@@ -15,6 +15,10 @@ namespace lfs::core::internal {
 } // namespace lfs::core::internal
 
 namespace lfs::test {
+    struct ForceDeferredTensorExecution {
+        ForceDeferredTensorExecution() { core::internal::lazy_executor_set_size_heuristic_override_for_testing(false); }
+        ~ForceDeferredTensorExecution() { core::internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt); }
+    };
     inline auto vulkan_validation_messages() {
         return core::internal::vulkan_validation_messages_for_testing();
     }

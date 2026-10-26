@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "collision_fixture.hpp"
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/services.hpp"
@@ -11,14 +12,17 @@
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "licht_test_support.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
 #include "test_view_targets.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include <cmath>
 #include <cstdlib>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
@@ -373,5 +377,50 @@ namespace lfs::vis {
         rendering->editViewSettings(viewer.activeView().id, [](ViewSettings& settings) { settings.ortho_scale = 2.0e-6f; });
         const auto small = overlays(viewer);
         EXPECT_EQ(small.frustum_overlay_data->frustum_batches.front().focal_x, 2.0e-6f);
+    }
+    TEST_F(OrthographicZoomTest, CollisionDrawRequestsTrackVisibilityTransformsAndOpacityNotSelection) {
+        SceneManager manager;
+        services().set(&manager);
+        auto& scene = manager.getScene();
+        const auto volume = collision_test::box({}, glm::ivec3(1), .05f);
+        scene.addCollision("First", volume);
+        scene.addCollision("Second", volume);
+        scene.addGroup("Other");
+        const auto transform = glm::scale(glm::rotate(glm::translate(glm::mat4(1), {3, -2, 5}), .7f, {0, 1, 0}), {-2, 3, .5f});
+        scene.setNodeTransform("First", transform);
+        RenderSettings settings;
+        EXPECT_FLOAT_EQ(settings.collision_preview_opacity, .4f);
+        Viewport viewport(640, 480);
+        const ViewportRegion region{0, 0, 640, 480};
+        FrameContext context{.viewport = viewport, .viewport_region = &region, .scene_manager = &manager, .settings = settings, .render_size = {640, 480}};
+        for (const auto name : {"First", "Other", ""}) {
+            manager.clearSelection();
+            if (*name)
+                manager.selectNode(name);
+            const auto items = buildViewportMeshDrawItems({}, settings, {0, 0, 1});
+            ASSERT_EQ(items.size(), 2);
+            EXPECT_EQ(items[0].collision, volume);
+            EXPECT_EQ(items[1].collision, volume);
+            EXPECT_EQ(items[0].model, lfs::rendering::dataWorldTransformToVisualizerWorld(transform));
+            for (bool frustums : {false, true}) {
+                context.settings.show_camera_frustums = frustums;
+                const auto request = buildViewportRenderRequest(context, {640, 480});
+                EXPECT_EQ(request.require_exact_depth, frustums);
+            }
+        }
+        scene.setNodeVisibility("First", false);
+        for (float opacity : {0.f, .25f, 1.f}) {
+            settings.collision_preview_opacity = opacity;
+            auto items = buildViewportMeshDrawItems({}, settings, {0, 0, 1});
+            ASSERT_EQ(items.size(), 1);
+            EXPECT_EQ(items[0].collision, volume);
+            EXPECT_FLOAT_EQ(items[0].collision_opacity, opacity);
+        }
+        scene.setNodeVisibility("First", true);
+        EXPECT_EQ(buildViewportMeshDrawItems({}, settings, {0, 0, 1}).size(), 2);
+        scene.setNodeTransform("First", glm::mat4(1));
+        const auto refreshed = buildViewportMeshDrawItems({}, settings, {0, 0, 1});
+        EXPECT_EQ(refreshed[0].collision, volume);
+        EXPECT_EQ(refreshed[0].model, lfs::rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1)));
     }
 } // namespace lfs::vis

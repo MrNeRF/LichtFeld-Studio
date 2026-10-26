@@ -14,6 +14,8 @@
 
 namespace lfs::vis {
 
+    [[nodiscard]] LFS_VIS_API bool hasVisibleCollisionPreview(const SceneManager& manager);
+
     // Centralized request builders for the public renderer boundary.
     // Visualizer-side code should prefer building FrameView/GpuFrame contracts first
     // and only translate to renderer request types here.

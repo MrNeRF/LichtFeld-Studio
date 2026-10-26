@@ -254,6 +254,7 @@ namespace lfs::vis {
             ViewerBackendValue,
             SceneUpscalerGeneration,
             AlignStateGeneration,
+            CollisionStateValue,
         };
 
         AppStore();
@@ -291,6 +292,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
         lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
+        lfs::core::reactive::Observable<TaskProgressState> collision_state;
         lfs::core::reactive::Observable<std::uint64_t> scripts_generation;
         lfs::core::reactive::Observable<std::uint64_t> language_generation;
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;

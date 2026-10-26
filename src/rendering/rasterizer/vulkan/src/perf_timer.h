@@ -25,7 +25,10 @@ namespace PerfTimer {
     _(ApplyDepthOrdering)         \
     _(PrepareTileSort)            \
     _(CullSplats)                 \
-    _(ProjectionSurvivors)
+    _(ProjectionSurvivors)        \
+    _(StochasticReuse)            \
+    _(StochasticResolve)          \
+    _(ViewportFrame)
 
 #define _(name) name,
     enum TrainStage {

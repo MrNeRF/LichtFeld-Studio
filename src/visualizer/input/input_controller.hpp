@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/collision_walk.hpp"
 
 #include "input/view_targets.hpp"
 
@@ -50,7 +51,8 @@ namespace lfs::vis {
             Orbit,
             Trackball,
             FPV,
-            Drone
+            Drone,
+            Walk
         };
 
         // Single source of truth for the mode <-> name mapping used by the
@@ -130,7 +132,10 @@ namespace lfs::vis {
         }
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
-        void setCameraNavigationMode(CameraNavigationMode mode);
+        bool setCameraNavigationMode(CameraNavigationMode mode);
+        core::WalkSettings walk_settings;
+        void setWalkSettings(core::WalkSettings settings);
+        std::string walk_error;
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         NavigationUpAxis navigationUpAxis() const { return viewport().camera.navigationUpAxis(); }
         void setNavigationUpAxis(NavigationUpAxis axis, bool align_grid = false);
@@ -151,7 +156,7 @@ namespace lfs::vis {
             bool view_snap_enabled,
             NavigationUpAxis up_axis = NavigationUpAxis::LegacyY) {
             setNavigationUpAxis(up_axis);
-            setCameraNavigationMode(mode);
+            setCameraNavigationMode(mode == CameraNavigationMode::Walk ? CameraNavigationMode::Orbit : mode);
             camera_view_snap_enabled_ =
                 view_snap_enabled;
             viewport().camera.clearTransientMotion();
@@ -231,6 +236,8 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        core::WalkState walk_state_;
+        core::CapsuleQuery walkQuery() const;
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             Viewport* viewport = nullptr;

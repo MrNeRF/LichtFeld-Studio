@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "combined_model_worker_fixture.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor_backend.hpp"
@@ -8,8 +9,6 @@
 #include <gtest/gtest.h>
 
 #include <exception>
-#include <future>
-#include <latch>
 #include <optional>
 #include <thread>
 #include <vector>
@@ -135,42 +134,36 @@ namespace {
     }
 
     TEST_P(SceneCombiningBackends, StaleBackgroundResultKeepsRetiredInputsAliveUntilJoin) {
-        std::promise<void> entered;
-        auto started = entered.get_future();
-        std::latch release(1);
-        std::atomic<bool> first_allocation{true};
+        namespace combined = lfs::test::combined_model;
         Scene scene;
+        combined::HeldWorker worker;
         const auto first = scene.addSplat("first", std::make_unique<SplatData>(model(33, 1, -0.5f, 2)->clone()));
         const auto second = scene.addSplat("second", std::make_unique<SplatData>(model(67, 3, 1.0f, 2)->clone()));
         auto replacement = std::make_unique<SplatData>(model(17, 2, 0.25f, 1)->clone());
-        struct ReleaseOnExit {
-            std::latch& signal;
-            bool released = false;
-            void now() {
-                if (!released) {
-                    released = true;
-                    signal.count_down();
-                }
-            }
-            ~ReleaseOnExit() { now(); }
-        } guard{release};
-        scene.setCombinedModelAllocator([&](TensorShape shape, size_t, DataType dtype, std::string_view) {
-            if (first_allocation.exchange(false))
-                entered.set_value();
-            release.wait();
-            return Tensor::empty(std::move(shape), Device::GPU, dtype);
-        });
+        scene.setCombinedModelAllocator(worker.allocator());
         const SplatData* retired = scene.getNodeById(first)->model.get();
+        const SplatData* removed = scene.getNodeById(second)->model.get();
         scene.requestCombinedModelBuild(true);
-        ASSERT_EQ(started.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        ASSERT_TRUE(worker.waitEntered());
         scene.replaceNodeModel("first", std::move(replacement));
         scene.removeNodeById(second);
         EXPECT_EQ(retired->size(), 33);
-        guard.now();
         const SplatData* current = scene.getNodeById(first)->model.get();
-        EXPECT_EQ(scene.getCombinedModel(), current);
+        const auto retained = combined::combinedModelWithin(scene, worker);
+        ASSERT_TRUE(retained.prompt);
+        EXPECT_EQ(retained.model, current);
         EXPECT_EQ(current->size(), 17);
+        EXPECT_TRUE(scene.combinedModelBuildPending());
+        // Returning the replacement must not retire inputs still used by the worker.
+        EXPECT_EQ(retired->size(), 33);
+        EXPECT_EQ(removed->size(), 67);
+        EXPECT_EQ(gpu_backend_of(retired->means_raw()), GetParam());
+        EXPECT_EQ(gpu_backend_of(removed->means_raw()), GetParam());
+
+        worker.release();
+        EXPECT_EQ(combined::settledCombinedModel(scene), current);
         EXPECT_FALSE(scene.combinedModelBuildPending());
+        EXPECT_EQ(current->size(), 17);
         EXPECT_EQ(gpu_backend_of(current->means_raw()), GetParam());
     }
 

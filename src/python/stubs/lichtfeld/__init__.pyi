@@ -30,6 +30,13 @@ from . import (
     ui as ui,
     undo as undo
 )
+from .scene import (
+    cancel_collision as cancel_collision,
+    export_collision as export_collision,
+    generate_collision as generate_collision,
+    get_collision_state as get_collision_state,
+    set_walk_settings as set_walk_settings
+)
 
 
 class Error(RuntimeError):
@@ -3193,8 +3200,10 @@ def build_splat_lod_hierarchy(source: object | None = None, ratio: float = 0.5, 
     Build a script-side multi-level LOD hierarchy from SplatData or a scene node.
     """
 
-def detect_dataset_info(path: str) -> DatasetInfo:
-    """Detect dataset information from a directory path"""
+def detect_dataset_info(path: str, images_path: str | None = None) -> DatasetInfo:
+    """
+    Detect dataset information from a directory path; images_path replaces the detected images folder
+    """
 
 def is_dataset_path(path: str) -> bool:
     """Check whether a path can be treated as a dataset source"""

@@ -39,7 +39,8 @@ namespace lfs::vis::cap {
                type == core::NodeType::CROPBOX ||
                type == core::NodeType::ELLIPSOID ||
                type == core::NodeType::CROP_POLYGON ||
-               type == core::NodeType::MESH;
+               type == core::NodeType::MESH ||
+               type == core::NodeType::COLLISION;
     }
 
     bool isAlignTransformTargetType(const core::NodeType type) {

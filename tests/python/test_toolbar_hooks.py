@@ -6,6 +6,7 @@ import inspect
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 import json
 import re
 import sys
@@ -18,6 +19,7 @@ def _install_stub_modules(monkeypatch):
     remove_calls = []
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.get_collision_state = lambda: {"has_collision": False}
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
@@ -2266,14 +2268,17 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
 
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
-    assert len(camera_buttons) == 4
+    assert len(camera_buttons) == 5
     assert [button["value"] for button in camera_buttons] == [
         "orbit",
         "trackball",
         "fpv",
-        "drone",
+        "drone", "walk",
     ]
     assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
+    assert not camera_buttons[4]["enabled"]
+    lf_stub.get_collision_state = lambda: {"has_collision": True}
+    assert module._UtilityToolbarController().snapshot()["camera_mode_buttons"][4]["enabled"]
     assert [button["button_id"] for button in extra_buttons] == [
         "util-asset-manager",
         "util-viewport-export",
@@ -2687,3 +2692,20 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[1]["enabled"] is True
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
+
+
+@pytest.mark.parametrize("mode,error,handled", [("walk", "No Walk support below the camera", True),
+                                               ("orbit", "No Walk support below the camera", False),
+                                               ("walk", "", False)])
+def test_walk_entry_rejection_is_already_surfaced_and_other_errors_propagate(toolbar_module, monkeypatch, mode, error, handled):
+    module, *_ = toolbar_module
+    lf = sys.modules["lichtfeld"]
+    monkeypatch.setattr(lf, "set_camera_navigation_mode", MagicMock(side_effect=RuntimeError("rejected")), raising=False)
+    monkeypatch.setattr(lf, "get_collision_state", lambda: {"walk_error": error})
+    controller = module._UtilityToolbarController()
+    if handled:
+        controller.dispatch("set_camera_navigation_mode", mode)
+    else:
+        with pytest.raises(RuntimeError):
+            controller.dispatch("set_camera_navigation_mode", mode)
+    lf.set_camera_navigation_mode.assert_called_once_with(mode)

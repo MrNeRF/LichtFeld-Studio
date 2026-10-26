@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <utility>
 #include <vector>
 
 using namespace lfs::core;
@@ -100,6 +101,30 @@ TEST(TensorElementwiseKernels, CountNonzeroMatchesReference) {
     // Bool path
     auto mask = (t > 0.0f);
     EXPECT_EQ(mask.count_nonzero(), expected);
+}
+
+// Catches a float count, exact only up to 2^24: callers size buffers from it, and the MRNF crop box
+// split compares it with an exact compaction count (#3806).
+TEST(TensorElementwiseKernels, CountNonzeroIsExactAbove2To24) {
+    for (const auto& [n, seed] : {std::pair<size_t, uint32_t>{20'000'003, 1u},
+                                  std::pair<size_t, uint32_t>{33'554'467, 2u},
+                                  std::pair<size_t, uint32_t>{40'000'001, 3u}}) {
+        SCOPED_TRACE(n);
+        std::vector<float> vals(n, 0.f);
+        size_t expected = 0;
+        uint32_t state = seed;
+        for (size_t i = 0; i < n; ++i) {
+            state = state * 1664525u + 1013904223u;
+            if ((state >> 29) != 0) { // about 7 in 8 nonzero
+                vals[i] = 1.f;
+                ++expected;
+            }
+        }
+        ASSERT_GT(expected, size_t{1} << 24);
+        auto t = f32_cuda(vals, n);
+        EXPECT_EQ(t.count_nonzero(), expected);
+        EXPECT_EQ((t > 0.0f).count_nonzero(), expected);
+    }
 }
 
 TEST(TensorElementwiseKernels, CompareFloat4SameShape) {

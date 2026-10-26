@@ -177,6 +177,7 @@ VulkanGSRenderer::~VulkanGSRenderer() noexcept {
 }
 
 void VulkanGSRenderer::cleanup() {
+    destroyBuffer(stochastic_noise_);
     destroyVisibleCountReadback();
     destroyLodSelectionReadback();
     destroyInstanceCountReadback();
@@ -425,6 +426,7 @@ VulkanGSRenderer::pollDeferredTileInstanceStats() {
     stats.raw_count = stats.count_overflow ? 0u : instance_count_readback_mapped_[0];
     stats.waves_needed = instance_count_readback_mapped_[1];
     stats.waves_armed = instance_count_readback_mapped_[2];
+    stats.submission_value = instance_count_readback_value_;
     instance_count_readback_pending_ = false;
     instance_count_readback_signal_ = VK_NULL_HANDLE;
     instance_count_readback_value_ = 0;
@@ -1022,6 +1024,8 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
         createComputePipeline(pipeline_rasterize_forward_3dgut[i], spirv_paths.at("rasterize_forward_3dgut"));
         createComputePipeline(pipeline_rasterize_forward_plain[i], spirv_paths.at("rasterize_forward_plain"));
+        createComputePipeline(pipeline_rasterize_stochastic[i], spirv_paths.at("rasterize_stochastic"));
+        createComputePipeline(pipeline_rasterize_stochastic_plain[i], spirv_paths.at("rasterize_stochastic_plain"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_plain[i], spirv_paths.at("rasterize_forward_3dgut_plain"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_rad[i], spirv_paths.at("rasterize_forward_3dgut_rad"));
         createComputePipeline(pipeline_rasterize_forward_3dgut_plain_rad[i],
@@ -1036,6 +1040,8 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                               spirv_paths.at("rasterize_forward_batches_plain"));
     }
     createComputePipeline(pipeline_tile_batch_descriptors, spirv_paths.at("tile_batch_descriptors"));
+    createComputePipeline(pipeline_stochastic_reuse, spirv_paths.at("stochastic_reuse"));
+    createComputePipeline(pipeline_stochastic_resolve, spirv_paths.at("stochastic_resolve"));
     createComputePipeline(pipeline_compose_tile_batches, spirv_paths.at("compose_tile_batches"));
     createComputePipeline(pipeline_compose_tile_batches_plain, spirv_paths.at("compose_tile_batches_plain"));
     createComputePipeline(pipeline_cumsum.single_pass, spirv_paths.at("cumsum_single_pass"));
@@ -1532,10 +1538,23 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     const bool predicate_waves,
     const bool selection_outline,
     const bool single_node_outline,
-    const VulkanGSOutlineStyle& outline_style) {
+    const VulkanGSOutlineStyle& outline_style,
+    const std::optional<StochasticTileState> cached_tiles) {
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
     DEVICE_GUARD;
     const bool raster_outline = selection_outline && !single_node_outline;
+    const bool reuse_tile_groups = cached_tiles.has_value();
+
+    if (reuse_tile_groups && (uniforms.stochastic_mode == 0u || armed != 1u || use_gut_rasterization || selection_outline))
+        lfs::rendering::throw_renderer_contract(
+            "Tile reuse requires one resident stochastic 3DGS wave", LFS_SOURCE_SITE_CURRENT());
+    if (uniforms.stochastic_mode == 2u && stochastic_noise_.buffer == VK_NULL_HANDLE)
+        lfs::rendering::throw_renderer_contract(
+            "STBN must be prepared before recording a SteadySplats frame", LFS_SOURCE_SITE_CURRENT());
+    // Input packing may reset the host ping-pong selector without changing
+    // resident device data. The selector is part of the cached tile state.
+    if (reuse_tile_groups)
+        buffers.is_unsorted_1 = cached_tiles->is_unsorted_1;
 
     if (armed == 0 || uniforms.sort_capacity != HIGS_DEPTH_WAVE_INSTANCES ||
         sort_bits <= 0 || sort_bits > 32) {
@@ -1607,7 +1626,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     // This one-frame heuristic selects only the faster of two wave-correct
     // raster paths. It never sizes storage or changes the wave budget.
     const bool use_batched_raster =
-        !selection_outline && !use_gut_rasterization && !depth_capture_ &&
+        uniforms.stochastic_mode == 0u && !selection_outline && !use_gut_rasterization && !depth_capture_ &&
         buffers.num_indices >= kMinLoadBalancedRasterInstances &&
         buffers.num_indices / num_tiles >= kMinLoadBalancedAverageTileInstances;
     const size_t batch_capacity = denseTileBatchCapacity(capacity, alloc_tiles);
@@ -1724,35 +1743,37 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
             indirect::byteOffset(indirect::DepthWave::countWordOffset(wave)),
             2u * sizeof(uint32_t));
 
-        auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
-        auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
-        // pipeline_generate_keys_wave: 8 bindings (catalog).
-        executeComputeIndirect(
-            record,
-            indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
-            &wave_uniforms,
-            sizeof(wave_uniforms),
-            pipeline_generate_keys_wave,
-            std::vector<TaggedBinding>{
-                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
-                {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
-                {unsorted_keys, BufferUse::ComputeWrite},
-                {unsorted_indices, BufferUse::ComputeWrite},
-                {wave_buffer, BufferUse::ComputeRead},
-            });
-        executeSortIndirectCountImpl(wave_uniforms,
-                                     buffers,
-                                     sort_bits,
-                                     count,
-                                     record,
-                                     capacity,
-                                     indirect::DepthWave::kRecordLayout,
-                                     indirect::DepthWave::kRadixWordOffset,
-                                     "vksplat.render.record.sort_legacy_depth_wave",
-                                     true);
+        if (!reuse_tile_groups) {
+            auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
+            auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
+            // pipeline_generate_keys_wave: 8 bindings (catalog).
+            executeComputeIndirect(
+                record,
+                indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
+                &wave_uniforms,
+                sizeof(wave_uniforms),
+                pipeline_generate_keys_wave,
+                std::vector<TaggedBinding>{
+                    {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+                    {unsorted_keys, BufferUse::ComputeWrite},
+                    {unsorted_indices, BufferUse::ComputeWrite},
+                    {wave_buffer, BufferUse::ComputeRead},
+                });
+            executeSortIndirectCountImpl(wave_uniforms,
+                                         buffers,
+                                         sort_bits,
+                                         count,
+                                         record,
+                                         capacity,
+                                         indirect::DepthWave::kRecordLayout,
+                                         indirect::DepthWave::kRadixWordOffset,
+                                         "vksplat.render.record.sort_legacy_depth_wave",
+                                         true);
+        }
 
         if (use_batched_raster) {
             executeComputeIndirect(
@@ -1869,7 +1890,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 overlays_active ? pipeline_compose_tile_batches
                                 : pipeline_compose_tile_batches_plain,
                 compose_bindings);
-        } else {
+        } else if (!reuse_tile_groups) {
             executeComputeIndirect(
                 record,
                 indirect::byteOffset(indirect::DepthWave::kRangeWordOffset),
@@ -1920,6 +1941,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 raster_bindings.push_back({lod_logical_indices, BufferUse::ComputeRead});
                 raster_bindings.push_back({lod_weights, BufferUse::ComputeRead});
             }
+            if (uniforms.stochastic_mode != 0u) {
+                raster_bindings.push_back({buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead});
+                raster_bindings.push_back({uniforms.stochastic_mode == 2u ? stochastic_noise_
+                                                                          : buffers.primitive_depth_keys.deviceBuffer,
+                                           BufferUse::ComputeRead});
+            }
             if (raster_outline) {
                 // Keep the normal color raster's register pressure and early
                 // termination unchanged. Only selected tiles run the mask shader.
@@ -1947,7 +1974,9 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                         ? (raster_outline ? (spark_rad ? (overlays_active ? pipeline_rasterize_outline_gut_rad : pipeline_rasterize_outline_gut_plain_rad) : (overlays_active ? pipeline_rasterize_outline_gut : pipeline_rasterize_outline_gut_plain))
                                                           : (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad) : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain)))
                                         : (raster_outline ? (overlays_active ? pipeline_rasterize_outline : pipeline_rasterize_outline_plain)
-                                                          : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain));
+                                                          : (uniforms.stochastic_mode != 0u
+                                                                 ? (overlays_active ? pipeline_rasterize_stochastic : pipeline_rasterize_stochastic_plain)
+                                                                 : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain)));
             executeComputeIndirect(record,
                                    indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
                                    &wave_uniforms, sizeof(wave_uniforms),
@@ -2503,7 +2532,8 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
 
 void VulkanGSRenderer::executeSortPrimitivesByDepth(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const bool sort_depth) {
     PerfTimer::Timer<PerfTimer::SortPrimitivesByDepth> timer(this);
 
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
@@ -2627,7 +2657,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
             });
     }
 
-    {
+    if (sort_depth) {
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.sort_visible_primitives");
         // Stage 1 sort: num_bits=32 is intentional. Projection writes the full
@@ -2645,6 +2675,10 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
                                  indirect::VisibleSortDispatch::kRadixWordOffset);
     }
 
+    // Stochastic rendering retains compact source order and skips depth radix
+    // sorting. Stage 2 groups by tile only; nearest accepted depth is selected
+    // per pixel independently of traversal order.
+    const auto& source_indices = sort_depth ? buffers.sorted_gauss_idx().deviceBuffer : *unsorted_idx;
     // Snapshot depth-ranked primitive indices into a stable buffer so stage 2
     // is free to reuse the ping-pong without clobbering the ordering. Matches
     // the CUDA reference's `primitive_indices_sorted` view.
@@ -2652,17 +2686,28 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::CopyPrimitiveSortIndices> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.copy_primitive_sort_indices");
+        // Alpha blending retires depth keys after compaction and aliases this
+        // destination onto them. Stochastic visibility reads the keys in raster,
+        // so detach that non-owning view before the index snapshot overwrites it.
+        auto& index_view = buffers.primitive_sort_indices.deviceBuffer;
+        const auto& depth_keys = buffers.primitive_depth_keys.deviceBuffer;
+        if (!sort_depth && index_view.buffer == depth_keys.buffer && index_view.offset == depth_keys.offset &&
+            index_view.allocation == VK_NULL_HANDLE) {
+            const char* const label = index_view.label;
+            index_view = {};
+            index_view.label = label;
+        }
         auto& sort_indices = resizeDeviceBuffer(buffers.primitive_sort_indices, num_splats);
         const DeclaredAccess pre_copy[] = {
-            {.buffer = &buffers.sorted_gauss_idx().deviceBuffer, .use = BufferUse::TransferRead},
+            {.buffer = &source_indices, .use = BufferUse::TransferRead},
             {.buffer = &sort_indices, .use = BufferUse::TransferWrite},
         };
         planTransfer(std::span{pre_copy});
         VkBufferCopy copy{};
-        copy.srcOffset = buffers.sorted_gauss_idx().deviceBuffer.offset;
+        copy.srcOffset = source_indices.offset;
         copy.dstOffset = sort_indices.offset;
         copy.size = num_splats * sizeof(int32_t);
-        validateBufferRange(buffers.sorted_gauss_idx().deviceBuffer,
+        validateBufferRange(source_indices,
                             0,
                             copy.size,
                             "primitive sort-index snapshot source");
@@ -2676,7 +2721,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
                 LFS_SOURCE_SITE_CURRENT());
         }
         vulkan_dispatch_.cmd_copy_buffer(command_buffer,
-                                         buffers.sorted_gauss_idx().deviceBuffer.buffer,
+                                         source_indices.buffer,
                                          sort_indices.buffer, 1, &copy);
         const DeclaredAccess post_copy{
             .buffer = &sort_indices,

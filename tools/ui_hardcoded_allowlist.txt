@@ -86,3 +86,5 @@ Finished transfers cleared. Project links and recovery copies kept.
 Discarded
 Gallery details saved.
 Removed from gallery. Local projects are unchanged.
+# Canonical format name and file extensions are not translated.
+SuperSplat (.voxel.json + .voxel.bin)

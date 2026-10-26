@@ -109,13 +109,14 @@ namespace lfs::gpu_ops {
         Tensor rendered_count, erank_reg_loss, dc_reg_loss, sh_rest_reg_loss;
         // Optional per-splat [N] float32 outputs: summed and peak per-pixel blend weight.
         Tensor impact_sum, impact_peak;
-        // SteadySplats color variance loss, off at weight 0. color_variance_target is the
-        // [3, H, W] float32 or UInt8 training image, color_variance_loss an optional
+        // SteadySplats color variance loss against the expected splat color, off at
+        // weight 0. The saved forward image must retain the raw render until backward.
+        // color_variance_loss is an optional
         // caller-zeroed float32 scalar that receives the weighted loss, and
         // color_variance_pixel_weight optional float32 [H, W] pixel weights (the crop box
         // ROI). Only backends whose FastRasterOps::color_variance is set accept it.
         float color_variance_weight = 0.f;
-        Tensor color_variance_target, color_variance_loss, color_variance_pixel_weight;
+        Tensor color_variance_loss, color_variance_pixel_weight;
     };
 
     struct RasterResult {

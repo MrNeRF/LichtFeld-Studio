@@ -1991,9 +1991,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
 def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
     """Choose a text log export path. Returns empty string if cancelled."""
 
-def save_json_file_dialog(default_name: str = 'config.json') -> str:
+def save_json_file_dialog(default_name: str = 'config.json', with_overwrite_confirmation: bool = False) -> object:
     """
-    Open a save file dialog for JSON files. Returns empty string if cancelled.
+    Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).
     """
 
 def save_png_file_dialog(default_name: str = 'export.png') -> str:

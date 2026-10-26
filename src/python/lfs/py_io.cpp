@@ -24,6 +24,8 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
+#include "io/atomic_output.hpp"
+#include "io/collision_export.hpp"
 #include "io/exporter.hpp"
 #include "io/image_output.hpp"
 #include "io/loader.hpp"
@@ -327,6 +329,49 @@ namespace lfs::python {
 
     void register_io(nb::module_& m) {
         namespace project = io::project;
+        nb::class_<core::CollisionSettings>(m, "VoxelSettings")
+            .def(nb::init<>())
+            .def_rw("voxel_size", &core::CollisionSettings::voxel_size)
+            .def_rw("opacity", &core::CollisionSettings::opacity)
+            .def_rw("max_gaussian_area", &core::CollisionSettings::max_gaussian_area)
+            .def_rw("auto_resolution", &core::CollisionSettings::auto_resolution)
+            .def_rw("cleanup", &core::CollisionSettings::cleanup);
+        nb::class_<core::CollisionVolume>(m, "VoxelVolume")
+            .def_prop_ro("occupied_count", [](const core::CollisionVolume& v) { return v.occupied_count; })
+            .def_prop_ro("voxel_size", [](const core::CollisionVolume& v) { return v.settings.voxel_size; });
+        m.def(
+            "generate_voxels",
+            [](const LogicalPath& path, core::CollisionSettings settings, nb::object progress) {
+                PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
+                nb::gil_scoped_release release;
+                auto source = io::loadCollisionSource(path, {}, io::scale_export_progress(report, 0, .2f));
+                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1));
+            },
+            nb::arg("path"), nb::arg("settings") = core::CollisionSettings{}, nb::arg("progress") = nb::none(),
+            "Generate owned full-detail occupancy from a splat file; callback False cancels.");
+        m.def(
+            "save_voxels",
+            [](const core::CollisionVolume& volume, const LogicalPath& path, bool overwrite,
+               const std::vector<float>& matrix, nb::object progress) {
+                glm::mat4 transform(1);
+                if (!matrix.empty()) {
+                    if (matrix.size() != 16)
+                        throw_invalid_io_argument("transform must contain 16 column-major affine matrix values");
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 4; ++r)
+                            transform[c][r] = matrix[c * 4 + r];
+                }
+                auto binary = std::filesystem::path(path);
+                binary.replace_extension(".bin");
+                if (!overwrite && (core::native_fs::exists(path) || core::native_fs::exists(binary)))
+                    throw_invalid_io_argument("Voxel pair already exists; approve replacement with overwrite=True");
+                PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
+                nb::gil_scoped_release release;
+                io::exportCollision(volume, path, transform, {}, report);
+            },
+            nb::arg("volume"), nb::arg("path"), nb::arg("overwrite") = false,
+            nb::arg("transform") = std::vector<float>{}, nb::arg("progress") = nb::none(),
+            "Save a SuperSplat v1.1 voxel pair, baking a captured data-world transform.");
         m.def("native_path", [](const std::filesystem::path& path, const bool force_extended) { return core::path_to_utf8(core::native_fs::native_path(path, force_extended)); }, nb::arg("path"), nb::arg("force_extended") = false, "Return a filename for filesystem I/O, including extended Windows paths. "
                                                                                                                                                                                                                                       "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
 

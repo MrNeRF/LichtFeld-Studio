@@ -232,6 +232,8 @@ namespace lfs::rendering {
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
+        GaussianTransparencyMode transparency_mode = GaussianTransparencyMode::AlphaBlend;
+        int stochastic_max_frames = DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
 
         float scaling_modifier = 1.0f;
         bool antialiasing = false;

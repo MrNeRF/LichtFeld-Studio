@@ -6,11 +6,13 @@
 #include "../shader/src/slang/overlay_flags.inc"
 #include "indirect_layout.h"
 #include "perf_timer.h"
+#include "stochastic.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <utility>
 #include <vector>
 
 struct VulkanGSOutlineStyle {
@@ -120,9 +122,9 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     // Orthographic views move the eye back along the view axis so nothing lies behind it; depth outputs subtract
     // this distance again, so they stay measured from the viewport camera (match shader).
     float depth_offset;
-    uint32_t depth_offset_pad0;
-    uint32_t depth_offset_pad1;
-    uint32_t depth_offset_pad2;
+    uint32_t stochastic_frame;
+    uint32_t stochastic_mode;
+    uint32_t stochastic_history_valid;
 });
 static_assert(sizeof(VulkanGSRendererUniforms) == 224);
 static_assert(offsetof(VulkanGSRendererUniforms, shN_address) % 8 == 0);
@@ -225,6 +227,7 @@ public:
         size_t waves_needed = 0;
         size_t waves_armed = 0;
         bool count_overflow = false;
+        std::uint64_t submission_value = 0;
     };
     struct TileInstanceGate {
         size_t raw_count = 0;
@@ -234,6 +237,11 @@ public:
         std::uint32_t target = 0;
         std::uint64_t model_generation = 0;
         std::uint64_t tree_generation = 0;
+    };
+    // A complete single wave leaves its groups resident in one sort stream.
+    // The caller must prove that projection and scratch are unchanged.
+    struct StochasticTileState {
+        bool is_unsorted_1 = true;
     };
     struct LodSelectionStats {
         LodSelectionReadbackIdentity identity{};
@@ -388,7 +396,13 @@ public:
                                  bool predicate_waves = true,
                                  bool selection_outline = false,
                                  bool single_node_outline = false,
-                                 const VulkanGSOutlineStyle& outline_style = {});
+                                 const VulkanGSOutlineStyle& outline_style = {},
+                                 std::optional<StochasticTileState> cached_tiles = std::nullopt);
+    // One immutable volume per renderer/device, uploaded before recording a
+    // SteadySplats frame. Basic stochastic sampling retains white noise.
+    const _VulkanBuffer& prepareStochasticNoise();
+    // Hands the volume to the caller, which destroys it once no frame uses it.
+    [[nodiscard]] _VulkanBuffer releaseStochasticNoise() noexcept { return std::exchange(stochastic_noise_, {}); }
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.
@@ -417,7 +431,17 @@ public:
     // Projection rejects are compacted out on the GPU before the radix sort.
     // Writes the depth-ranked primitive indices into buffers.primitive_sort_indices.
     void executeSortPrimitivesByDepth(const VulkanGSRendererUniforms& uniforms,
-                                      VulkanGSPipelineBuffers& buffers);
+                                      VulkanGSPipelineBuffers& buffers,
+                                      bool sort_depth = true);
+
+    void executeStochasticReuse(const VulkanGSRendererUniforms& uniforms,
+                                VulkanGSPipelineBuffers& buffers,
+                                VulkanGSStochasticBuffers& history);
+    [[nodiscard]] const _VulkanBuffer& executeStochasticResolve(
+        const VulkanGSStochasticResolveUniforms& uniforms,
+        VulkanGSPipelineBuffers& buffers,
+        VulkanGSStochasticBuffers& history,
+        std::size_t output_index);
 
     // Reorder tiles_touched into depth-rank order so the subsequent cumsum
     // produces offsets matching the depth-ordered walk in generate_keys.
@@ -545,6 +569,11 @@ protected:
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(17);
+    _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(17);
+    _VulkanBuffer stochastic_noise_;
+    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(6);
+    _ComputePipeline pipeline_stochastic_resolve = _ComputePipeline(6);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain_rad = _ComputePipelinePair(24);

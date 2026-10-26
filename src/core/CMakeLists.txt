@@ -241,6 +241,10 @@ set(CORE_SOURCES
         animatable_property.cpp
         camera.cpp
         undistort_params.cpp
+        collision.cpp
+        collision_volume.cpp
+        collision_walk.cpp
+        $<$<BOOL:${LFS_HAS_CUDA}>:collision_voxelization.cpp>
         checkpoint_format.cpp
         crop_polygon.cpp
         image_loader.cpp

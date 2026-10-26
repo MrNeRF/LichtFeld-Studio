@@ -291,11 +291,12 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK")
                 )
             },
         ),
         Action=SimpleNamespace(
+            EXIT_WALK=SimpleNamespace(name="EXIT_WALK", value=999),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),

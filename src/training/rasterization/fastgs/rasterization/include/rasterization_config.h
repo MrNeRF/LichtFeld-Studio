@@ -22,14 +22,14 @@ namespace fast_lfs::rasterization {
         const float* grad_alpha_extra = nullptr;
     };
 
-    // Per-view SteadySplats Eq. 30 loss. Targets are normalized float32 or
-    // UInt8 CHW RGB. The caller zeros loss_out; the blend adds weighted loss.
-    // Background contributes to the photometric adjoint only, not this loss.
+    // Per-view SteadySplats Eq. 7 loss. Its target is each pixel's expected
+    // splat color, which the blend backward derives from the forward image,
+    // its final transmittance and the background, so the forward image must
+    // still hold the raw render. The caller zeros loss_out; the blend adds
+    // weighted loss. Background contributes to the photometric adjoint only.
     // Pixels are averaged uniformly, or with pixel_weight (e.g. the crop box ROI)
     // as weight * w_p / sum(w), the weighted mean the photometric loss uses.
     struct ColorVarianceLoss {
-        const float* target = nullptr;
-        const std::uint8_t* target_u8 = nullptr;
         float weight = 0.0f;
         const float* pixel_weight = nullptr;
         const float* pixel_weight_sum = nullptr; // device scalar, required with pixel_weight

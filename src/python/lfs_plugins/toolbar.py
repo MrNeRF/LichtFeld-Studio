@@ -1341,6 +1341,7 @@ class _UtilityToolbarController:
         ("world", "trackball", "toolbar.free_orbit_camera", "Free Orbit Camera"),
         ("camera-fpv", "fpv", "toolbar.fly_camera", "Fly Camera"),
         ("drone", "drone", "toolbar.drone_camera", "Drone Camera"),
+        ("walk", "walk", "collision.walk", "Walk"),
     )
 
     def __init__(self, viewport_export_visible=None):
@@ -1382,6 +1383,7 @@ class _UtilityToolbarController:
                 tooltip_key=tooltip_key,
                 tooltip_text=label,
                 selected=camera_mode == mode_id,
+                enabled=mode_id != "walk" or lf.get_collision_state()["has_collision"],
             )
             for icon_name, mode_id, tooltip_key, label in self._CAMERA_MODE_SPECS
         ]
@@ -1448,7 +1450,12 @@ class _UtilityToolbarController:
         import lichtfeld as lf
 
         if action == "set_camera_navigation_mode":
-            lf.set_camera_navigation_mode(value)
+            try:
+                lf.set_camera_navigation_mode(value)
+            except RuntimeError:
+                # Native entry already published the rejection and left the camera unchanged.
+                if value != "walk" or not lf.get_collision_state().get("walk_error"):
+                    raise
             return
         if action == "home":
             lf.reset_camera()

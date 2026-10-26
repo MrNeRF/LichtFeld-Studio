@@ -221,7 +221,7 @@ namespace {
                     (capability_gate ? 81'110 : 81'210),
             };
             if (capability_gate) {
-                // Unassigned core bit (9+); bit 8 is CHUNK_BYTESHUFFLE_ZSTD_V1.
+                // ENCODED_SCENE_ASSETS is outside declared_v1's bits 0–8.
                 options.extra_reader_capabilities.set(9);
             } else {
                 options.min_reader_version = Version{1, 1};
@@ -277,6 +277,50 @@ namespace {
             IndexCompression::StoredForDeterministicTests);
         EXPECT_EQ(ProjectReader::classify(higher, v1).state,
                   OpenState::HardFail);
+    }
+
+    TEST(P8CompatibilityTest, TilesetBit10RequiresReaderSupport) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "tileset-capability.licht";
+        CommitOptions commit{
+            .commit_uuid = fixed_uuid(81'400),
+            .snapshot_uuid = fixed_uuid(81'401),
+            .wallclock_unix_ns = FIXED_COMMIT_NS + 81'400,
+        };
+        commit.extra_reader_capabilities.set(10);
+        commit.extra_writer_capabilities.set(10);
+        create_raw_fixture(path, 81'402, commit);
+
+        EXPECT_EQ(ProjectReader::classify(path).state, OpenState::Open);
+        auto supported = ProjectReader::open(path);
+        ASSERT_TRUE(supported);
+        EXPECT_TRUE(supported->commit().required_reader_capabilities.contains(TILESET_REFERENCES));
+
+        ReaderOptions without_tilesets;
+        without_tilesets.reader_capabilities.set(TILESET_REFERENCES, false);
+        without_tilesets.writer_capabilities.set(TILESET_REFERENCES, false);
+        EXPECT_EQ(ProjectReader::classify(path, without_tilesets).state, OpenState::UnsupportedNewer);
+        auto reader = ProjectReader::open(path, without_tilesets);
+        ASSERT_FALSE(reader);
+        EXPECT_EQ(reader.error().code(), lfs::ErrorCode::Unsupported);
+        EXPECT_NE(reader.error().user_message().find("newer LichtFeld"),
+                  std::string_view::npos);
+        EXPECT_NE(lfs::format_for_developer(reader.error()).find("unsupported bits"),
+                  std::string::npos);
+        auto document = ProjectDocument::open(path, ProjectDocumentOpenOptions{.reader = without_tilesets});
+        ASSERT_FALSE(document);
+        EXPECT_EQ(document.error().code(), lfs::ErrorCode::Unsupported);
+
+        ReaderOptions inspect_options = without_tilesets;
+        inspect_options.allow_unsupported_inspection = true;
+        auto inspection = require_result(ProjectReader::open(path, inspect_options));
+        EXPECT_EQ(inspection.open_state(), OpenState::UnsupportedNewer);
+        EXPECT_TRUE(inspection.commit().required_reader_capabilities.contains(10));
+        EXPECT_TRUE(inspection.commit().required_writer_capabilities.contains(10));
+        ASSERT_FALSE(inspection.chunks().empty());
+        auto payload = inspection.read_chunk(inspection.chunks().front());
+        ASSERT_FALSE(payload);
+        EXPECT_EQ(payload.error().code(), lfs::ErrorCode::Unsupported);
     }
 
     TEST(P8CompatibilityTest,

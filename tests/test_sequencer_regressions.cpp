@@ -1157,6 +1157,49 @@ namespace {
         }
     }
 
+    TEST(SequencerTimelineRegressionTest, SavedCameraPathDoesNotFlipMidSegment) {
+        const std::array times{0.0f, 5.065666198730469f, 12.063790321350098f};
+        const std::array rotations{
+            glm::quat{0.7606963515281677f, -0.0820314958691597f, -0.6401920318603516f, -0.06903663277626038f},
+            glm::quat{0.7713736295700073f, -0.015757152810692787f, -0.6360547542572021f, -0.012992939911782742f},
+            glm::quat{0.308904767036438f, -0.04253435879945755f, 0.9412603378295898f, 0.1296059787273407f}};
+        Timeline timeline;
+        for (size_t i = 0; i < times.size(); ++i) {
+            auto keyframe = makeKeyframe(times[i]);
+            keyframe.rotation = rotations[i];
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (size_t i = 0; i < times.size(); ++i) {
+            SCOPED_TRACE(times[i]);
+            EXPECT_NEAR(quaternionAngle(timeline.evaluate(times[i]).rotation, rotations[i]), 0.0f, 2.0e-3f);
+        }
+        auto previous = timeline.evaluate(times[1]).rotation;
+        for (int i = 1; i <= 840; ++i) {
+            const float time = times[1] + (times[2] - times[1]) * static_cast<float>(i) / 840.0f;
+            SCOPED_TRACE(time);
+            const auto current = timeline.evaluate(time).rotation;
+            EXPECT_TRUE(std::isfinite(current.w) && std::isfinite(current.x) &&
+                        std::isfinite(current.y) && std::isfinite(current.z));
+            EXPECT_NEAR(glm::length(current), 1.0f, 1.0e-5f);
+            EXPECT_LT(quaternionAngle(previous, current), glm::radians(1.0f));
+            previous = current;
+        }
+        for (int mask = 1; mask < 8; ++mask) {
+            Timeline equivalent;
+            for (size_t i = 0; i < times.size(); ++i) {
+                auto keyframe = makeKeyframe(times[i]);
+                keyframe.rotation = (mask & (1 << i)) ? -rotations[i] : rotations[i];
+                keyframe.easing = EasingType::LINEAR;
+                equivalent.addKeyframe(keyframe);
+            }
+            for (const float time : {8.555f, 8.56f, 10.0f}) {
+                SCOPED_TRACE(std::format("mask {} time {}", mask, time));
+                EXPECT_NEAR(quaternionAngle(timeline.evaluate(time).rotation, equivalent.evaluate(time).rotation), 0.0f, 2.0e-3f);
+            }
+        }
+    }
+
     TEST(SequencerTimelineRegressionTest, ConstantOrientationDollyRemainsFixed) {
         Timeline timeline;
         const auto orientation = glm::angleAxis(glm::radians(60.0f), glm::vec3(0.0f, 1.0f, 0.0f));

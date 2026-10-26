@@ -19,6 +19,9 @@ from test_render_on_demand_idle import _call, _initialize, _ledger, _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
 
+SCENE_SIDE = 256
+FULL_BUDGET = SCENE_SIDE * SCENE_SIDE
+
 
 @pytest.fixture
 def lod_scene(tmp_path):
@@ -28,7 +31,7 @@ def lod_scene(tmp_path):
     properties = ["x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2",
                   "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
     # Enough detail to expose coarse-budget recovery, with a small runtime fixture.
-    side = 256
+    side = SCENE_SIDE
     header = f"ply\nformat binary_little_endian 1.0\nelement vertex {side * side}\n"
     header += "".join(f"property float {name}\n" for name in properties) + "end_header\n"
     with model.open("wb") as output:
@@ -103,7 +106,9 @@ def test_lod_budget_recovers_without_camera_input(lod_scene, tmp_path, low_budge
     assert {"scene_load_ply", "camera_reset", "camera_get", "editor_run",
             "render_capture", "runtime_frame_ledger"} <= tools
     _tool(endpoint, "scene_load_ply", {"path": fixture})
-    _editor(endpoint, "lf.get_render_settings().lod_max_splats = 100000")
+    # Stay within the panel's full-quality limit so baseline and restoration
+    # request the same budget even after the hierarchy statistics arrive.
+    _editor(endpoint, f"lf.get_render_settings().lod_max_splats = {FULL_BUDGET}")
     # Import and the first shader compilation may outlive an idle frame window.
     deadline = time.monotonic() + 60
     while True:
@@ -125,7 +130,7 @@ def test_lod_budget_recovers_without_camera_input(lod_scene, tmp_path, low_budge
     low = _stats(endpoint, tmp_path / "low.json")
     # The GPU selector permits 20% headroom for hierarchy transitions.
     assert 0 < low["selected"] <= low_budget * 1.2, low
-    _editor(endpoint, "lf.get_render_settings().lod_max_splats = 100000")
+    _editor(endpoint, f"lf.get_render_settings().lod_max_splats = {FULL_BUDGET}")
     _quiet(endpoint)
     restored = _stats(endpoint, tmp_path / "restored.json")
     recovered = _capture(endpoint)
@@ -144,7 +149,7 @@ def test_lod_budget_recovers_without_camera_input(lod_scene, tmp_path, low_budge
 
     # Reading/capturing a settled cut and setting the same budget must not
     # leave a continuous render loop running.
-    _editor(endpoint, "lf.get_render_settings().lod_max_splats = 100000")
+    _editor(endpoint, f"lf.get_render_settings().lod_max_splats = {FULL_BUDGET}")
     settled = _quiet(endpoint)
     time.sleep(2)
     assert _ledger(endpoint)["views_rendered"] == settled["views_rendered"]

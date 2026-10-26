@@ -57,6 +57,7 @@ namespace lfs::vis {
         p.show_grid = s.show_grid;
         p.grid_plane = s.grid_plane;
         p.grid_opacity = s.grid_opacity;
+        p.collision_preview_opacity = s.collision_preview_opacity;
         p.point_cloud_mode = s.point_cloud_mode;
         p.voxel_size = s.voxel_size;
         p.show_rings = s.show_rings;
@@ -73,6 +74,8 @@ namespace lfs::vis {
         p.split_position = s.split_position;
         p.split_view_offset = s.split_view_offset;
         p.raster_backend = static_cast<int>(s.raster_backend);
+        p.transparency_mode = static_cast<int>(s.transparency_mode);
+        p.stochastic_max_frames = s.stochastic_max_frames;
         p.gut = lfs::rendering::isGutBackend(s.raster_backend);
         p.equirectangular = s.equirectangular;
         p.orthographic = s.orthographic;
@@ -160,6 +163,7 @@ namespace lfs::vis {
         s.show_grid = p.show_grid;
         s.grid_plane = p.grid_plane;
         s.grid_opacity = p.grid_opacity;
+        s.collision_preview_opacity = p.collision_preview_opacity;
         s.point_cloud_mode = p.point_cloud_mode;
         s.voxel_size = p.voxel_size;
         s.show_rings = p.show_rings;
@@ -177,6 +181,9 @@ namespace lfs::vis {
         s.split_position = p.split_position;
         s.split_view_offset = p.split_view_offset;
         const auto previous_backend = s.raster_backend;
+        s.transparency_mode = static_cast<lfs::rendering::GaussianTransparencyMode>(
+            std::clamp(p.transparency_mode, 0, 2));
+        s.stochastic_max_frames = std::clamp(p.stochastic_max_frames, 1, 1024);
         const bool previous_gut = s.gut;
         const auto requested_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
         const bool gut_toggle_only = requested_backend == previous_backend && p.gut != previous_gut;

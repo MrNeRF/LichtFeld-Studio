@@ -24,6 +24,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
@@ -784,6 +785,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("tooltip_key", &MenuToolbarButtonView::tooltip_key);
             handle.RegisterMember("tooltip_text", &MenuToolbarButtonView::tooltip_text);
             handle.RegisterMember("selected", &MenuToolbarButtonView::selected);
+            handle.RegisterMember("enabled", &MenuToolbarButtonView::enabled);
         }
         ctor.RegisterArray<std::vector<MenuToolbarButtonView>>();
         ctor.Bind("menu_labels", &menu_labels_);
@@ -1318,7 +1320,7 @@ namespace lfs::vis::gui {
         } else {
             if (hovered_toolbar_btn) {
                 wants_input_ = true;
-                if (input.mouse_clicked[0]) {
+                if (input.mouse_clicked[0] && !hovered_toolbar_btn->IsClassSet("disabled")) {
                     dispatchToolbarAction(
                         hovered_toolbar_btn->GetAttribute<Rml::String>("data-action", ""),
                         hovered_toolbar_btn->GetAttribute<Rml::String>("data-value", ""));
@@ -1985,6 +1987,7 @@ namespace lfs::vis::gui {
                 localization.get("toolbar.free_orbit_camera"),
                 localization.get("toolbar.fly_camera"),
                 localization.get("toolbar.drone_camera"),
+                localization.get("collision.walk"),
             };
             navigation_tooltip_language_generation_ = language_generation;
             has_navigation_tooltip_language_generation_ = true;
@@ -2002,6 +2005,7 @@ namespace lfs::vis::gui {
                 {NavMode::Trackball, "world", 1},
                 {NavMode::FPV, "camera-fpv", 2},
                 {NavMode::Drone, "drone", 3},
+                {NavMode::Walk, "walk", 4},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
@@ -2009,6 +2013,11 @@ namespace lfs::vis::gui {
                 camera_buttons.push_back(make("menu-camera-" + name, "set_camera_navigation_mode", name,
                                               spec.icon, "", navigation_tooltips_[spec.tooltip_index],
                                               mode == spec.mode));
+                if (spec.mode == NavMode::Walk) {
+                    const auto* manager = services().sceneOrNull();
+                    camera_buttons.back().enabled = manager && std::ranges::any_of(manager->getScene().getNodes(),
+                                                                                   [](const auto* node) { return node && bool(node->collision); });
+                }
             }
         }
 
@@ -2125,7 +2134,8 @@ namespace lfs::vis::gui {
             if (!ic)
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
-                ic->setCameraNavigationMode(*mode);
+                if (!ic->setCameraNavigationMode(*mode))
+                    return;
                 if (auto* const viewer = lfs::python::get_visualizer()) {
                     viewer->projectMarkSessionChapterCommitted("VIEW");
                 }

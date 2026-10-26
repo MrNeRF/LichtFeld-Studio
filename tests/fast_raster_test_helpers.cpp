@@ -122,7 +122,6 @@ namespace lfs::training {
                     .impact_sum = device_f32(fused_extra_gradients.impact_sum_out, {static_cast<size_t>(gaussian_model.size())}),
                     .impact_peak = device_f32(fused_extra_gradients.impact_peak_out, {static_cast<size_t>(gaussian_model.size())}),
                     .color_variance_weight = color_variance.weight,
-                    .color_variance_target = color_variance.target,
                     .color_variance_loss = color_variance.loss,
                     .color_variance_pixel_weight = color_variance.pixel_weight,
                 },

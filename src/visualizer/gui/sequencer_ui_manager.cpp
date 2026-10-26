@@ -2674,6 +2674,10 @@ namespace lfs::vis::gui {
         if (!pip_initialized_)
             initPipPreview();
 
+        (void)sm->getModelForRendering();
+        if (sm->getScene().combinedModelBuildPending())
+            return;
+
         const glm::mat3 cam_rot = glm::mat3_cast(key.rotation);
         const auto image = rm->renderPreviewImage(sm, cam_rot, key.position, key.focal_length_mm,
                                                   key.width, key.height);

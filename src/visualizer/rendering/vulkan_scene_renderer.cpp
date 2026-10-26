@@ -31,6 +31,7 @@ namespace lfs::vis {
 
         public:
             explicit VulkanSceneRenderer(VulkanContext& context) : context_(context), training_(context, renderer_) {}
+            void invalidateStochasticHistory(DirtyMask flags) override { renderer_.invalidateStochasticHistory(flags); }
             SceneTrainingInterop* trainingInterop() override { return &training_; }
             std::expected<void, std::string> prepareDevice() override { return renderer_.prepareDevice(context_); }
             std::expected<RenderResult, std::string> render(const core::SplatData& model, const rendering::ViewportRenderRequest& request,

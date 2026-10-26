@@ -76,8 +76,9 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 9> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 10> kRuntimeJobIds = {
             "nodes.evaluate",
+            "collision.main",
             "editor.python",
             "training.main",
             "export.scene",
@@ -117,6 +118,8 @@ namespace lfs::app {
                 return "Media Extraction";
             if (job_id == "nodes.evaluate")
                 return "Node evaluation";
+            if (job_id == "collision.main")
+                return "Collision";
             if (job_id == "editor.python") {
                 return "Python Editor";
             }
@@ -776,6 +779,17 @@ namespace lfs::app {
                                  "conversion",
                                  "GUI manager is not initialized"));
             }
+            if (job_id == "collision.main") {
+                if (!gui)
+                    return unavailable_job_json("collision.main", "Collision", "conversion", "GUI manager is not initialized");
+                const auto state = gui->asyncTasks().collisionJob();
+                const bool active = state && state->running();
+                const std::string status = !state ? "idle" : active                                  ? "running"
+                                                         : state->status == vis::JobStatus::Failed   ? "failed"
+                                                         : state->status == vis::JobStatus::Canceled ? "cancelled"
+                                                                                                     : "finished";
+                return json{{"id", "collision.main"}, {"label", "Collision"}, {"kind", "conversion"}, {"active", active}, {"status", status}, {"outcome", status}, {"progress", state ? state->progress : 0.f}, {"stage", state ? state->stage : ""}, {"error", state ? state->error : ""}, {"cancel_supported", active}, {"actions", {{"cancel", active}, {"start", false}, {"pause", false}, {"resume", false}, {"dismiss", false}}}};
+            }
             if (job_id == "operator.modal") {
                 return operator_modal_job_json();
             }
@@ -1131,6 +1145,12 @@ namespace lfs::app {
                 return {};
             }
 
+            if (job_id == "collision.main") {
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Collision supports cancel only while the GUI is active");
+                gui->asyncTasks().cancelCollision();
+                return {};
+            }
             if (job_id == "mesh2splat") {
                 return std::unexpected("mesh2splat does not currently support runtime control");
             }

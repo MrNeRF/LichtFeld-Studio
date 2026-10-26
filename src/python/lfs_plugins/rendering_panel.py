@@ -12,6 +12,7 @@ from .default_reset import LabelDefaultReset, values_match
 from .panels import panel_class
 from .rendering_defaults import confirm_apply_defaults
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .collision_rendering import CollisionRendering
 from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
 from .types import Panel
 from .selected_splat import active_splat_node
@@ -82,8 +83,9 @@ BOOL_PROPS = [
 ]
 
 SLIDER_PROPS = [
+    "stochastic_max_frames",
     "selection_outline_opacity", "selection_outline_width", "selection_outline_threshold",
-    "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
+    "axes_size", "grid_opacity", "collision_preview_opacity", "camera_frustum_scale", "voxel_size",
     "focal_length_mm", "render_scale", "color_exposure", "environment_exposure", "environment_rotation_degrees",
     "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
     "ppisp_exposure", "ppisp_vignette_strength", "ppisp_gamma_multiplier",
@@ -94,11 +96,13 @@ SLIDER_PROPS = [
 ]
 
 SCRUB_FIELD_DEFS = {
+    "stochastic_max_frames": ScrubFieldSpec(1, 1024, 1, "%d", data_type=int),
     "selection_outline_opacity": ScrubFieldSpec(0, 1, 0.01, "%.2f"),
     "selection_outline_width": ScrubFieldSpec(1, 12, 0.01, "%.2f"),
     "selection_outline_threshold": ScrubFieldSpec(0.05, 0.95, 0.01, "%.2f"),
 
     "axes_size": ScrubFieldSpec(0.5, 10.0, 0.01, "%.3f"),
+    "collision_preview_opacity": ScrubFieldSpec(0, 1, .01, "%.2f"),
     "grid_opacity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "camera_frustum_scale": ScrubFieldSpec(0.01, 10.0, 0.01, "%.3f"),
     "voxel_size": ScrubFieldSpec(0.001, 0.1, 0.001, "%.3f"),
@@ -138,6 +142,7 @@ SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
     "depth_filter_viz_mode",
     "color_tonemapping",
+    "transparency_mode",
 ]
 RASTER_BACKENDS = {"3dgs", "3dgut"}
 
@@ -175,6 +180,7 @@ SECTION_NAMES = (
     "lod_advanced",
     "selection",
     "mesh",
+    "collision",
     "post_process",
     "ppisp_crf",
 )
@@ -197,6 +203,8 @@ LOCALE_KEY = {
     "depth_filter_viz_mode": "main_panel.depth_filter_viz_mode",
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
+    "transparency_mode": "main_panel.transparency_mode",
+    "stochastic_max_frames": "main_panel.stochastic_max_frames",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
     "grid_opacity": "main_panel.grid_opacity",
@@ -346,6 +354,7 @@ class RenderingPanel(Panel):
             commit_value=self._commit_render_setting,
         )
         self._reactive_binding = PanelStateBinding()
+        self._collision = CollisionRendering()
 
     def capture_chrome(self):
         return {"version": 2, "collapsed": sorted(self._collapsed)}
@@ -402,6 +411,7 @@ class RenderingPanel(Panel):
             el.add_event_listener("change", self._on_color_text_change)
             el.add_event_listener("blur", self._on_color_text_blur)
         self._scrub_fields.mount(doc)
+        self._collision.mount(doc)
         self._default_reset.mount(doc)
         self._selection_groups.mount(doc)
         self._sync_section_states()
@@ -419,6 +429,8 @@ class RenderingPanel(Panel):
             RuntimeState.transform_space,
             RuntimeState.pivot_mode,
             RuntimeState.language_generation,
+            RuntimeState.viewport_toolbar_generation,
+            RuntimeState.collision_state,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
         self._reactive_binding.watch(RuntimeState.render_settings_generation, dirty="*")
@@ -436,6 +448,7 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
+        self._collision.bind(model)
         model.bind("navigation_up_idx", self._navigation_up_index, self._set_navigation_up_index)
         model.bind_event("align_navigation_grid", self._align_navigation_grid)
 
@@ -655,7 +668,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if settings is None:
             return
-        settings._set_without_session_dirty(prop, float(value))
+        typed_value = int(round(float(value))) if prop == "stochastic_max_frames" else float(value)
+        settings._set_without_session_dirty(prop, typed_value)
         self._render_slider_pending = True
 
     def on_update(self, doc):
@@ -663,7 +677,7 @@ class RenderingPanel(Panel):
         if not s:
             return False
 
-        dirty = False
+        dirty = self._collision.update()
         if not getattr(s, "selection_outline", False) and self._color_edit_prop == "selection_outline_color":
             self._hide_picker()
             dirty = True
@@ -924,6 +938,8 @@ class RenderingPanel(Panel):
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
+        self._collision.scrubs.unmount()
+        self._collision.handle = None
         self._default_reset.unmount()
 
     def _reset_default(self, prop):
@@ -979,7 +995,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        settings._set_without_session_dirty(prop, float(value))
+        typed_value = int(round(float(value))) if prop == "stochastic_max_frames" else float(value)
+        settings._set_without_session_dirty(prop, typed_value)
         if self._handle:
             self._handle.dirty(prop)
             if prop == "focal_length_mm":

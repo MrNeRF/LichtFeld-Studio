@@ -12,6 +12,7 @@
 #include "core/rad_pool_quant.hpp"
 #include "core/splat_data.hpp"
 #include "gpu_lod_target_feedback.hpp"
+#include "dirty_flags.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
@@ -53,6 +54,7 @@ namespace lfs::vis {
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
         friend struct SplitOutputLifetimeTestAccess;
+        friend struct StochasticHistoryTestAccess;
 
     public:
         using RenderResult = SceneRenderer::RenderResult;
@@ -154,6 +156,7 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
+        void invalidateStochasticHistory(DirtyMask dirty_flags = DirtyFlag::ALL);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -364,7 +367,51 @@ namespace lfs::vis {
             bool depth_view,
             float depth_min,
             float depth_max,
-            lfs::rendering::DepthVisualizationMode depth_visualization_mode);
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            const _VulkanBuffer* color_override = nullptr);
+
+        struct StochasticHistory {
+            VulkanGSStochasticBuffers buffers;
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t last_color = 0;
+            bool valid = false;
+        };
+        struct StochasticFrame {
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t output_color = 0;
+            bool history_valid = false;
+            bool enabled = false;
+        };
+        // Projection scratch is shared by all views. Only the last submitted
+        // projection can be reused, even when another view still has color history.
+        struct StochasticProjectionCache {
+            StochasticFrame frame;
+            RenderTargetId slot{};
+            std::uint64_t first_submission = 0;
+            std::uint64_t last_submission = 0;
+            std::size_t wave_count = 0;
+            std::optional<VulkanGSRenderer::StochasticTileState> tiles;
+        };
+        [[nodiscard]] static bool canReuseStochasticProjection(
+            const StochasticFrame& frame, RenderTargetId slot, const StochasticProjectionCache& cache);
+        static void updateStochasticProjectionStats(
+            StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats);
+        [[nodiscard]] StochasticFrame prepareStochasticFrame(
+            VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
+            RenderTargetId slot, bool content_changed);
+        [[nodiscard]] const _VulkanBuffer* resolveStochasticFrame(
+            const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
+            RenderTargetId slot, const glm::vec3& background);
+        void commitStochasticFrame(const StochasticFrame& frame, RenderTargetId slot);
+        void retireStochasticBuffer(_VulkanBuffer& buffer, bool destroy_now);
+        void releaseUnusedStochasticBuffers(RenderTargetId slot, std::uint32_t mode);
+        void releaseStochasticBuffers();
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);
@@ -650,6 +697,13 @@ namespace lfs::vis {
         LodPageInputStorage lod_page_inputs_;
         std::unique_ptr<ComposePipeline> compose_;
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
+        std::unordered_map<RenderTargetId, StochasticHistory, RenderTargetIdHash> stochastic_histories_;
+        std::uint64_t stochastic_history_generation_ = 1;
+        std::unordered_map<RenderTargetId, std::uint32_t, RenderTargetIdHash> stochastic_sample_serials_;
+        StochasticProjectionCache stochastic_projection_cache_;
+        // Stochastic frames keep depth keys alive, so the sort-index copy owns
+        // its own allocation instead of aliasing them.
+        bool stochastic_sort_indices_owned_ = false;
         OutputSlotRing ring_{};
         mutable std::recursive_mutex target_mutex_;
         RenderTargetId rendering_target_{};

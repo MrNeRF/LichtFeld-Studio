@@ -7,6 +7,7 @@
 #include "app/converter.hpp"
 #include "app/gpu_preflight.hpp"
 #include "app/licht_command.hpp"
+#include "app/voxelizer.hpp"
 #include "core/abi.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -224,6 +225,16 @@ namespace {
                 // Converting trains nothing, so any tensor backend can run it.
                 preflightGpuOrExit(false, true);
                 return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::VoxelizeMode>) {
+                if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA) {
+                    std::println(stderr, "Collision generation requires the CUDA tensor backend.");
+                    return 1;
+                }
+#if LFS_HAS_CUDA
+                applyCudaContextTuning();
+#endif
+                preflightGpuOrExit(false);
+                return lfs::app::run_voxelizer(mode);
             } else if constexpr (std::is_same_v<T, lfs::io::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);

@@ -48,6 +48,7 @@ namespace lfs::vis {
                                Field::SplatSimplifyStateValue,
                                "splat_simplify_state",
                                TaskProgressState{}),
+          collision_state(store_, Field::CollisionStateValue, "collision_state", TaskProgressState{}),
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),

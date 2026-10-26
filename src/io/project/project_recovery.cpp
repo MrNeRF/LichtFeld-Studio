@@ -79,6 +79,7 @@ namespace lfs::io::project {
             return fourcc == FOURCC_SPLT ||
                    fourcc == FOURCC_PCLD ||
                    fourcc == FOURCC_MESH ||
+                   fourcc == FOURCC_COLV ||
                    fourcc == FOURCC_CKPT ||
                    fourcc == FOURCC_PPIS;
         }
