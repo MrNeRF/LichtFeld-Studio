@@ -49,7 +49,7 @@ extern "C" int lfs_hip_chain_reduce_f32(LfsHipContext* context, LfsHipView input
         DeviceScope device(context->device);
         if (!size) {
             require(operation == LFS_HIP_REDUCE_SUM || operation == LFS_HIP_REDUCE_MEAN, "Empty HIP fused minimum or maximum reduction");
-            hipLaunchKernelGGL(fill, dim3(blocks(segments)), dim3(256), 0, context->stream, static_cast<float*>(output.buffer->data) + output.offset / sizeof(float), segments, operation == LFS_HIP_REDUCE_SUM ? 0.0f : NAN);
+            check(lfs_hip_fill_internal(context, static_cast<float*>(output.buffer->data) + output.offset / sizeof(float), segments, operation == LFS_HIP_REDUCE_SUM ? 0.0f : NAN));
             check(hipGetLastError());
             return;
         }

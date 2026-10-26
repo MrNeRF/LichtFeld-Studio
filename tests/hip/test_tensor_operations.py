@@ -662,6 +662,129 @@ class TensorOperations(native.RuntimeContract):
             self.checked("index_cast", context, indices, cast, 2, 6)
             self.assertEqual(self.read(context, cast, 2, 2), [2, 0])
 
+    @contextmanager
+    def readback_slot(self, context):
+        slot = c.c_void_p()
+        self.checked("readback_create", context, c.byref(slot))
+        try:
+            yield slot
+        finally:
+            # Fault tests deliberately leave an execution error in the context.
+            # Draining it is independent of the snapshot's own error lifetime.
+            error = Error()
+            self.calls["context_synchronize"](context, c.byref(error))
+            self.checked("readback_destroy", context, slot)
+
+    def test_invalid_index_readback_never_exposes_payload_and_can_be_discarded(self):
+        with self.resources() as context, self.readback_slot(context) as slot:
+            source = self.tensor(context, [1, 2, 3])
+            invalid = self.tensor(context, [-1, 3], 3)
+            valid = self.tensor(context, [2, 0], 3)
+            output = self.tensor(context, [99, 99])
+            p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+            self.checked("gather", context, source, invalid, output, c.byref(p))
+            self.checked("readback_enqueue", context, slot, output.buffer, output.offset, 8)
+            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -2)
+            destination, ready = (c.c_float * 2)(-7, -8), c.c_int32(9)
+            self.assertEqual(self.reject("readback_poll", context, slot, destination, 8, c.byref(ready)).native_code, -2)
+            self.assertEqual(ready.value, 0)
+            self.assertEqual(list(destination), [-7, -8])
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            # Consuming the context error must not validate an already bad snapshot.
+            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -2)
+            self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -2)
+            self.assertEqual(ready.value, 0)
+            self.checked("gather", context, source, valid, output, c.byref(p))
+            self.checked("readback_enqueue", context, slot, output.buffer, output.offset, 8)
+            self.checked("readback_wait", context, slot)
+            self.checked("readback_poll", context, slot, destination, 8, c.byref(ready))
+            self.assertEqual(ready.value, 1)
+            self.assertEqual(list(destination), [3, 1])
+
+    def test_later_index_error_does_not_poison_earlier_snapshot(self):
+        with self.resources() as context, self.readback_slot(context) as earlier, self.readback_slot(context) as later:
+            source = self.tensor(context, [1, 2, 3])
+            valid = self.tensor(context, [2, 0], 3)
+            invalid = self.tensor(context, [-1, 3], 3)
+            output = self.tensor(context, [99, 99])
+            p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+            self.checked("gather", context, source, valid, output, c.byref(p))
+            self.checked("readback_enqueue", context, earlier, output.buffer, 0, 8)
+            self.checked("gather", context, source, invalid, output, c.byref(p))
+            self.checked("readback_enqueue", context, later, output.buffer, 0, 8)
+            destination, ready = (c.c_float * 2)(-7, -8), c.c_int32()
+            self.checked("readback_wait", context, earlier)
+            self.checked("readback_poll", context, earlier, destination, 8, c.byref(ready))
+            self.assertEqual(ready.value, 1)
+            self.assertEqual(list(destination), [3, 1])
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            destination[:] = [-7, -8]
+            self.assertEqual(self.reject("readback_poll", context, later, destination, 8, c.byref(ready)).native_code, -2)
+            self.assertEqual(ready.value, 0)
+            self.assertEqual(list(destination), [-7, -8])
+            self.assertEqual(self.reject("readback_wait", context, later).native_code, -2)
+            self.assertEqual(self.reject("readback_poll", context, later, None, 0, c.byref(ready)).native_code, -2)
+            self.assertEqual(ready.value, 0)
+
+    def test_packed_readback_preserves_faults_across_appends_and_context_reset(self):
+        with self.resources() as context, self.readback_slot(context) as slot:
+            source = self.tensor(context, [1, 2, 3])
+            invalid = self.tensor(context, [-1, 3], 3)
+            valid = self.tensor(context, [2, 0], 3)
+            output = self.tensor(context, [99, 99])
+            host = c.c_uint64()
+            self.checked("readback_reserve", context, slot, 8, c.byref(host))
+            p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+            self.checked("gather", context, source, invalid, output, c.byref(p))
+            self.checked("readback_append", context, slot, output.buffer, 0, 4, 0)
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -2)
+            self.checked("gather", context, source, valid, output, c.byref(p))
+            self.checked("readback_append", context, slot, output.buffer, 4, 4, 4)
+            self.checked("context_synchronize", context)
+            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -2)
+            destination, ready = (c.c_float * 2)(-7, -8), c.c_int32(9)
+            self.assertEqual(self.reject("readback_poll", context, slot, destination, 8, c.byref(ready)).native_code, -2)
+            self.assertEqual(list(destination), [-7, -8])
+            self.assertEqual(ready.value, 0)
+            self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -2)
+            self.checked("readback_append", context, slot, output.buffer, 0, 8, 0)
+            self.checked("readback_wait", context, slot)
+            self.checked("readback_poll", context, slot, destination, 8, c.byref(ready))
+            self.assertEqual(ready.value, 1)
+            self.assertEqual(list(destination), [3, 1])
+
+    def test_readback_reports_masked_scatter_cardinality_error(self):
+        with self.resources() as context, self.readback_slot(context) as slot:
+            output = self.tensor(context, [99, 99, 99])
+            mask = self.tensor(context, [1, 0, 1], 4)
+            source = self.tensor(context, [7])
+            self.checked("masked_scatter", context, output, mask, source, 0, 3, 1)
+            self.checked("readback_enqueue", context, slot, output.buffer, 0, 12)
+            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -1)
+            destination, ready = (c.c_float * 3)(-7, -8, -9), c.c_int32(9)
+            self.assertEqual(self.reject("readback_poll", context, slot, destination, 12, c.byref(ready)).native_code, -1)
+            self.assertEqual(ready.value, 0)
+            self.assertEqual(list(destination), [-7, -8, -9])
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -1)
+            self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -1)
+
+    def test_empty_readback_and_ordering_marker_capture_index_errors(self):
+        for marker in (False, True):
+            with self.subTest(marker=marker), self.resources() as context, self.readback_slot(context) as slot:
+                source = self.tensor(context, [1])
+                indices = self.tensor(context, [1], 3)
+                output = self.tensor(context, [99])
+                p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([1]), layout([1]))
+                self.checked("gather", context, source, indices, output, c.byref(p))
+                if marker:
+                    self.checked("marker_record", context, slot)
+                else:
+                    self.checked("readback_enqueue", context, slot, None, 0, 0)
+                self.assertEqual(self.reject("readback_wait", context, slot).native_code, -2)
+                ready = c.c_int32(9)
+                self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -2)
+                self.assertEqual(ready.value, 0)
+
     def test_invalid_update_fill_and_cast_skip_out_of_range_lanes(self):
         with self.resources() as context:
             output = self.tensor(context, [99] * 6)
@@ -843,6 +966,41 @@ class TensorFaultRecovery(TensorOperations):
                 self.fail_once(2)
                 self.reject("context_destroy", context)
                 # Destruction retains the pinned staging after failed release.
+
+    def test_readback_error_capture_failures_retain_all_owners(self):
+        for fault in (1, 8, 10, 6, 3):
+            with self.subTest(fault=fault), self.resources() as context:
+                source = self.tensor(context, [1, 2, 3])
+                indices = self.tensor(context, [2, 0], 3)
+                output = self.tensor(context, [99, 99])
+                p = Gather(c.sizeof(Gather), 0, 3, 0, 0, 1, layout([3]), layout([2]))
+                self.checked("gather", context, source, indices, output, c.byref(p))
+                with self.readback_slot(context) as slot:
+                    host = c.c_uint64()
+                    self.checked("readback_reserve", context, slot, 4, c.byref(host))
+                    self.fail_once(fault)
+                    self.reject("readback_append", context, slot, output.buffer, 0, 0, 0)
+                    ready = c.c_int32(9)
+                    if fault == 3:
+                        # The payload/error capture succeeded; a failed event
+                        # record falls back to a stream completion query.
+                        self.checked("readback_wait", context, slot)
+                        self.checked("readback_poll", context, slot, None, 0, c.byref(ready))
+                        self.assertEqual(ready.value, 1)
+                    else:
+                        self.reject("readback_wait", context, slot)
+                        self.reject("readback_poll", context, slot, None, 0, c.byref(ready))
+                        self.assertEqual(ready.value, 0)
+                    self.checked("readback_append", context, slot, output.buffer, 0, 0, 0)
+                    self.checked("readback_wait", context, slot)
+                    self.checked("readback_poll", context, slot, None, 0, c.byref(ready))
+                    self.assertEqual(ready.value, 1)
+                    self.fail_once(2)
+                    self.reject("readback_destroy", context, slot)
+                    self.fail_once(9)
+                    self.reject("readback_destroy", context, slot)
+                    # The fixture retries destruction; pinned/device snapshot
+                    # storage remains owned through both release failures.
 
     def test_index_error_storage_allocation_and_cleanup_can_retry(self):
         for fault in (1, 8):

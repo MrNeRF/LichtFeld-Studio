@@ -244,10 +244,17 @@ training integration remains separate work.
 No CUDA, Metal or Vulkan implementation is replaced or modified.
 
 Checked indexing skips out-of-range device indices and reports the error at
-context synchronization or a blocking host read. Valid lanes may already have
+context synchronization, a blocking host read, or a staged readback wait/poll.
+Each staged readback captures prior execution faults at its queue position;
+later operations cannot invalidate an earlier snapshot. Packed appends retain
+faults from every appended range, including across context synchronization.
+A failed snapshot exposes neither bytes nor successful readiness. A drained
+null poll discards it while reporting its error, allowing slot reuse. Context
+error consumption is independent and does not validate a failed snapshot.
+Valid lanes may already have
 completed; these operations do not promise transactional rollback. Masked scatter
 validates its supplied count on the device before updating elements. Consuming an
-asynchronous error clears it, allowing subsequent valid operations on the context.
+context error clears it, allowing subsequent valid operations on the context.
 
 The build compiles runtime services, pointwise kernels and Tensor operators as
 separate objects. `LFS_HIP_OFFLOAD_JOBS` controls concurrent architecture

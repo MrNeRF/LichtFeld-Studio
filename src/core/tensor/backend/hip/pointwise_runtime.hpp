@@ -45,9 +45,5 @@ namespace {
         hipLaunchKernelGGL((pointwise_kernel<Mode, In, Out, Op>), dim3(blocks(count)), dim3(256), 0, context->stream, lhs, rhs, output, count, scalar, op);
         check(hipGetLastError());
     }
-    __global__ void arange_kernel(float* out, size_t n, float start, float step) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < n; i += size_t(gridDim.x) * blockDim.x)
-            out[i] = start + static_cast<float>(i) * step;
-    }
 
 } // namespace

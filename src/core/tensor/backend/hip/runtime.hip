@@ -1,6 +1,25 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "runtime_common.hpp"
+namespace {
+    __global__ void fill(float* output, size_t count, float value) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+             i < count; i += size_t(gridDim.x) * blockDim.x)
+            output[i] = value;
+    }
+
+    __global__ void affine(const float* input, float* output, size_t count, float scale, float bias) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+             i < count; i += size_t(gridDim.x) * blockDim.x)
+            output[i] = input[i] * scale + bias;
+    }
+} // namespace
+hipError_t lfs_hip_fill_internal(LfsHipContext* context, float* output, size_t count, float value) {
+    if (!count)
+        return hipSuccess;
+    hipLaunchKernelGGL(fill, dim3(blocks(count)), dim3(256), 0, context->stream, output, count, value);
+    return hipGetLastError();
+}
 extern "C" {
 uint32_t lfs_hip_runtime_abi(void) { return LFS_HIP_RUNTIME_ABI_VERSION; }
 
@@ -193,6 +212,44 @@ namespace {
         staging->host = replacement;
         staging->capacity = bytes;
     }
+    __global__ void snapshot_execution_error(const uint32_t* source, uint32_t* destination) {
+        *destination |= *source;
+    }
+    void capture_execution_error(LfsHipContext* context, LfsHipReadback* staging, bool reset, bool packed = false) {
+        if (reset) {
+            staging->execution_snapshot = false;
+            staging->execution_error_initialized = false;
+        }
+        if (!context->index_work_pending)
+            return;
+        try {
+            if (!staging->execution_error_host)
+                check(hipHostMalloc(reinterpret_cast<void**>(&staging->execution_error_host), sizeof(uint32_t), hipHostMallocDefault));
+            // This runs at the snapshot's position, never at wait/poll time.
+            // Packed appends retain faults from all ranges, even if a context
+            // synchronization consumes and resets the source flag in between.
+            const auto* captured = context->index_error;
+            if (packed) {
+                if (!staging->execution_error_device)
+                    check(hipMalloc(&staging->execution_error_device, sizeof(uint32_t)));
+                if (!staging->execution_error_initialized) {
+                    check(hipMemsetAsync(staging->execution_error_device, 0, sizeof(uint32_t), context->stream));
+                    staging->execution_error_initialized = true;
+                }
+                hipLaunchKernelGGL(snapshot_execution_error, dim3(1), dim3(1), 0, context->stream,
+                                   context->index_error, staging->execution_error_device);
+                check(hipGetLastError());
+                captured = staging->execution_error_device;
+            }
+            check(hipMemcpyAsync(staging->execution_error_host, captured,
+                                 sizeof(uint32_t), hipMemcpyDeviceToHost, context->stream));
+            staging->execution_snapshot = true;
+        } catch (const HipFailure& failure) {
+            // A failed error capture cannot turn a payload into a valid result.
+            staging->copy_error = failure.code;
+            throw;
+        }
+    }
 } // namespace
 int lfs_hip_readback_create(LfsHipContext* context, LfsHipReadback** output, LfsHipError* error) {
     return boundary(error, [&] {
@@ -231,6 +288,7 @@ int lfs_hip_readback_enqueue(LfsHipContext* context, LfsHipReadback* staging, co
             staging->copy_error = hipMemcpyAsync(staging->host, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream);
             check(staging->copy_error);
         }
+        capture_execution_error(context, staging, true);
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -257,6 +315,7 @@ int lfs_hip_staged_upload(LfsHipContext* context, LfsHipReadback* staging, LfsHi
             staging->copy_error = hipMemcpyAsync(static_cast<char*>(destination->data) + offset, staging->host, bytes, hipMemcpyHostToDevice, context->stream);
             check(staging->copy_error);
         }
+        capture_execution_error(context, staging, true);
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -268,6 +327,8 @@ int lfs_hip_marker_record(LfsHipContext* context, LfsHipReadback* marker, LfsHip
         DeviceScope device(context->device);
         marker->pending = true;
         marker->recorded = false;
+        marker->copy_error = hipSuccess;
+        capture_execution_error(context, marker, true);
         check(hipEventRecord(marker->completion, context->stream));
         marker->recorded = true;
     });
@@ -295,12 +356,14 @@ int lfs_hip_readback_append(LfsHipContext* context, LfsHipReadback* staging, con
                 "HIP packed readback range exceeds reserved host slot");
         DeviceScope device(context->device);
         staging->bytes = staging->reserved_bytes;
+        const bool reset = !staging->pending;
         staging->pending = true;
         staging->recorded = false;
         if (bytes) {
             staging->copy_error = hipMemcpyAsync(static_cast<char*>(staging->host) + destination_offset, static_cast<const char*>(source->data) + offset, bytes, hipMemcpyDeviceToHost, context->stream);
             check(staging->copy_error);
         }
+        capture_execution_error(context, staging, reset, true);
         check(hipEventRecord(staging->completion, context->stream));
         staging->recorded = true;
     });
@@ -312,6 +375,8 @@ int lfs_hip_readback_wait(LfsHipContext* context, LfsHipReadback* staging, LfsHi
         if (staging->pending) {
             check(staging->recorded ? hipEventSynchronize(staging->completion) : hipStreamSynchronize(context->stream));
             check(staging->copy_error);
+            if (staging->execution_snapshot)
+                check_execution_error(*staging->execution_error_host);
         }
     });
 }
@@ -338,6 +403,11 @@ int lfs_hip_readback_poll(LfsHipContext* context, LfsHipReadback* staging, void*
             }
             check(copy_error);
         }
+        if (staging->execution_snapshot && *staging->execution_error_host) {
+            if (!destination)
+                staging->pending = false; // Discard a drained failed snapshot.
+            check_execution_error(*staging->execution_error_host);
+        }
         if (destination && staging->bytes)
             std::memmove(destination, staging->host, staging->bytes);
         staging->pending = false;
@@ -358,6 +428,14 @@ int lfs_hip_readback_destroy(LfsHipContext* context, LfsHipReadback* staging, Lf
             check(hipHostFree(staging->host));
             staging->host = nullptr;
         }
+        if (staging->execution_error_host) {
+            check(hipHostFree(staging->execution_error_host));
+            staging->execution_error_host = nullptr;
+        }
+        if (staging->execution_error_device) {
+            check(hipFree(staging->execution_error_device));
+            staging->execution_error_device = nullptr;
+        }
         context->readbacks.erase(staging);
         delete staging;
     });
@@ -371,8 +449,7 @@ int lfs_hip_fill_f32(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset
             return;
         DeviceScope device(context->device);
         auto* output = reinterpret_cast<float*>(static_cast<char*>(buffer->data) + offset);
-        hipLaunchKernelGGL(fill, dim3(blocks(count)), dim3(256), 0, context->stream, output, count, value);
-        check(hipGetLastError());
+        check(lfs_hip_fill_internal(context, output, count, value));
     });
 }
 

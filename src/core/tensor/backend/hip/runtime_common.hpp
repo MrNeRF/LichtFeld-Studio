@@ -30,6 +30,9 @@ struct LfsHipReadback {
     hipEvent_t completion = nullptr;
     hipError_t copy_error = hipSuccess;
     bool pending = false, recorded = false;
+    uint32_t* execution_error_device = nullptr;
+    uint32_t* execution_error_host = nullptr;
+    bool execution_error_initialized = false, execution_snapshot = false;
 };
 
 struct LfsHipTiming {
@@ -59,6 +62,8 @@ struct LfsHipContext {
 
 hipError_t lfs_hip_release_expression_internal(LfsHipContext*, LfsHipExpression*);
 hipError_t lfs_hip_release_timing_internal(LfsHipContext*, LfsHipTiming*);
+
+hipError_t lfs_hip_fill_internal(LfsHipContext*, float*, size_t, float);
 
 namespace {
     struct HipFailure : std::exception {
@@ -96,6 +101,12 @@ namespace {
         context->index_work_pending = true;
         return context->index_error;
     }
+    void check_execution_error(uint32_t invalid) {
+        if (invalid & 2u)
+            throw std::invalid_argument("HIP masked scatter source count does not match mask");
+        if (invalid & 1u)
+            throw InvalidIndex("HIP index is negative or outside its extent");
+    }
     void synchronize_context(LfsHipContext* context) {
         check(hipStreamSynchronize(context->stream));
         if (context->index_work_pending) {
@@ -109,10 +120,7 @@ namespace {
             // not enqueue fresh work or leave a flag write pending at teardown.
             context->index_error_initialized = false;
             context->index_work_pending = false;
-            if (invalid & 2u)
-                throw std::invalid_argument("HIP masked scatter source count does not match mask");
-            if (invalid & 1u)
-                throw InvalidIndex("HIP index is negative or outside its extent");
+            check_execution_error(invalid);
         }
     }
     __device__ bool checked_index(int64_t index, size_t extent, uint32_t* invalid) {
@@ -211,18 +219,6 @@ namespace {
 
     unsigned blocks(size_t count) {
         return static_cast<unsigned>(std::min<size_t>((count - 1) / 256 + 1, 4096));
-    }
-
-    __global__ void fill(float* output, size_t count, float value) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-             i < count; i += size_t(gridDim.x) * blockDim.x)
-            output[i] = value;
-    }
-
-    __global__ void affine(const float* input, float* output, size_t count, float scale, float bias) {
-        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
-             i < count; i += size_t(gridDim.x) * blockDim.x)
-            output[i] = input[i] * scale + bias;
     }
 
 } // namespace

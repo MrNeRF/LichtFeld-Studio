@@ -1211,6 +1211,9 @@ int lfs_hip_memory_info(LfsHipContext* context, LfsHipMemoryInfo* output, LfsHip
         output->workspace_bytes += context->scan_workspace_bytes;
         output->workspace_bytes += context->sort_workspace_bytes;
         output->owned_bytes = output->workspace_bytes + (context->index_error ? sizeof(uint32_t) : 0);
+        for (const auto* staging : context->readbacks)
+            if (staging->execution_error_device)
+                output->owned_bytes += sizeof(uint32_t);
         for (const auto* buffer : context->buffers)
             output->owned_bytes += buffer->bytes;
     });
@@ -1315,9 +1318,7 @@ int lfs_hip_random(LfsHipContext* context, LfsHipView output, const LfsHipRandom
         if ((p.kind == LFS_HIP_RANDOM_UNIFORM && p.first == p.second) ||
             (p.kind == LFS_HIP_RANDOM_NORMAL && p.second == 0) ||
             (p.kind == LFS_HIP_RANDOM_BERNOULLI && (p.first == 0 || p.first == 1))) {
-            hipLaunchKernelGGL(fill, dim3(blocks(p.count)), dim3(256), 0, context->stream,
-                               reinterpret_cast<float*>(static_cast<char*>(output.buffer->data) + output.offset), p.count, p.first);
-            check(hipGetLastError());
+            check(lfs_hip_fill_internal(context, reinterpret_cast<float*>(static_cast<char*>(output.buffer->data) + output.offset), p.count, p.first));
             return;
         }
         switch (p.kind) {
