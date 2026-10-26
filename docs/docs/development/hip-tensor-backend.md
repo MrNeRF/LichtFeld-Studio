@@ -53,6 +53,8 @@ host submissions. It rejects CUDA streams and foreign storage before dispatch.
 Each native call restores the calling thread's previous HIP device. Tensor
 readback, upload, fences, completion and timestamp facilities use HIP-owned
 resources; CUDA availability is irrelevant to those paths.
+Synchronous scalar results use reusable context-owned staging; a failed copy or
+wait leaves the caller's result unchanged and retains staging for safe cleanup.
 
 Generic pointwise, strided, indexing, reduction, scan, sorting, GEMM and sampling
 operations use the private native operators. Image, geometry and NN operations

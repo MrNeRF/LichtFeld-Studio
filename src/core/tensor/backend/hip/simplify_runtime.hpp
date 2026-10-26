@@ -66,8 +66,7 @@ int lfs_hip_simplify_merge(LfsHipContext* context, const LfsHipView* inputs, con
         simplify_validate<<<blocks(groups), 256, 0, context->stream>>>(static_cast<const int32_t*>(ptr(inputs[5])), static_cast<const int32_t*>(ptr(inputs[6])), groups, members, rows, invalid);
         check(hipGetLastError());
         uint32_t bad = 0;
-        check(hipMemcpyAsync(&bad, invalid, 4, hipMemcpyDeviceToHost, context->stream));
-        check(hipStreamSynchronize(context->stream));
+        read_device_scalar(context, &bad, invalid, sizeof(bad));
         require(!bad, "Invalid HIP simplify offsets or sorted members");
         hip_simplify::simplify_merge_kernel<<<(groups + 127) / 128, 128, 0, context->stream>>>(
             static_cast<const float*>(ptr(inputs[0])), static_cast<const float*>(ptr(inputs[1])), static_cast<const float*>(ptr(inputs[2])),

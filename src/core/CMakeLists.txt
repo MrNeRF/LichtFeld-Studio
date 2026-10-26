@@ -31,7 +31,7 @@ endif()
 # Event bridge shared library
 add_subdirectory(event_bridge)
 
-# Logger shared library (leaf dep, breaks lfs_core â†” lfs_event_bridge cycle)
+# Logger shared library (leaf dep, breaks lfs_core ↔ lfs_event_bridge cycle)
 add_subdirectory(logger)
 add_subdirectory(error)
 add_subdirectory(file_io)

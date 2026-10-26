@@ -130,6 +130,7 @@ class TensorOperations(native.RuntimeContract):
             "cdist_f32": [P, View, View, View, Z, Z, Z, c.c_float, E],
             "memory_info": [P, c.POINTER(MemoryInfo), E],
             "trim_workspace": [P, E],
+            "multinomial": [P, View, View, Z, Z, c.c_uint64, U, E],
         }
         cls.calls.update({name: native.bind(cls.dll, name, args) for name, args in signatures.items()})
         cls.operations = native.pointwise_operations()
@@ -710,6 +711,18 @@ class TensorOperations(native.RuntimeContract):
                                  values, c.byref(shape), 1, 3, 1)
                     self.assertEqual(self.read(context, destination, 6, dtype), [3, 0, 3, 6, 0, 9])
 
+    def test_multinomial_rejects_invalid_weights_without_writing_output(self):
+        with self.resources() as context:
+            output = self.tensor(context, [99], 3)
+            for weights in ([0, 0, 0], [0, -1, 0], [0, float("nan"), 0], [0, float("inf"), 0]):
+                with self.subTest(weights=weights):
+                    source = self.tensor(context, weights)
+                    self.reject("multinomial", context, source, output, 3, 1, 42, 1)
+                    self.assertEqual(self.read(context, output, 1, 3), [99])
+            source = self.tensor(context, [0, 1, 0])
+            self.checked("multinomial", context, source, output, 3, 1, 42, 1)
+            self.assertEqual(self.read(context, output, 1, 3), [1])
+
     def test_random_reproducibility_bounds_and_distribution(self):
         with self.resources() as context:
             count = 4097
@@ -796,6 +809,40 @@ class TensorFaultRecovery(TensorOperations):
     def tearDown(self):
         self.fail_once(0)
         self.assertEqual(self.live_resources(), 0)
+
+    def test_extended_workspace_growth_failure_is_retryable(self):
+        for fault in (7, 9, 8):
+            with self.subTest(fault=fault), self.resources() as context:
+                small = self.tensor(context, [0, 1, 0])
+                large = self.tensor(context, [0, 1] + [0] * 4095)
+                output = self.tensor(context, [99], 3)
+                self.checked("multinomial", context, small, output, 3, 1, 42, 1)
+                self.checked("context_synchronize", context)
+                self.fail_once(fault)
+                self.reject("multinomial", context, large, output, 4097, 1, 42, 1)
+                self.assertEqual(self.read(context, output, 1, 3), [1])
+                self.checked("multinomial", context, large, output, 4097, 1, 42, 1)
+                self.assertEqual(self.read(context, output, 1, 3), [1])
+
+    def test_scalar_staging_survives_copy_sync_and_release_failures(self):
+        for fault in (1, 6, 7):
+            with self.subTest(fault=fault), self.resources() as context:
+                source = self.tensor(context, [0, 1, 0])
+                output = self.tensor(context, [99], 3)
+                if fault != 1:
+                    self.checked("multinomial", context, source, output, 3, 1, 42, 1)
+                    self.checked("context_synchronize", context)
+                    self.checked("memset", context, output, 8, 0x63)
+                self.fail_once(fault)
+                self.reject("multinomial", context, source, output, 3, 1, 42, 1)
+                self.checked("context_synchronize", context)
+                expected = 99 if fault == 1 else 0x6363636363636363
+                self.assertEqual(self.read(context, output, 1, 3), [expected])
+                self.checked("multinomial", context, source, output, 3, 1, 42, 1)
+                self.assertEqual(self.read(context, output, 1, 3), [1])
+                self.fail_once(2)
+                self.reject("context_destroy", context)
+                # Destruction retains the pinned staging after failed release.
 
     def test_index_error_storage_allocation_and_cleanup_can_retry(self):
         for fault in (1, 8):

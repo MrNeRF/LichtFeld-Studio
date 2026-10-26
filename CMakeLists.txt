@@ -237,7 +237,7 @@ add_compile_options($<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--static-global-templat
 
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
-# separated. Single-config generators (Ninja, NMake) use a flat binary dir â€”
+# separated. Single-config generators (Ninja, NMake) use a flat binary dir —
 # the selected CMAKE_BUILD_TYPE is baked in at configure time, so no subdirectory
 # is needed; each target's per-target RUNTIME_OUTPUT_DIRECTORY (set to
 # ${CMAKE_BINARY_DIR}) ensures a flat layout under build/.
@@ -1232,7 +1232,7 @@ if(TARGET lfs_vulkan_rasterizer AND NOT LFS_TENSOR_METAL)
     if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
         # The runtime loads SPIR-V from the resource dir first, so staging must
         # follow every shader rebuild. A POST_BUILD on the executable misses
-        # shader-only edits (no relink â†’ stale staged shaders); an always-run
+        # shader-only edits (no relink → stale staged shaders); an always-run
         # staging target costs one timestamp compare per build.
         add_custom_target(lfs_stage_vulkan_shaders ALL
             COMMAND ${CMAKE_COMMAND} -E make_directory

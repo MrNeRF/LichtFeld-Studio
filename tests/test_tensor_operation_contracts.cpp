@@ -111,6 +111,28 @@ namespace {
         ASSERT_NO_FATAL_FAILURE(check_indices(values({1, -1, 2}, {3}), {0, 1, 2}));
     }
 
+    TEST_P(TensorOperationContracts, MaskedSelectionReadsStridedValuesAndExactCardinality) {
+        const auto input = values({1, 2, 3, 4, 5, 6}, {2, 3}).transpose(0, 1);
+        const auto mask = input > 3.f;
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.masked_select(mask), {3}, {4, 5, 6}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.masked_select(input > 10.f), {0}, {}));
+        auto filled = input.clone();
+        filled.masked_fill_(mask, -2.f);
+        ASSERT_NO_FATAL_FAILURE(expect_values(filled, {3, 2}, {1, -2, 2, -2, 3, -2}));
+    }
+
+    TEST_P(TensorOperationContracts, IndexedWritesPreserveOtherRowsAndAccumulateDuplicates) {
+        const auto indices = Tensor::from_vector(std::vector<int>{2, 0}, {2}, device());
+        auto output = values({1, 2, 3, 4, 5, 6}, {3, 2});
+        output.index_copy_(0, indices, values({7, 8, 9, 10}, {2, 2}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {9, 10, 3, 4, 7, 8}));
+        output.index_fill_(0, indices, -1.f);
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {-1, -1, 3, 4, -1, -1}));
+        const auto duplicates = Tensor::from_vector(std::vector<int>{1, 1}, {2}, device());
+        output.index_add_(0, duplicates, values({1, 2, 3, 4}, {2, 2}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {-1, -1, 7, 10, -1, -1}));
+    }
+
     TEST_P(TensorOperationContracts, SortReturnsAValidPermutationForDuplicateKeys) {
         const std::vector<float> data{3, -1, 3, 0, -1, 2};
         const auto [sorted, indices] = values(data, {data.size()}).sort();

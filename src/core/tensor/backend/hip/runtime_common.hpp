@@ -43,6 +43,7 @@ struct LfsHipContext {
     int device = 0;
     uint32_t* index_error = nullptr;
     uint32_t* index_error_host = nullptr;
+    void* scalar_readback_host = nullptr;
     bool index_work_pending = false, index_error_initialized = false;
     hipStream_t stream = nullptr;
     std::unordered_set<LfsHipBuffer*> buffers;

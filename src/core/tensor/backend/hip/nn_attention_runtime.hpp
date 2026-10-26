@@ -98,20 +98,7 @@ int lfs_hip_nn_attention(LfsHipContext* context, const LfsHipView* inputs, LfsHi
         const size_t group_chunk = std::max<size_t>(1, std::min<size_t>({p->groups, 65535, budget / (p->keys * 4)}));
         const size_t query_chunk = std::max<size_t>(1, std::min<size_t>({p->queries, 64, budget / (group_chunk * p->keys * 4)}));
         const size_t required = count(group_chunk, query_chunk, p->keys) * 4;
-        if (required > context->sort_workspace_bytes) {
-            check(hipStreamSynchronize(context->stream));
-            void* replacement = nullptr;
-            check(hipMalloc(&replacement, required));
-            if (context->sort_workspace) {
-                const auto status = hipFree(context->sort_workspace);
-                if (status != hipSuccess) {
-                    (void)hipFree(replacement);
-                    check(status);
-                }
-            }
-            context->sort_workspace = replacement;
-            context->sort_workspace_bytes = required;
-        }
+        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
         auto* scores = static_cast<float*>(context->sort_workspace);
         const auto ptr = [](LfsHipView view) -> void* { return view.buffer ? static_cast<char*>(view.buffer->data) + view.offset : nullptr; };
         const auto launch = [&]<class T>() {

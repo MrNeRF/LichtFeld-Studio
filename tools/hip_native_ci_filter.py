@@ -18,6 +18,7 @@ FILES = {
     "tests/python/test_hip_pointwise_generation.py",
     "tests/python/test_hip_host_contracts.py",
     "src/core/include/core/detail/pointwise_ops.def",
+    "src/core/include/core/detail/pointwise_lowering.hpp",
     "src/core/include/core/detail/tensor_functors.hpp",
     "src/core/include/core/detail/descriptors.hpp", "src/core/include/core/environment_math.hpp",
     "src/core/include/core/morton.hpp", "src/core/include/core/tensor_ppisp.hpp",

@@ -435,23 +435,6 @@ namespace lfs::core::internal {
                 check(api.predicate_typed(context, lhs, rhs, result, &native, &error), error);
                 return;
             }
-            if (a.dtype == DataType::Int32 && !binary &&
-                (program.op == PointwiseOp::MinimumScalar || program.op == PointwiseOp::MaximumScalar)) {
-                require(program.in_dtype == DataType::Int32 && program.out_dtype == DataType::Int32 && out.dtype == DataType::Int32,
-                        "HIP integer min/max requires Int32 output");
-                const double bound = program.scalar.kind == ScalarKind::Int32 ? double(program.scalar.value.int32_value) : double(scalar_value(program.scalar));
-                require(std::isfinite(bound) && std::trunc(bound) == bound && bound >= INT32_MIN && bound <= INT32_MAX,
-                        "HIP integer min/max scalar must be representable as Int32");
-                const auto lhs = view(a, byte_count(count)), output = view(out, byte_count(count));
-                LfsHipError error{};
-                if (lhs.buffer != output.buffer || lhs.offset != output.offset)
-                    check(api.copy(context, lhs, output, byte_count(count), &error), error);
-                const bool lower = program.op == PointwiseOp::MaximumScalar;
-                check(api.clamp_i32(context, output, count, lower ? int32_t(bound) : INT32_MIN,
-                                    lower ? INT32_MAX : int32_t(bound), &error),
-                      error);
-                return;
-            }
             if (!binary && !program.scalar.scalar_on_right && (a.dtype == DataType::Float16 || a.dtype == DataType::Float32)) {
                 bool scalar_op = false;
                 switch (program.op) {

@@ -69,20 +69,7 @@ int lfs_hip_morton(LfsHipContext* context, LfsHipView positions, LfsHipView keys
         const size_t buffers = bounds_bytes + 256 + key_bytes + index_bytes;
         require(temporary_bytes <= SIZE_MAX - buffers, "HIP Morton workspace overflow");
         const size_t required = buffers + temporary_bytes;
-        if (required > context->sort_workspace_bytes) {
-            check(hipStreamSynchronize(context->stream));
-            void* replacement = nullptr;
-            check(hipMalloc(&replacement, required));
-            if (context->sort_workspace) {
-                const auto status = hipFree(context->sort_workspace);
-                if (status != hipSuccess) {
-                    (void)hipFree(replacement);
-                    check(status);
-                }
-            }
-            context->sort_workspace = replacement;
-            context->sort_workspace_bytes = required;
-        }
+        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
         auto* memory = static_cast<char*>(context->sort_workspace);
         auto* partials = reinterpret_cast<float*>(memory);
         auto* bounds = reinterpret_cast<float*>(memory + bounds_bytes);

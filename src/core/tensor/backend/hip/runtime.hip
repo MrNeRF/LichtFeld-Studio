@@ -131,6 +131,10 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
             check(hipHostFree(context->index_error_host));
             context->index_error_host = nullptr;
         }
+        if (context->scalar_readback_host) {
+            check(hipHostFree(context->scalar_readback_host));
+            context->scalar_readback_host = nullptr;
+        }
         check(hipStreamDestroy(context->stream));
         delete context;
     });

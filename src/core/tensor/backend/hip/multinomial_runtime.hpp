@@ -63,20 +63,7 @@ int lfs_hip_multinomial(LfsHipContext* context, LfsHipView weights, LfsHipView o
         const size_t buffers = data_bytes + 256, temp = std::max(scan_bytes, sort_bytes);
         require(temp <= SIZE_MAX - buffers, "HIP multinomial workspace overflow");
         const size_t required = buffers + temp;
-        if (required > context->sort_workspace_bytes) {
-            check(hipStreamSynchronize(context->stream));
-            void* replacement_buffer = nullptr;
-            check(hipMalloc(&replacement_buffer, required));
-            if (context->sort_workspace) {
-                const auto status = hipFree(context->sort_workspace);
-                if (status != hipSuccess) {
-                    (void)hipFree(replacement_buffer);
-                    check(status);
-                }
-            }
-            context->sort_workspace = replacement_buffer;
-            context->sort_workspace_bytes = required;
-        }
+        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
         auto* memory = static_cast<char*>(context->sort_workspace);
         auto* prefix = reinterpret_cast<double*>(memory);
         auto* invalid = reinterpret_cast<uint32_t*>(memory + data_bytes);
@@ -87,9 +74,7 @@ int lfs_hip_multinomial(LfsHipContext* context, LfsHipView weights, LfsHipView o
         check(hipcub::DeviceScan::InclusiveSum(temporary, scan_bytes, prefix, prefix, int(count), context->stream));
         double sum = 0;
         uint32_t bad = 0;
-        check(hipMemcpyAsync(&sum, prefix + count - 1, 8, hipMemcpyDeviceToHost, context->stream));
-        check(hipMemcpyAsync(&bad, invalid, 4, hipMemcpyDeviceToHost, context->stream));
-        check(hipStreamSynchronize(context->stream));
+        read_device_scalar(context, &bad, invalid, sizeof(bad), &sum, prefix + count - 1, sizeof(sum));
         require(!bad, "HIP multinomial weights must be finite and non-negative");
         require(std::isfinite(sum) && sum > 0, "HIP multinomial weights must have a positive finite sum");
         if (replacement) {

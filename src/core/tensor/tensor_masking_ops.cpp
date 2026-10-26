@@ -137,8 +137,8 @@ namespace lfs::core {
 #ifdef LFS_TENSOR_HIP
             if (indices.device() == Device::GPU && internal::gpu_backend_tag(indices) == GpuBackend::HIP &&
                 (operation == "gather" || operation == "index_select_into" || operation == "index_copy_" || operation == "index_add_")) {
-                // These HIP kernels validate all indices before any output write.
-                // Clamp/wrap operate on the full signed Int64 value as well.
+                // HIP checks indices in the kernel, skipping invalid lanes and
+                // reporting faults at synchronization. Clamp/wrap preserve Int64.
                 assert_index_tensor_host_only(indices, upper_bound, operation);
                 return;
             }
@@ -1925,7 +1925,11 @@ namespace lfs::core {
             if (device_ == Device::GPU) {
                 // HIP consumes the already computed count; other backends retain
                 // their existing capacity-based selection contract.
-                const size_t selection_count = internal::gpu_backend_tag(*this) == GpuBackend::HIP ? count : numel();
+                const size_t selection_count =
+#ifdef LFS_TENSOR_HIP
+                    internal::gpu_backend_tag(*this) == GpuBackend::HIP ? count :
+#endif
+                                                                        numel();
                 if (is_bool_like(dtype_)) {
                     actual_count = internal::backend_ops_for(*this).nonzero_bool(
                         internal::storage_ref(*this), internal::storage_ref(temp),

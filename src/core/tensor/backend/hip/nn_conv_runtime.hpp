@@ -73,20 +73,7 @@ int lfs_hip_nn_conv(LfsHipContext* context, const LfsHipView* inputs, LfsHipView
         }
         DeviceScope device(context->device);
         const size_t chunk = std::max<size_t>(1, std::min<size_t>({pixels, 1024, (16 * 1024 * 1024) / (taps * (width + p->transpose))})), required = taps * chunk * (width + p->transpose);
-        if (required > context->sort_workspace_bytes) {
-            check(hipStreamSynchronize(context->stream));
-            void* replacement = nullptr;
-            check(hipMalloc(&replacement, required));
-            if (context->sort_workspace) {
-                const auto status = hipFree(context->sort_workspace);
-                if (status != hipSuccess) {
-                    (void)hipFree(replacement);
-                    check(status);
-                }
-            }
-            context->sort_workspace = replacement;
-            context->sort_workspace_bytes = required;
-        }
+        ensure_workspace(context, context->sort_workspace, context->sort_workspace_bytes, required);
         const auto ptr = [](LfsHipView v) -> void* { return v.buffer ? static_cast<char*>(v.buffer->data) + v.offset : nullptr; };
         const auto launch = [&]<class T, bool Transpose>() {
             auto* columns = static_cast<T*>(context->sort_workspace);
