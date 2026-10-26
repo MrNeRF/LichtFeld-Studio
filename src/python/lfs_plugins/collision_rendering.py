@@ -36,17 +36,15 @@ STAGES = {
 
 
 class CollisionRendering:
-    def __init__(self, popup=False):
-        self.popup = popup
+    def __init__(self):
         self.export_target = None
         self.handle = None
-        self.values = dict(size=.05, opacity=.1, area=0., automatic=False, cleanup=True)
+        self.values = dict(size=.05, opacity=.1, area=0., automatic=False, cleanup=True, error="")
         self.path = "collision.voxel.json"
-        self.error = ""
         self.state = {}
         self.scrubs = ScrubFieldController(
             SPECS, self.values.__getitem__, self.set_value, commit_value=self.commit,
-            on_error=self.show_error,
+            on_error=lambda error: self.set_value("error", self.localized_error(error)),
         )
 
     def mount(self, doc):
@@ -65,9 +63,12 @@ class CollisionRendering:
                         row.set_attribute("data-tooltip", "tooltip.collision." + ("voxel_size" if key == "size" else key))
         self.scrubs.mount(doc)
 
-    def show_error(self, message):
-        self.error = self.localized_error(message)
+    def show(self, export=False):
+        state = lf.get_collision_state() if export else None
+        self.export_target = None if state is None else (
+            state.get("target_uuid", ""), state.get("target_name", ""))
         invalidate_panel(self.handle, "*")
+        lf.ui.set_panel_enabled("lfs.collision", True)
 
     @staticmethod
     def localized_error(message):
@@ -83,26 +84,26 @@ class CollisionRendering:
 
     def commit(self, key, value):
         if key in WALK_FIELDS:
-            def apply():
-                settings = list(lf.get_collision_state()["walk_settings"])
-                settings[WALK_FIELDS.index(key)] = value
-                lf.set_walk_settings(*settings)
-            self.run(apply)
+            self.run(lambda: lf.set_walk_settings(*(
+                value if field == key else setting for field, setting in
+                zip(WALK_FIELDS, lf.get_collision_state()["walk_settings"]))))
             self.update()
 
-    def bind(self, model):
+    def bind(self, model, popup=False):
         self.handle = model.get_handle()
         self.update()
-        model.bind_func("collision_has_collision", lambda: self.state.get("has_collision", False))
-        model.bind_func("collision_error", lambda: self.error or self.localized_error(self.state.get("error" if self.popup else "walk_error", "")))
-        if not self.popup:
+        for key, field, default in (("collision_has_collision", "has_collision", False), ("collision_source", "source_name", ""), ("collision_active", "active", False), ("collision_progress", "progress", 0)):
+            model.bind_func(key, lambda k=field, d=default: self.state.get(k, d))
+        model.bind_func("collision_error", lambda: self.values["error"] or self.localized_error(self.state.get("error" if popup else "walk_error", "")))
+        if not popup:
             return
+        model.bind_func("panel_label", lambda: lf.ui.tr(
+            "export.export" if self.export_target is not None else "collision.title"))
+        model.bind_func("export_mode", lambda: self.export_target is not None)
         for key in ("automatic", "cleanup"):
             model.bind(f"collision_{key}", lambda k=key: self.values[k],
                        lambda value, k=key: self.set_value(k, value))
         model.bind_func("collision_resolved_size", self.resolved_size)
-        for key, field, default in (("collision_source", "source_name", ""), ("collision_active", "active", False), ("collision_progress", "progress", 0)):
-            model.bind_func(key, lambda k=field, d=default: self.state.get(k, d))
         model.bind_func("collision_target", lambda: self.export_target[1] if self.export_target else "")
         model.bind_func("collision_exportable", lambda: bool(self.export_target and self.export_target[0]) and not self.state.get("active", False))
         model.bind_func("collision_status", lambda: f'{lf.ui.tr(STAGES.get(self.state.get("stage"), "training_panel.running"))} {self.state.get("progress", 0):.0%}')
@@ -125,10 +126,10 @@ class CollisionRendering:
 
     def run(self, action):
         try:
-            self.error = ""
+            self.values["error"] = ""
             action()
         except (RuntimeError, ValueError) as exc:
-            self.show_error(exc)
+            self.values["error"] = self.localized_error(exc)
         invalidate_panel(self.handle, "*")
 
     def export(self, *_):
@@ -152,17 +153,14 @@ class CollisionRendering:
         else:
             action()
 
-    def update(self):
+    def update(self, doc=None):
         state = lf.get_collision_state()
         changed = state != self.state
         self.state = state
         for key, value in zip(WALK_FIELDS, state.get("walk_settings", ())):
             if self.scrubs._active_prop != key:
                 self.values[key] = value
-        changed |= self.scrubs.sync_all()
-        if changed:
-            invalidate_panel(self.handle, "*")
-        return changed
+        return self.scrubs.sync_all() or changed
 
 
 def open_collision(export=False):

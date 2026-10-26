@@ -11,23 +11,24 @@
 #include "gui/rml_menu_bar.hpp"
 #include "input/input_bindings.hpp"
 #include "input/input_controller.hpp"
+#include "io/project/collision_serialization.hpp"
+#include "io/project/project_container_internal.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
-#include "visualizer/app_store.hpp"
+#include "training/project_snapshot_chapters.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include <algorithm>
-#include <atomic>
 #include <cuda_runtime.h>
 #include <fstream>
-#include <future>
 #include <glm/ext/matrix_relational.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <semaphore>
+#include <string_view>
+#include <thread>
 #include <tuple>
 
 namespace lfs::vis::gui {
@@ -37,10 +38,9 @@ namespace lfs::vis::gui {
         lfs::test::licht::TemporaryDirectory temporary_;
         std::optional<lfs::test::licht::ScopedEnvironmentVariable> home_;
         std::unique_ptr<VisualizerImpl> viewer_;
-        std::binary_semaphore release_{0};
-        enum class Outcome { Generate,
-                             Fail,
-                             PublishedExport };
+        std::binary_semaphore release_{0}, dispatched_{0};
+        int batches_ = 0;
+        int exit_prompts_ = 0;
         void SetUp() override {
             int devices = 0;
             if (cudaGetDeviceCount(&devices) != cudaSuccess || !devices)
@@ -51,6 +51,7 @@ namespace lfs::vis::gui {
             options.show_startup_overlay = false;
             options.project_lifecycle_settings_path = temporary_.path / "lifecycle.json";
             viewer_ = std::make_unique<VisualizerImpl>(options);
+            events::cmd::ShowExitConfirmation::when([this](const auto&) { ++exit_prompts_; });
         }
         void resetServices() {
             lfs::event::EventBridge::instance().clear_all();
@@ -68,28 +69,15 @@ namespace lfs::vis::gui {
             resetServices();
         }
         AsyncTaskManager& tasks() { return viewer_->getGuiManager()->asyncTasks(); }
+        project::ProjectLifecycle& lifecycle() { return *viewer_->project_lifecycle_; }
+        void queueOpen(const std::filesystem::path& path) {
+            EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges)), ProjectOpenOutcome::Deferred);
+        }
         Scene& scene() { return viewer_->getScene(); }
         std::vector<const SceneNode*> colliders() {
             auto result = scene().getNodes();
             std::erase_if(result, [](const auto* node) { return node->type != NodeType::COLLISION; });
             return result;
-        }
-        std::stop_token launch(std::function<bool(std::stop_token, const ProgressCallback&)> work) {
-            tasks().launchCollision(std::move(work));
-            return tasks().collision_stop_.get_token();
-        }
-        void start(NodeId source, Outcome outcome = Outcome::Generate) {
-            tasks().collision_source_ = scene().collisionSourceIdentity(source);
-            tasks().collision_resolved_size_ = .25f;
-            tasks().launchCollision([this, outcome](std::stop_token, const ProgressCallback&) {
-                release_.acquire();
-                if (outcome == Outcome::Fail)
-                    throw std::runtime_error("fixture generation failure");
-                if (outcome == Outcome::PublishedExport)
-                    return true;
-                tasks().collision_result_ = collision_test::box({0, 0, 0}, {4, 1, 4});
-                return false;
-            });
         }
         void finish() {
             release_.release();
@@ -98,151 +86,206 @@ namespace lfs::vis::gui {
             tasks().pollCollision();
             ASSERT_TRUE(tasks().collisionJob());
             EXPECT_FALSE(tasks().collisionJob()->running());
-            EXPECT_FALSE(app_store().collision_state.get().active);
+            const auto open = viewer_->jobs().active(JobType::ProjectOpen);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (viewer_->jobs().anyRunning(JobType::ProjectOpen) && std::chrono::steady_clock::now() < deadline) {
+                viewer_->pumpPostedWorkForProjectWrite();
+                std::this_thread::yield();
+            }
+            EXPECT_FALSE(viewer_->jobs().active(JobType::ProjectOpen));
+            if (open)
+                EXPECT_FALSE(viewer_->jobs().peek(open->handle));
+        }
+        void EligibilityAndAllOutcomesSettle() {
+            for (int edit = 0; edit < 10; ++edit) {
+                SCOPED_TRACE(edit);
+                const auto parent = scene().addGroup("Parent");
+                scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2, 3, 4)));
+                const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat(), parent);
+                scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(5, 6, 7)));
+                const auto local = glm::inverse(scene().getWorldTransform(source));
+                scene().setNodeVisibility(source, false);
+                viewer_->getSceneManager()->selectNode(source);
+                tasks().collision_source_ = scene().collisionSourceIdentity(source);
+                tasks().collision_resolved_size_ = .25f;
+                tasks().launchCollision([this, edit](std::stop_token, const ProgressCallback&) {
+                    release_.acquire();
+                    if (edit == 8)
+                        throw std::runtime_error("fixture generation failure");
+                    if (edit == 9)
+                        return true;
+                    tasks().collision_result_ = collision_test::box({0, 0, 0}, {4, 1, 4});
+                    return false;
+                });
+                if (edit == 0) {
+                    scene().setNodeVisibility(source, true);
+                    scene().renameNode(source, "Renamed");
+                    scene().invalidateCache();
+                    scene().invalidateTransformCache();
+                } else if (edit == 1)
+                    scene().removeNodeById(source);
+                else if (edit == 2)
+                    scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(1)));
+                else if (edit == 3)
+                    scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2)));
+                else if (edit == 4)
+                    scene().replaceNodeModel(scene().getNodeById(source)->name, lfs::test::licht::make_matrix_splat());
+                else if (edit == 5)
+                    scene().invalidateBounds(); // Trainer's step-boundary content revision.
+                else if (edit == 6) {
+                    auto& model = *scene().getNodeById(source)->model;
+                    model.deleted() = Tensor::ones_bool({static_cast<size_t>(model.size())}, Device::CPU);
+                    model.notify_deleted_mask_changed();
+                } else if (edit == 7 || edit == 9)
+                    tasks().cancelCollision();
+                if (edit == 9)
+                    ASSERT_TRUE(viewer_->clearScene());
+                finish();
+                EXPECT_EQ(tasks().collisionJob()->status, edit == 0 || edit == 9 ? JobStatus::Completed : edit == 7 ? JobStatus::Canceled
+                                                                                                                    : JobStatus::Failed);
+                ASSERT_EQ(colliders().size(), edit == 0 ? 1 : 0);
+                if (edit > 0 && edit < 7)
+                    EXPECT_EQ(tasks().collisionJob()->error, LOC("collision.source_changed"));
+                if (edit == 0) {
+                    EXPECT_FLOAT_EQ(tasks().collisionResolvedSize(), .25f);
+                    const auto uuid = colliders().front()->uuid;
+                    const auto volume = colliders().front()->collision;
+                    EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(colliders().front()->id), glm::mat4(1), 1e-5f)));
+                    const auto unrelated = scene().addGroup("Unrelated later edit");
+                    (void)op::undoHistory().undo();
+                    EXPECT_TRUE(colliders().empty());
+                    EXPECT_NE(scene().getNodeById(unrelated), nullptr);
+                    (void)op::undoHistory().redo();
+                    const auto* restored = scene().getNodeByUuid(uuid);
+                    ASSERT_NE(restored, nullptr);
+                    EXPECT_EQ(restored->parent_id, source);
+                    EXPECT_EQ(restored->collision, volume);
+                    EXPECT_TRUE(glm::all(glm::equal(restored->transform(), local, 1e-5f)));
+                    scene().setNodeTransform(parent, glm::translate(glm::mat4(1), glm::vec3(8, 9, 10)));
+                    EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(restored->id), scene().getWorldTransform(source) * local, 1e-5f)));
+                }
+                scene().removeNodeById(parent);
+            }
+        }
+
+        void ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity() {
+            const auto path = temporary_.path / "other.licht";
+            const auto second_path = temporary_.path / "second.licht";
+            const auto first = generate_uuid_v4(), second = generate_uuid_v4();
+            for (const auto& [destination, uuid] : {std::pair{path, first}, std::pair{second_path, second}}) {
+                auto document = lfs::test::licht::make_empty_document(uuid);
+                ASSERT_TRUE(document->edit_scene_graph().upsert_node({.uuid = uuid, .type = "group", .name = "Prepared shell"}));
+                ASSERT_TRUE(document->save(destination));
+            }
+            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
+                SCOPED_TRACE(replacement);
+                const bool retain_source = replacement == "StaleEpoch" || replacement == "CancelClose" || replacement == "DiscardClose";
+                const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat());
+                const auto source_uuid = scene().getNodeUuid(source);
+                if (replacement == "Open") {
+                    scene().addSplat("Large unselected source", lfs::test::licht::make_splat(100000));
+                    scene().consolidateNodeModels();
+                }
+                auto owned = scene().captureCollisionSource(source);
+                EXPECT_EQ(owned.means.size(0), 4);
+                EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
+                batches_ = 0;
+                tasks().launchCollision([this, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
+                    (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
+                        if (stage == "Voxelizing collision" && ++batches_ == 2) {
+                            dispatched_.release();
+                            if (!release_.try_acquire_for(std::chrono::seconds(10)))
+                                throw std::runtime_error("Collision stage release timed out");
+                        }
+                        return progress(value, stage);
+                    });
+                    return false;
+                });
+                const auto token = tasks().collision_stop_.get_token();
+                ASSERT_TRUE(dispatched_.try_acquire_for(std::chrono::seconds(10))) << tasks().collisionJob()->error;
+                if (replacement == "Open" || replacement == "InvalidSecond") {
+                    if (replacement == "InvalidSecond")
+                        ASSERT_NO_FATAL_FAILURE(queueOpen(path));
+                    for (const auto* name : {"missing.licht", "corrupt.licht"}) {
+                        const auto invalid = temporary_.path / name;
+                        if (*name == 'c')
+                            std::ofstream(invalid) << "not a project";
+                        EXPECT_FALSE(viewer_->projectOpen(invalid, ProjectSwitchDisposition::DiscardChanges));
+                        EXPECT_EQ(token.stop_requested(), replacement == "InvalidSecond");
+                    }
+                }
+                const auto started = std::chrono::steady_clock::now();
+                if (replacement != "Clear" && replacement != "New" && replacement != "InvalidSecond")
+                    ASSERT_NO_FATAL_FAILURE(queueOpen(path));
+                else if (replacement == "Clear")
+                    ASSERT_TRUE(viewer_->clearScene());
+                else if (replacement == "New")
+                    events::cmd::NewProject{.discard_changes = true}.emit();
+                if (replacement == "Supersede")
+                    ASSERT_NO_FATAL_FAILURE(queueOpen(second_path));
+                if (replacement == "Prepared")
+                    std::filesystem::rename(path, temporary_.path / "prepared.licht");
+                if (replacement == "StaleEpoch")
+                    ++tasks().splat_simplify_scene_epoch_;
+                EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
+                if (replacement == "CancelClose" || replacement == "DiscardClose") {
+                    ASSERT_TRUE(lifecycle().setAutoSaveOnClose(false));
+                    const auto prompts = exit_prompts_;
+                    events::cmd::RequestExit{}.emit();
+                    EXPECT_FALSE(viewer_->allowclose());
+                    EXPECT_EQ(exit_prompts_, prompts + 1);
+                    EXPECT_TRUE(lifecycle().isApplicationClosePending());
+                    EXPECT_FALSE(tasks().sceneReplacementPending());
+                    if (replacement == "DiscardClose")
+                        events::cmd::ForceExit{.discard_autosave = true}.emit();
+                }
+                int callbacks = 0;
+                for (int frame = 0; frame < 3; ++frame) {
+                    ASSERT_TRUE(viewer_->postWork({.run = [&] { ++callbacks; }, .cancel = [] {}}));
+                    viewer_->pumpPostedWorkForProjectWrite();
+                    tasks().pollImportCompletion();
+                    EXPECT_NE(scene().getNodeById(source), nullptr);
+                    EXPECT_FALSE(viewer_->jobs().active(JobType::ProjectOpen));
+                }
+                EXPECT_EQ(callbacks, 3);
+                finish();
+                EXPECT_FALSE(tasks().sceneReplacementPending());
+                if (!retain_source) {
+                    EXPECT_EQ(scene().getNodeByUuid(source_uuid), nullptr);
+                    if (replacement != "Clear" && replacement != "New") {
+                        const auto expected = replacement == "Supersede" ? second : first;
+                        ASSERT_TRUE(lifecycle().boundDocument());
+                        EXPECT_EQ(lifecycle().boundDocument()->project_uuid(), expected);
+                        EXPECT_NE(scene().getNodeByUuid(expected), nullptr);
+                        EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectGetInfo()).hydration_state, replacement == "Prepared" ? "failed" : "complete");
+                    }
+                    ASSERT_NE(scene().restoreNodeWithUuid({.uuid = source_uuid, .preferred_id = source, .type = NodeType::SPLAT, .name = "Reused source identity", .model = lfs::test::licht::make_matrix_splat()}), NULL_NODE);
+                } else {
+                    if (replacement == "CancelClose") {
+                        events::cmd::CancelExit{}.emit();
+                        EXPECT_FALSE(lifecycle().isApplicationClosePending());
+                        EXPECT_FALSE(viewer_->getGuiManager()->isExitConfirmationPending());
+                    }
+                    tasks().pollImportCompletion();
+                    EXPECT_NE(scene().getNodeById(source), nullptr);
+                    scene().removeNodeById(source);
+                }
+                if (replacement == "Prepared")
+                    std::filesystem::rename(temporary_.path / "prepared.licht", path);
+                EXPECT_TRUE(token.stop_requested());
+                EXPECT_EQ(batches_, 2);
+                EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
+                EXPECT_TRUE(colliders().empty());
+            }
         }
     };
 
     TEST_F(CollisionJobsTest, EligibilityAndAllOutcomesSettle) {
-        for (int edit = 0; edit < 10; ++edit) {
-            SCOPED_TRACE(edit);
-            const auto parent = scene().addGroup("Parent");
-            scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2, 3, 4)));
-            const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat(), parent);
-            scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(5, 6, 7)));
-            const auto local = glm::inverse(scene().getWorldTransform(source));
-            scene().setNodeVisibility(source, false);
-            viewer_->getSceneManager()->selectNode(source);
-            const auto outcome = edit == 8 ? Outcome::Fail : edit == 9 ? Outcome::PublishedExport
-                                                                       : Outcome::Generate;
-            start(source, outcome);
-            if (edit == 0) {
-                scene().setNodeVisibility(source, true);
-                scene().renameNode(source, "Renamed");
-                scene().invalidateCache();
-                scene().invalidateTransformCache();
-            } else if (edit == 1)
-                scene().removeNodeById(source);
-            else if (edit == 2)
-                scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(1)));
-            else if (edit == 3)
-                scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2)));
-            else if (edit == 4)
-                scene().replaceNodeModel(scene().getNodeById(source)->name, lfs::test::licht::make_matrix_splat());
-            else if (edit == 5)
-                scene().invalidateBounds(); // Trainer's step-boundary content revision.
-            else if (edit == 6) {
-                auto& model = *scene().getNodeById(source)->model;
-                model.deleted() = Tensor::ones_bool({static_cast<size_t>(model.size())}, Device::CPU);
-                model.notify_deleted_mask_changed();
-            } else if (edit == 7 || edit == 9)
-                tasks().cancelCollision();
-            if (edit == 9)
-                ASSERT_TRUE(viewer_->clearScene());
-            finish();
-            const auto expected = edit == 0 || edit == 9 ? JobStatus::Completed
-                                  : edit == 7            ? JobStatus::Canceled
-                                                         : JobStatus::Failed;
-            EXPECT_EQ(tasks().collisionJob()->status, expected);
-            ASSERT_EQ(colliders().size(), edit == 0 ? 1 : 0);
-            if (edit > 0 && edit < 7)
-                EXPECT_EQ(tasks().collisionJob()->error, LOC("collision.source_changed"));
-            if (edit == 0) {
-                EXPECT_FLOAT_EQ(tasks().collisionResolvedSize(), .25f);
-                const auto uuid = colliders().front()->uuid;
-                const auto volume = colliders().front()->collision;
-                EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(colliders().front()->id), glm::mat4(1), 1e-5f)));
-                const auto unrelated = scene().addGroup("Unrelated later edit");
-                (void)op::undoHistory().undo();
-                EXPECT_TRUE(colliders().empty());
-                EXPECT_NE(scene().getNodeById(unrelated), nullptr);
-                (void)op::undoHistory().redo();
-                const auto* restored = scene().getNodeByUuid(uuid);
-                ASSERT_NE(restored, nullptr);
-                EXPECT_EQ(restored->parent_id, source);
-                EXPECT_EQ(restored->collision, volume);
-                EXPECT_TRUE(glm::all(glm::equal(restored->transform(), local, 1e-5f)));
-                scene().setNodeTransform(parent, glm::translate(glm::mat4(1), glm::vec3(8, 9, 10)));
-                EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(restored->id), scene().getWorldTransform(source) * local, 1e-5f)));
-            }
-            scene().removeNodeById(parent);
-        }
+        EligibilityAndAllOutcomesSettle();
     }
 
     TEST_F(CollisionJobsTest, ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity) {
-        const auto path = temporary_.path / "other.licht";
-        ASSERT_TRUE(lfs::test::licht::make_empty_document(generate_uuid_v4())->save(path));
-        for (int replacement = 0; replacement < 4; ++replacement) {
-            SCOPED_TRACE(replacement);
-            const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat());
-            Scene::RestoreNodeDesc reused;
-            reused.uuid = scene().getNodeUuid(source);
-            reused.preferred_id = source;
-            reused.type = NodeType::SPLAT;
-            reused.name = "Reused source identity";
-            reused.model = lfs::test::licht::make_matrix_splat();
-            if (replacement == 0) {
-                scene().addSplat("Large unselected source", lfs::test::licht::make_splat(100000));
-                scene().consolidateNodeModels();
-            }
-            auto owned = scene().captureCollisionSource(source);
-            EXPECT_EQ(owned.means.size(0), 4);
-            EXPECT_FALSE(owned.means.is_view());
-            EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
-            auto dispatched = std::make_shared<std::promise<void>>();
-            auto ready = dispatched->get_future();
-            auto batches = std::make_shared<std::atomic<int>>(0);
-            const auto token = launch([this, dispatched, batches, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
-                (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
-                    if (stage == "Voxelizing collision" && ++*batches == 2) {
-                        dispatched->set_value();
-                        if (!release_.try_acquire_for(std::chrono::seconds(10)))
-                            throw std::runtime_error("Collision stage release timed out");
-                    }
-                    return progress(value, stage);
-                });
-                return false;
-            });
-            ASSERT_EQ(ready.wait_for(std::chrono::seconds(10)), std::future_status::ready) << tasks().collisionJob()->error << " batches=" << batches->load();
-            if (replacement == 0) {
-                for (const auto* name : {"missing.licht", "corrupt.licht"}) {
-                    const auto invalid = temporary_.path / name;
-                    if (*name == 'c')
-                        std::ofstream(invalid) << "not a project";
-                    EXPECT_FALSE(viewer_->projectOpen(invalid, ProjectSwitchDisposition::DiscardChanges));
-                    EXPECT_FALSE(token.stop_requested());
-                    EXPECT_TRUE(tasks().collisionWorkerActive());
-                    EXPECT_NE(scene().getNodeById(source), nullptr);
-                }
-            }
-            const auto started = std::chrono::steady_clock::now();
-            if (replacement < 2) {
-                const auto opened = viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges);
-                ASSERT_TRUE(opened);
-                EXPECT_EQ(*opened, ProjectOpenOutcome::Deferred);
-            } else if (replacement == 2)
-                ASSERT_TRUE(viewer_->clearScene());
-            else
-                events::cmd::NewProject{.discard_changes = true}.emit();
-            EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
-            EXPECT_NE(scene().getNodeById(source), nullptr);
-            EXPECT_TRUE(tasks().sceneReplacementPending());
-            int callbacks = 0;
-            for (int frame = 0; frame < 3; ++frame) {
-                ASSERT_TRUE(viewer_->postWork({.run = [&] { ++callbacks; }, .cancel = [] {}}));
-                viewer_->pumpPostedWorkForProjectWrite();
-                tasks().pollImportCompletion();
-                EXPECT_NE(scene().getNodeById(source), nullptr);
-            }
-            EXPECT_EQ(callbacks, 3);
-            finish();
-            EXPECT_FALSE(tasks().sceneReplacementPending());
-            EXPECT_EQ(scene().getNodeById(source), nullptr);
-            ASSERT_NE(scene().restoreNodeWithUuid(std::move(reused)), NULL_NODE);
-            EXPECT_TRUE(token.stop_requested());
-            EXPECT_EQ(batches->load(), 2);
-            EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
-            EXPECT_TRUE(colliders().empty());
-        }
+        ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity();
     }
 
     class CollisionUiTest : public ::testing::Test {
@@ -316,5 +359,151 @@ namespace lfs::vis::gui {
             context.settings.show_camera_frustums = frustums;
             EXPECT_EQ(buildViewportRenderRequest(context, {640, 480}).require_exact_depth, frustums);
         }
+    }
+    using namespace lfs::io::project;
+    using namespace lfs::test::licht;
+    using collision_test::box;
+
+    class CollisionArchive : public ::testing::Test {
+    protected:
+        TemporaryDirectory temporary;
+        const std::filesystem::path path = temporary.path / "collision.licht";
+        Scene scene;
+        std::shared_ptr<CollisionVolume> volume = std::make_shared<CollisionVolume>(*box({1, 2, 3}, {3, 1, 2}, .0125f));
+        void SetUp() override {
+            volume->settings = {.0125f, .35f, 2.5f, true, true};
+            const auto parent = scene.addGroup("Parent");
+            scene.setNodeTransform(parent, glm::translate(glm::mat4(1), {4, 5, 6}));
+            for (int i = 0; i < 13; ++i) {
+                const auto id = scene.addCollision(std::to_string(i), i < 12 ? volume : box({0, 0, 0}, {1, 1, 1}), parent);
+                scene.setNodeTransform(id, glm::translate(glm::mat4(1), {float(i), 2, 3}));
+                scene.getNodeById(id)->visible = i != 0;
+            }
+            auto document = make_empty_document(generate_uuid_v4());
+            auto captured = require_result(capture_scene_graph_state(scene, {}));
+            for (const auto& [uuid, payload] : captured.collisions)
+                require_status(document->set_collision(uuid, payload));
+            document->edit_scene_graph() = require_result(materialize_scene_graph_chapter(std::move(captured)));
+            (void)require_result(document->save(path));
+        }
+    };
+
+    TEST_F(CollisionArchive, BinaryDedupDeferredHydrationAndSaveAsPreserveNodes) {
+        auto reader = require_result(ProjectReader::open(path));
+        EXPECT_EQ(std::ranges::count_if(reader.chunks(), [](const auto& row) {
+                      return row.is_live() && row.key.fourcc == FOURCC_COLV;
+                  }),
+                  2);
+        EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(COLLISION_VOLUMES_V1));
+        ReaderOptions old_reader;
+        old_reader.reader_capabilities.set(COLLISION_VOLUMES_V1, false);
+        auto incompatible = ProjectReader::open(path, old_reader);
+        ASSERT_FALSE(incompatible);
+        EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
+        EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
+        auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true}));
+        const auto expected = require_result(capture_scene_graph(scene, {})).to_bytes();
+        for (bool deferred : {true, false}) {
+            SCOPED_TRACE(deferred);
+            const auto copy = temporary.path / (deferred ? "unloaded.licht" : "loaded.licht");
+            ASSERT_TRUE(document.save_as(copy));
+            for (const auto& state : document.payload_states())
+                EXPECT_EQ(state.loaded, !deferred);
+            document = require_result(ProjectDocument::open(copy, {.defer_geometry_payloads = deferred}));
+            Scene target;
+            auto shell = require_result(document.stage_shell(target));
+            ASSERT_TRUE(document.hydrate(target));
+            for (const auto* restored : {shell.get(), &target}) {
+                // Recapture checks local/parent transforms, visibility, node type and shared payload references.
+                EXPECT_EQ(require_result(capture_scene_graph(*restored, {})).to_bytes(), expected);
+                const auto* first = restored->getNode("0");
+                ASSERT_NE(first, nullptr);
+                for (const auto* node : restored->getNodes()) {
+                    if (!node->collision)
+                        continue;
+                    if (node->name != "12")
+                        EXPECT_EQ(node->collision, first->collision);
+                    EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*scene.getNodeByUuid(node->uuid)->collision));
+                }
+            }
+        }
+    }
+
+    TEST_F(CollisionArchive, ReadAndSaveFailuresAreTransactional) {
+        auto document = require_result(ProjectDocument::open(path));
+        const auto baseline = read_file_bytes(path);
+        lfs::io::project::detail::set_max_payload_materialized_bytes_for_testing(1);
+        auto limited = ProjectDocument::open(path);
+        lfs::io::project::detail::set_max_payload_materialized_bytes_for_testing(std::nullopt);
+        ASSERT_FALSE(limited);
+        EXPECT_EQ(limited.error().code(), lfs::ErrorCode::ResourceExhausted);
+        const auto bytes = encodeCollision(*volume);
+        EXPECT_THROW(decodeCollision(std::span(bytes).first(bytes.size() - 1)), std::invalid_argument);
+        CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {CollisionVolume::brick_tag | 1, 0x00110011, 0}};
+        ASSERT_NO_THROW(padded.validate());
+        padded.words[1] |= 2;
+        EXPECT_THROW(padded.validate(), std::invalid_argument);
+        auto invalid = std::make_shared<CollisionVolume>(*volume);
+        invalid->words.front() = 0xffffffff;
+        EXPECT_FALSE(document.set_collision(document.payload_states().front().instance_uuid, invalid));
+        std::filesystem::create_directory(temporary.path / "directory");
+        EXPECT_FALSE(document.save(temporary.path / "directory"));
+        EXPECT_EQ(read_file_bytes(path), baseline);
+        for (const bool erase : {false, true}) {
+            auto reader = require_result(ProjectReader::open(path));
+            auto writer = require_result(ProjectWriter::append(path));
+            require_status(writer.plan_commit());
+            auto corrupt = encodeCollision(*volume);
+            corrupt[0] = std::byte{0};
+            require_status(writer.preflight(corrupt.size()));
+            for (const auto& row : reader.chunks()) {
+                if (!row.is_live())
+                    continue;
+                if (row.key.fourcc == FOURCC_COLV)
+                    require_status(erase ? writer.erase(row.key) : writer.write_chunk(row.key, corrupt));
+                else
+                    require_status(writer.reuse_if_clean(require_result(reader.make_clean_proof(row, 1)), 1));
+            }
+            require_status(writer.commit());
+            auto failed = ProjectDocument::open(path);
+            ASSERT_FALSE(failed);
+            EXPECT_EQ(failed.error().code(), lfs::ErrorCode::DataLoss);
+        }
+        Scene unchanged;
+        const auto retained = unchanged.addGroup("Retained");
+        EXPECT_FALSE(hydrate_scene_graph(require_result(capture_scene_graph(scene, {})), unchanged, {}));
+        EXPECT_EQ(unchanged.getNodes().size(), 1);
+        EXPECT_NE(unchanged.getNodeById(retained), nullptr);
+    }
+
+    TEST(CollisionScene, CpuSourceAndSafePointSnapshotOwnDataAfterDeletion) {
+        Scene scene;
+        const auto parent = scene.addGroup("Parent");
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(10)));
+        const auto source = scene.addSplat("Selected hidden source", make_matrix_splat(), parent);
+        scene.setTrainingModelNode(source);
+        scene.setNodeVisibility(source, false);
+        const auto volume = box({1, 2, 3}, {3, 1, 2});
+        const auto first = scene.addCollision("First", volume, source);
+        const auto second = scene.addCollision("Second", volume, source);
+        const auto transform = glm::translate(glm::mat4(1), {-4, 5, -6});
+        scene.setNodeTransform(source, transform);
+        scene.setNodeTransform(first, transform);
+        const auto captured_source = scene.captureCollisionSource(source);
+        EXPECT_EQ(captured_source.transform, scene.getWorldTransform(source));
+        lfs::training::ProjectSnapshotCpuState captured;
+        ASSERT_TRUE(lfs::training::capture_project_snapshot_cpu_state(scene, ParameterManagerSnapshot{}, generate_uuid_v4(), 3, captured));
+        const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
+        scene.removeNodeById(source);
+        EXPECT_EQ(captured_source.means.ptr<float>()[0], 1);
+        EXPECT_THROW((void)scene.captureCollisionSource(source), lfs::Exception);
+        lfs::training::ProjectSnapshotChapters chapters;
+        ASSERT_TRUE(lfs::training::materialize_project_snapshot_cpu_chapters(std::move(captured), chapters));
+        ASSERT_EQ(chapters.collisions.size(), 1);
+        EXPECT_EQ(chapters.collisions.begin()->second, volume);
+        const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);
+        ASSERT_TRUE(one && *one && two && *two);
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_EQ((**one).local_transform[12 + axis], transform[3][axis]);
     }
 } // namespace lfs::vis::gui

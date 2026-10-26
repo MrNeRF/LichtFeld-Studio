@@ -360,7 +360,7 @@ def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_pane
     assert model.handle.dirty_fields == ["raster_backend", "equirectangular", "show_fov_controls"]
 
 
-@pytest.mark.parametrize("field", ("scene_generation", "collision_state", "viewport_toolbar_generation"))
+@pytest.mark.parametrize("field", ("scene_generation", "viewport_toolbar_generation"))
 def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_module, field):
     module = rendering_panel_module
     model = _BindingModelStub()
@@ -374,7 +374,7 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     model.handle.dirty_fields.clear()
 
     signal = getattr(module.RuntimeState, field)
-    value = {"active": True, "progress": .5} if field == "collision_state" else signal.value + 1
+    value = signal.value + 1
     signal.value = value
     assert model.handle.dirty_fields == ["__all__"]
     model.handle.dirty_fields.clear()
@@ -386,6 +386,7 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
 def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_panel_module, monkeypatch):
     from lfs_plugins import collision_panel, collision_rendering
     from lfs_plugins.panels import PANEL_SPECS, _register_lazy_panel
+    from unittest.mock import MagicMock
     lf = collision_rendering.lf
     monkeypatch.setattr(lf.ui, "Panel", collision_panel.Panel, raising=False)
     monkeypatch.setattr(lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
@@ -398,11 +399,22 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     collision_rendering.open_collision(export=True)
     model = _BindingModelStub()
     panel.on_bind_model(_BindingContextStub(model))
+    controls = panel._load()
+    bindings, events = model.func_bindings, model.events
     assert PANEL_SPECS["collision"].update_policy == "dirty"
+    assert set(model.bindings) == {"collision_automatic", "collision_cleanup"}
+    assert not bindings["collision_source"]() and bindings["collision_target"]() == "Floor"
     state.update(target_uuid="second", target_name="Wall")
-    assert panel.on_update(None)
+    for stage, key in (("Preparing collision", "gallery.transfer.phase.preparing"),
+                       ("Sorting collision records", "gallery.transfer.phase.processing"),
+                       ("Publishing voxel metadata", "export.export"), ("Collision ready", "status.ready")):
+        state.update(source_name="Selected", active=stage == "Sorting collision records", stage=stage, progress=.4)
+        assert panel.on_update(None)
+        assert bindings["collision_source"]() == "Selected"
+        assert bindings["collision_active"]() == state.get("active", False)
+        assert bindings["collision_status"]().startswith(key)
     other.show()
-    assert panel.controls.export_target == ("first", "Floor") and other.controls.export_target is None
+    assert panel.export_target == ("first", "Floor") and other.export_target is None
     model.handle.dirty_fields.clear()
     assert panel.on_update(None) is False
     assert not model.handle.dirty_fields
@@ -410,13 +422,30 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
         model.handle.dirty_fields.clear()
         collision_rendering.open_collision(export=export)
         assert model.handle.dirty_fields == ["__all__"] and model.func_bindings["export_mode"]() is export
-    monkeypatch.setattr(panel.controls, "mount", lambda doc: None)
+    controls.values.update(size=.005, opacity=.2, area=3., automatic=True)
+    for event, name, args in (("generate", "generate_collision", (.005, .2, True, True, 3.)),
+                              ("cancel", "cancel_collision", ())):
+        action = MagicMock()
+        monkeypatch.setattr(lf, name, action, raising=False)
+        events[f"collision_{event}"]()
+        action.assert_called_once_with(*args)
+    state.update(resolved_voxel_size=.01234, generation_settings=(.00500000007, .200000001, True, True, 3.))
+    controls.update()
+    assert controls.resolved_size() == "0.01234"
+    for changes in ({"size": .01}, {"size": .005, "opacity": .3}, {"opacity": .2, "automatic": False},
+                    {"automatic": True, "cleanup": False}, {"cleanup": True, "area": 1}, {"area": 3}):
+        controls.values.update(changes)
+        if changes == {"area": 3}:
+            controls.state["resolved_voxel_size"] = 0
+        assert controls.resolved_size() == "collision.size_pending"
+    monkeypatch.setattr(controls, "mount", lambda doc: None)
     panel.on_mount(SimpleNamespace(get_element_by_id=lambda _: None))
     model.handle.dirty_fields.clear()
-    collision_panel.RuntimeState.collision_state.value = {"active": True}
+    state["active"] = True
+    collision_panel.RuntimeState.viewport_toolbar_generation.value += 1
     assert model.handle.dirty_fields == ["__all__"]
     panel.on_unmount(SimpleNamespace(remove_data_model=lambda *_: None))
-    assert panel.controls.handle is None
+    assert panel.handle is None and not controls.binding.active and not controls.scrubs._fields
 
 
 def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):

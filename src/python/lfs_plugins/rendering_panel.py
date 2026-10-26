@@ -417,7 +417,6 @@ class RenderingPanel(Panel):
             RuntimeState.pivot_mode,
             RuntimeState.language_generation,
             RuntimeState.viewport_toolbar_generation,
-            RuntimeState.collision_state,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
         self._reactive_binding.watch(RuntimeState.render_settings_generation, dirty="*")

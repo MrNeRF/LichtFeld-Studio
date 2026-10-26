@@ -49,6 +49,10 @@ namespace lfs::python {
     struct SequencerUIStateData;
 } // namespace lfs::python
 
+namespace lfs::vis::gui {
+    class CollisionJobsTest;
+}
+
 namespace lfs::vis {
     class SceneManager;
 } // namespace lfs::vis
@@ -65,6 +69,7 @@ namespace lfs::vis {
         friend class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         friend class gui::GuiManager;
         friend class gui::AsyncTaskManager;
+        friend class gui::CollisionJobsTest;
 
     public:
         explicit VisualizerImpl(const ViewerOptions& options);

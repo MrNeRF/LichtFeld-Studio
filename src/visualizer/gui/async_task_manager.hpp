@@ -63,6 +63,7 @@ namespace lfs::vis {
             void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
             void cancelCollision();
             [[nodiscard]] bool collisionWorkerActive() const;
+            void dropSceneReplacement();
             bool deferSceneReplacement(std::move_only_function<void()> replacement);
             [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
@@ -355,7 +356,6 @@ namespace lfs::vis {
             core::CollisionSettings collision_settings_;
             std::atomic<float> collision_resolved_size_{0};
             void pollCollision();
-            void publishCollisionState(bool force = false);
             void launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work);
 
             struct ExportState {

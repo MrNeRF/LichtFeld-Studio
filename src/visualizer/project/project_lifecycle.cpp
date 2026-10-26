@@ -8003,25 +8003,22 @@ namespace lfs::vis::project {
             !materialized) {
             return materialized;
         }
-        auto opened =
-            openMaster(
-                temporary, disposition, [this, master_path, sidecar_path, disposition] {
-                    return openRecovered(master_path, sidecar_path, disposition);
-                });
-        if (!opened) {
-            static_cast<void>(
-                session->release());
-            return opened;
-        }
-        if (collisionSwitchPending())
-            return {};
-        session->attach_document();
+        return openMaster(temporary, disposition,
+                          [this, master_path, sidecar_path, temporary, session = std::move(*session)]() mutable {
+                              return finishRecovered(master_path, sidecar_path, temporary, std::move(session));
+                          });
+    }
+
+    lfs::Result<void> ProjectLifecycle::finishRecovered(
+        const std::filesystem::path& master_path, const std::filesystem::path& sidecar_path,
+        const std::filesystem::path& temporary, lfs::io::project::RecoverySession session) {
+        session.attach_document();
         recovered_master_path_ =
             master_path;
         recovery_session_path_ =
             temporary;
         recovery_session_ =
-            std::move(*session);
+            std::move(session);
         if (auto prepared =
                 document_->prepare_recovery_autosave(
                     sidecar_path);
@@ -8061,11 +8058,23 @@ namespace lfs::vis::project {
         return {};
     }
 
+    struct ProjectLifecycle::PreparedOpen {
+        std::shared_ptr<ProjectDocument> candidate;
+        std::filesystem::path normalized;
+        std::unique_ptr<lfs::core::Scene> shell;
+        PreparedGuiSessionRestore session;
+        lfs::io::project::ParameterManagerSnapshot parameters;
+        std::optional<std::filesystem::path> discard_master;
+        ProjectSwitchDisposition disposition;
+        std::move_only_function<lfs::Result<void>()> after_open;
+        std::array<std::chrono::steady_clock::time_point, 6> stages;
+    };
+
     lfs::Result<void>
     ProjectLifecycle::openMaster(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition,
-        std::move_only_function<lfs::Result<void>()> retry) {
+        std::move_only_function<lfs::Result<void>()> after_open) {
         recovery_prompt_pending_ = false;
         if (auto preflight =
                 preflightSwitch(disposition);
@@ -8091,20 +8100,6 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(normalized).error());
         }
-        stopHydrationThreads();
-        const auto opening_stage = std::format(
-            "Opening {}…",
-            lfs::core::path_to_utf8(
-                normalized->filename()));
-        project_open_job_ = viewer_.jobs().init(
-            JobType::ProjectOpen, opening_stage);
-        if (!project_open_job_) {
-            return fail<void>(
-                lfs::ErrorCode::Unavailable,
-                "Project opening could not be started.",
-                "The project-open job registry has no available slot",
-                "project.open.job");
-        }
         const auto normalized_at =
             std::chrono::steady_clock::now();
         auto opened = ProjectDocument::open(
@@ -8114,18 +8109,8 @@ namespace lfs::vis::project {
                 .geometry = {},
                 .defer_geometry_payloads = true,
             });
-        if (!opened) {
-            if (project_open_job_) {
-                viewer_.jobs().failed(
-                    *project_open_job_,
-                    developerError(opened.error()),
-                    "Project open failed");
-                viewer_.jobs().free(*project_open_job_);
-                project_open_job_.reset();
-            }
-            return lfs::Status::failure(
-                std::move(opened).error());
-        }
+        if (!opened)
+            return lfs::Status::failure(std::move(opened).error());
         auto candidate =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
@@ -8197,14 +8182,22 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        if (!retry)
-            retry = [this, path, disposition] { return openMaster(path, disposition); };
-        if (deferCollisionSwitch(std::move(retry))) {
-            viewer_.jobs().free(*project_open_job_);
-            project_open_job_.reset();
-            return {};
-        }
-        stopHydrationThreads(false);
+        auto prepared = std::make_shared<PreparedOpen>(
+            std::move(candidate), std::move(*normalized), std::move(*shell), std::move(*session),
+            std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
+            std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at});
+        auto commit = [this, prepared = std::move(prepared)] { return commitOpen(std::move(*prepared)); };
+        return deferCollisionSwitch(commit) ? lfs::Result<void>{} : commit();
+    }
+
+    lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen prepared) {
+        auto& [candidate, normalized, shell, session, parameters, discard_master, disposition, after_open, stages] = prepared;
+        const auto& [started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at] = stages;
+        if (auto preflight = preflightSwitch(disposition); !preflight)
+            return preflight;
+        auto* manager = viewer_.getSceneManager();
+        auto* parameter_manager = viewer_.getParameterManager();
+        stopHydrationThreads();
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
             !trainer_manager->clearTrainer()) {
@@ -8213,6 +8206,19 @@ namespace lfs::vis::project {
                 "The previous training session could not be cleared.",
                 "Project switching requires the trainer to reach its terminal state",
                 "project.training");
+        }
+        const auto opening_stage = std::format(
+            "Opening {}…",
+            lfs::core::path_to_utf8(
+                normalized.filename()));
+        project_open_job_ = viewer_.jobs().init(
+            JobType::ProjectOpen, opening_stage);
+        if (!project_open_job_) {
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project opening could not be started.",
+                "The project-open job registry has no available slot",
+                "project.open.job");
         }
         // Every project-open entry point reaches this committed switch boundary.
         if (auto* loader = viewer_.getDataLoader())
@@ -8227,16 +8233,16 @@ namespace lfs::vis::project {
             rendering->releaseSceneModelResources();
         }
         retireSceneAsync(manager->getScene().commitRestoreStage(
-            std::move(*shell)));
+            std::move(shell)));
         manager->changeContentType(
             inferContentType(
                 manager->getScene()));
         parameter_manager
             ->installValidatedPendingProjectState(
-                *parameters);
+                parameters);
         active_restore_ticket_ =
             viewer_.stagePreparedProjectSessionRestore(
-                std::move(*session));
+                std::move(session));
         const auto shell_committed_at =
             std::chrono::steady_clock::now();
 
@@ -8300,7 +8306,7 @@ namespace lfs::vis::project {
         const auto shell_selected_nodes =
             selectedNodeUuids(viewer_);
         const bool opened_scratch =
-            isScratchPath(*normalized);
+            isScratchPath(normalized);
         if (!opened_scratch) {
             removeScratchAutosave();
             const std::lock_guard lock(
@@ -8308,7 +8314,7 @@ namespace lfs::vis::project {
             rememberProject(
                 settings_,
                 candidate->project_uuid(),
-                *normalized);
+                normalized);
         }
         if (!opened_scratch) {
             if (auto persisted = persistSettings();
@@ -8357,7 +8363,7 @@ namespace lfs::vis::project {
             };
         LOG_DEBUG(
             "Project shell stages: path={} normalize={:.3f} ms document_open={:.3f} ms session_restore={:.3f} ms parameters={:.3f} ms shell_stage={:.3f} ms shell_commit={:.3f} ms lifecycle_install={:.3f} ms hydration_launch={:.3f} ms total={:.3f} ms",
-            lfs::core::path_to_utf8(*normalized),
+            lfs::core::path_to_utf8(normalized),
             milliseconds(started, normalized_at),
             milliseconds(
                 normalized_at,
@@ -8384,12 +8390,12 @@ namespace lfs::vis::project {
         LOG_INFO(
             "Project shell ready in {:.3f} ms: {} (generation {}, {} payload units)",
             shell_ms,
-            lfs::core::path_to_utf8(*normalized),
+            lfs::core::path_to_utf8(normalized),
             candidate->generation(),
             candidate->payload_states().size());
         resetMaintenanceClocks();
         refreshStorageStats();
-        return {};
+        return after_open ? after_open() : lfs::Result<void>{};
     }
 
     void ProjectLifecycle::recoverDeferredPayloadsAfterUndo(
@@ -9539,7 +9545,7 @@ namespace lfs::vis::project {
     ProjectLifecycle::CloseSaveStatus
     ProjectLifecycle::beginOrPollCloseSave() {
         settleProjectWrite();
-        application_close_pending_ = true;
+        markApplicationClosePending();
         switch (close_save_state_.load(
             std::memory_order_acquire)) {
         case CloseSaveState::Saving:
@@ -9750,6 +9756,8 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::markApplicationClosePending() {
+        if (auto* gui = viewer_.getGuiManager())
+            gui->asyncTasks().dropSceneReplacement();
         application_close_pending_ = true;
         cancelTrainingStartPreparation();
     }
@@ -10789,15 +10797,10 @@ namespace lfs::vis::project {
     ProjectLifecycle::openScratchRecovered(
         const std::filesystem::path& scratch_path,
         const ProjectSwitchDisposition disposition) {
-        auto opened = openMaster(
-            scratch_path, disposition, [this, scratch_path, disposition] {
-                return openScratchRecovered(scratch_path, disposition);
-            });
-        if (!opened) {
-            return opened;
-        }
-        if (collisionSwitchPending())
-            return {};
+        return openMaster(scratch_path, disposition, [this] { return finishScratchRecovery(); });
+    }
+
+    lfs::Result<void> ProjectLifecycle::finishScratchRecovery() {
         scene_dirty_.store(
             true, std::memory_order_release);
         if (document_ && document_->source_path() &&

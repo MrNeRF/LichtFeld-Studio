@@ -624,7 +624,13 @@ namespace lfs::vis::project {
         openMaster(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition,
-            std::move_only_function<lfs::Result<void>()> retry = {});
+            std::move_only_function<lfs::Result<void>()> after_open = {});
+        lfs::Result<void> finishScratchRecovery();
+        struct PreparedOpen;
+        lfs::Result<void> commitOpen(PreparedOpen prepared);
+        lfs::Result<void> finishRecovered(
+            const std::filesystem::path& master, const std::filesystem::path& sidecar,
+            const std::filesystem::path& temporary, lfs::io::project::RecoverySession session);
         bool deferCollisionSwitch(std::move_only_function<lfs::Result<void>()> retry);
         [[nodiscard]] bool collisionSwitchPending() const;
         [[nodiscard]] lfs::Result<void>

@@ -3754,47 +3754,36 @@ namespace lfs::vis::gui {
                collision_worker_.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
     }
 
-    bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
-        if (!collision_worker_.valid() && !collision_replacement_)
-            return false;
-        cancelCollision();
+    void AsyncTaskManager::dropSceneReplacement() {
         if (collision_replacement_ && viewer_->projectCreatePending()) {
             viewer_->pending_training_action_ = VisualizerImpl::PendingTrainingAction::None;
             viewer_->pending_create_project_path_.clear();
             viewer_->pending_load_files_.clear();
         }
+        collision_replacement_ = {};
+    }
+
+    bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
+        if (!collision_worker_.valid() && !collision_replacement_)
+            return false;
+        cancelCollision();
+        dropSceneReplacement();
         const auto epoch = viewer_->project_lifecycle_->documentEpoch();
         const auto scene_epoch = splat_simplify_scene_epoch_;
         collision_replacement_ = [this, epoch, scene_epoch, replacement = std::move(replacement)]() mutable {
-            if (viewer_->project_lifecycle_->documentEpoch() == epoch && splat_simplify_scene_epoch_ == scene_epoch)
+            if (!viewer_->project_lifecycle_->isApplicationClosePending() &&
+                viewer_->project_lifecycle_->documentEpoch() == epoch && splat_simplify_scene_epoch_ == scene_epoch)
                 replacement();
             else
                 LOG_WARN("Discarding stale collision scene replacement");
         };
-        wakeMainThreadForAsyncWork();
         return true;
     }
 
     void AsyncTaskManager::cancelCollision() {
         jobs_.requestCancel(collision_job_);
         collision_stop_.request_stop();
-        publishCollisionState();
-    }
-
-    void AsyncTaskManager::publishCollisionState(const bool force) {
-        AppStore::TaskProgressState state;
-        if (const auto job = collisionJob()) {
-            state.active = job->running();
-            state.progress = job->progress;
-            state.stage = job->stage;
-            state.error = job->error;
-        }
-        auto& store = app_store();
-        const bool changed = store.collision_state.set(std::move(state));
-        if (force && !changed)
-            store.store().enqueue_dirty(store.collision_state.field_id());
-        if (changed || force)
-            wakeMainThreadForAsyncWork();
+        publish_viewport_toolbar_generation();
     }
 
     float AsyncTaskManager::collisionResolvedSize() const {
@@ -3829,7 +3818,6 @@ namespace lfs::vis::gui {
             collision_result_ = std::make_shared<const core::CollisionVolume>(core::generateCollision(
                 source, settings, stop, progress, [this](float size) {
                     collision_resolved_size_ = size;
-                    publishCollisionState(true);
                     publish_viewport_toolbar_generation();
                 }));
             return false;
@@ -3862,7 +3850,7 @@ namespace lfs::vis::gui {
             throw std::runtime_error("Cannot start collision job");
         collision_result_.reset();
         collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();
-        publishCollisionState(true);
+        publish_viewport_toolbar_generation();
         const auto job = collision_job_;
         collision_stop_ = {};
         try {
@@ -3871,9 +3859,14 @@ namespace lfs::vis::gui {
                 std::string error;
                 bool published = false, canceled = false;
                 try {
-                    published = work(stop, [this, job](float value, const std::string& stage) {
+                    AppStore::TaskProgressState shown;
+                    published = work(stop, [this, job, &shown](float value, const std::string& stage) {
                         jobs_.report(job, value, stage);
-                        publishCollisionState();
+                        AppStore::TaskProgressState next{.active = true, .progress = value, .stage = stage};
+                        if (next != shown) {
+                            shown = std::move(next);
+                            publish_viewport_toolbar_generation();
+                        }
                         return !jobs_.cancelRequested(job);
                     });
                 } catch (const core::OperationCancelled&) {
@@ -3884,12 +3877,12 @@ namespace lfs::vis::gui {
                 }
                 work = {};
                 jobs_.finishWork(job, canceled, std::move(error), std::nullopt, std::nullopt, published);
-                publishCollisionState(true);
+                publish_viewport_toolbar_generation();
             });
         } catch (const std::exception& e) {
             LOG_ERROR("Cannot launch collision worker: {}", e.what());
             jobs_.failed(job, core::localizedCollisionError(e));
-            publishCollisionState(true);
+            publish_viewport_toolbar_generation();
             throw;
         }
     }
@@ -3945,7 +3938,7 @@ namespace lfs::vis::gui {
         }
         collision_worker_.get();
         settlePendingJobs();
-        publishCollisionState(true);
+        publish_viewport_toolbar_generation();
         if (auto replacement = std::exchange(collision_replacement_, {}))
             replacement();
     }

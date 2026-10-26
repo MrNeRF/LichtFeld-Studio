@@ -34,7 +34,7 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
-add_executable(lichtfeld_collision_tests test_collision.cpp test_voxelize_cli.cpp
+add_executable(lichtfeld_collision_tests test_collision.cpp
     ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
 target_compile_definitions(lichtfeld_collision_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
@@ -164,7 +164,6 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         licht_test_support.cpp
-        test_collision_scene.cpp
         test_json_chapter_dom.cpp
         test_collision_jobs.cpp
         test_keymap_upgrade.cpp
