@@ -1,6 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "pointwise_runtime.hpp"
+namespace {
+    __global__ void arange_kernel(float* out, size_t n, float start, float step) {
+        for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < n; i += size_t(gridDim.x) * blockDim.x)
+            out[i] = start + static_cast<float>(i) * step;
+    }
+} // namespace
 extern "C" {
 int lfs_hip_pointwise_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, LfsHipView rhs, LfsHipView output, size_t count, float scalar, LfsHipError* error) {
     return boundary(error, [&] {

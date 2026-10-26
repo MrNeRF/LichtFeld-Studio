@@ -52,6 +52,7 @@ class HipCiFilter(unittest.TestCase):
                      "tests/python/test_hip_runtime_configuration.py",
                      "tests/python/test_hip_pointwise_generation.py",
                      "src/core/include/core/detail/pointwise_ops.def",
+                     "src/core/include/core/detail/pointwise_lowering.hpp",
                      "src/core/include/core/detail/tensor_functors.hpp"):
             with self.subTest(path=path):
                 self.write(path)

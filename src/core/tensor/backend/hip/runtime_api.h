@@ -83,12 +83,17 @@ LFS_HIP_API int lfs_hip_readback_wait(LfsHipContext*, LfsHipReadback*, LfsHipErr
 /* Poll does not block. destination_bytes must describe the writable destination
  * extent; an insufficient extent fails without consuming the snapshot.
  * A valid snapshot is consumed only on success with ready=1; idle slots return 0.
- * wait alone does not consume completion or permit staging reuse. A copy error
- * stays latched: wait/poll report it and never return a successful snapshot.
+ * wait alone does not consume completion or permit staging reuse. A copy or
+ * captured execution error stays latched: wait/poll report it before exposing
+ * bytes or ready=1. Execution errors are captured at enqueue/append/marker time;
+ * work submitted later cannot invalidate an earlier successful snapshot.
+ * Packed appends retain every captured error until consumption or discard.
  * Once drained, poll(nullptr, 0) discards a failed result, returning that error
  * with ready=0; the slot may then be reused. Event-record errors alone do not
  * invalidate an accepted copy, whose completion is checked through the stream.
- * Borrowed host subranges may overlap upload sources or poll destinations. */
+ * Context synchronization reports/consumes its own pending error independently;
+ * clearing it does not validate a failed snapshot. Borrowed host subranges may
+ * overlap upload sources or poll destinations. */
 LFS_HIP_API int lfs_hip_readback_poll(LfsHipContext*, LfsHipReadback*, void* destination, size_t destination_bytes, int32_t* ready, LfsHipError*);
 LFS_HIP_API int lfs_hip_readback_destroy(LfsHipContext*, LfsHipReadback*, LfsHipError*);
 LFS_HIP_API int lfs_hip_fill_f32(LfsHipContext* context, LfsHipBuffer* buffer, size_t offset, size_t count, float value, LfsHipError* error);
