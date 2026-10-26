@@ -30,6 +30,7 @@
 #include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "operator/operator_registry.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -3116,6 +3117,8 @@ namespace lfs::vis::gui {
                    });
         };
 
+        if (node->collision)
+            items.push_back(makeAction(tr("collision.export"), prefixedAction(std::format("export_collision:{}", node_id))));
         if (node->type == core::NodeType::SPLAT) {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
@@ -3555,6 +3558,15 @@ namespace lfs::vis::gui {
                 }
             };
             gui->enqueueModal(std::move(request));
+        } else if (kind == "export_collision" && parts.size() >= 2) {
+            core::NodeId id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], id))
+                return;
+            const auto* node = scene->getNodeById(id);
+            if (!node || !node->collision)
+                return;
+            scene_manager->selectNode(node->name);
+            op::operators().invoke("lfs_plugins.file_menu.CollisionOperator");
         } else if (kind == "export_splat" && parts.size() >= 2) {
             core::NodeId id = core::NULL_NODE;
             if (!parseNodeId(parts[1], id))

@@ -732,6 +732,7 @@ namespace lfs::vis::project {
                     }),
                 required_field("show_grid", &RenderSettings::show_grid),
                 required_field("grid_plane", &RenderSettings::grid_plane),
+                optional_field("collision_preview_opacity", &RenderSettings::collision_preview_opacity),
                 required_field("grid_opacity", &RenderSettings::grid_opacity),
                 required_field("point_cloud_mode", &RenderSettings::point_cloud_mode),
                 required_field("voxel_size", &RenderSettings::voxel_size),

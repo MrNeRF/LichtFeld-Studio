@@ -168,11 +168,11 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         licht_test_support.cpp
-        test_collision_jobs.cpp
-        test_keymap_layout_contract.cpp
         test_collision_scene.cpp
+        test_collision_jobs.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
+        test_keymap_layout_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp

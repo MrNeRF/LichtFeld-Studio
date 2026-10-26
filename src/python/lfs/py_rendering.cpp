@@ -782,6 +782,7 @@ namespace lfs::python {
         add_bool(&Proxy::show_grid, "show_grid", "Show Grid", "Display grid in viewport", true);
         add_int_enum(&Proxy::grid_plane, "grid_plane", "Plane", "Grid orientation",
                      {{"YZ (Right)", "0", 0}, {"XZ (Top)", "1", 1}, {"XY (Front)", "2", 2}}, 1);
+        add_float(&Proxy::collision_preview_opacity, "collision_preview_opacity", "Collision Opacity", "Collision preview face opacity; edges remain stronger", 0.4, 0.0, 1.0);
         add_float(&Proxy::grid_opacity, "grid_opacity", "Grid Opacity", "Grid transparency", 0.5, 0.0, 1.0);
 
         // Camera Frustums

@@ -337,7 +337,9 @@ namespace lfs::vis::gui {
             return handle;
         }
 
-        bool runDialog(const DialogRequest& request, std::filesystem::path& resultPath) {
+        bool runDialog(const DialogRequest& request, std::filesystem::path& resultPath, bool* overwriteConfirmed = nullptr) {
+            if (overwriteConfirmed)
+                *overwriteConfirmed = false;
             resultPath.clear();
             if (nativeFileDialogsBlocked()) {
                 native_dialog_block_attempted = true;
@@ -411,7 +413,13 @@ namespace lfs::vis::gui {
 
             resultPath = lfs::core::utf8_to_path(selectedPath);
             NFD_FreePathU8(selectedPath);
+            const auto selected = resultPath;
             resultPath = detail::appendRequiredExtension(resultPath, request.required_extension);
+            if (overwriteConfirmed) {
+                std::error_code ec;
+                // NFD confirms replacement of the selected file, not a suffix appended afterwards.
+                *overwriteConfirmed = selected == resultPath && core::native_fs::exists(selected, ec) && !ec;
+            }
             return !resultPath.empty();
         }
 
@@ -807,8 +815,13 @@ namespace lfs::vis::gui {
 
     std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                              const std::filesystem::path& defaultPath) {
+        return SaveJsonFileDialog(defaultName, defaultPath, nullptr);
+    }
+
+    std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
+                                             const std::filesystem::path& defaultPath, bool* overwriteConfirmed) {
         std::filesystem::path result;
-        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result);
+        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result, overwriteConfirmed);
         return result;
     }
 
