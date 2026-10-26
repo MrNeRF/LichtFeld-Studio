@@ -24,6 +24,13 @@ def _all_file_items(file_menu):
 
 def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     module = _load_file_menu(monkeypatch)
+    calls = []
+    module.lf.ui.set_panel_enabled = lambda panel, enabled: calls.append((panel, enabled))
+    monkeypatch.setattr(module.lf, "get_collision_state", lambda: {}, raising=False)
+    assert module.CollisionOperator().execute(None) == {"FINISHED"}
+    from lfs_plugins import collision_rendering
+    assert collision_rendering.CollisionRendering.export_mode
+    assert calls == [("lfs.collision", True)]
     items = module.FileMenu().menu_items()
     submenus = {item["label"]: item["items"] for item in items if item["type"] == "submenu"}
     assert list(submenus) == [
@@ -32,7 +39,7 @@ def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     ]
     exports = submenus["tr:menu.file.export_menu"]
     assert [item["operator_id"].split(".")[-1] for item in exports] == [
-        "ExportOperator", "ExportConfigOperator",
+        "CollisionOperator", "ExportOperator", "ExportConfigOperator",
     ]
     maintenance = submenus["tr:menu.file.project_maintenance"]
     assert [item["operator_id"].split(".")[-1] for item in maintenance if "operator_id" in item] == [

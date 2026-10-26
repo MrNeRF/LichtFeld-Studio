@@ -1646,19 +1646,21 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.4f);
 }
 
-// Catches the color variance flags not reaching the training parameters.
+// Catches the color variance flags not reaching the training parameters, also beside the
+// exposure correction MRNF turns on by default.
 TEST(ArgumentParserTest, TrainingParsesColorVarianceLoss) {
     const auto data_path = make_test_path("lfs_arg_parser_color_variance_data");
     const auto output_path = make_test_path("lfs_arg_parser_color_variance_output");
     const auto parse = [&](const char* warmup) {
         const char* argv[] = {
             "LichtFeld-Studio", "--headless", "--data-path", data_path.c_str(), "--output-path", output_path.c_str(),
-            "--no-exposure-correction", "--color-variance-weight", "0.5", warmup};
+            "--color-variance-weight", "0.5", warmup};
         return lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     };
 
     auto parsed = parse("--color-variance-warmup-iters=15000");
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.use_exposure_correction);
     EXPECT_FLOAT_EQ((*parsed)->optimization.color_variance_weight, 0.5f);
     EXPECT_EQ((*parsed)->optimization.color_variance_warmup_iters, 15000u);
     EXPECT_TRUE((*parsed)->cli_step_values_set);

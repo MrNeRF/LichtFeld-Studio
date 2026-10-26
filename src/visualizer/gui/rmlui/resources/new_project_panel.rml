@@ -28,7 +28,7 @@
       </div>
     </div>
 
-    <span class="impdlg-status status-error" data-if="create_hint">{{create_hint}}</span>
+    <span class="impdlg-status status-error" data-if="create_hint != ''">{{create_hint}}</span>
     <div class="impdlg-control-row">
       <span class="impdlg-note text-muted">{{location_preview}}</span>
       <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_destination">@tr:new_project.choose_folder</button>
@@ -39,10 +39,13 @@
       <span>@tr:new_project.advanced</span>
     </div>
     <div class="impdlg-advanced-content" data-if="advanced_expanded">
-      <div class="impdlg-info-row" data-if="source_is_dataset">
+      <div class="impdlg-control-group" data-if="source_is_dataset">
         <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.images_dir</span>
-        <div class="impdlg-info-main">
-          <span class="impdlg-value text-default">{{images_path}}</span>
+        <div class="impdlg-control-main">
+          <div class="impdlg-control-row">
+            <input type="text" class="impdlg-input" data-value="images_path" />
+            <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_images">@tr:common.browse</button>
+          </div>
           <span class="impdlg-meta text-muted">{{images_count_text}}</span>
         </div>
       </div>

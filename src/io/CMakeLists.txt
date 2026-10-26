@@ -158,6 +158,7 @@ endif()
 
 add_library(lfs_io STATIC
         argument_parser.cpp
+    collision_export.cpp
         # Implementation file only (header is in include/io/)
         loader.cpp
         ppisp_file.cpp

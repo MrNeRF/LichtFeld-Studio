@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/error.hpp"
+#include "dirty_flags.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "lod_page_cache.hpp"
@@ -38,6 +39,7 @@ namespace lfs::vis {
             std::uint64_t lod_page_generation = 0;
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
+            bool stochastic_accumulation_active = false;
             rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
         };
         enum class SelectionMaskShape : std::uint32_t {
@@ -158,6 +160,7 @@ namespace lfs::vis {
         virtual void configureLod(const LodSettings&) = 0;
         virtual GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId) const = 0;
         virtual std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(const core::SplatData&) { return std::nullopt; }
+        virtual void invalidateStochasticHistory(DirtyMask) {}
         virtual void setCameraNavigating(bool) {}
         virtual bool takeRefinementRequest() { return false; }
         // Optional capability; its trainer protocol is defined separately.

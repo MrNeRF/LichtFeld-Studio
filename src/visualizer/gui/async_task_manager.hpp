@@ -7,12 +7,14 @@
 #include <condition_variable>
 #include <cstdint>
 
+#include "core/collision.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "core/splat_simplify.hpp"
 #include "core/uuid.hpp"
 #include "gui/gallery_scene_publication.hpp"
@@ -44,6 +46,7 @@ namespace lfs::vis {
 
     namespace gui {
 
+        class CollisionJobsTest;
         struct VideoExportEnvironmentState;
         struct VideoExportMeshRendererState;
 
@@ -55,6 +58,12 @@ namespace lfs::vis {
             void shutdown();
 
             void setupEvents();
+            void startCollision(core::CollisionSettings settings);
+            void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
+            void cancelCollision();
+            [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
+            [[nodiscard]] float collisionResolvedSize() const;
+            [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }
             void pollImportCompletion();
             [[nodiscard]] bool hasPendingMainThreadCompletions() const;
 
@@ -230,6 +239,7 @@ namespace lfs::vis {
             void cancelSplatSimplify();
 
         private:
+            friend class CollisionJobsTest;
             bool import_cancel_pending_ = false;
             bool importWorkersFinished() const;
             friend class lfs::vis::VisualizerImplResetTest_ImportWorkerFailureSettlesFailed_Test;
@@ -290,6 +300,8 @@ namespace lfs::vis {
                 size_t loaded_count = 0;
                 size_t failed_count = 0;
                 std::string reframe_error;
+                // Attached nodes; the completion overlay counts those still in the scene.
+                std::vector<core::Uuid> imported_nodes;
                 bool consolidation_pending = false;
                 std::optional<SplatLoadRequest> pending_render_request;
                 core::Uuid pending_render_node;
@@ -336,6 +348,17 @@ namespace lfs::vis {
 
             VisualizerImpl* viewer_;
             JobRegistry& jobs_;
+            JobHandle collision_job_;
+            std::optional<std::jthread> collision_thread_;
+            std::shared_ptr<const core::CollisionVolume> collision_result_;
+            uint64_t collision_epoch_ = 0;
+            std::optional<core::Scene::CollisionSourceIdentity> collision_source_;
+            core::CollisionSettings collision_settings_;
+            std::atomic<float> collision_resolved_size_{0};
+            std::atomic<bool> collision_pending_{false};
+            void pollCollision();
+            void publishCollisionState(bool force = false);
+            void launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work);
 
             struct ExportState {
                 std::string commit_uuid;

@@ -16,6 +16,13 @@
 
 import utils;
 
+#ifndef LFS_STOCHASTIC_RASTER
+#define LFS_STOCHASTIC_RASTER 0
+#endif
+#if LFS_STOCHASTIC_RASTER
+#include "stochastic_sampling.slang"
+#endif
+
 #ifndef LFS_3DGUT_RASTERIZE
 #define LFS_3DGUT_RASTERIZE 0
 #endif
@@ -129,6 +136,11 @@ groupshared float4 collected_inv_cov_vs_opacity[SPLAT_BATCH_SIZE];
 
 groupshared uint32_t active_subgroups[TILE_SIZE / SUBGROUP_SIZE];
 groupshared uint32_t collected_gauss_idx[SPLAT_BATCH_SIZE];
+#if LFS_STOCHASTIC_RASTER
+groupshared float collected_depth[SPLAT_BATCH_SIZE];
+groupshared float collected_depth_metric[SPLAT_BATCH_SIZE];
+groupshared uint2 collected_noise[SPLAT_BATCH_SIZE];
+#endif
 #if LFS_RASTER_OVERLAYS
 // Packed flags | selection_byte | preview_byte — one global load set per splat
 // per workgroup instead of per pixel.
@@ -146,6 +158,9 @@ layout(binding=2) StructuredBuffer<float2> xy_vs;
 layout(binding=3) StructuredBuffer<float4> inv_cov_vs_opacity;
 layout(binding=4) StructuredBuffer<float> rgb;
 layout(binding=5) StructuredBuffer<float> depths;
+#if LFS_STOCHASTIC_RASTER
+layout(binding=15) StructuredBuffer<uint> stochastic_depth_keys;
+#endif
 
 #if LFS_3DGUT_RASTERIZE
 layout(binding=6) StructuredBuffer<float> xyz_ws;
@@ -328,9 +343,17 @@ void main(
     float weighted_depth = 0.0f;
     float weighted_alpha = 0.0f;
     int32_t local_n_contrib = 0;
+#if LFS_STOCHASTIC_RASTER
+    uint selected_id = 0xffffffffu;
+    float nearest_metric = asfloat(0x7f800000u);
+#endif
     if (uniforms.depth_wave > 0u && is_inside) {
         curr_pixel_state = final_pixel_state[pix_id];
         local_n_contrib = n_contributors[pix_id];
+#if LFS_STOCHASTIC_RASTER
+        selected_id = asuint(local_n_contrib);
+        nearest_metric = pixel_depth_weight[pix_id];
+#endif
         if (uniforms.expected_far > 0.0f) {
             weighted_depth = final_pixel_depth[pix_id];
             weighted_alpha = pixel_depth_weight[pix_id];
@@ -355,10 +378,22 @@ void main(
     outline_active = outline_active && outline_selected_coverage < overlay_params[OVERLAY_PARAM_MARKER_FLAGS].w;
 #endif
     bool thread_active = LFS_OUTLINE_ONLY == 0 && is_inside && curr_pixel_state.a >= 0.0001f;
+#if LFS_STOCHASTIC_RASTER
+    // An opaque sample does not terminate the search: a nearer accepted splat
+    // can occur later in this tile or in a subsequent unsorted wave.
+    thread_active = is_inside;
+#endif
 
     const uint2 projection_origin = full_frame_binning(uniforms)
         ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
     float2 center_pix_coord = pix_coord + projection_origin;
+#if LFS_STOCHASTIC_RASTER
+    // The reference sampler retains exactly the same bits, with pixel/frame
+    // hashes hoisted out of the fragment loop and primitive hashes shared.
+    const uint2 noise_pixel = pix_coord + projection_origin;
+    const uint noise_pixel_seed = stochastic_hash(noise_pixel.x ^ stochastic_hash(noise_pixel.y));
+    const uint noise_frame_seed = stochastic_hash(uniforms.stochastic_frame + 0x85ebca6bu);
+#endif
   #if SUBTILE_SIZE > 0
     pix_coord_base += projection_origin;
   #endif
@@ -433,6 +468,11 @@ void main(
         int splat_pointer_offset = i * SPLAT_BATCH_SIZE + thread_rank;
         if (thread_rank < SPLAT_BATCH_SIZE && tile_idx_start + splat_pointer_offset < tile_idx_end) {
             uint32_t coll_id = uint32_t(sorted_gauss_idx[tile_idx_start + splat_pointer_offset]);
+#if LFS_STOCHASTIC_RASTER
+            collected_depth[thread_rank] = read_t1_float(coll_id, depths);
+            collected_depth_metric[thread_rank] = asfloat(stochastic_depth_keys[coll_id]);
+            collected_noise[thread_rank] = stochastic_primitive_noise(coll_id);
+#endif
             #if SHARED_STRUCT
               #if LFS_3DGUT_RASTERIZE
                 collected_gut_splats[thread_rank] =
@@ -498,7 +538,16 @@ void main(
                 const uint overlay_pack = collected_overlay[j];
                 const uint flags = unpack_overlay_flags(overlay_pack);
               #endif
+#if LFS_STOCHASTIC_RASTER
+                float splat_depth = collected_depth[j];
+                float depth_metric = collected_depth_metric[j];
+                // Unsorted traversal still permits an early depth test. Reject
+                // farther fragments before evaluating their Gaussian kernel.
+                if (depth_metric > nearest_metric || (depth_metric == nearest_metric && splat_id >= selected_id))
+                    continue;
+#else
                 float splat_depth = read_t1_float(splat_id, depths);
+#endif
                 float4 gauss_rgba;
               #if LFS_RASTER_OVERLAYS
                 Splat_2D_AlphaBlend overlay_splat;
@@ -648,6 +697,18 @@ void main(
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
             #endif
 
+#if LFS_STOCHASTIC_RASTER
+                const float threshold = uniforms.stochastic_mode == 2u
+                    ? stochastic_blue_threshold(pix_coord + projection_origin, collected_noise[j], uniforms.stochastic_frame)
+                    : stochastic_threshold(noise_pixel_seed, collected_noise[j].y, noise_frame_seed);
+                if ((depth_metric < nearest_metric || (depth_metric == nearest_metric && splat_id < selected_id)) &&
+                    threshold < gauss_rgba.a) {
+                    curr_pixel_state = float4(gauss_rgba.rgb / gauss_rgba.a, 0.0f);
+                    median_depth = splat_depth;
+                    nearest_metric = depth_metric;
+                    selected_id = splat_id;
+                }
+#else
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
                 if (uniforms.expected_far > 0.0f && splat_depth <= uniforms.expected_far) {
                     float depth_weight = gauss_rgba.a * curr_pixel_state.a;
@@ -668,6 +729,7 @@ void main(
                     break;
                 }
                 curr_pixel_state = new_pixel_state;
+#endif
             }
         }
         splats_left_to_process -= SPLAT_BATCH_SIZE;
@@ -686,7 +748,14 @@ void main(
         outline_scene_depths[pix_id] = float4(outline_scene_depth, outline_selected_depth, outline_scene_coverage, outline_selected_coverage);
 #endif
 #if !LFS_OUTLINE_ONLY
+#if LFS_STOCHASTIC_RASTER
+        n_contributors[pix_id] = asint(selected_id);
+        // Preserve native alpha blending's radial ordering while retaining
+        // view-space Z separately for reprojection, picking, and mesh depth.
+        pixel_depth_weight[pix_id] = nearest_metric;
+#else
         n_contributors[pix_id] = local_n_contrib;
+#endif
         final_pixel_state[pix_id] = curr_pixel_state;
         if (uniforms.expected_far > 0.0f) {
             // Keep the expected-depth numerator and denominator raw across

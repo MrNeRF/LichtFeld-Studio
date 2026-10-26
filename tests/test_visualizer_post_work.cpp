@@ -7161,6 +7161,38 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         EXPECT_EQ(manager->getSelectedNodeName(), "async-single");
     }
 
+    // Catches the import overlay counting the whole scene: importing a file next to a cropped
+    // model reported the rows of every node, soft-deleted ones included.
+    TEST_F(VisualizerImplResetTest, AsyncSplatImportReportsImportedPointCount) {
+        const auto path = temporary_.path / "async-added.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(3), {
+                                                                            .output_path = path,
+                                                                            .binary = true,
+                                                                            .async = false,
+                                                                        }));
+
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        auto cropped = lfs::test::licht::make_splat(5);
+        auto deleted = core::Tensor::zeros_bool({5}, core::Device::CPU);
+        deleted.slice(0, 0, 4).copy_from(core::Tensor::ones_bool({4}, core::Device::CPU));
+        cropped->soft_delete(deleted);
+        ASSERT_NE(viewer.getScene().addSplat("cropped", std::move(cropped)), core::NULL_NODE);
+
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startSplatLoad({path}, false));
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+            }));
+
+        ASSERT_NE(viewer.getScene().getNode("async-added"), nullptr);
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 8u);
+        EXPECT_TRUE(tasks.getImportSuccess());
+        EXPECT_EQ(tasks.getImportNumPoints(), 3u);
+        EXPECT_EQ(app_store().import_overlay_state.get().num_points, 3u);
+    }
+
     class SplatSimplifyCompletionTest : public VisualizerImplResetTest {
     protected:
         void startAndWaitForResult(VisualizerImpl& viewer) {

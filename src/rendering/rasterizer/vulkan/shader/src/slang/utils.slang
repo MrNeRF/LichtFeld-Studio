@@ -1237,9 +1237,9 @@ struct Uniforms {
     float rasterization_scale;
     // Distance the orthographic eye was moved back; subtracted from every depth output.
     float depth_offset;
-    uint depth_offset_pad0;
-    uint depth_offset_pad1;
-    uint depth_offset_pad2;
+    uint stochastic_frame;
+    uint stochastic_mode;
+    uint stochastic_history_valid;
 }
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "collision_fixture.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
@@ -14,6 +15,7 @@
 #include "screen/screen_service.hpp"
 #include "screen/view3d_space.hpp"
 #include "test_view_targets.hpp"
+#include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL_keycode.h>
@@ -40,6 +42,9 @@ namespace lfs::vis::gui {
     // Model registration, resources, layout, updates and hit tests are production code.
     class RmlMenuBarTestAccess {
     public:
+        static void enterWalk(RmlMenuBar& bar) {
+            bar.dispatchToolbarAction("set_camera_navigation_mode", "walk");
+        }
         static void toggleProjection(RmlMenuBar& bar) {
             bar.dispatchToolbarAction("toggle_projection", "");
         }
@@ -183,12 +188,12 @@ namespace lfs::vis::gui {
             bar.rml_context_ = context;
             bar.bindModel();
             bar.camera_buttons_ = {
-                {"menu-camera-orbit", "set_camera_navigation_mode", "orbit"},
-                {"menu-camera-trackball", "set_camera_navigation_mode", "trackball"},
-                {"menu-camera-fpv", "set_camera_navigation_mode", "fpv"},
-                {"menu-camera-drone", "set_camera_navigation_mode", "drone"},
+                {.button_id = "menu-camera-orbit", .action = "set_camera_navigation_mode", .value = "orbit"},
+                {.button_id = "menu-camera-trackball", .action = "set_camera_navigation_mode", .value = "trackball"},
+                {.button_id = "menu-camera-fpv", .action = "set_camera_navigation_mode", .value = "fpv"},
+                {.button_id = "menu-camera-drone", .action = "set_camera_navigation_mode", .value = "drone"},
             };
-            bar.snap_buttons_ = {{"menu-view-snap", "toggle_camera_view_snap"}};
+            bar.snap_buttons_ = {{.button_id = "menu-view-snap", .action = "toggle_camera_view_snap"}};
             for (const auto* name : {"menu_camera_buttons", "menu_snap_buttons"})
                 bar.menu_model_.DirtyVariable(name);
         }
@@ -204,6 +209,10 @@ namespace lfs::vis::gui {
             bar.project_title_container_ = doc->GetElementById("project-title");
             bar.project_title_el_ = doc->GetElementById("project-title-content");
             bar.body_el_ = doc->GetElementById("body");
+        }
+        static bool walkEnabled(RmlMenuBar& bar) {
+            bar.rebuildToolbarButtons();
+            return bar.camera_buttons_.back().enabled;
         }
         static bool accessVisible(const RmlMenuBar& bar) {
             return bar.body_el_ && bar.body_el_->IsClassSet("access-keys-visible");
@@ -392,6 +401,32 @@ namespace {
         lfs::vis::gui::RmlUIManager manager_;
         lfs::vis::gui::RmlMenuBar bar_;
     };
+
+    TEST_F(MenuBarTitleTest, WalkRejectionDoesNotEscapeNativeDispatch) {
+        lfs::vis::input::InputBindings::setPersistenceEnabled(false);
+        lfs::vis::SceneManager manager;
+        lfs::vis::services().set(&manager);
+        Viewport viewport(200, 200);
+        lfs::vis::TestViewTargets targets(viewport);
+        lfs::vis::InputController controller(nullptr, targets);
+        controller.initialize();
+        controller.setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Orbit);
+        EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
+        EXPECT_EQ(controller.walk_error, "No collision nodes are loaded");
+        const auto floor = manager.getScene().addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        manager.getScene().setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        manager.getScene().setNodeVisibility(floor, false);
+        EXPECT_TRUE(RmlMenuBarTestAccess::walkEnabled(bar_));
+        viewport.camera.t = {0, 20, 0};
+        EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
+        for (int frame = 0; frame < 20; ++frame)
+            EXPECT_NO_THROW(RmlMenuBarTestAccess::frame(bar_));
+        EXPECT_EQ(controller.walk_error, "No Walk support below the camera");
+        EXPECT_EQ(controller.cameraNavigationMode(), lfs::vis::InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
+        lfs::vis::services().clear();
+        lfs::vis::input::InputBindings::setPersistenceEnabled(true);
+    }
 
     TEST_F(MenuBarTitleTest, ContextMenuFitsShortcutColumns) {
         auto* doc = context_->LoadDocumentFromMemory(
@@ -1112,6 +1147,13 @@ namespace {
                 continue; // Rml keeps the two data-for templates in the tree.
             rendered_buttons.push_back(button);
             const auto action = button->GetAttribute<Rml::String>("data-action", "");
+            const auto id = button->GetAttribute<Rml::String>("id", "");
+            if (id == "menu-view-snap") {
+                EXPECT_EQ(action, "toggle_camera_view_snap");
+            } else {
+                EXPECT_EQ(action, "set_camera_navigation_mode");
+                EXPECT_EQ(id, "menu-camera-" + button->GetAttribute<Rml::String>("data-value", ""));
+            }
             EXPECT_NE(action, "set_render_mode");
             EXPECT_NE(action, "set_projection");
             EXPECT_NE(action, "toggle_depth_view");
@@ -1538,6 +1580,7 @@ namespace {
             lfs::vis::TestViewTargets targets(viewport);
             lfs::vis::InputController controller(nullptr, targets);
             controller.initialize();
+            EXPECT_FALSE(RmlMenuBarTestAccess::walkEnabled(bar_));
             EXPECT_FALSE(RmlMenuBarTestAccess::keyEvent(bar_, lfs::vis::FrameInputEventKind::KeyDown, SDL_SCANCODE_LALT));
             EXPECT_FALSE(RmlMenuBarTestAccess::letterKey(bar_, SDLK_C, SDL_KMOD_LALT));
             EXPECT_FALSE(bar_.isOpen());

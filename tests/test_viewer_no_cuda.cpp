@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/gpu_preflight.hpp"
+#include "combined_model_worker_fixture.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_info.hpp"
@@ -18,13 +19,10 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
-#include <latch>
 #include <random>
-#include <thread>
 #include <vector>
 
 namespace {
@@ -194,8 +192,10 @@ TEST(ViewerNoCuda, CameraPathRenderDoesNotRequireTrainerOrCuda) {
     EXPECT_TRUE(lfs::app::training_params_are_viewer_only(params));
 }
 
-TEST(ViewerNoCuda, RevealingEarlierSplatWaitsForCoherentAggregateAndRequestsRedraw) {
+TEST(ViewerNoCuda, RevealingEarlierSplatKeepsCoherentAliasAndRequestsRedraw) {
+    namespace combined = lfs::test::combined_model;
     Scene scene;
+    combined::HeldWorker worker;
     constexpr size_t count = 500001;
     const auto make_model = [](float value) {
         return std::make_unique<SplatData>(
@@ -207,13 +207,17 @@ TEST(ViewerNoCuda, RevealingEarlierSplatWaitsForCoherentAggregateAndRequestsRedr
     };
     const auto first = scene.addSplat("first", make_model(0.0f));
     const auto second = scene.addSplat("second", make_model(1.0f));
+    glm::mat4 first_transform(1.0f), second_transform(1.0f);
+    first_transform[3] = glm::vec4(10.0f, 0.0f, 0.0f, 1.0f);
+    second_transform[3] = glm::vec4(0.0f, 20.0f, 0.0f, 1.0f);
+    scene.setNodeTransform(first, first_transform);
+    scene.setNodeTransform(second, second_transform);
     scene.setNodeVisibility(first, false);
-    ASSERT_EQ(scene.getCombinedModel(), scene.getNodeById(second)->model.get());
-    std::latch release(1);
-    scene.setCombinedModelAllocator([&](TensorShape shape, size_t, DataType dtype, std::string_view) {
-        release.wait();
-        return Tensor::empty(std::move(shape), Device::GPU, dtype);
-    });
+    const auto* alias = scene.getNodeById(second)->model.get();
+    ASSERT_EQ(scene.getCombinedModel(), alias);
+    ASSERT_NE(scene.getTransformIndices(), nullptr);
+    EXPECT_EQ(scene.getVisibleNodeTransforms(), (std::vector<glm::mat4>{second_transform}));
+    scene.setCombinedModelAllocator(worker.allocator());
     std::atomic<int> ready{0};
     lfs::event::ScopedHandler handler;
     handler.subscribe<events::state::CombinedModelBuildReady>([&](const auto& event) {
@@ -221,18 +225,30 @@ TEST(ViewerNoCuda, RevealingEarlierSplatWaitsForCoherentAggregateAndRequestsRedr
             ++ready;
     });
     scene.setNodeVisibility(first, true);
-    // The old second-node alias must not be paired with slot zero (first).
-    EXPECT_EQ(scene.getCombinedModel(), nullptr);
-    release.count_down();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (scene.combinedModelBuildPending() && std::chrono::steady_clock::now() < deadline) {
-        (void)scene.getCombinedModel();
-        std::this_thread::yield();
-    }
-    EXPECT_FALSE(scene.combinedModelBuildPending());
-    ASSERT_NE(scene.getCombinedModel(), nullptr);
-    EXPECT_EQ(scene.getCombinedModel()->size(), 2 * count);
+    const auto retained = combined::combinedModelWithin(scene, worker);
+    ASSERT_TRUE(retained.prompt);
+    ASSERT_TRUE(worker.waitEntered());
+    ASSERT_TRUE(scene.combinedModelBuildPending());
+    ASSERT_EQ(retained.model, alias);
+    // Slot zero must still mean second while its old geometry is displayed.
+    const auto retained_indices = scene.getTransformIndices();
+    ASSERT_NE(retained_indices, nullptr);
+    EXPECT_EQ(retained_indices->to_vector_int(), std::vector<int>(count, 0));
+    EXPECT_EQ(scene.getVisibleNodeTransforms(), (std::vector<glm::mat4>{second_transform}));
+    const auto slots = scene.getCombinedSplatNodeSlots();
+    ASSERT_EQ(slots.size(), 1);
+    ASSERT_NE(slots[0].node, nullptr);
+    EXPECT_EQ(slots[0].node->id, second);
+    EXPECT_EQ(slots[0].slot_index, 0);
+
+    worker.release();
+    const auto* aggregate = combined::settledCombinedModel(scene);
+    ASSERT_FALSE(scene.combinedModelBuildPending());
+    ASSERT_NE(aggregate, nullptr);
+    ASSERT_EQ(aggregate->size(), 2 * count);
     EXPECT_GE(ready.load(), 1);
+    EXPECT_EQ(scene.getVisibleNodeTransforms(), (std::vector<glm::mat4>{first_transform, second_transform}));
+    ASSERT_NE(scene.getTransformIndices(), nullptr);
     const auto indices = scene.getTransformIndices()->cpu();
     EXPECT_EQ(indices.ptr<int>()[0], 0);
     EXPECT_EQ(indices.ptr<int>()[count], 1);

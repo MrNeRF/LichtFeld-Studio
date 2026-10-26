@@ -223,6 +223,8 @@ class Action(enum.Enum):
 
     REMOVE_CROP_POLYGON_VERTEX = 110
 
+    EXIT_WALK = 111
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 
@@ -237,6 +239,8 @@ class ToolMode(enum.Enum):
     ALIGN = 6
 
     CROP_BOX = 7
+
+    WALK = 8
 
 class Modifier(enum.Enum):
     NONE = 0

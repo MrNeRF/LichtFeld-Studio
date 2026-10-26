@@ -3155,7 +3155,8 @@ NB_MODULE(lichtfeld, m) {
                     "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
             }
             const auto before = controller->cameraNavigationMode();
-            controller->setCameraNavigationMode(*parsed);
+            if (!controller->setCameraNavigationMode(*parsed))
+                throw std::runtime_error(controller->walk_error);
             if (markViewSettingIfChanged(before, controller->cameraNavigationMode())) {
                 lfs::vis::saveCameraNavigationPreference(
                     lfs::vis::InputController::cameraNavigationModeName(*parsed));
@@ -3547,6 +3548,8 @@ NB_MODULE(lichtfeld, m) {
     auto scene_module = m.def_submodule("scene", "Scene graph API");
     lfs::python::register_splat_data(scene_module);
     lfs::python::register_scene(scene_module);
+    for (const auto* name : {"generate_collision", "export_collision", "cancel_collision", "get_collision_state", "set_walk_settings"})
+        m.attr(name) = scene_module.attr(name);
     lfs::python::register_cameras(scene_module);
 
     auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
@@ -4151,12 +4154,14 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) {
+        [](const std::string& path, const std::optional<std::string>& images_path) {
             const auto native_path = python_utf8_path(path);
+            const auto native_images = images_path ? python_utf8_path(*images_path) : std::filesystem::path{};
             nb::gil_scoped_release release;
-            return lfs::io::detect_dataset_info(native_path);
+            return lfs::io::detect_dataset_info(native_path, native_images);
         },
-        nb::arg("path"), "Detect dataset information from a directory path");
+        nb::arg("path"), nb::arg("images_path") = nb::none(),
+        "Detect dataset information from a directory path; images_path replaces the detected images folder");
     m.def(
         "is_dataset_path",
         [](const std::string& path) {

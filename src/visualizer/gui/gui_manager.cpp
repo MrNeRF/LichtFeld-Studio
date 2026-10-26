@@ -8333,8 +8333,10 @@ namespace lfs::vis::gui {
     }
 
     ViewportLayout GuiManager::activeViewportLayout(const ScreenState& screen) const {
+        ViewportLayout layout;
+        const auto active = viewer_->screens().screen().activeView();
+        layout.view = active.value;
         if (ui_hidden_) {
-            ViewportLayout layout;
             layout.has_focus = !screen.any_item_active;
             if (const auto* window = viewer_->getWindowManager()) {
                 const auto size = window->getWindowSize();
@@ -8342,9 +8344,6 @@ namespace lfs::vis::gui {
             }
             return layout;
         }
-        ViewportLayout layout;
-        const auto active = viewer_->screens().screen().activeView();
-        layout.view = active.value;
         if (const auto rect = screen_host_.viewContent(active)) {
             layout.pos = {rect->x, rect->y};
             layout.size = {rect->w, rect->h};

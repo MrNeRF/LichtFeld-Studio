@@ -291,6 +291,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
 
         // Point cloud
         bool point_cloud_mode = false;
@@ -342,6 +343,7 @@ namespace lfs::vis {
                    show_grid == other.show_grid &&
                    grid_plane == other.grid_plane &&
                    grid_opacity == other.grid_opacity &&
+                   collision_preview_opacity == other.collision_preview_opacity &&
                    point_cloud_mode == other.point_cloud_mode &&
                    voxel_size == other.voxel_size &&
                    show_rings == other.show_rings &&
@@ -417,6 +419,9 @@ namespace lfs::vis {
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
+        lfs::rendering::GaussianTransparencyMode transparency_mode =
+            lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
 
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);

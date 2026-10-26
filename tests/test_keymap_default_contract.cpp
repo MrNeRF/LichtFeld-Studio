@@ -82,7 +82,7 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
                           Action::PREVIOUS_SIDEBAR_CATEGORY);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
-                          Action::CANCEL_POLYGON);
+                          mode == ToolMode::WALK ? Action::EXIT_WALK : Action::CANCEL_POLYGON);
                 if (mode == ToolMode::SELECTION)
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_ENTER, MODIFIER_CTRL),
                               Action::ASSET_GALLERY_PRIMARY);
@@ -99,7 +99,7 @@ namespace lfs::vis::input {
                         ? Action::DELETE_SELECTED
                         : Action::DELETE_NODE;
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_DELETE, MODIFIER_NONE),
-                          delete_action);
+                          mode == ToolMode::WALK ? Action::NONE : delete_action);
             }
             EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT,
                                                 MODIFIER_NONE),

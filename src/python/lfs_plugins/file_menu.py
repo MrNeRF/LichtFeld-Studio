@@ -438,6 +438,15 @@ class ImportConfigOperator(Operator):
         return {"FINISHED"}
 
 
+class CollisionOperator(Operator):
+    label = "collision.title"
+
+    def execute(self, context) -> set:
+        from .collision_rendering import open_collision
+        open_collision(export=True)
+        return {"FINISHED"}
+
+
 class ExportOperator(Operator):
     label = "menu.file.export"
     description = "Export the scene"
@@ -999,6 +1008,7 @@ class FileMenu:
                 ],
             ),
             menu_submenu(lf.ui.tr("menu.file.export_menu"), [
+                menu_operator(CollisionOperator),
                 menu_operator(ExportOperator, label=lf.ui.tr("menu.file.export_scene")),
                 menu_operator(ExportConfigOperator, label=lf.ui.tr("menu.file.configuration")),
             ]),
@@ -1056,6 +1066,7 @@ _operator_classes = [
     ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,
+    CollisionOperator,
     ExportOperator,
     ExportConfigOperator,
     Mesh2SplatOperator,

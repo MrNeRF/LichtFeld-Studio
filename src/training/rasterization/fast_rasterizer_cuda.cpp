@@ -708,12 +708,6 @@ namespace lfs::training {
         if (adam.color_variance_weight > 0.0f) {
             if (ctx.mip_filter)
                 throw std::runtime_error("Color variance does not yet support mip filtering");
-            const auto& target = adam.color_variance_target;
-            if (!target.is_valid() || target.shape() != grad_image.shape() ||
-                target.device() != core::Device::GPU || !target.is_contiguous() ||
-                (target.dtype() != core::DataType::Float32 && target.dtype() != core::DataType::UInt8)) {
-                throw std::runtime_error("Color variance target must be contiguous CUDA Float32 or UInt8 [3, H, W]");
-            }
             const auto& loss = adam.color_variance_loss;
             if (loss.is_valid() && (loss.numel() != 1 || loss.device() != core::Device::GPU ||
                                     loss.dtype() != core::DataType::Float32 || !loss.is_contiguous())) {
@@ -728,14 +722,9 @@ namespace lfs::training {
                 }
                 pixel_weight_sum = pixel_weight.sum();
             }
-            core::pin_operands({&grad_image, &target, &loss, &pixel_weight, &pixel_weight_sum});
-            target.sync_to_stream(stream);
+            core::pin_operands({&grad_image, &loss, &pixel_weight, &pixel_weight_sum});
             if (loss.is_valid())
                 loss.sync_to_stream(stream);
-            if (target.dtype() == core::DataType::UInt8)
-                variance.target_u8 = target.ptr<std::uint8_t>();
-            else
-                variance.target = target.ptr<float>();
             variance.weight = adam.color_variance_weight;
             if (pixel_weight.is_valid()) {
                 pixel_weight.sync_to_stream(stream);
@@ -837,10 +826,9 @@ namespace lfs::training {
             }
         }
 
-        // blend_backward_cu does not read the image buffer
-        // ((void)image in the kernel) — it reconstructs transmittance from
-        // blended image in ctx (one-image VRAM already resident for the
-        // loss path); do not allocate a separate pre-blend cache.
+        // Only the color variance loss reads the forward image, for each pixel's
+        // expected splat color; the blend backward reconstructs transmittance from
+        // the tile buffers. Do not allocate a separate pre-blend cache.
 
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");

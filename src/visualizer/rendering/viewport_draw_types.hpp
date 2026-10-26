@@ -11,6 +11,7 @@
 #include <vector>
 namespace lfs::core {
     struct MeshData;
+    struct CollisionVolume;
 }
 namespace lfs::vis {
     struct ViewportOverlayVertex {
@@ -96,6 +97,8 @@ namespace lfs::vis {
 
     struct ViewportMeshDrawItem {
         const lfs::core::MeshData* mesh = nullptr;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision{};
+        float collision_opacity = 1.0f;
         glm::mat4 model{1.0f};
         glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
         bool camera_relative_light = false;

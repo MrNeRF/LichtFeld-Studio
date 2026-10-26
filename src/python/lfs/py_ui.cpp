@@ -3486,12 +3486,16 @@ namespace lfs::python {
 
         m.def(
             "save_json_file_dialog",
-            [](const std::string& default_name) -> std::string {
-                auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
-                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            [](const std::string& default_name, bool with_overwrite_confirmation) -> nb::object {
+                bool confirmed = false;
+                const auto result = lfs::vis::gui::SaveJsonFileDialog(default_name, {}, &confirmed);
+                const auto path = lfs::core::path_to_utf8(result);
+                if (with_overwrite_confirmation)
+                    return nb::make_tuple(path, confirmed);
+                return nb::cast(path);
             },
-            nb::arg("default_name") = "config.json",
-            "Open a save file dialog for JSON files. Returns empty string if cancelled.");
+            nb::arg("default_name") = "config.json", nb::arg("with_overwrite_confirmation") = false,
+            "Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).");
 
         m.def(
             "save_png_file_dialog",

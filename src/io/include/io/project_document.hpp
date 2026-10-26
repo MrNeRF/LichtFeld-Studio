@@ -6,6 +6,7 @@
 #pragma once
 
 #include "core/checkpoint_format.hpp"
+#include "core/collision_serialization.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/geometry_payload.hpp"
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
@@ -99,6 +101,8 @@ namespace lfs::io::project {
         // Skip Impl::validate after the chapter scan. Hydration re-opens a
         // path the shell already validated; identity is checked by the caller.
         bool skip_validation = false;
+        // Aggregate COLV allocation bound, counted once per distinct volume.
+        std::size_t collision_byte_budget = std::numeric_limits<std::size_t>::max();
     };
 
     struct ProjectDocumentSaveOptions {
@@ -376,7 +380,10 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_mesh(const lfs::core::Uuid& node_uuid, MeshPayload payload);
         [[nodiscard]] bool remove_mesh(const lfs::core::Uuid& node_uuid);
-        // Drop SPLT/PCLD/MESH payloads the current scene graph no longer binds.
+        [[nodiscard]] lfs::Result<void>
+        set_collision(const lfs::core::Uuid& instance_uuid,
+                      std::shared_ptr<const lfs::core::CollisionVolume> volume);
+        // Drop SPLT/PCLD/MESH/COLV payloads the current scene graph no longer binds.
         void remove_geometry_payloads_not_bound_by_scene();
 
         [[nodiscard]] std::vector<lfs::core::Uuid> splat_uuids() const;

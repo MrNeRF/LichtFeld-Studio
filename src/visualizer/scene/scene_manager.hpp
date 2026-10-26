@@ -491,6 +491,7 @@ namespace lfs::vis {
                 bool point_cloud_source = false;
                 std::unique_ptr<lfs::core::SplatData> data;
                 std::shared_ptr<lfs::core::MeshData> mesh;
+                std::shared_ptr<const core::CollisionVolume> collision{};
                 std::unique_ptr<core::CropBoxData> cropbox;
                 std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;

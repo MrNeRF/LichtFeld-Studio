@@ -108,8 +108,13 @@ namespace lfs::sequencer {
             const glm::quat start_control = squadControl(previous, start, end);
             const glm::quat end_control = squadControl(start, end, next);
             const glm::quat direct = glm::slerp(start, end, t);
-            const glm::quat controls = glm::slerp(start_control, end_control, t);
-            return glm::normalize(glm::slerp(direct, controls, 2.0f * t * (1.0f - t)));
+            const glm::quat hemisphere = glm::normalize(start + end);
+            if (glm::dot(hemisphere, start_control) <= 1.0e-3f ||
+                glm::dot(hemisphere, end_control) <= 1.0e-3f)
+                return glm::normalize(direct);
+            // Preserve the control path's sign when blending the two SQUAD curves.
+            const glm::quat controls = glm::mix(start_control, end_control, t);
+            return glm::normalize(glm::mix(direct, controls, 2.0f * t * (1.0f - t)));
         }
     } // namespace
 

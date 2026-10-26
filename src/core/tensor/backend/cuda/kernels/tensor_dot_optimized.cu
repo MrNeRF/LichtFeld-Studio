@@ -98,7 +98,7 @@ namespace lfs::core::tensor_ops {
     // Small-n path: single block, float4 loads when aligned.
     __global__ void count_nonzero_float_small(const float* __restrict__ data,
                                               size_t* __restrict__ result, size_t n) {
-        unsigned int count = 0u;
+        unsigned long long count = 0u;
         for (size_t i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
             if (i + 3 < n) {
                 float4 v = reinterpret_cast<const float4*>(data)[i / 4];
@@ -115,10 +115,10 @@ namespace lfs::core::tensor_ops {
 
     // Stage1: SM-capped grid-stride, float4, write per-block partial count.
     __global__ void count_nonzero_float_stage1(const float* __restrict__ data,
-                                               unsigned int* __restrict__ partials, size_t n) {
+                                               unsigned long long* __restrict__ partials, size_t n) {
         const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-        unsigned int count = 0u;
+        unsigned long long count = 0u;
         for (size_t i = tid * 4; i < n; i += stride * 4) {
             if (i + 3 < n) {
                 float4 v = reinterpret_cast<const float4*>(data)[i / 4];
@@ -135,7 +135,7 @@ namespace lfs::core::tensor_ops {
 
     __global__ void count_nonzero_bool_small(const unsigned char* __restrict__ data,
                                              size_t* __restrict__ result, size_t n) {
-        unsigned int count = 0u;
+        unsigned long long count = 0u;
         for (size_t i = threadIdx.x; i < n; i += blockDim.x)
             count += (data[i] != 0);
         count = warp_ops::block_reduce_sum(count);
@@ -144,10 +144,10 @@ namespace lfs::core::tensor_ops {
     }
 
     __global__ void count_nonzero_bool_stage1(const unsigned char* __restrict__ data,
-                                              unsigned int* __restrict__ partials, size_t n) {
+                                              unsigned long long* __restrict__ partials, size_t n) {
         const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-        unsigned int count = 0u;
+        unsigned long long count = 0u;
         for (size_t i = tid; i < n; i += stride)
             count += (data[i] != 0);
         count = warp_ops::block_reduce_sum(count);
@@ -155,7 +155,7 @@ namespace lfs::core::tensor_ops {
             partials[blockIdx.x] = count;
     }
 
-    __global__ void count_partials_to_size_t(const unsigned int* __restrict__ partials,
+    __global__ void count_partials_to_size_t(const unsigned long long* __restrict__ partials,
                                              size_t* __restrict__ result, int n) {
         unsigned long long sum = 0ull;
         for (int i = threadIdx.x; i < n; i += blockDim.x)
@@ -179,8 +179,8 @@ namespace lfs::core::tensor_ops {
             return;
         }
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        unsigned int* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned int), stream));
+        unsigned long long* partials = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned long long), stream));
         count_nonzero_float_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_float_stage1");
         count_partials_to_size_t<<<1, BLOCK, 0, stream>>>(partials, result, grid);
@@ -201,8 +201,8 @@ namespace lfs::core::tensor_ops {
             return;
         }
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        unsigned int* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned int), stream));
+        unsigned long long* partials = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned long long), stream));
         count_nonzero_bool_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_bool_stage1");
         count_partials_to_size_t<<<1, BLOCK, 0, stream>>>(partials, result, grid);

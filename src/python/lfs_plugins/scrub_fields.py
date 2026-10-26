@@ -53,13 +53,15 @@ class ScrubFieldController:
                  set_value: Callable[[str, float], None], *,
                  commit_value: Callable[[str, float], None] | None = None,
                  capture_edit: Callable[[str], object] | None = None,
-                 restore_edit: Callable[[str, object], None] | None = None):
+                 restore_edit: Callable[[str, object], None] | None = None,
+                 on_error: Callable[[str], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
         self._commit_value = commit_value
         self._capture_edit = capture_edit
         self._restore_edit = restore_edit
+        self._on_error = on_error
         self._doc = None
         self._fields: dict[str, _ScrubFieldState] = {}
         self._active_prop: str | None = None
@@ -370,7 +372,9 @@ class ScrubFieldController:
             return
         try:
             self._commit_value(state.prop, value)
-        except (RuntimeError, TypeError, ValueError):
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
     def _enter_edit(self, state: _ScrubFieldState) -> None:
@@ -426,10 +430,14 @@ class ScrubFieldController:
                 bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
                 value = int(bounded)
             elif not math.isfinite(parsed):
+                if self._on_error:
+                    self._on_error("Expected a finite number")
                 return
             else:
                 value = parsed
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
         self._apply_value(state, value)
@@ -454,7 +462,9 @@ class ScrubFieldController:
 
         try:
             self._set_value(state.prop, next_value)
-        except (RuntimeError, TypeError, ValueError):
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
         self._sync_field(state)

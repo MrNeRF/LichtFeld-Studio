@@ -414,6 +414,8 @@ namespace lfs::vis {
                 return "Camera";
             case core::NodeType::MESH:
                 return "Mesh";
+            case core::NodeType::COLLISION:
+                return "Collision";
             case core::NodeType::CROPBOX:
                 return "CropBox";
             case core::NodeType::ELLIPSOID:
@@ -5718,6 +5720,7 @@ namespace lfs::vis {
         result.visible = node->visible;
         result.locked = node->locked;
         result.point_cloud_source = node->point_cloud_source;
+        result.collision = node->collision;
 
         if (node->model && node->model->size() > 0) {
             if (node->model->has_deleted_mask() &&
@@ -5835,7 +5838,7 @@ namespace lfs::vis {
                 entry.data = keep.is_valid()
                                  ? cloneSplatDataToCpu(lfs::core::extract_by_mask(model, keep))
                                  : cloneSplatDataToCpu(model);
-            } else if (!entry.hierarchy || entry.hierarchy->type != core::NodeType::GROUP) {
+            } else if (!entry.hierarchy || (entry.hierarchy->type != core::NodeType::GROUP && !entry.hierarchy->collision)) {
                 continue;
             }
 
@@ -6180,6 +6183,8 @@ namespace lfs::vis {
                                 core::NodeId child_id = core::NULL_NODE;
                                 if (child.type == core::NodeType::GROUP) {
                                     child_id = scene_.addGroup(child_name, parent_id);
+                                } else if (child.collision) {
+                                    child_id = scene_.addCollision(child_name, child.collision, parent_id);
                                 } else if (child.type == core::NodeType::SPLAT && child.data) {
                                     auto paste_data = std::make_unique<lfs::core::SplatData>(
                                         child.data->get_max_sh_degree(),
@@ -6226,6 +6231,9 @@ namespace lfs::vis {
                     }
                     paste_hierarchy(*entry.hierarchy, pasted_id);
                 }
+            } else if (entry.hierarchy && entry.hierarchy->collision) {
+                name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
+                pasted_id = scene_.addCollision(name, entry.hierarchy->collision);
             } else if (entry.mesh) {
                 name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
                 pasted_id = scene_.addMesh(name, cloneMeshData(*entry.mesh));

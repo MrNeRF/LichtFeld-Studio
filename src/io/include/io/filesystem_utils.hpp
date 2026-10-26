@@ -701,17 +701,22 @@ namespace lfs::io {
         int normal_count = 0;
     };
 
-    inline DatasetInfo detect_dataset_info(const std::filesystem::path& base_path) {
+    // A given images_path (absolute, or relative to base_path) replaces the search, as for images kept outside the
+    // dataset folder.
+    inline DatasetInfo detect_dataset_info(const std::filesystem::path& base_path,
+                                           const std::filesystem::path& images_path = {}) {
         static constexpr const char* const IMAGE_FOLDERS[] = {"images", "images_4", "images_2", "images_8", "input", "rgb"};
 
         DatasetInfo info;
         info.base_path = base_path;
 
+        if (!images_path.empty())
+            info.images_path = images_path.is_absolute() ? images_path : base_path / images_path;
         for (const auto* name : IMAGE_FOLDERS) {
-            if (safe_is_directory(base_path / name)) {
-                info.images_path = base_path / name;
+            if (!info.images_path.empty())
                 break;
-            }
+            if (safe_is_directory(base_path / name))
+                info.images_path = base_path / name;
         }
         if (info.images_path.empty()) {
             bool has_colmap_in_root = !find_file_ci(base_path, "cameras.bin").empty() ||

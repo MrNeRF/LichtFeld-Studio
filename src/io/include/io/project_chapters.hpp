@@ -475,6 +475,8 @@ namespace lfs::io::project {
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
         std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
+        // Shared immutable occupancy in the COLV instance with this UUID.
+        std::optional<lfs::core::Uuid> collision = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
@@ -493,7 +495,7 @@ namespace lfs::io::project {
             invalidate_parsed_nodes();
             return dom_;
         }
-        [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
+        [[nodiscard]] std::vector<std::byte> to_bytes() const;
 
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
         training_model_uuid() const;

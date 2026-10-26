@@ -74,6 +74,23 @@
             </select>
           </div>
         </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.transparency_mode">
+          <span class="setting-row__label-col" data-reset-prop="transparency_mode">{{label_transparency_mode}}</span>
+          <div class="setting-row__control-col setting-row__control-col--fill">
+            <select data-value="transparency_mode">
+              <option value="alpha_blend">@tr:rendering_panel.alpha_blend</option>
+              <option value="stochastic">@tr:rendering_panel.stochastic</option>
+              <option value="steady_splats">@tr:rendering_panel.steady_splats</option>
+            </select>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-if="transparency_mode != 'alpha_blend'" data-tooltip="tooltip.stochastic_max_frames">
+          <span class="setting-row__label-col" data-reset-prop="stochastic_max_frames">{{label_stochastic_max_frames}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="stochastic_max_frames" min="1" max="1024" step="1" />
+            <span class="slider-value">{{stochastic_max_frames | format_int}}</span>
+          </div>
+        </div>
         <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_metrics_mode">
           <span class="setting-row__label-col" data-reset-prop="camera_metrics_mode">{{label_camera_metrics_mode}}</span>
           <div class="setting-row__control-col setting-row__control-col--fill">
@@ -595,6 +612,52 @@
             </select>
           </div>
         </div>
+      </div>
+    </div>
+    <div class="section" data-if="collision_has_collision">
+      <div class="section-header text-accent" id="hdr-collision" data-event-click="toggle_section('collision')">
+        <span class="section-arrow text-accent is-expanded" id="arrow-collision">▶</span>
+        <span class="text-accent">@tr:collision.title</span>
+      </div>
+      <div class="section-content" id="sec-collision">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">@tr:main_panel.selection_outline_opacity</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="collision_preview_opacity" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{collision_preview_opacity}}</span>
+        </div>
+      </div>
+      <div id="collision-walk-fields">
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.height</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_height" min="0.0001" max="1000" step="0.01" />
+            <span class="slider-value">{{collision_height}}</span>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.radius</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_radius" min="0.00001" max="500" step="0.01" />
+            <span class="slider-value">{{collision_radius}}</span>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:collision.step</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_step" min="0" max="1000" step="0.01" />
+            <span class="slider-value">{{collision_step}}</span>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:ui.speed</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_speed" min="0.00001" max="1000" step="0.1" />
+            <span class="slider-value">{{collision_speed}}</span>
+          </div>
+        </div>
+      </div>
+      <div data-if="collision_has_error"><span>@tr:status.error</span>: {{collision_error}}</div>
       </div>
     </div>
     <div id="color-picker-popup" class="color-picker-popup">

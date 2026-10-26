@@ -287,7 +287,7 @@ namespace lfs::core {
             // of every export. A stopped run keeps them so it can resume.
             bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
-            // SteadySplats Eq. 30: weighted RGB squared distance to the training target.
+            // SteadySplats Eq. 7: weighted RGB squared distance to each pixel's expected render color.
             float color_variance_weight = 0.0f;
             size_t color_variance_warmup_iters = 0;
             float min_opacity = 0.005f;

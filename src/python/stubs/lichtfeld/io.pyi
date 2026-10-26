@@ -1,6 +1,6 @@
 """File I/O operations"""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import enum
 import os
 import pathlib
@@ -9,6 +9,56 @@ import lichtfeld
 import lichtfeld.media
 import lichtfeld.scene
 
+
+class VoxelSettings:
+    def __init__(self) -> None: ...
+
+    @property
+    def voxel_size(self) -> float: ...
+
+    @voxel_size.setter
+    def voxel_size(self, arg: float, /) -> None: ...
+
+    @property
+    def opacity(self) -> float: ...
+
+    @opacity.setter
+    def opacity(self, arg: float, /) -> None: ...
+
+    @property
+    def max_gaussian_area(self) -> float: ...
+
+    @max_gaussian_area.setter
+    def max_gaussian_area(self, arg: float, /) -> None: ...
+
+    @property
+    def auto_resolution(self) -> bool: ...
+
+    @auto_resolution.setter
+    def auto_resolution(self, arg: bool, /) -> None: ...
+
+    @property
+    def cleanup(self) -> bool: ...
+
+    @cleanup.setter
+    def cleanup(self, arg: bool, /) -> None: ...
+
+class VoxelVolume:
+    @property
+    def occupied_count(self) -> int: ...
+
+    @property
+    def voxel_size(self) -> float: ...
+
+def generate_voxels(path: str | os.PathLike, settings: VoxelSettings = ..., progress: object | None = None) -> VoxelVolume:
+    """
+    Generate owned full-detail occupancy from a splat file; callback False cancels.
+    """
+
+def save_voxels(volume: VoxelVolume, path: str | os.PathLike, overwrite: bool = False, transform: Sequence[float] = [], progress: object | None = None) -> None:
+    """
+    Save a SuperSplat v1.1 voxel pair, baking a captured data-world transform.
+    """
 
 def native_path(path: str | os.PathLike, force_extended: bool = False) -> str:
     """

@@ -114,8 +114,8 @@ namespace lfs::vis::gui {
             return snap;
         }
 
-        bool button_is_enabled(const lfs::core::ModalRequest& req, const std::string& label) {
-            for (const auto& btn : req.buttons) {
+        bool button_is_enabled(const std::vector<lfs::core::ModalButtonSpec>& buttons, const std::string& label) {
+            for (const auto& btn : buttons) {
                 if (btn.label == label)
                     return !btn.disabled;
             }
@@ -202,11 +202,14 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlModalOverlay::secondsUntilNextUpdate() const {
-        if (active_ && next_update_at_)
-            return std::max(0.0, std::chrono::duration<double>(
-                                     *next_update_at_ - std::chrono::steady_clock::now())
-                                     .count());
-        return std::nullopt;
+        if (!pending_actions_.empty())
+            return 0.0;
+        if (!active_)
+            return std::nullopt;
+        auto deadline = next_update_at_;
+        if (const auto tooltip_deadline = tooltip_.revealDeadline(); tooltip_deadline && (!deadline || *tooltip_deadline < *deadline))
+            deadline = tooltip_deadline;
+        return deadline ? std::optional(std::max(0.0, std::chrono::duration<double>(*deadline - std::chrono::steady_clock::now()).count())) : std::nullopt;
     }
 
     std::string RmlModalOverlay::animationDemandDescription() const {
@@ -404,6 +407,38 @@ namespace lfs::vis::gui {
         el_button_row_->SetInnerRML(btn_html);
     }
 
+    RmlModalOverlay::DispatchScope::DispatchScope(RmlModalOverlay& overlay, const bool flush)
+        : overlay(overlay), flush(flush) {
+        ++overlay.dispatch_depth_;
+    }
+
+    RmlModalOverlay::DispatchScope::~DispatchScope() {
+        if (--overlay.dispatch_depth_ == 0 && flush)
+            overlay.flushPendingActions();
+    }
+
+    void RmlModalOverlay::flushPendingActions() {
+        if (dispatch_depth_ != 0 || flushing_actions_)
+            return;
+        flushing_actions_ = true;
+        while (!pending_actions_.empty()) {
+            auto action = std::move(pending_actions_.front());
+            pending_actions_.pop_front();
+            switch (action.kind) {
+            case PendingAction::Kind::Update:
+                applyFormUpdate(action.body_rml, action.buttons);
+                break;
+            case PendingAction::Kind::Dismiss:
+                dismiss(action.button_label);
+                break;
+            case PendingAction::Kind::Cancel:
+                cancel();
+                break;
+            }
+        }
+        flushing_actions_ = false;
+    }
+
     bool RmlModalOverlay::updateForm(const std::string& key,
                                      const std::optional<std::string>& body_rml,
                                      const std::vector<lfs::core::ModalButtonSpec>& buttons) {
@@ -421,7 +456,23 @@ namespace lfs::vis::gui {
             }
             return false;
         }
+        if (close_pending_)
+            return false;
+        if (dispatch_depth_ != 0 || !pending_actions_.empty()) {
+            pending_actions_.push_back({PendingAction::Kind::Update, body_rml, buttons, {}});
+            flushPendingActions();
+        } else {
+            applyFormUpdate(body_rml, buttons);
+        }
+        return true;
+    }
+
+    void RmlModalOverlay::applyFormUpdate(const std::optional<std::string>& body_rml,
+                                          const std::vector<lfs::core::ModalButtonSpec>& buttons) {
+        const DispatchScope dispatch(*this);
         if (body_rml) {
+            resetTooltip();
+            last_mouse_valid_ = false;
             text_input_revert_.clear();
             active_->body_rml = *body_rml;
             el_content_->SetInnerRML(*body_rml);
@@ -432,7 +483,6 @@ namespace lfs::vis::gui {
         lfs::python::request_redraw();
         render_needed_ = true;
         dialog_position_valid_ = false;
-        return true;
     }
 
     lfs::core::ModalResult RmlModalOverlay::collectFormValues() const {
@@ -465,9 +515,22 @@ namespace lfs::vis::gui {
 
     bool RmlModalOverlay::dismiss(const std::string& button_label) {
         if (active_) {
-            if (!button_is_enabled(*active_, button_label))
+            const bool defer = dispatch_depth_ != 0 || (!flushing_actions_ && !pending_actions_.empty());
+            if (defer && close_pending_)
                 return false;
+            const auto& buttons = defer && !pending_actions_.empty()
+                                      ? pending_actions_.back().buttons
+                                      : active_->buttons;
+            if (!button_is_enabled(buttons, button_label))
+                return false;
+            if (defer) {
+                pending_actions_.push_back({PendingAction::Kind::Dismiss, {}, {}, button_label});
+                close_pending_ = true;
+                flushPendingActions();
+                return true;
+            }
 
+            const DispatchScope dispatch(*this);
             text_input_revert_.clear();
             if (el_backdrop_)
                 el_backdrop_->SetProperty("display", "none");
@@ -478,7 +541,9 @@ namespace lfs::vis::gui {
             result.button_label = button_label;
 
             auto on_result = std::move(active_->on_result);
+            resetTooltip();
             active_.reset();
+            close_pending_ = false;
             lfs::python::request_redraw();
             rml_manager_->deactivateInput(rml_context_);
             render_needed_ = true;
@@ -494,7 +559,7 @@ namespace lfs::vis::gui {
         lfs::core::ModalRequest req;
         {
             std::lock_guard lock(queue_mutex_);
-            if (queue_.empty() || !button_is_enabled(queue_.front(), button_label))
+            if (queue_.empty() || !button_is_enabled(queue_.front().buttons, button_label))
                 return false;
             req = std::move(queue_.front());
             queue_.pop_front();
@@ -513,25 +578,37 @@ namespace lfs::vis::gui {
         if (!active_)
             return false;
 
-        for (const auto& button : active_->buttons) {
+        const auto& buttons = !pending_actions_.empty() && !close_pending_
+                                  ? pending_actions_.back().buttons
+                                  : active_->buttons;
+        for (const auto& button : buttons) {
             if (!button.disabled) {
-                dismiss(button.label);
-                return true;
+                return dismiss(button.label);
             }
         }
         return false;
     }
 
     void RmlModalOverlay::cancel() {
-        if (!active_)
+        const bool defer = dispatch_depth_ != 0 || (!flushing_actions_ && !pending_actions_.empty());
+        if (!active_ || (defer && close_pending_))
             return;
+        if (defer) {
+            pending_actions_.push_back({PendingAction::Kind::Cancel, {}, {}, {}});
+            close_pending_ = true;
+            flushPendingActions();
+            return;
+        }
 
+        const DispatchScope dispatch(*this);
         text_input_revert_.clear();
         el_backdrop_->SetProperty("display", "none");
         el_dialog_->SetProperty("display", "none");
 
         auto on_cancel = std::move(active_->on_cancel);
+        resetTooltip();
         active_.reset();
+        close_pending_ = false;
         lfs::python::request_redraw();
         rml_manager_->deactivateInput(rml_context_);
         render_needed_ = true;
@@ -543,10 +620,24 @@ namespace lfs::vis::gui {
         activatePending();
     }
 
+    void RmlModalOverlay::resetTooltip() {
+        tooltip_.setHover({}, nullptr);
+        render_needed_ |= tooltip_.apply(document_ ? document_->GetElementById("body") : nullptr,
+                                         last_mouse_x_, last_mouse_y_, width_, height_);
+        tooltip_suppressed_target_ = nullptr;
+    }
+
     void RmlModalOverlay::bindTextInputRevert() {
         text_input_revert_.bind(el_input_);
         rml_input::forEachTextEditableElement(el_content_, [this](Rml::Element& element) {
-            text_input_revert_.bind(&element);
+            text_input_revert_.bind(&element, [this](Rml::Element&) {
+                // Escape restores the control without a native Change event.
+                // Keep a keyed form's draft and validation in sync as well.
+                if (active_ && active_->on_change) {
+                    auto callback = active_->on_change;
+                    callback(collectFormValues());
+                }
+            });
         });
     }
 
@@ -558,6 +649,7 @@ namespace lfs::vis::gui {
 
         if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, true))
             return;
+        const DispatchScope dispatch(*this);
         auto& focus = guiFocusState();
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
@@ -589,6 +681,30 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseButtonUp(0, mods);
         }
 
+        if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
+            rml_context_->ProcessMouseWheel(Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
+            render_needed_ = true;
+        }
+        auto* hover = rml_context_->GetHoverElement();
+        const bool interacting = input.mouse_down[0] ||
+                                 input.mouse_clicked[0] || input.mouse_released[0] ||
+                                 !input.input_events.empty();
+        auto* tooltip_target = hover;
+        while (tooltip_target && tooltip_target->GetAttribute<Rml::String>("data-tooltip", "").empty() &&
+               tooltip_target->GetAttribute<Rml::String>("title", "").empty())
+            tooltip_target = tooltip_target->GetParentNode();
+        if (interacting) {
+            resetTooltip();
+            tooltip_suppressed_target_ = tooltip_target;
+        } else {
+            if (tooltip_target != tooltip_suppressed_target_)
+                tooltip_suppressed_target_ = nullptr;
+            if (tooltip_target && tooltip_target == tooltip_suppressed_target_)
+                tooltip_.setHover({}, nullptr);
+            else
+                tooltip_.setHover(resolveRmlTooltip(hover), tooltip_target);
+        }
+
         auto* const text_input_handler =
             rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
         for (const auto& event : input.input_events) {
@@ -604,8 +720,8 @@ namespace lfs::vis::gui {
                 }
             }
             render_needed_ |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
-            // A key can dismiss the modal synchronously.
-            if (!active_)
+            // Stop processing input once a close has been requested.
+            if (!active_ || close_pending_)
                 return;
             if (!composing && down && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
                 (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER)) {
@@ -621,6 +737,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlModalOverlay::render(int screen_w, int screen_h) {
+        flushPendingActions();
         bool has_pending;
         {
             std::lock_guard lock(queue_mutex_);
@@ -697,6 +814,10 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (tooltip_.apply(document_ ? document_->GetElementById("body") : nullptr, last_mouse_x_, last_mouse_y_, w, h)) {
+            rml_context_->Update();
+            needs_update = true;
+        }
         if (needs_update || position_changed) {
             next_update_at_.reset();
             const double delay = rml_context_->GetNextUpdateDelay();
@@ -725,6 +846,7 @@ namespace lfs::vis::gui {
 
     void RmlModalOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {
         assert(overlay);
+        const DispatchScope dispatch(*overlay, false);
         auto* target = event.GetTargetElement();
         if (!target)
             return;

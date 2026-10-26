@@ -551,8 +551,8 @@ namespace lfs::vis {
         });
     }
 
-    void RenderingManager::requestViewFollowUp(ViewRenderState& view, const DirtyMask flags) {
-        markViewDirty(view.id, flags, FrameReason::AsyncCompletion);
+    void RenderingManager::requestViewFollowUp(ViewRenderState& view, const DirtyMask flags, const FrameReason reason) {
+        markViewDirty(view.id, flags, reason);
 
         std::function<void()> wake_callback;
         {
@@ -1068,6 +1068,9 @@ namespace lfs::vis {
             if (settings.environment_map_path != sanitized_settings.environment_map_path)
                 environment_map_path_ = std::make_shared<const std::filesystem::path>(sanitized_settings.environment_map_path);
             settings = sanitized_settings;
+            settings.transparency_mode = static_cast<lfs::rendering::GaussianTransparencyMode>(
+                std::clamp(static_cast<int>(settings.transparency_mode), 0, 2));
+            settings.stochastic_max_frames = std::clamp(settings.stochastic_max_frames, 1, 1024);
             const bool gut_toggle_only = settings.raster_backend == previous_backend &&
                                          settings.gut != previous_gut;
             settings.raster_backend = gut_toggle_only

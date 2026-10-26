@@ -58,3 +58,42 @@ def test_handshake_failure_does_not_repeat_mutation(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "post_json", lambda *a, **kw: next(responses))
     with pytest.raises(RuntimeError, match="initialization failed"):
         bridge.forward_message({"method": "tools/call"})
+
+
+def test_camera_runtime_isolates_inherited_application_root(monkeypatch, tmp_path):
+    import os
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import test_api_camera_project_runtime as runtime
+
+    inherited = tmp_path / "inherited-profile"
+    expected = tmp_path / "home" / ".lichtfeld"
+    monkeypatch.setenv("LFS_HOME", str(inherited))
+    monkeypatch.setenv("LFS_EXECUTABLE", str(tmp_path / "LichtFeld-Studio"))
+
+    def start():
+        assert Path(os.environ["LFS_HOME"]) == expected
+        assert Path(os.environ["HOME"]) == expected.parent
+
+    bridge = SimpleNamespace(
+        endpoint_ready=lambda: False,
+        pick_launch_command=lambda: [],
+        ensure_server_ready=start,
+        cleanup_spawned_processes=Mock(),
+    )
+    spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _module: None))
+    monkeypatch.setattr(runtime, "importlib", SimpleNamespace(util=SimpleNamespace(
+        spec_from_file_location=lambda *_args: spec,
+        module_from_spec=lambda _spec: bridge,
+    )))
+    monkeypatch.setattr(runtime, "_initialize", lambda _endpoint: None)
+    monkeypatch.setattr(runtime, "_call", lambda _endpoint, method, *_args: {
+        "tools": [{"name": name} for name in ("editor_run", "project_save_as", "project_open")]
+    } if method == "tools/list" else {})
+    fixture = runtime.camera_runtime.__wrapped__(tmp_path, monkeypatch)
+    try:
+        assert next(fixture).startswith("http://127.0.0.1:")
+    finally:
+        fixture.close()
+    bridge.cleanup_spawned_processes.assert_called_once()
+    assert not inherited.exists()

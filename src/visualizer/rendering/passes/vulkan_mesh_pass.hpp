@@ -17,12 +17,15 @@
 
 namespace lfs::core {
     struct MeshData;
-}
+    struct CollisionVolume;
+    struct SceneNode;
+} // namespace lfs::core
 
 namespace lfs::vis {
 
     class VulkanContext;
     class SharedViewportGpuAssets;
+    class SceneManager;
 
     // GPU-rendered mesh draw item. Full PBR (Cook-Torrance: GGX + Smith + Schlick) with
     // albedo / normal / metallic-roughness textures, vertex colors, Reinhard tonemap +

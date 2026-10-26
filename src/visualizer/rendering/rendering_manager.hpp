@@ -984,7 +984,7 @@ namespace lfs::vis {
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
         void queueCameraMetricsRefreshIfStale(ViewId view, SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
-        void requestViewFollowUp(ViewRenderState& view, DirtyMask flags);
+        void requestViewFollowUp(ViewRenderState& view, DirtyMask flags, FrameReason reason = FrameReason::AsyncCompletion);
         void queueSharedScratchRetry(ViewRenderState& view, DirtyMask retry_dirty);
         void notifyAsyncLodResultsReady();
         // Fills the request's level-of-detail cut for `model` (rendering_manager_lod.cpp).

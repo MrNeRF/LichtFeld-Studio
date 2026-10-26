@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
 
+#include "core/collision.hpp"
 #include "core/parameters.hpp"
 #include <expected>
 #include <filesystem>
@@ -47,6 +48,11 @@ namespace lfs::io::args {
     struct ConvertMode {
         core::param::ConvertParameters params;
     };
+    struct VoxelizeMode {
+        std::filesystem::path input_path, output_path;
+        core::CollisionSettings settings;
+        bool overwrite = false;
+    };
     struct Mesh2SplatMode {
         core::param::Mesh2SplatParameters params;
     };
@@ -75,7 +81,7 @@ namespace lfs::io::args {
     };
 
     using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, CompareMode, HelpMode,
-                                    VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode, LichtMode>;
+                                    VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode, LichtMode, VoxelizeMode>;
 
     LFS_IO_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

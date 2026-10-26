@@ -26,6 +26,7 @@ namespace lfs::vis {
         ProjectWrite,
         ProjectOpen,
         DatasetEmbed,
+        Collision,
     };
 
     enum class JobStatus : std::uint8_t {

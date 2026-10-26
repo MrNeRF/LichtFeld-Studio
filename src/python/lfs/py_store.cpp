@@ -408,6 +408,8 @@ namespace lfs::python {
                 store.mesh2splat_state.set(task_progress_state_from_object(value));
             else if (field == "splat_simplify_state")
                 store.splat_simplify_state.set(task_progress_state_from_object(value));
+            else if (field == "collision_state")
+                store.collision_state.set(task_progress_state_from_object(value));
             else if (field == "scripts_generation")
                 store.scripts_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "language_generation")
@@ -418,6 +420,8 @@ namespace lfs::python {
                 store.depth_window_draw_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "depth_window_draw_commit")
                 store.depth_window_draw_commit.set(depth_window_draw_commit_from_object(value));
+            else if (field == "viewport_toolbar_generation")
+                store.viewport_toolbar_generation.set(nb::cast<std::uint64_t>(value));
             else
                 throw_unknown_field(field);
         }
@@ -478,6 +482,8 @@ namespace lfs::python {
                 return task_progress_state_to_dict(store.mesh2splat_state.get());
             if (field == "splat_simplify_state")
                 return task_progress_state_to_dict(store.splat_simplify_state.get());
+            if (field == "collision_state")
+                return task_progress_state_to_dict(store.collision_state.get());
             if (field == "scripts_generation")
                 return nb::cast(store.scripts_generation.get());
             if (field == "language_generation")
@@ -488,6 +494,8 @@ namespace lfs::python {
                 return nb::cast(store.depth_window_draw_generation.get());
             if (field == "depth_window_draw_commit")
                 return depth_window_draw_commit_to_dict(store.depth_window_draw_commit.get());
+            if (field == "viewport_toolbar_generation")
+                return nb::cast(store.viewport_toolbar_generation.get());
             throw_unknown_field(field);
         }
 
@@ -554,6 +562,9 @@ namespace lfs::python {
             if (field == "splat_simplify_state")
                 return subscribe_observable_as(
                     store.splat_simplify_state, std::move(callback), task_progress_state_to_dict);
+            if (field == "collision_state")
+                return subscribe_observable_as(
+                    store.collision_state, std::move(callback), task_progress_state_to_dict);
             if (field == "scripts_generation")
                 return subscribe_observable(store.scripts_generation, std::move(callback));
             if (field == "language_generation")
@@ -565,6 +576,8 @@ namespace lfs::python {
             if (field == "depth_window_draw_commit")
                 return subscribe_observable_as(
                     store.depth_window_draw_commit, std::move(callback), depth_window_draw_commit_to_dict);
+            if (field == "viewport_toolbar_generation")
+                return subscribe_observable(store.viewport_toolbar_generation, std::move(callback));
             throw_unknown_field(field);
         }
 

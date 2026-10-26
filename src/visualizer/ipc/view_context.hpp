@@ -119,6 +119,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
         bool point_cloud_mode = false;
         float voxel_size = 0.01f;
         bool show_rings = false;
@@ -135,6 +136,8 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
         int raster_backend = 2;
+        int transparency_mode = 0;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

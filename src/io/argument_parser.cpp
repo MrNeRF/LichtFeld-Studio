@@ -719,6 +719,7 @@ namespace {
                 "LichtFeld Studio: High-performance GPU implementation of 3D Gaussian Splatting.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
+                "voxelize -- Generate a .voxel.json/.voxel.bin collision pair\n"
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
@@ -2932,7 +2933,61 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
             return WarmupMode{};
         }
 
-        if (arg1 == "convert") {
+        if (arg1 == "voxelize") {
+            ::args::ArgumentParser parser("Generate a .voxel.json/.voxel.bin collision pair.",
+                                          "Scene-unit distances, squared scene-unit areas. Connected filtering, fill/carve and surfaces are deferred.");
+            parser.Prog(std::string(argv[0]) + " voxelize");
+            ::args::HelpFlag help(parser, "help", "Display help", {'h', "help"});
+            ::args::Positional<std::string> input(parser, "input", "Gaussian splat file or SOG/SSOG folder");
+            ::args::Positional<std::string> output(parser, "output", "Output .voxel.json");
+            ::args::ValueFlag<std::string> out(parser, "path", "Output .voxel.json", {'o', "output"});
+            ::args::ValueFlag<float> size(parser, "size", "Cell edge (default 0.05)", {"voxel-size"});
+            ::args::ValueFlag<float> opacity(parser, "opacity", "Accumulated opacity threshold [0,1)", {"voxel-opacity"});
+            ::args::ValueFlag<float> area(parser, "area", "Maximum Gaussian area; 0 automatic", {"max-gaussian-area"});
+            ::args::ValueFlag<std::string> filter(parser, "filter", "cleanup (default) or none", {"filter"});
+            ::args::Flag automatic(parser, "auto", "Scale-relative automatic resolution", {"auto"});
+            ::args::Flag overwrite(parser, "overwrite", "Replace BOTH output files", {'y', "overwrite"});
+            LogLevelFlag log_level(parser);
+            try {
+                parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+            } catch (const ::args::Help&) {
+                std::print("{}", parser.Help());
+                return HelpMode{};
+            } catch (const ::args::ParseError& e) {
+                return std::unexpected(std::format("{}\n{}", e.what(), parser.Help()));
+            }
+            if (!input || (!output && !out) || (output && out))
+                return std::unexpected("Provide input and one output path, positionally or with --output");
+            if (automatic && size)
+                return std::unexpected("--auto and --voxel-size are mutually exclusive");
+            VoxelizeMode mode;
+            mode.input_path = absolute_input_path(::args::get(input));
+            mode.output_path = absolute_input_path(out ? ::args::get(out) : ::args::get(output));
+            if (!core::native_fs::exists(mode.input_path))
+                return std::unexpected("Input not found: " + core::path_to_utf8(mode.input_path));
+            if (!core::path_to_utf8(mode.output_path.filename()).ends_with(".voxel.json"))
+                return std::unexpected("Output must end in .voxel.json");
+            if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
+                return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
+            mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
+            mode.settings.auto_resolution = automatic;
+            if (size)
+                mode.settings.voxel_size = ::args::get(size);
+            if (opacity)
+                mode.settings.opacity = ::args::get(opacity);
+            if (area)
+                mode.settings.max_gaussian_area = ::args::get(area);
+            try {
+                mode.settings.validate();
+            } catch (const std::exception& e) {
+                return std::unexpected(e.what());
+            }
+            std::string error;
+            if (!log_level.apply(error))
+                return std::unexpected(error);
+            mode.overwrite = overwrite;
+            return mode;
+        } else if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
         } else if (arg1 == "eval") {
             std::string error;

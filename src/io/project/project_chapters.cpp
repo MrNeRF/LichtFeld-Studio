@@ -3027,6 +3027,15 @@ namespace lfs::io::project {
                 }
                 result.crop_polygon = std::move(*parsed);
             }
+            if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
+                if (!collision->is_string() ||
+                    !(result.collision = lfs::core::Uuid::from_string(collision->get<std::string>())) ||
+                    result.collision->is_nil())
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "Invalid collision payload reference.",
+                        "SCNG collision must reference a COLV UUID; unreleased inline hexadecimal occupancy is unsupported",
+                        "SCNG", "nodes.collision");
+            }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
                 camera) {
@@ -3049,6 +3058,13 @@ namespace lfs::io::project {
 
     SceneGraphChapter::SceneGraphChapter(JsonChapterDom dom)
         : dom_(std::move(dom)) {}
+
+    std::vector<std::byte> SceneGraphChapter::to_bytes() const {
+        auto bytes = dom_.to_bytes();
+        if (bytes.size() > JsonChapterDom::max_bytes)
+            throw std::length_error("Scene graph exceeds the project JSON chapter size supported by the reader");
+        return bytes;
+    }
 
     lfs::Result<SceneGraphChapter> SceneGraphChapter::parse(
         const std::string_view bytes) {
@@ -3163,6 +3179,10 @@ namespace lfs::io::project {
                 "UUID/type/name/transform must be valid and generated keyframes are excluded",
                 "SCNG", "nodes");
         }
+        if (value.collision && (value.collision->is_nil() || value.type != "collision"))
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
+                "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
         if (value.payload &&
             (value.payload->fourcc.size() != 4 ||
              value.payload->instance_uuid.is_nil() ||
@@ -3240,6 +3260,10 @@ namespace lfs::io::project {
         } else {
             element.erase("crop_polygon");
         }
+        if (value.collision)
+            element["collision"] = value.collision->to_string();
+        else
+            element.erase("collision");
         if (value.camera) {
             element["camera"] = camera_json(*value.camera);
         } else {

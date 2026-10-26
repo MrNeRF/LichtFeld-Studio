@@ -2820,7 +2820,12 @@ namespace lfs::vis {
         // above the display rate when presenting does not block. Wakes without input start at most
         // one display interval after the last presented frame started; requests stay queued for this
         // frame, and work posted meanwhile is picked up by the next wait.
-        if (last_presented_frame_start_) {
+        // Stochastic refinement is finite work, not a periodic animation. Keep
+        // polling input between samples, but let available GPU slots advance it.
+        const bool refinement_pending = rendering_manager_ &&
+                                        rendering_manager_->frameDemandLedger().hasPendingRequest(
+                                            FrameReason::StochasticAccumulation);
+        if (last_presented_frame_start_ && !refinement_pending) {
             const auto ready_at = *last_presented_frame_start_ +
                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                       std::chrono::duration<double>(displayFrameInterval()));
@@ -2949,9 +2954,15 @@ namespace lfs::vis {
         if (scene_capture_jobs_.hasPending()) {
             const bool has_mesh = scene_manager_ &&
                                   !scene_manager_->getScene().getVisibleMeshes().empty();
-            if (scene_capture_jobs_.beginFrame(has_mesh))
-                rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion,
+            if (scene_capture_jobs_.beginFrame(has_mesh)) {
+                // Preserve stochastic history on capture. Alpha blending keeps
+                // its existing full invalidation; edits carry their own flags.
+                const bool stochastic_capture = rendering_manager_->getSettings().transparency_mode !=
+                                                lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+                const auto capture_dirty = stochastic_capture ? DirtyFlag::CAMERA : DirtyFlag::ALL;
+                rendering_manager_->markDirty(capture_dirty, FrameReason::AsyncCompletion,
                                               "viewport_capture");
+            }
         }
 
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();

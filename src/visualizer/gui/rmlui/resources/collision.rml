@@ -1,0 +1,71 @@
+<rml>
+  <head>
+    <link type="text/template" href="floating_window.rml" />
+    <link type="text/rcss" href="rendering.rcss" />
+    <link type="text/rcss" href="export_panel.rcss" />
+  </head>
+  <body template="floating-window" data-model="collision">
+    <div data-if="!export_mode">
+      <div data-if="!collision_has_source" class="text-muted">@tr:rendering_panel.simplify_select_source</div>
+      <div data-if="collision_has_source"><span>@tr:rendering_panel.simplify_source</span>: {{collision_source}}</div>
+      <div id="collision-size-fields" data-if="!collision_automatic">
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.voxel_size">
+          <span class="setting-row__label-col">@tr:main_panel.voxel_size</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_size" min="0.000001" max="10" step="0.001" />
+            <span class="slider-value">{{collision_size}}</span>
+          </div>
+        </div>
+      </div>
+      <div id="collision-generator-fields">
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.opacity">
+          <span class="setting-row__label-col">@tr:collision.opacity</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_opacity" min="0" max="0.99" step="0.01" />
+            <span class="slider-value">{{collision_opacity}}</span>
+          </div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.area">
+          <span class="setting-row__label-col">@tr:collision.area</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="collision_area" min="0" max="1000000" step="0.01" />
+            <span class="slider-value">{{collision_area}}</span>
+          </div>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.auto">
+        <span class="setting-row__label-col">@tr:common.auto</span>
+        <label class="setting-row__control-col setting-row__control-col--checkbox"><input type="checkbox" data-checked="collision_automatic" /></label>
+      </div>
+      <div data-if="collision_automatic" class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">@tr:collision.resolved_size</span>
+        <div class="setting-row__control-col"><span>{{collision_resolved_size}}</span></div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.cleanup">
+        <span class="setting-row__label-col">@tr:collision.cleanup</span>
+        <label class="setting-row__control-col setting-row__control-col--checkbox"><input type="checkbox" data-checked="collision_cleanup" /></label>
+      </div>
+      <div class="rendering-simplify-actions">
+        <button class="btn btn--primary" data-attrif-disabled="!collision_can_generate" data-event-click="collision_generate">@tr:collision.generate</button>
+      </div>
+    </div>
+    <div data-if="export_mode">
+      <div data-if="!collision_exportable" class="text-muted">@tr:collision.select_export</div>
+      <div data-if="collision_exportable">
+        <div>{{collision_target}}</div>
+        <div class="text-muted">SuperSplat (.voxel.json + .voxel.bin)</div>
+      </div>
+    </div>
+    <div data-if="collision_active">
+      <progress max="1" data-attr-value="collision_progress" />
+      <span>{{collision_status}}</span>
+
+    </div>
+    <div data-if="collision_has_error" class="text-error"><span>@tr:status.error</span>: {{collision_error}}</div>
+    <div class="ep-buttons">
+      <button data-if="export_mode" class="btn btn--primary ep-action-btn" data-attrif-disabled="!collision_exportable" data-event-click="collision_export">@tr:export.export</button>
+      <button data-if="!collision_active" class="btn btn--secondary ep-action-btn" data-event-click="collision_close">@tr:common.cancel</button>
+      <button data-if="collision_active" class="btn btn--secondary ep-action-btn" data-event-click="collision_cancel">@tr:common.cancel</button>
+    </div>
+  </body>
+</rml>

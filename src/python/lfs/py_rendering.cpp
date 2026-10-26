@@ -701,20 +701,21 @@ namespace lfs::python {
         };
 
         auto add_int = [&](int Proxy::*member, const std::string& id, const std::string& name,
-                           const std::string& desc, int default_val, int min_val, int max_val) {
+                           const std::string& desc, int default_value, int min_value, int max_value) {
             PropertyMeta meta;
             meta.id = id;
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Int;
-            meta.default_value = static_cast<int64_t>(default_val);
-            meta.min_value = static_cast<double>(min_val);
-            meta.max_value = static_cast<double>(max_val);
+            meta.default_value = static_cast<int64_t>(default_value);
+            meta.min_value = min_value;
+            meta.max_value = max_value;
+            meta.step = 1.0;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->*member;
             };
-            meta.setter = [member](PropertyObjectRef& ref, const std::any& val) {
-                static_cast<Proxy*>(ref.ptr)->*member = std::any_cast<int>(val);
+            meta.setter = [member](PropertyObjectRef& ref, const std::any& value) {
+                static_cast<Proxy*>(ref.ptr)->*member = std::any_cast<int>(value);
             };
             group.properties.push_back(std::move(meta));
         };
@@ -801,6 +802,7 @@ namespace lfs::python {
         add_bool(&Proxy::show_grid, "show_grid", "Show Grid", "Display grid in viewport", true);
         add_int_enum(&Proxy::grid_plane, "grid_plane", "Plane", "Grid orientation",
                      {{"YZ (Right)", "0", 0}, {"XZ (Top)", "1", 1}, {"XY (Front)", "2", 2}}, 1);
+        add_float(&Proxy::collision_preview_opacity, "collision_preview_opacity", "Collision Opacity", "Collision preview face opacity; edges remain stronger", 0.4, 0.0, 1.0);
         add_float(&Proxy::grid_opacity, "grid_opacity", "Grid Opacity", "Grid transparency", 0.5, 0.0, 1.0);
 
         // Camera Frustums
@@ -861,6 +863,14 @@ namespace lfs::python {
                      {{"3DGS", "3dgs", 2},
                       {"3DGUT", "3dgut", 3}},
                      2);
+        add_int_enum(&Proxy::transparency_mode, "transparency_mode", "Transparency", "3DGS transparency mode",
+                     {{"Alpha blend", "alpha_blend", 0},
+                      {"Stochastic", "stochastic", 1},
+                      {"SteadySplats", "steady_splats", 2}},
+                     0);
+        add_int(&Proxy::stochastic_max_frames, "stochastic_max_frames", "Refinement Frames",
+                "Maximum new samples after the view or scene changes",
+                lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES, 1, 1024);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
         add_string(&Proxy::scene_upscaler,

@@ -177,9 +177,11 @@ namespace lfs::vis::gui::rml_input {
             return false;
 
         if (isTextEditableElement(focused)) {
+            const auto alive = focused->GetObserverPtr();
             Rml::Dictionary params;
             focused->DispatchEvent("escapecancel", params);
-            focused->Blur();
+            if (alive)
+                focused->Blur();
             return true;
         }
 
@@ -337,10 +339,14 @@ namespace lfs::vis::gui::rml_input {
             if (type != "escapecancel")
                 return;
 
-            element->SetAttribute("value", it->second.snapshot);
-            if (it->second.restore_callback)
-                it->second.restore_callback(*element);
             event.StopPropagation();
+            const auto snapshot = it->second.snapshot;
+            const bool changed = element->GetAttribute<Rml::String>("value", "") != snapshot;
+            // Restoring may replace the form and clear this binding during the callback.
+            auto callback = it->second.restore_callback;
+            element->SetAttribute("value", snapshot);
+            if (changed && callback)
+                callback(*element);
         }
 
     private:

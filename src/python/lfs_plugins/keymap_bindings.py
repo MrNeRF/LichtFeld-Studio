@@ -18,9 +18,11 @@ class KeymapBindingsSection:
         lf.keymap.ToolMode.SCALE,
         lf.keymap.ToolMode.ALIGN,
         lf.keymap.ToolMode.CROP_BOX,
+        lf.keymap.ToolMode.WALK,
     ]
 
     BINDING_SECTIONS = {
+        "walk": [lf.keymap.Action.EXIT_WALK],
         "navigation": [
             lf.keymap.Action.CAMERA_ORBIT,
             lf.keymap.Action.CAMERA_PAN,
@@ -507,6 +509,8 @@ class KeymapBindingsSection:
         tr = lf.ui.tr
         rows = []
 
+        if mode == lf.keymap.ToolMode.WALK:
+            self._append_binding_section(rows, tr("collision.walk"), self.BINDING_SECTIONS["walk"], mode)
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(
                 rows, tr("input_settings.section.navigation"),

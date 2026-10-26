@@ -1052,8 +1052,6 @@ namespace lfs::core {
                     return "Color variance requires the FastGS training renderer (GUT is not supported)";
                 if (mip_filter)
                     return "Color variance does not yet support mip filtering";
-                if (bilateral_grid_active() || ppisp_active())
-                    return "Color variance does not yet support appearance correction";
                 if (mask_mode != MaskMode::None)
                     return "Color variance does not yet support masked training";
                 if (enable_sparsity)
