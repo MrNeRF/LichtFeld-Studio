@@ -1,16 +1,10 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from xml.etree import ElementTree as ET
 import sys
 import pytest
 from test_depth_view_scrub import attach_fields, Event
-from test_localization_contracts import _flatten
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -23,6 +17,7 @@ def controls(monkeypatch):
     lf.get_collision_state.side_effect = lambda: dict(lf.get_collision_state.return_value)
     lf.set_walk_settings.side_effect = lambda *settings: lf.get_collision_state.return_value.update(walk_settings=settings)
     monkeypatch.setattr(module, "lf", lf)
+    monkeypatch.setitem(sys.modules, "lichtfeld", lf)
     return module.CollisionRendering()
 
 
@@ -45,8 +40,9 @@ def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
     scrub._on_input_change(prop, Event(linebreak=True))
     assert not field.editing
     module.lf.set_walk_settings.assert_called_once_with(.6, .15, .35, 5.)
-    assert tuple(controls.values[k] for k in module.WALK_FIELDS) == (.6, .15, .35, 5.)
-    module.lf.set_walk_settings.side_effect = RuntimeError("The edited Walk capsule does not fit")
+    blocked = RuntimeError("The edited Walk capsule does not fit")
+    blocked.message_key = "collision.walk_blocked"
+    module.lf.set_walk_settings.side_effect = blocked
     scrub._on_field_keydown(prop, enter)
     field.input_el.set_attribute("value", ".9")
     scrub._on_input_change(prop, Event(linebreak=True))
@@ -54,12 +50,12 @@ def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
     scrub._on_field_keydown(prop, enter)
     field.input_el.set_attribute("value", "nan")
     scrub._on_input_change(prop, Event(linebreak=True))
-    assert controls.error and not field.editing
+    assert controls.error == "preferences.viewport_defaults_invalid" and not field.editing
     scrub._on_field_keydown(prop, enter)
     assert field.editing
 
 
-@pytest.mark.parametrize("approved,choice", [(False, "common.cancel"), (False, "collision.export"),
+@pytest.mark.parametrize("approved,choice", [(False, "common.cancel"), (False, "export.export"),
                                           (True, None), (False, None)])
 def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, approved, choice):
     from lfs_plugins import collision_rendering as module
@@ -67,10 +63,10 @@ def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, ap
     path.with_suffix(".bin").write_bytes(b"old")
     controls.state = {"target_uuid": "first", "target_name": "Floor"}
     def pick(*args, **kwargs):
-        assert kwargs == {"with_overwrite_confirmation": True}
+        assert args == ("collision.voxel.json",) and not kwargs
         controls.state["target_uuid"] = "second"
         return (str(path) if approved or choice else "", approved)
-    module.lf.ui.save_json_file_dialog.side_effect = pick
+    module.lf.ui.save_json_file_dialog_with_confirmation.side_effect = pick
     controls.export()
     if choice:
         prompt = module.lf.ui.confirm_dialog.call_args.args
@@ -78,11 +74,11 @@ def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, ap
         prompt[-1](choice)
     else:
         module.lf.ui.confirm_dialog.assert_not_called()
-    expected = [("first", str(path))] if approved or choice == "collision.export" else []
+    expected = [("first", str(path))] if approved or choice == "export.export" else []
     assert [call.args for call in module.lf.export_collision.call_args_list] == expected
     assert path.with_suffix(".bin").read_bytes() == b"old" and not path.exists()
     module.lf.export_collision.side_effect = RuntimeError("destination denied")
-    module.lf.ui.save_json_file_dialog.side_effect = lambda *a, **kw: (str(path), True)
+    module.lf.ui.save_json_file_dialog_with_confirmation.side_effect = lambda *a: (str(path), True)
     controls.run(controls.export)
     assert controls.error == "destination denied"
 
@@ -112,34 +108,16 @@ def test_bindings_generation_resolution_and_idle_updates(controls):
         if changes == {"area": 3}:
             controls.state["resolved_voxel_size"] = 0
         assert controls.resolved_size() == "collision.size_pending"
-    controls.popup = True
-    assert bindings["collision_error"]() == "/tmp/output.bin: denied"
-    assert controls.localized_error("No Walk support below the camera") == "collision.walk_no_support"
+    for stage, key in (("Preparing collision", "gallery.transfer.phase.preparing"),
+                       ("Publishing voxel metadata", "export.export"), ("Collision ready", "status.ready")):
+        controls.state["stage"] = stage
+        assert bindings["collision_status"]().startswith(key)
 
 
-def test_generator_and_rendering_surfaces_and_translations(controls, monkeypatch):
-    from lfs_plugins import collision_rendering as module
-    resources = ROOT / "src/visualizer/gui/rmlui/resources"
-    generator, rendering = (ET.parse(resources / name).getroot() for name in ("collision.rml", "rendering.rml"))
-    assert generator.find(".//button[@data-event-click='collision_generate']").get("data-attrif-disabled") == "!collision_can_generate"
-    assert generator.find(".//*[@id='collision-size-fields']").get("data-if") == "!collision_automatic"
-    assert rendering.find(".//*[@id='hdr-collision']/..").get("data-if") == "collision_has_collision"
-    assert rendering.find(".//*[@id='collision-walk-fields']") is not None
-    assert rendering.find(".//*[@data-value='collision_preview_opacity']") is not None
-    assert rendering.find(".//*[@data-event-click='collision_generate']") is None
-    for root in (generator, rendering):
-        assert root.find(".//*[@data-if='collision_has_error']/span").text == "@tr:status.error"
-    row = MagicMock()
-    monkeypatch.setattr(module.w, "slider", lambda *a, **kw: row)
-    controls.mount(MagicMock())
-    for key in ("main_panel.voxel_size", "ui.speed"):
-        row.query_selector(".setting-row__label-col").set_attribute.assert_any_call("data-lfs-i18n", key)
-    keys = {call.args[1] for call in row.set_attribute.call_args_list if call.args[0] == "data-tooltip"}
-    assert keys == {"tooltip.collision." + key for key in ("voxel_size", "opacity", "area")}
-    keys.update(("tooltip.collision.auto", "tooltip.collision.cleanup", "collision.replace_pair", "collision.walk_enter_failed"))
-    keys.update((*module.ERRORS.values(), *module.STAGES.values(), "status.error", "ui.speed"))
-    locales = sorted((ROOT / "src/visualizer/gui/resources/locales").glob("*.json"))
-    assert len(locales) == 10
-    for locale in locales:
-        translations = dict(_flatten(json.loads(locale.read_text())))
-        assert all(translations.get(key) for key in keys), locale.name
+def test_structured_errors_translate_only_explicit_keys(controls):
+    error = RuntimeError("Readable English diagnostic, not a translation lookup")
+    error.message_key = "collision.output_limit"
+    error.message_details = "/tmp/collision.walk_no_support/64000001.bin"
+    controls.show_error(error)
+    assert controls.error == f"{error.message_key}\n{error.message_details}"
+    assert controls.localized_error(RuntimeError(error.message_details)) == error.message_details

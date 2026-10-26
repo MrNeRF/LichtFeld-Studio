@@ -36,7 +36,6 @@
     <div data-if="collision_active">
       <progress max="1" data-attr-value="collision_progress" />
       <span>{{collision_status}}</span>
-
     </div>
     <div data-if="collision_has_error" class="text-error"><span>@tr:status.error</span>: {{collision_error}}</div>
     <div class="ep-buttons">

@@ -38,7 +38,7 @@ from .scene import (
 
 class Error(RuntimeError):
     """
-    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context.
+    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context. Presentation fields .message_key and .message_details are included when provided.
     """
 
 class InvalidArgumentError(Error, ValueError):

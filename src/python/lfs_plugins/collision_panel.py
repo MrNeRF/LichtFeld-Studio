@@ -17,12 +17,18 @@ class CollisionPanel(Panel):
         self.controls = CollisionRendering(popup=True)
         self.binding = PanelStateBinding()
 
+    def show(self, export=False):
+        self.controls.export_mode = export
+        state = lf.get_collision_state() if export else {}
+        self.controls.export_target = (state.get("target_uuid", ""), state.get("target_name", ""))
+        self.controls.invalidate()
+        lf.ui.set_panel_enabled(self.id, True)
+
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("collision")
-        model.bind_func("panel_label", lambda: lf.ui.tr("collision.export" if CollisionRendering.export_mode else "collision.title"))
-        model.bind_func("export_mode", lambda: CollisionRendering.export_mode)
+        model.bind_func("panel_label", lambda: lf.ui.tr("export.export" if self.controls.export_mode else "collision.title"))
+        model.bind_func("export_mode", lambda: self.controls.export_mode)
         self.controls.bind(model)
-        CollisionRendering.popup_handle = self.controls.handle
 
     def on_mount(self, doc):
         super().on_mount(doc)
@@ -39,5 +45,4 @@ class CollisionPanel(Panel):
         self.binding.close()
         self.controls.scrubs.unmount()
         self.controls.handle = None
-        CollisionRendering.popup_handle = None
         doc.remove_data_model("collision")

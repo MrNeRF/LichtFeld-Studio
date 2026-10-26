@@ -384,22 +384,38 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
 
 def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_panel_module, monkeypatch):
     from lfs_plugins import collision_panel, collision_rendering
-    from lfs_plugins.panels import PANEL_SPECS
-    panel = collision_panel.CollisionPanel()
+    from lfs_plugins.panels import PANEL_SPECS, _register_lazy_panel
+    lf = collision_rendering.lf
+    monkeypatch.setattr(lf.ui, "Panel", collision_panel.Panel, raising=False)
+    monkeypatch.setattr(lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
+    monkeypatch.setattr(lf, "register_class", lambda *_: None, raising=False)
+    lazy = _register_lazy_panel(lf, "collision")
+    panel, other = lazy(), lazy()
+    monkeypatch.setattr(lf.ui, "get_panel_object", lambda _: panel, raising=False)
+    state = {"has_collision": True, "target_uuid": "first", "target_name": "Floor"}
+    monkeypatch.setattr(lf, "get_collision_state", lambda: dict(state))
+    collision_rendering.open_collision(export=True)
     model = _BindingModelStub()
     panel.on_bind_model(_BindingContextStub(model))
-    monkeypatch.setattr(collision_rendering.lf, "get_collision_state", lambda: {"has_collision": True}, raising=False)
-    monkeypatch.setattr(collision_rendering.lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
     assert PANEL_SPECS["collision"].update_policy == "dirty"
+    state.update(target_uuid="second", target_name="Wall")
     assert panel.on_update(None)
+    other.show()
+    assert panel.controls.target() == ("first", "Floor") and not other.controls.export_mode
     model.handle.dirty_fields.clear()
     assert panel.on_update(None) is False
     assert not model.handle.dirty_fields
     for export in (True, False):
+        model.handle.dirty_fields.clear()
         collision_rendering.open_collision(export=export)
-        assert model.handle.dirty_fields and model.func_bindings["export_mode"]() is export
+        assert model.handle.dirty_fields == ["__all__"] and model.func_bindings["export_mode"]() is export
+    monkeypatch.setattr(panel.controls, "mount", lambda doc: None)
+    panel.on_mount(SimpleNamespace(get_element_by_id=lambda _: None))
+    model.handle.dirty_fields.clear()
+    collision_panel.RuntimeState.collision_state.value = {"active": True}
+    assert model.handle.dirty_fields == ["__all__"]
     panel.on_unmount(SimpleNamespace(remove_data_model=lambda *_: None))
-    assert collision_rendering.CollisionRendering.popup_handle is None
+    assert panel.controls.handle is None
 
 
 def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):

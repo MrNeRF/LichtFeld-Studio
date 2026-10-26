@@ -341,10 +341,10 @@ namespace lfs::python {
                 PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
                 nb::gil_scoped_release release;
                 auto source = io::loadCollisionSource(path, {}, io::scale_export_progress(report, 0, .2f));
-                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1));
+                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1), {}, io::checkCollisionExportMixedBlocks);
             },
             nb::arg("path"), nb::arg("settings") = core::CollisionSettings{}, nb::arg("progress") = nb::none(),
-            "Generate owned full-detail occupancy from a splat file; callback False cancels.");
+            "Generate owned full-detail occupancy within voxel-pair export limits; callback False cancels.");
         m.def(
             "save_voxels",
             [](const core::CollisionVolume& volume, const LogicalPath& path, bool overwrite,

@@ -405,7 +405,7 @@ namespace {
         controller.initialize();
         controller.setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Orbit);
         EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
-        EXPECT_EQ(controller.walk_error, "No collision nodes are loaded");
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_collision"));
         const auto floor = manager.getScene().addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
         manager.getScene().setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
         manager.getScene().setNodeVisibility(floor, false);
@@ -414,7 +414,7 @@ namespace {
         EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
         for (int frame = 0; frame < 20; ++frame)
             EXPECT_NO_THROW(RmlMenuBarTestAccess::frame(bar_));
-        EXPECT_EQ(controller.walk_error, "No Walk support below the camera");
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_support"));
         EXPECT_EQ(controller.cameraNavigationMode(), lfs::vis::InputController::CameraNavigationMode::Orbit);
         EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
         lfs::vis::services().clear();
