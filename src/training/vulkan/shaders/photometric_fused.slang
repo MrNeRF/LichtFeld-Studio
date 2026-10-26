@@ -71,11 +71,33 @@ float partial(Params p, uint base, int x, int y, uint field) {
     float weight = decoupled(p) && field > 0 ? 1.0f : p.weight;
     return -weight * value * chain(p, x, y);
 }
-void finishMoments(Params p, uint i, float m[7], float derivativeWeight) {
+// Match CUDA's weighted pair: round the right product and the pair before
+// adding it to the running sum. Explicit fma/precise preserve those boundaries.
+float accumulateWeightedPair(float sum, float left, float right, float wl, float wr) {
+    precise float rightProduct = right * wr;
+    precise float result = sum + fma(left, wl, rightProduct);
+    return result;
+}
+void finishMoments(Params p, uint i, float m[7], bool weighted, float invMass, float derivativeWeight) {
     float a = m[0], r = m[1], t = m[3];
-    float A = fma(a, a, t * t) + 0.01f * 0.01f;
-    float B = fma(-r, r, m[2]) + fma(-t, t, m[4]) + 0.03f * 0.03f;
-    float C = fma(2 * a, t, 0.01f * 0.01f), D = fma(2.0f, fma(-r, t, m[5]), 0.03f * 0.03f);
+    float A, B, covariance;
+    if (weighted) {
+        a *= invMass;
+        r *= invMass;
+        t *= invMass;
+        // CUDA rounds mean products, then fuses normalization with subtraction.
+        // Rounding normalized second moments first loses precision near flat windows.
+        precise float aa = a * a, rr = r * r, tt = t * t, rt = r * t;
+        precise float luminanceDenominator = (aa + tt) + 0.01f * 0.01f;
+        A = luminanceDenominator;
+        B = fma(m[2], invMass, -rr) + fma(m[4], invMass, -tt) + 0.03f * 0.03f;
+        covariance = fma(m[5], invMass, -rt);
+    } else {
+        A = fma(a, a, t * t) + 0.01f * 0.01f;
+        B = fma(-r, r, m[2]) + fma(-t, t, m[4]) + 0.03f * 0.03f;
+        covariance = fma(-r, t, m[5]);
+    }
+    float C = fma(2 * a, t, 0.01f * 0.01f), D = fma(2.0f, covariance, 0.03f * 0.03f);
     float invAB = 1.0f / (A * B), invAAB = 1.0f / (A * A * B), invABB = 1.0f / (A * B * B);
     float similarity;
     if (decoupled(p)) {
@@ -121,8 +143,8 @@ void finishGradient(Params p, uint i, int x, int y, float m[4]) {
     if (decoupled(p))
         writeFloat(p.gradRaw, i, centerWeight * fma(t, m[3], fma(2 * readFloat(p.raw, i), m[2], m[1])));
 }
-// Both separable passes stay in one workgroup. Preserve the original FMA
-// order and half-rounded partials, including zero padding at image edges.
+// Both separable passes stay in one workgroup. Match CUDA's weighted moment
+// rounding and retain half-rounded partials and zero padding at image edges.
 // Keep the existing device workspace sizes to preserve allocation placement.
 // The horizontal pass writes 16 columns across 26 halo rows (416 entries).
 // Specialize scratch fields to avoid reserving masked/decoupled workspace
@@ -186,15 +208,12 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
                         float ml = fusedInput[3][center - d], mr = fusedInput[3][center + d];
                         float wl = ml * weights[d], wr = mr * weights[d];
                         sums[6] = fma(ml + mr, weights[d], sums[6]);
-                        // Keep each weighted sample fused with its accumulator.
-                        // Separately rounding the pair before accumulation amplifies
-                        // error when normalized moments form the SSIM covariance.
-                        sums[0] = fma(al, wl, fma(ar, wr, sums[0]));
-                        sums[1] = fma(rl, wl, fma(rr, wr, sums[1]));
-                        sums[2] = fma(rl * rl, wl, fma(rr * rr, wr, sums[2]));
-                        sums[3] = fma(tl, wl, fma(tr, wr, sums[3]));
-                        sums[4] = fma(tl * tl, wl, fma(tr * tr, wr, sums[4]));
-                        sums[5] = fma(rl * tl, wl, fma(rr * tr, wr, sums[5]));
+                        sums[0] = accumulateWeightedPair(sums[0], al, ar, wl, wr);
+                        sums[1] = accumulateWeightedPair(sums[1], rl, rr, wl, wr);
+                        sums[2] = accumulateWeightedPair(sums[2], rl * rl, rr * rr, wl, wr);
+                        sums[3] = accumulateWeightedPair(sums[3], tl, tr, wl, wr);
+                        sums[4] = accumulateWeightedPair(sums[4], tl * tl, tr * tr, wl, wr);
+                        sums[5] = accumulateWeightedPair(sums[5], rl * tl, rr * tr, wl, wr);
                     } else {
                         sums[0] = fma(al + ar, weights[d], sums[0]);
                         sums[1] = fma(rl + rr, weights[d], sums[1]);
@@ -210,10 +229,12 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
             if (moments) {
                 float a = fusedInput[0][center], r = fusedInput[1][center], t = fusedInput[2][center];
                 float mc = masked(p) ? fusedInput[3][center] : 1.0f;
-                float v[7] = {a * mc, r * mc, r * r * mc, t * mc, t * t * mc, r * t * mc, mc};
+                // CUDA weights the center coefficient before multiplying a moment.
+                float wc = weighted ? mc * weights[0] : weights[0];
+                float v[7] = {a, r, r * r, t, t * t, r * t, mc};
                 [loop] for (uint f = 0; f < 7; ++f)
                     if (f < fields)
-                        verticalTile[f][j] = f == 6 ? sums[f] : fma(v[f], weights[0], sums[f]);
+                        verticalTile[f][j] = f == 6 ? sums[f] : fma(v[f], wc, sums[f]);
             } else {
                 [loop] for (uint f = 0; f < 4; ++f) if (f < fields) verticalTile[f][j] = fma(fusedInput[f][center], weights[0], sums[f]);
             }
@@ -239,10 +260,8 @@ void fusedFilter(Params p, uint group, uint lane, uint groupCount) {
             uint i = base + uint(y) * p.width + uint(x);
             if (moments) {
                 float invMass = weighted ? (m[6] >= 1.0e-30f ? 1.0f / m[6] : 0.0f) : 1.0f;
-                if (weighted)
-                    for (uint f = 0; f < 6; ++f) m[f] *= invMass;
                 float centerWeight = masked(p) ? fusedInput[3][lane / 16 * 26 + lane % 16 + 135] : 1.0f;
-                finishMoments(p, i, m, centerWeight * invMass);
+                finishMoments(p, i, m, weighted, invMass, centerWeight * invMass);
             }
             else {
                 float dm[4];
