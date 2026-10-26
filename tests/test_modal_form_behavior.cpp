@@ -5,7 +5,6 @@
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include <RmlUi/Core.h>
-#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -111,6 +110,19 @@ namespace lfs::vis::gui {
         }
         void changeHandler(std::function<void(const core::ModalResult&)> callback) { overlay.active_->on_change = std::move(callback); }
         void cancel() { overlay.cancel(); }
+        void resultHandler(std::function<void(const core::ModalResult&)> callback) { overlay.active_->on_result = std::move(callback); }
+        void cancelHandler(std::function<void()> callback) { overlay.active_->on_cancel = std::move(callback); }
+        void defaultButton(const std::string& label, bool disabled) {
+            overlay.active_->submit_button_label = label;
+            overlay.updateForm("test.form", std::nullopt, {{label, "primary", disabled}, {"Cancel", "secondary"}});
+        }
+        void type(PanelInputState input) {
+            input.input_events.push_back({.kind = FrameInputEventKind::Text, .text = "x"});
+            send(input);
+        }
+        bool replace(const std::string& body) {
+            return overlay.updateForm("test.form", body, {{"Cancel", "secondary"}});
+        }
         static Rml::Element* nativeChild(Rml::Element* element, const char* tag) {
             if (element->GetTagName() == tag)
                 return element;
@@ -218,6 +230,241 @@ namespace lfs::vis::gui {
         EXPECT_FALSE(alive);
         EXPECT_NE(document->GetElementById("replacement"), nullptr);
         EXPECT_TRUE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, EnterChangeDefersReplacementUntilDispatchReturns) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        const auto alive = field->GetObserverPtr();
+        int changes = 0;
+        changeHandler([&](const core::ModalResult&) {
+            ++changes;
+            EXPECT_TRUE(replace("<input id='replacement' value='new' />"));
+            EXPECT_TRUE(alive);
+            EXPECT_EQ(document->GetElementById("replacement"), nullptr);
+        });
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult& result) {
+            submitted = true;
+            EXPECT_EQ(result.form_values.at("replacement"), "new");
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_EQ(changes, 1);
+        EXPECT_TRUE(submitted);
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, TypingChangeDefersReplacementUntilDispatchReturns) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        const auto alive = field->GetObserverPtr();
+        int changes = 0;
+        changeHandler([&](const core::ModalResult&) {
+            ++changes;
+            EXPECT_TRUE(replace("<input id='replacement' />"));
+            EXPECT_TRUE(alive);
+            EXPECT_EQ(document->GetElementById("replacement"), nullptr);
+        });
+        type(over(field));
+        EXPECT_EQ(changes, 1);
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+        EXPECT_TRUE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, DropdownChangeDefersReplacementUntilDispatchReturns) {
+        openForm("<select id='choices' style='width:200dp'><option value='one'>One</option><option value='two'>Two</option></select>");
+        auto* select = document->GetElementById("choices");
+        const auto alive = select->GetObserverPtr();
+        int changes = 0;
+        changeHandler([&](const core::ModalResult& result) {
+            ++changes;
+            EXPECT_EQ(result.form_values.at("choices"), "two");
+            EXPECT_TRUE(replace("<input id='replacement' />"));
+            EXPECT_TRUE(alive);
+            EXPECT_EQ(document->GetElementById("replacement"), nullptr);
+        });
+        auto input = over(select);
+        input.mouse_x += select->GetOffsetWidth() - 16;
+        click(input);
+        auto* popup = nativeChild(select, "selectbox");
+        ASSERT_NE(popup, nullptr);
+        ASSERT_TRUE(popup->IsVisible(true));
+        Rml::ElementList options;
+        popup->QuerySelectorAll(options, "option");
+        ASSERT_EQ(options.size(), 2);
+        click(over(options[1]));
+        EXPECT_EQ(changes, 1);
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, ChangeDefersCloseUntilDispatchReturns) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool closed = false;
+        resultHandler([&](const core::ModalResult&) { closed = true; });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.dismiss("Cancel"));
+            EXPECT_TRUE(overlay.isOpen());
+            EXPECT_FALSE(closed);
+        });
+        type(over(field));
+        EXPECT_TRUE(closed);
+        EXPECT_FALSE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, ChangeAppliesUpdatesInRequestOrder) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        const auto alive = field->GetObserverPtr();
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(replace("<input id='first' />"));
+            EXPECT_TRUE(replace("<input id='second' />"));
+            EXPECT_TRUE(alive);
+            EXPECT_EQ(document->GetElementById("second"), nullptr);
+        });
+        type(over(field));
+        EXPECT_FALSE(alive);
+        EXPECT_EQ(document->GetElementById("first"), nullptr);
+        EXPECT_NE(document->GetElementById("second"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, ChangeCloseWinsOverUpdates) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool closed = false;
+        resultHandler([&](const core::ModalResult& result) {
+            closed = true;
+            EXPECT_EQ(result.form_values.at("first"), "new");
+        });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(replace("<input id='first' value='new' />"));
+            EXPECT_TRUE(overlay.dismiss("Cancel"));
+            EXPECT_FALSE(replace("<input id='dropped' />"));
+            EXPECT_FALSE(closed);
+        });
+        type(over(field));
+        EXPECT_TRUE(closed);
+        EXPECT_FALSE(overlay.isOpen());
+        EXPECT_NE(document->GetElementById("first"), nullptr);
+        EXPECT_EQ(document->GetElementById("dropped"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, NestedInputDoesNotFlushOuterDispatchUpdates) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        const auto alive = field->GetObserverPtr();
+        const auto input = over(field);
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(replace("<input id='first' />"));
+            key(input, SDL_SCANCODE_RIGHT, SDLK_RIGHT);
+            EXPECT_TRUE(alive);
+            EXPECT_EQ(document->GetElementById("first"), nullptr);
+            EXPECT_TRUE(replace("<input id='second' />"));
+        });
+        type(input);
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("second"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, ChangeDefersCancelAndDropsLaterUpdate) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool cancelled = false;
+        cancelHandler([&] { cancelled = true; });
+        changeHandler([&](const core::ModalResult&) {
+            cancel();
+            EXPECT_TRUE(overlay.isOpen());
+            EXPECT_FALSE(cancelled);
+            EXPECT_FALSE(replace("<input id='dropped' />"));
+        });
+        type(over(field));
+        EXPECT_TRUE(cancelled);
+        EXPECT_FALSE(overlay.isOpen());
+        EXPECT_EQ(document->GetElementById("dropped"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, EnterUsesButtonsFromQueuedUpdate) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult& result) {
+            submitted = true;
+            EXPECT_EQ(result.button_label, "Apply");
+        });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Apply", "primary"}}));
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_TRUE(submitted);
+        EXPECT_FALSE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, ProgrammaticChangeWaitsUntilNextFrame) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        const auto alive = field->GetObserverPtr();
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(replace("<input id='replacement' />"));
+            EXPECT_TRUE(alive);
+        });
+        field->DispatchEvent(Rml::EventId::Change, {});
+        EXPECT_TRUE(alive);
+        EXPECT_TRUE(overlay.needsAnimationFrame());
+        overlay.render(0, 0);
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, UpdateOutsideDispatchAppliesImmediately) {
+        openForm();
+        const auto alive = document->GetElementById("field")->GetObserverPtr();
+        EXPECT_TRUE(replace("<input id='replacement' />"));
+        EXPECT_FALSE(alive);
+        EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, QueuedValidationDisablesExplicitSubmitWithoutFallingThroughToCancel) {
+        openForm();
+        defaultButton("Export", false);
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult&) { submitted = true; });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Export", "primary", true}, {"Cancel", "secondary"}}));
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_FALSE(submitted);
+        EXPECT_TRUE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, QueuedValidationEnablesExplicitSubmitOnTheSameEnter) {
+        openForm();
+        defaultButton("Export", true);
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult& result) {
+            submitted = true;
+            EXPECT_EQ(result.button_label, "Export");
+        });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Export", "primary"}, {"Cancel", "secondary"}}));
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_TRUE(submitted);
+        EXPECT_FALSE(overlay.isOpen());
     }
 
     TEST_F(ModalFormBehaviorTest, EscapeOnUneditedFieldDoesNotNotifyChange) {

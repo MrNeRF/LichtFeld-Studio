@@ -217,6 +217,9 @@ namespace lfs::rendering {
 
     struct ViewportRenderRequest {
         FrameView frame_view;
+        // Offline pixels use stable model-id depth ties and alpha blending.
+        // Live views leave this false, retaining the fast HiGS path.
+        bool deterministic_export = false;
         // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
         float color_exposure = 1.0f;
         int color_tonemapping = 0;

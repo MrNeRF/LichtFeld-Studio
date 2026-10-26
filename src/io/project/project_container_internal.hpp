@@ -80,6 +80,7 @@ namespace lfs::io::project::detail {
         [[nodiscard]] static lfs::Result<std::shared_ptr<NativeFile>>
         create_new(const std::filesystem::path& path);
 
+        [[nodiscard]] lfs::Result<bool> same_file(const NativeFile& other) const;
         [[nodiscard]] lfs::Result<std::uint64_t> size() const;
         [[nodiscard]] lfs::Result<void>
         read_exact(std::uint64_t offset, std::span<std::byte> destination) const;

@@ -4,7 +4,6 @@
 
 #include "viewport_request_builder.hpp"
 #include "core/camera.hpp"
-#include "core/services.hpp"
 #include "frustum_depth_coverage.hpp"
 #include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
@@ -544,6 +543,7 @@ namespace lfs::vis {
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
+            .deterministic_export = ctx.deterministic_export,
             .color_exposure = ctx.settings.color_exposure,
             .color_tonemapping = ctx.settings.color_tonemapping,
             .splat_render_profile = ctx.settings.splat_render_profile,
@@ -713,14 +713,6 @@ namespace lfs::vis {
         return request;
     }
 
-    bool hasVisibleCollisionPreview(const SceneManager& manager) {
-        const auto& scene = manager.getScene();
-        for (const auto* node : scene.getNodes())
-            if (node->collision && scene.isNodeEffectivelyVisible(node->id))
-                return true;
-        return false;
-    }
-
     std::vector<VulkanMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
@@ -728,7 +720,7 @@ namespace lfs::vis {
         const bool any_selected_mesh = std::any_of(
             scene_state.meshes.begin(),
             scene_state.meshes.end(),
-            [](const auto& mesh) { return mesh.is_selected; });
+            [](const auto& mesh) { return mesh.mesh && mesh.is_selected; });
         const bool any_selected_node = std::any_of(
             scene_state.selected_node_mask.begin(),
             scene_state.selected_node_mask.end(),
@@ -743,11 +735,13 @@ namespace lfs::vis {
         std::vector<VulkanMeshDrawItem> items;
         items.reserve(scene_state.meshes.size());
         for (const auto& mesh : scene_state.meshes) {
-            if (!mesh.mesh) {
+            if (!mesh.mesh && !mesh.collision) {
                 continue;
             }
             VulkanMeshDrawItem item{};
             item.mesh = mesh.mesh;
+            item.collision = mesh.collision;
+            item.collision_opacity = settings.collision_preview_opacity;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
             item.camera_relative_light = true;
@@ -762,17 +756,6 @@ namespace lfs::vis {
             item.shadow_enabled = settings.mesh_shadow_enabled;
             item.shadow_map_resolution = settings.mesh_shadow_resolution;
             items.push_back(item);
-        }
-        if (const auto* manager = services().sceneOrNull()) {
-            for (const auto* node : manager->getScene().getNodes()) {
-                if (!node->collision || !manager->getScene().isNodeEffectivelyVisible(node->id))
-                    continue;
-                VulkanMeshDrawItem item{};
-                item.collision = node->collision;
-                item.collision_opacity = settings.collision_preview_opacity;
-                item.model = lfs::rendering::dataWorldTransformToVisualizerWorld(manager->getScene().getWorldTransform(node->id));
-                items.push_back(std::move(item));
-            }
         }
         return items;
     }

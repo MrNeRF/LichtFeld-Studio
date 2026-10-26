@@ -51,6 +51,15 @@ not copied again, because generation 2's table of contents just points back at
 the bytes generation 1 already wrote. The preview thumbnail is a stored `THMB`
 chunk; the head stores only its locator, which updates atomically on publish.
 
+## Capability bits
+
+Each generation declares required reader and writer capabilities; a reader refuses
+requirements it does not implement. The canonical bit assignments are the
+[`CapabilityBit` enum](../src/io/include/io/project_container.hpp), rather than a
+second registry in this guide. Declaring an enum value does not enable support:
+bit 10 (`TILESET_REFERENCES`) remains reserved and unsupported, while collision
+volumes require bit 11 (`COLLISION_VOLUMES_V1`).
+
 ## Training and Edit Mode
 
 A `CKPT` chapter is resumable project state only while `SCNG` identifies the

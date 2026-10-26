@@ -431,7 +431,8 @@ class ScrubFieldController:
                 value = int(bounded)
             elif not math.isfinite(parsed):
                 if self._on_error:
-                    self._on_error("Expected a finite number")
+                    import lichtfeld as lf
+                    self._on_error(lf.ui.tr("preferences.viewport_defaults_invalid"))
                 return
             else:
                 value = parsed

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
-#include "core/collision_walk.hpp"
+#include "core/collision.hpp"
 
 #include "core/events.hpp"
 #include "core/export.hpp"

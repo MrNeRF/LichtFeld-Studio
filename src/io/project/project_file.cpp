@@ -549,6 +549,24 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+    lfs::Result<bool> NativeFile::same_file(const NativeFile& other) const {
+#ifdef _WIN32
+        BY_HANDLE_FILE_INFORMATION a{}, b{};
+        if (GetFileInformationByHandle(handle_, &a) && GetFileInformationByHandle(other.handle_, &b))
+            return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+                   a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+        const auto error = GetLastError();
+#else
+        struct stat a {
+        }, b{};
+        if (::fstat(fd_, &a) == 0 && ::fstat(other.fd_, &b) == 0)
+            return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+        const auto error = errno;
+#endif
+        return project_error(lfs::ErrorCode::Unavailable, "The project file identity could not be checked.",
+                             std::format("File identity query failed ({})", error), path_);
+    }
+
     lfs::Result<std::uint64_t> NativeFile::size() const {
 #ifdef _WIN32
         LARGE_INTEGER size{};

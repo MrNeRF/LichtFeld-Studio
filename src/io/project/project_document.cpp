@@ -7,6 +7,7 @@
 #include "core/native_fs.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
+#include "collision_serialization.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/resource_messages.hpp"
@@ -107,11 +108,14 @@ namespace lfs::io::project {
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
                                   std::string detail,
-                                  const std::string_view field = {}) {
+                                  const std::string_view field = {},
+                                  const std::string_view message_key = {}) {
             lfs::SmallFields fields;
             if (!field.empty()) {
                 fields.add("field", field);
             }
+            if (!message_key.empty())
+                fields.add("message_key", message_key);
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::IO,
@@ -130,13 +134,14 @@ namespace lfs::io::project {
         lfs::Result<T> fail(const lfs::ErrorCode code,
                             std::string message,
                             std::string detail,
-                            const std::string_view field = {}) {
+                            const std::string_view field = {},
+                            const std::string_view message_key = {}) {
             if constexpr (std::same_as<T, void>) {
                 return lfs::Result<void>::failure(document_error(
-                    code, std::move(message), std::move(detail), field));
+                    code, std::move(message), std::move(detail), field, message_key));
             } else {
                 return document_error(
-                    code, std::move(message), std::move(detail), field);
+                    code, std::move(message), std::move(detail), field, message_key);
             }
         }
 
@@ -965,21 +970,17 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
-        decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) {
-            try {
-                auto volume = lfs::core::decodeCollision(bytes);
-                collisions.emplace(uuid, volume);
-                deferred_geometry_keys.erase({FOURCC_COLV, uuid});
-                return volume;
-            } catch (const std::bad_alloc& error) {
-                // LFS-CENSUS-OK(empty-catch): allocation failures stay inside the project Result boundary.
-                return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
-                    lfs::ErrorCode::ResourceExhausted, "A collision payload could not be allocated.", error.what(), "COLV");
-            } catch (const std::exception& error) {
-                // LFS-CENSUS-OK(empty-catch): malformed binary data cannot escape project loading.
-                return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
-                    lfs::ErrorCode::DataLoss, "A collision payload is invalid.", error.what(), "COLV");
-            }
+        decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) try {
+            auto volume = decodeCollision(bytes);
+            collisions.emplace(uuid, volume);
+            deferred_geometry_keys.erase({FOURCC_COLV, uuid});
+            return volume;
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
+            return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
+                dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
+                "A collision payload could not be decoded.", error.what(), "COLV",
+                dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
         }
 
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
@@ -991,10 +992,11 @@ namespace lfs::io::project {
             if (!source_reader || !deferred_geometry_keys.contains(key) || row == source_rows.end())
                 return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
                     lfs::ErrorCode::DataLoss, "A saved collision payload is missing.",
-                    std::format("COLV instance {} is unavailable", uuid.to_string()), "COLV.instance_uuid");
+                    std::format("COLV instance {} is unavailable", uuid.to_string()), "COLV.instance_uuid", "collision.data_invalid");
             auto bytes = source_reader->read_chunk(row->second.info);
             if (!bytes)
-                return std::move(bytes).error();
+                return std::move(bytes).error().with_context("read collision payload", LFS_SOURCE_SITE_CURRENT(),
+                                                             lfs::SmallFields{}.add("message_key", std::string_view("collision.data_invalid")));
             return decode_collision(uuid, *bytes);
         }
 
@@ -2071,20 +2073,17 @@ namespace lfs::io::project {
                           const ProjectDocumentOpenOptions& options) {
         const auto open_started =
             std::chrono::steady_clock::now();
-        auto normalized = normalized_absolute_path(path);
+        auto normalized = options.retained_source ? lfs::Result<std::filesystem::path>(options.retained_source->path()) : normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
         }
         const auto normalized_at =
             std::chrono::steady_clock::now();
-        auto reader = ProjectReader::open(*normalized, options.reader);
-        if (!reader) {
+        auto reader = options.retained_source ? lfs::Result<ProjectReader>(options.retained_source->share()) : ProjectReader::open(*normalized, options.reader);
+        if (!reader)
             return std::move(reader).error();
-        }
-        const auto reader_opened_at =
-            std::chrono::steady_clock::now();
-        auto shared_reader = std::make_shared<ProjectReader>(
-            std::move(*reader));
+        const auto reader_opened_at = std::chrono::steady_clock::now();
+        auto shared_reader = std::make_shared<ProjectReader>(std::move(*reader));
         auto impl = std::make_unique<Impl>();
         impl->project_uuid = shared_reader->superblock().project_uuid;
         impl->source_path = *normalized;
@@ -2101,7 +2100,6 @@ namespace lfs::io::project {
         bool have_editor = false;
         bool have_sequencer = false;
         bool have_metrics = false;
-        auto collision_budget = options.collision_byte_budget;
         double chapter_read_ms = 0.0;
         const auto chapter_scan_started =
             std::chrono::steady_clock::now();
@@ -2209,13 +2207,6 @@ namespace lfs::io::project {
                 row.key.fourcc == FOURCC_SPLT &&
                 (row.stored_bytes > materialized_max ||
                  row.uncompressed_bytes > materialized_max);
-            if (row.key.fourcc == FOURCC_COLV) {
-                if (row.uncompressed_bytes > collision_budget)
-                    return fail<ProjectDocument>(
-                        lfs::ErrorCode::ResourceExhausted, "Collision payloads exceed the project memory budget.",
-                        "COLV declared bytes exceed the remaining collision allocation budget", "COLV.bytes");
-                collision_budget -= static_cast<std::size_t>(row.uncompressed_bytes);
-            }
             if ((options.defer_geometry_payloads && geometry_payload) || oversized_splat) {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
@@ -2539,7 +2530,8 @@ namespace lfs::io::project {
                 chapter_scan_finished,
                 open_finished),
             milliseconds(open_started, open_finished));
-        sweep_stale_licht_artifacts(*normalized, false);
+        if (!options.retained_source)
+            sweep_stale_licht_artifacts(*normalized, false);
         return ProjectDocument(std::move(impl));
     }
 
@@ -3642,19 +3634,16 @@ namespace lfs::io::project {
         std::shared_ptr<const lfs::core::CollisionVolume> volume) {
         if (instance_uuid.is_nil() || !volume)
             return fail<void>(lfs::ErrorCode::InvalidArgument,
-                              "A collision payload is invalid.", "COLV requires a non-null UUID and volume", "COLV");
+                              "A collision payload is invalid.", "COLV requires a non-null UUID and volume", "COLV", "collision.data_invalid");
         if (const auto found = impl_->collisions.find(instance_uuid); found != impl_->collisions.end() && found->second == volume)
             return {};
         try {
             volume->validate();
-        } catch (const std::bad_alloc& error) {
-            // LFS-CENSUS-OK(empty-catch): first adoption validates once; subsequent saves reuse the immutable volume.
-            return fail<void>(lfs::ErrorCode::ResourceExhausted,
-                              "A collision payload could not be validated in memory.", error.what(), "COLV");
         } catch (const std::exception& error) {
-            // LFS-CENSUS-OK(empty-catch): invalid caller-owned occupancy cannot enter the document.
-            return fail<void>(lfs::ErrorCode::InvalidArgument,
-                              "A collision payload is invalid.", error.what(), "COLV");
+            // LFS-CENSUS-OK(empty-catch): validate first adoption through the Result boundary.
+            return fail<void>(dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
+                              "A collision payload could not be validated.", error.what(), "COLV",
+                              dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
         }
         impl_->deferred_geometry_keys.erase({FOURCC_COLV, instance_uuid});
         impl_->collisions.insert_or_assign(instance_uuid, std::move(volume));
@@ -3722,10 +3711,8 @@ namespace lfs::io::project {
                 .instance_uuid = uuid,
             });
         }
-        for (const auto& [uuid, ignored] : impl_->collisions) {
-            (void)ignored;
+        for (const auto& uuid : impl_->collisions | std::views::keys)
             consider(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
-        }
         for (const auto& key : impl_->deferred_geometry_keys) {
             consider(key);
         }
@@ -4220,10 +4207,6 @@ namespace lfs::io::project {
         }
 
         CommitOptions commit = options.commit;
-        if (!impl_->collisions.empty()) {
-            commit.extra_reader_capabilities.set(COLLISION_VOLUMES_V1);
-            commit.extra_writer_capabilities.set(COLLISION_VOLUMES_V1);
-        }
         if (auto scene_nodes = impl_->scene_graph.nodes(); scene_nodes && std::ranges::any_of(*scene_nodes, [](const auto& node) {
                                                                return node.payload && node.payload->fourcc == "DSRC";
                                                            })) {
@@ -4284,17 +4267,6 @@ namespace lfs::io::project {
             ProjectChapter::from_bytes(impl_->project.to_bytes());
         if (!staged_project) {
             return std::move(staged_project).error();
-        }
-        if (!impl_->collisions.empty()) {
-            auto manifest = staged_project->manifest();
-            if (!manifest)
-                return std::move(manifest).error();
-            if (std::ranges::find(manifest->required_capabilities, "collision-volumes-v1") ==
-                manifest->required_capabilities.end()) {
-                manifest->required_capabilities.push_back("collision-volumes-v1");
-                if (auto updated = staged_project->set_manifest(*manifest); !updated)
-                    return std::move(updated).error();
-            }
         }
         if (auto modified = staged_project->set_modified_at_unix_ns(
                 commit.wallclock_unix_ns);
@@ -4427,7 +4399,7 @@ namespace lfs::io::project {
             const ChunkKey key{.fourcc = FOURCC_COLV, .instance_uuid = uuid};
             if (!impl_->dirty_or_new(key))
                 continue;
-            auto bytes = lfs::core::encodeCollision(*volume);
+            auto bytes = encodeCollision(*volume);
             const auto size = bytes.size();
             add_encoded(key, std::move(bytes), tensor_options(size));
         }
@@ -4504,10 +4476,8 @@ namespace lfs::io::project {
             desired.insert(
                 ChunkKey{.fourcc = FOURCC_MESH, .instance_uuid = uuid});
         }
-        for (const auto& [uuid, ignored] : impl_->collisions) {
-            (void)ignored;
+        for (const auto& uuid : impl_->collisions | std::views::keys)
             desired.insert(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
-        }
         desired.insert(
             impl_->deferred_geometry_keys.begin(),
             impl_->deferred_geometry_keys.end());
@@ -5099,17 +5069,10 @@ namespace lfs::io::project {
         report.commit_uuid = impl_->source_reader->commit().commit_uuid;
         report.snapshot_uuid = impl_->source_reader->commit().snapshot_uuid;
         return report;
-    } catch (const std::bad_alloc& error) {
-        // LFS-CENSUS-OK(empty-catch): serialization allocation failures are returned to the save job.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::ResourceExhausted,
-                                               "The project could not be serialized in memory.", error.what(), "project.save");
-    } catch (const std::length_error& error) {
-        // LFS-CENSUS-OK(empty-catch): bounded serializers reject unrepresentable chapters before publication.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::ResourceExhausted,
-                                               "The project exceeds its serialization budget.", error.what(), "project.save");
     } catch (const std::exception& error) {
-        // LFS-CENSUS-OK(empty-catch): legacy chapter serializers throw; callers use the Result contract.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::InvalidArgument,
+        // LFS-CENSUS-OK(empty-catch): serialization failures settle the save Result before publication.
+        const bool exhausted = dynamic_cast<const std::bad_alloc*>(&error) || dynamic_cast<const std::length_error*>(&error);
+        return fail<ProjectDocumentSaveReport>(exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
                                                "The project could not be serialized.", error.what(), "project.save");
     }
 

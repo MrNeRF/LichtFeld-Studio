@@ -6,7 +6,7 @@
 #pragma once
 
 #include "core/checkpoint_format.hpp"
-#include "core/collision_serialization.hpp"
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/geometry_payload.hpp"
@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <set>
@@ -98,8 +97,8 @@ namespace lfs::io::project {
         // Skip Impl::validate after the chapter scan. Hydration re-opens a
         // path the shell already validated; identity is checked by the caller.
         bool skip_validation = false;
-        // Aggregate COLV allocation bound, counted once per distinct volume.
-        std::size_t collision_byte_budget = std::numeric_limits<std::size_t>::max();
+        // Optional validated source: retain its file handle, path and exact commit. Borrowed only during open().
+        const ProjectReader* retained_source = nullptr;
     };
 
     struct ProjectDocumentSaveOptions {

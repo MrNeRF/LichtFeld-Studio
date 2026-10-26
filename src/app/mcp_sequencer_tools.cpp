@@ -176,6 +176,11 @@ namespace lfs::app {
                 {"ply_sequence_frame_count", has_ply_sequence ? controller.plySequence()->frames.size() : 0},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
                 {"follow_playback", ui_state ? ui_state->follow_playback : false},
+                {"camera_width", ui_state ? ui_state->camera_width : 16},
+                {"camera_height", ui_state ? ui_state->camera_height : 9},
+                {"video_framerate_numerator", ui_state ? ui_state->framerate : 30},
+                {"video_framerate_denominator", ui_state ? ui_state->framerate_denominator : 1},
+                {"export_fit", ui_state ? ui_state->export_fit : 0},
                 {"keyframe_count", keyframe_list.size()},
                 {"keyframes", keyframe_list},
             };

@@ -6,7 +6,6 @@
 #include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/licht_command.hpp"
-#include "app/voxelizer.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"

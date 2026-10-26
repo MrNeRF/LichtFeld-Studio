@@ -11,14 +11,11 @@ LichtFeld-Studio voxelize scene.ply -o scene.voxel.json --voxel-size 0.05
 LichtFeld-Studio voxelize scene.sog scene.voxel.json --auto --overwrite
 ```
 
-Writes a SuperSplat v1.1 `.voxel.json` / `.voxel.bin` pair.
-
 `--voxel-opacity` sets accumulated opacity (default 0.1, range [0,1)). `--filter cleanup` rejects
 outliers; `--filter none` disables cleanup. `--max-gaussian-area` is a three-sigma projected area in
 squared scene units (0 disables the manual cap). Cleanup may still apply its automatic limit.
 
-See [Collision](features/collision.md) for Auto resolution, full-source coverage, memory/format limits
-and cancellation guarantees. Overwrite approval covers both outputs once.
+See [Collision](features/collision.md) for the pair format, Auto resolution, limits and overwrite approval.
 
 Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_voxels(volume, path,
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback

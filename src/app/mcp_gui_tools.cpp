@@ -21,6 +21,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -2747,6 +2748,8 @@ namespace lfs::app {
                          true},
                     };
                 }
+                if (*result == vis::ProjectOpenOutcome::Deferred)
+                    return json{{"status", "switch_pending"}};
                 auto info = post_and_wait(
                     viewer, [viewer] {
                         return viewer->projectGetInfo();
@@ -3020,15 +3023,12 @@ namespace lfs::app {
                 auto result = [&]() -> lfs::Result<std::string> {
                     if (panel_id.empty())
                         return lfs::from_legacy_expected(
-                            capture_after_gui_render(viewer, [viewer, width, height]() {
-                                return capture_full_window_to_base64(viewer, width, height);
-                            }),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Unavailable,
-                                .domain = lfs::ErrorDomain::MCP,
-                                .operation = "Capture composited app window",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                            capture_after_gui_render(viewer, [viewer, width, height]() { return capture_full_window_to_base64(viewer, width, height); }, true), lfs::LegacyErrorContext{
+                                                                                                                                                                    .code = lfs::ErrorCode::Unavailable,
+                                                                                                                                                                    .domain = lfs::ErrorDomain::MCP,
+                                                                                                                                                                    .operation = "Capture composited app window",
+                                                                                                                                                                    .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                                                                                                                });
                     auto promise = std::make_shared<std::promise<lfs::Result<vis::VulkanContext::WindowCapture>>>();
                     auto future = promise->get_future();
                     const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
@@ -3596,10 +3596,17 @@ namespace lfs::app {
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
                     if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&params->getActiveParams());
                         for (const auto& change : changes) {
                             if (change.meta.id == "iterations" &&
                                 trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
                                 return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                            if (change.meta.needs_restart()) {
+                                auto current_val = change.meta.getter(ref);
+                                if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
+                                }
                             }
                         }
                     }
@@ -6107,9 +6114,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_full_window_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -6123,9 +6128,7 @@ namespace lfs::app {
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_full_window_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 }
                 if (!result)
                     return std::unexpected(result.error());

@@ -504,54 +504,32 @@ def test_signal_family_keeps_a_distinct_visual_language():
     )
 
 
-def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
-    sequencer_rml = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.rml"
-    ).read_text(encoding="utf-8")
-    sequencer_rcss = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.rcss"
-    ).read_text(encoding="utf-8")
-    sequencer_theme = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.theme.rcss"
-    ).read_text(encoding="utf-8")
+def test_sequencer_export_quality_uses_shared_native_range_and_theme():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    sequencer = (resources / "sequencer.rml").read_text(encoding="utf-8")
+    modal_css = (resources / "modal_overlay.rcss").read_text(encoding="utf-8")
+    components = (resources / "components.theme.rcss").read_text(encoding="utf-8")
+    implementation = (PROJECT_ROOT / "src/visualizer/gui/sequencer_ui_manager.cpp").read_text(encoding="utf-8")
 
-    assert 'id="quality-scrub" class="scrub-field"' in sequencer_rml
-    assert 'id="quality-fill" class="scrub-field-fill"' in sequencer_rml
-    quality_scrubber = sequencer_rcss.split("/* ── Quality Scrub Field", 1)[1].split(
-        "#btn-equirect", 1
-    )[0]
-    assert "decorator: vertical-gradient" not in quality_scrubber
-    assert "decorator: horizontal-gradient" not in quality_scrubber
-    assert "color: #cdd6f4;" not in quality_scrubber
-    assert sequencer_theme.count("@{panel.body_decor}") == 2
-    assert "@{components.header_decor}" in sequencer_theme
+    assert 'id="quality-scrub"' not in sequencer
+    assert 'id="quality-fill"' not in sequencer
+    assert 'type="range" name="quality_slider"' in implementation
+    assert 'name="quality"' in implementation
+    assert 'data-tooltip="sequencer.export_quality_hint"' in implementation
+    quality_rules = modal_css.split(".export-quality-scale", 1)[1].split("@media", 1)[0]
+    assert "decorator:" not in quality_rules
+    assert re.search(r"#[0-9a-fA-F]{3,8}\b", quality_rules) is None
+    track = components.split('input[type="range"] slidertrack {', 1)[1].split("\n}", 1)[0]
+    thumb = components.split('input[type="range"] sliderbar {', 1)[1].split("\n}", 1)[0]
+    assert "background-color: @{border};" in track
+    assert "background-color: @{primary};" in thumb
 
-    assert "@media (max-width: 1620dp)" not in sequencer_rcss
-    responsive_rules = sequencer_rcss.split("@media", 1)[1]
-    assert ".quality-group" not in responsive_rules
-    assert "#quality-scrub" not in responsive_rules
-    assert ".speed-text" not in responsive_rules
-    assert "#btn-speed" not in responsive_rules
-    assert "#sequence-fps-field" not in responsive_rules
-    assert "#resolution-field" not in responsive_rules
+
+def test_camera_aspect_tooltip_resolves_in_every_locale():
+    for locale in (PROJECT_ROOT / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(locale.read_text(encoding="utf-8"))
+        assert data["tooltip"]["seq_camera_aspect"], locale.name
+        assert "seq_camera_aspect" not in data.get("training", {}).get("tooltip", {}), locale.name
 
 
 def test_asset_manager_palette_is_fully_theme_driven():
