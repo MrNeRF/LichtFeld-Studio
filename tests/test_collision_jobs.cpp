@@ -480,7 +480,7 @@ namespace lfs::vis::gui {
         Scene scene;
         const auto parent = scene.addGroup("Parent");
         scene.setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(10)));
-        const auto source = scene.addSplat("Selected hidden source", make_matrix_splat(), parent);
+        const auto source = scene.addSplat("Selected hidden source", make_splat(4), parent);
         scene.setTrainingModelNode(source);
         scene.setNodeVisibility(source, false);
         const auto volume = box({1, 2, 3}, {3, 1, 2});
@@ -495,7 +495,7 @@ namespace lfs::vis::gui {
         ASSERT_TRUE(lfs::training::capture_project_snapshot_cpu_state(scene, ParameterManagerSnapshot{}, generate_uuid_v4(), 3, captured));
         const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
         scene.removeNodeById(source);
-        EXPECT_EQ(captured_source.means.ptr<float>()[0], 1);
+        EXPECT_EQ(captured_source.means.ptr<float>()[0], 0);
         EXPECT_THROW((void)scene.captureCollisionSource(source), lfs::Exception);
         lfs::training::ProjectSnapshotChapters chapters;
         ASSERT_TRUE(lfs::training::materialize_project_snapshot_cpu_chapters(std::move(captured), chapters));
