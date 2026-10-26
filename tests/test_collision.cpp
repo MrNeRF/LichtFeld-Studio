@@ -1,9 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "app/voxelizer.hpp"
-#include "collision_fixture.hpp"
+#include "app/converter.hpp"
 #include "core/argument_parser.hpp"
-#include "core/collision_walk.hpp"
+#include "core/collision.hpp"
 #include "core/cuda/collision_voxelization_kernels.hpp"
 #include "core/native_fs.hpp"
 #include "core/splat_data.hpp"

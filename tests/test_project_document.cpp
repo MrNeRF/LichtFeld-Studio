@@ -9,6 +9,7 @@
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include "io/project/collision_serialization.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
@@ -415,7 +416,7 @@ namespace {
         return result;
     }
 
-    void write_phase_a_fixture(const fs::path& path) {
+    void write_phase_a_fixture(const fs::path& path, Scene* collision_scene = nullptr) {
         const Uuid project_uuid = fixed_uuid(950);
         const Uuid root_uuid = fixed_uuid(951);
         const Uuid splat_uuid = fixed_uuid(952);
@@ -544,6 +545,26 @@ namespace {
                             PointCloud,
                     .mask = {4, 0},
                 }));
+        if (collision_scene) {
+            require_status(hydrate_scene_graph(scene, *collision_scene, {.splat = [](const auto&) { return make_splat(3); }, .point_cloud = [](const auto&) { return make_point_cloud(2); }, .mesh = [](const auto&) { return make_triangle_mesh(); }}));
+            const auto parent = collision_scene->addGroup("Parent");
+            collision_scene->setNodeTransform(parent, glm::translate(glm::mat4(1), {4, 5, 6}));
+            auto volume = std::make_shared<lfs::core::CollisionVolume>(*collision_test::box({1, 2, 3}, {3, 1, 2}, .0125f));
+            volume->settings = {.0125f, .35f, 2.5f, true, true};
+            for (int i = 0; i < 13; ++i) {
+                const auto id = collision_scene->addCollision(std::to_string(i), i < 12 ? volume : collision_test::box({}, {1, 1, 1}), parent);
+                collision_scene->setNodeTransform(id, glm::translate(glm::mat4(1), {float(i), 2, 3}));
+                collision_scene->setNodeVisibility(id, i != 0);
+            }
+            ScenePayloadBindings bindings;
+            for (const auto& node : require_result(document->scene_graph().nodes()))
+                if (node.payload)
+                    bindings.emplace(node.uuid, *node.payload);
+            auto captured = require_result(capture_scene_graph_state(*collision_scene, bindings));
+            for (const auto& [uuid, volume] : captured.collisions)
+                require_status(document->set_collision(uuid, volume));
+            document->edit_scene_graph() = require_result(materialize_scene_graph_chapter(std::move(captured)));
+        }
         const auto saved =
             document->save(path, save_options(960, 200));
         ASSERT_TRUE(saved)
@@ -1954,7 +1975,8 @@ namespace {
         TemporaryDirectory temporary;
         const fs::path path =
             temporary.path / "phase-a-fixture.licht";
-        write_phase_a_fixture(path);
+        Scene collision_scene;
+        write_phase_a_fixture(path, &collision_scene);
 
         enum class Injection {
             Proj,
@@ -2108,6 +2130,53 @@ namespace {
             ASSERT_FALSE(staged);
             EXPECT_TRUE(witness_scene(live) == before);
         }
+        auto document = require_result(ProjectDocument::open(path));
+        const auto baseline = read_file_bytes(path);
+        {
+            const PayloadCapGuard cap(1);
+            auto limited = ProjectDocument::open(path);
+            ASSERT_FALSE(limited);
+            EXPECT_EQ(limited.error().code(), lfs::ErrorCode::ResourceExhausted);
+        }
+        const auto volume = collision_scene.getNode("0")->collision;
+        const auto bytes = encodeCollision(*volume);
+        EXPECT_THROW(decodeCollision(std::span(bytes).first(bytes.size() - 1)), std::invalid_argument);
+        lfs::core::CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {lfs::core::CollisionVolume::brick_tag | 1, 0x00110011, 0}};
+        ASSERT_NO_THROW(padded.validate());
+        padded.words[1] |= 2;
+        EXPECT_THROW(padded.validate(), std::invalid_argument);
+        auto invalid = std::make_shared<lfs::core::CollisionVolume>(*volume);
+        invalid->words.front() = 0xffffffff;
+        EXPECT_FALSE(document.set_collision(collision_scene.getNode("0")->uuid, invalid));
+        fs::create_directory(temporary.path / "directory");
+        EXPECT_FALSE(document.save(temporary.path / "directory"));
+        EXPECT_EQ(read_file_bytes(path), baseline);
+        for (const bool erase : {false, true}) {
+            auto reader = require_result(ProjectReader::open(path));
+            auto writer = require_result(ProjectWriter::append(path));
+            require_status(writer.plan_commit());
+            auto corrupt = bytes;
+            corrupt[0] = std::byte{0};
+            require_status(writer.preflight(corrupt.size()));
+            for (const auto& row : reader.chunks()) {
+                if (!row.is_live())
+                    continue;
+                if (row.key.fourcc == FOURCC_COLV)
+                    require_status(erase ? writer.erase(row.key) : writer.write_chunk(row.key, corrupt));
+                else
+                    require_status(writer.reuse_if_clean(require_result(reader.make_clean_proof(row, 1)), 1));
+            }
+            require_status(writer.commit());
+            auto failed = ProjectDocument::open(path);
+            ASSERT_FALSE(failed);
+            EXPECT_EQ(failed.error().code(), lfs::ErrorCode::DataLoss);
+        }
+        Scene unchanged;
+        const auto retained = unchanged.addGroup("Retained");
+        const std::array omitted{fixed_uuid(951), fixed_uuid(952), fixed_uuid(953), fixed_uuid(954)};
+        EXPECT_FALSE(hydrate_scene_graph(require_result(capture_scene_graph(collision_scene, {}, omitted)), unchanged, {}));
+        EXPECT_EQ(unchanged.getNodes().size(), 1);
+        EXPECT_NE(unchanged.getNodeById(retained), nullptr);
     }
 
     TEST(ProjectDocumentTest,
@@ -3017,7 +3086,8 @@ namespace {
             temporary.path / "source.licht";
         const auto destination =
             temporary.path / "destination.licht";
-        write_phase_a_fixture(source);
+        Scene collision_scene;
+        write_phase_a_fixture(source, &collision_scene);
         {
             std::ofstream existing(
                 destination,
@@ -3026,11 +3096,35 @@ namespace {
             existing << "replace me";
         }
 
+        auto pinned = require_result(ProjectReader::open(source));
+        const auto verify_capabilities = [](const ProjectReader& reader) {
+            for (const auto& bits : {reader.commit().required_reader_capabilities, reader.commit().required_writer_capabilities}) {
+                EXPECT_TRUE(bits.contains(11));
+                EXPECT_FALSE(bits.contains(10));
+            }
+        };
+        verify_capabilities(pinned);
+        ReaderOptions old_reader;
+        old_reader.reader_capabilities.set(11, false);
+        auto incompatible = ProjectReader::open(source, old_reader);
+        ASSERT_FALSE(incompatible);
+        EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported) << lfs::format_for_developer(incompatible.error());
+        EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
+        ASSERT_TRUE(pinned.validate_source_identity());
+        auto newer = require_result(ProjectDocument::open(source));
+        ASSERT_TRUE(newer.set_collision(collision_scene.getNode("0")->uuid, collision_test::box({}, {1, 1, 1})));
+        ASSERT_TRUE(newer.save(source));
+        EXPECT_FALSE(pinned.validate_source_identity());
+        const auto retained = temporary.path / "retained.licht";
+        fs::rename(source, retained);
         auto document = require_result_ptr(ProjectDocument::open(
-            source,
-            ProjectDocumentOpenOptions{
-                .defer_geometry_payloads = true,
-            }));
+            source, {.defer_geometry_payloads = true, .retained_source = &pinned}));
+        EXPECT_EQ(document->source_commit_uuid(), pinned.commit().commit_uuid);
+        ScenePayloadBindings bindings;
+        for (const auto& node : require_result(document->scene_graph().nodes()))
+            if (node.payload)
+                bindings.emplace(node.uuid, *node.payload);
+        const auto expected = require_result(capture_scene_graph(collision_scene, bindings)).to_bytes();
         const auto project_uuid =
             document->project_uuid();
         auto saved = document->save_as(
@@ -3065,6 +3159,37 @@ namespace {
             reader->find(
                 FOURCC_MESH, fixed_uuid(954)),
             nullptr);
+        for (const bool deferred : {true, false}) {
+            SCOPED_TRACE(deferred);
+            if (!deferred)
+                ASSERT_TRUE(document->save_as(destination));
+            const auto saved_reader = require_result(ProjectReader::open(destination));
+            verify_capabilities(saved_reader);
+            EXPECT_EQ(std::ranges::count_if(saved_reader.chunks(), [](const auto& row) {
+                          return row.is_live() && row.key.fourcc == FOURCC_COLV;
+                      }),
+                      2);
+            for (const auto& state : document->payload_states())
+                if (state.fourcc == FOURCC_COLV)
+                    EXPECT_EQ(state.loaded, !deferred);
+            document = require_result_ptr(ProjectDocument::open(destination, {.defer_geometry_payloads = deferred}));
+            Scene target;
+            auto shell = require_result(document->stage_shell(target));
+            ASSERT_TRUE(document->hydrate(target));
+            for (const auto* restored : {shell.get(), &target}) {
+                EXPECT_EQ(require_result(capture_scene_graph(*restored, bindings)).to_bytes(), expected);
+                const auto* first = restored->getNode("0");
+                ASSERT_NE(first, nullptr);
+                for (const auto* node : restored->getNodes()) {
+                    if (!node->collision)
+                        continue;
+                    if (node->name != "12")
+                        EXPECT_EQ(node->collision, first->collision);
+                    EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*collision_scene.getNodeByUuid(node->uuid)->collision));
+                }
+            }
+        }
+        fs::rename(retained, source);
         EXPECT_TRUE(
             std::filesystem::is_regular_file(
                 source));
@@ -5846,10 +5971,22 @@ namespace {
                    live_parameters.error());
 
         Scene scene;
+        const auto parent = scene.addGroup("Parent");
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(10)));
         const auto model_id = scene.addSplat(
-            "training", make_splat(8));
+            "training", make_splat(8), parent);
         ASSERT_NE(model_id, lfs::core::NULL_NODE);
         scene.setTrainingModelNode(model_id);
+        scene.setNodeVisibility(model_id, false);
+        const auto volume = collision_test::box({1, 2, 3}, {3, 1, 2});
+        const auto first = scene.addCollision("First", volume, model_id);
+        const auto second = scene.addCollision("Second", volume, model_id);
+        const auto transform = glm::translate(glm::mat4(1), {-4, 5, -6});
+        scene.setNodeTransform(model_id, transform);
+        scene.setNodeTransform(first, transform);
+        const auto captured_source = scene.captureCollisionSource(model_id);
+        EXPECT_EQ(captured_source.transform, scene.getWorldTransform(model_id));
+        const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
         const auto model_uuid =
             scene.getNodeUuid(model_id);
         const std::array selected_nodes{model_uuid};
@@ -5864,12 +6001,21 @@ namespace {
         ASSERT_TRUE(captured)
             << lfs::format_for_developer(
                    captured.error());
+        scene.removeNodeById(model_id);
+        EXPECT_EQ(captured_source.means.ptr<float>()[0], 0);
+        EXPECT_THROW((void)scene.captureCollisionSource(model_id), lfs::Exception);
         lfs::training::ProjectSnapshotChapters
             chapters;
         require_status(lfs::training::
                            materialize_project_snapshot_cpu_chapters(
                                std::move(cpu_state),
                                chapters));
+        ASSERT_EQ(chapters.collisions.size(), 1);
+        EXPECT_EQ(chapters.collisions.begin()->second, volume);
+        const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);
+        ASSERT_TRUE(one && *one && two && *two);
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_EQ((**one).local_transform[12 + axis], transform[3][axis]);
         EXPECT_EQ(
             chapters.selection
                 .selected_node_uuids(),

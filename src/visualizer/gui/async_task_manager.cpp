@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
-#include "core/collision_error.hpp"
+#include "core/collision.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -3764,13 +3764,12 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
-        if (!collision_worker_.valid() && !collision_replacement_)
+        if (!sceneReplacementRequired())
             return false;
         cancelCollision();
         dropSceneReplacement();
-        const auto epoch = viewer_->project_lifecycle_->documentEpoch();
-        const auto scene_epoch = splat_simplify_scene_epoch_;
-        collision_replacement_ = [this, epoch, scene_epoch, replacement = std::move(replacement)]() mutable {
+        collision_replacement_ = [this, epoch = viewer_->project_lifecycle_->documentEpoch(),
+                                  scene_epoch = splat_simplify_scene_epoch_, replacement = std::move(replacement)]() mutable {
             if (!viewer_->project_lifecycle_->isApplicationClosePending() &&
                 viewer_->project_lifecycle_->documentEpoch() == epoch && splat_simplify_scene_epoch_ == scene_epoch)
                 replacement();
@@ -3781,7 +3780,7 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelCollision() {
-        jobs_.requestCancel(collision_job_);
+        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
         collision_stop_.request_stop();
         publish_viewport_toolbar_generation();
     }
@@ -3834,9 +3833,8 @@ namespace lfs::vis::gui {
         const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
         if (!node || node->type != core::NodeType::COLLISION || !node->collision)
             throw std::runtime_error("The export target is not a collision node");
-        auto volume = node->collision;
         const auto transform = manager->getScene().getWorldTransform(node->id);
-        launchCollision([volume, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([volume = node->collision, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
             io::exportCollision(*volume, path, transform, stop, progress);
             return true; // Publication wins a cancellation arriving after installation.
         });
@@ -3846,7 +3844,7 @@ namespace lfs::vis::gui {
         if (collisionWorkerActive() || collision_replacement_)
             throw std::runtime_error("A collision worker or scene replacement is still pending");
         pollCollision();
-        if (!beginJob(collision_job_, JobType::Collision, "Preparing collision"))
+        if (!beginJob(collision_job_, JobType::Collision, LOC("gallery.transfer.phase.preparing")))
             throw std::runtime_error("Cannot start collision job");
         collision_result_.reset();
         collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();

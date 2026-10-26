@@ -5,7 +5,6 @@
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/collision.hpp"
-#include "core/collision_error.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_bus.hpp"
@@ -4276,16 +4275,10 @@ namespace lfs::core {
     }
 
     NodeId Scene::addCollision(const std::string& name, std::shared_ptr<const CollisionVolume> volume, NodeId parent) {
-        if (!volume)
-            throw std::invalid_argument("Collision volume is missing");
-        if (parent != NULL_NODE && (!getNodeById(parent) || !isSceneNodeParentCompatible(getNodeById(parent)->type, NodeType::COLLISION)))
-            throw std::invalid_argument("Invalid collision parent");
-        auto node = std::make_unique<SceneNode>();
-        node->parent_id = parent;
-        node->type = NodeType::COLLISION;
-        node->name = makeUniqueNodeName(name_to_id_, name);
-        node->collision = std::move(volume);
-        return insertNode(std::move(node), false, std::nullopt, nullptr);
+        const auto id = restoreNodeWithUuid({.uuid = generate_uuid_v4(), .type = NodeType::COLLISION, .name = makeUniqueNodeName(name_to_id_, name), .parent = parent, .collision = std::move(volume)});
+        if (id == NULL_NODE)
+            throw std::invalid_argument("Cannot add collision node: invalid name or parent");
+        return id;
     }
 
     std::optional<Scene::CollisionSourceIdentity> Scene::collisionSourceIdentity(NodeId id) const {

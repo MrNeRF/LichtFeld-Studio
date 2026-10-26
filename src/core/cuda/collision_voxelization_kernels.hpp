@@ -21,9 +21,8 @@ namespace lfs::core::cuda {
         float min[3], max[3];
         uint32_t left, right, begin, count;
     };
-    struct Region {
-        int x, y, z;
-    };
+    using Region = glm::ivec3;
+    static_assert(sizeof(Region) == 3 * sizeof(int) && alignof(Region) == alignof(int));
     struct Grid {
         float origin[3], size;
         int dimensions[3];

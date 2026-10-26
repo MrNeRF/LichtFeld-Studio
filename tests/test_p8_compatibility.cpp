@@ -205,11 +205,9 @@ namespace {
             ProjectReader::classify(supported, v1);
         EXPECT_EQ(classification.state, OpenState::Open);
 
-        for (const bool capability_gate : {false, true}) {
-            const auto newer = temporary.path /
-                               (capability_gate
-                                    ? "newer-capability.licht"
-                                    : "newer-version.licht");
+        for (const int capability_gate : {0, 9, 10}) {
+            const auto reader_options = capability_gate == 10 ? ReaderOptions{} : v1;
+            const auto newer = temporary.path / std::format("newer-{}.licht", capability_gate);
             CommitOptions options{
                 .kind = CommitKind::Explicit,
                 .commit_uuid = fixed_uuid(
@@ -221,22 +219,26 @@ namespace {
                     (capability_gate ? 81'110 : 81'210),
             };
             if (capability_gate) {
-                // ENCODED_SCENE_ASSETS is outside declared_v1's bits 0–8.
-                options.extra_reader_capabilities.set(9);
+                options.extra_reader_capabilities.set(capability_gate);
+                options.extra_writer_capabilities.set(capability_gate);
             } else {
                 options.min_reader_version = Version{1, 1};
             }
             create_raw_fixture(
                 newer, capability_gate ? 81'100 : 81'200,
                 options);
-            EXPECT_EQ(ProjectReader::classify(newer, v1).state,
+            EXPECT_EQ(ProjectReader::classify(newer, reader_options).state,
                       OpenState::UnsupportedNewer);
-            auto semantic = ProjectReader::open(newer, v1);
+            auto semantic = ProjectReader::open(newer, reader_options);
             ASSERT_FALSE(semantic);
             EXPECT_EQ(semantic.error().code(),
                       lfs::ErrorCode::Unsupported);
 
-            auto inspect_options = v1;
+            EXPECT_NE(semantic.error().user_message().find("newer LichtFeld"), std::string_view::npos);
+            if (capability_gate)
+                EXPECT_NE(lfs::format_for_developer(semantic.error()).find("unsupported bits"), std::string::npos);
+
+            auto inspect_options = reader_options;
             inspect_options.allow_unsupported_inspection = true;
             auto inspection = ProjectReader::open(
                 newer, inspect_options);
@@ -244,6 +246,10 @@ namespace {
                 << lfs::format_for_developer(inspection.error());
             EXPECT_EQ(inspection->open_state(),
                       OpenState::UnsupportedNewer);
+            if (capability_gate) {
+                EXPECT_TRUE(inspection->commit().required_reader_capabilities.contains(capability_gate));
+                EXPECT_TRUE(inspection->commit().required_writer_capabilities.contains(capability_gate));
+            }
             auto verified = inspection->verify_all();
             ASSERT_FALSE(verified);
             EXPECT_EQ(verified.error().code(),
@@ -256,7 +262,7 @@ namespace {
                       lfs::ErrorCode::Unsupported);
             auto hydrated = ProjectDocument::open(
                 newer,
-                ProjectDocumentOpenOptions{.reader = v1});
+                ProjectDocumentOpenOptions{.reader = reader_options});
             ASSERT_FALSE(hydrated);
             EXPECT_EQ(hydrated.error().code(),
                       lfs::ErrorCode::Unsupported);
@@ -277,42 +283,6 @@ namespace {
             IndexCompression::StoredForDeterministicTests);
         EXPECT_EQ(ProjectReader::classify(higher, v1).state,
                   OpenState::HardFail);
-    }
-
-    TEST(P8CompatibilityTest, TilesetBit10IsUnsupportedByDefaultReader) {
-        TemporaryDirectory temporary;
-        const auto path = temporary.path / "tileset-capability.licht";
-        CommitOptions commit{
-            .commit_uuid = fixed_uuid(81'400),
-            .snapshot_uuid = fixed_uuid(81'401),
-            .wallclock_unix_ns = FIXED_COMMIT_NS + 81'400,
-        };
-        commit.extra_reader_capabilities.set(10);
-        commit.extra_writer_capabilities.set(10);
-        create_raw_fixture(path, 81'402, commit);
-
-        EXPECT_EQ(ProjectReader::classify(path).state, OpenState::UnsupportedNewer);
-        auto reader = ProjectReader::open(path);
-        ASSERT_FALSE(reader);
-        EXPECT_EQ(reader.error().code(), lfs::ErrorCode::Unsupported);
-        EXPECT_NE(reader.error().user_message().find("newer LichtFeld"),
-                  std::string_view::npos);
-        EXPECT_NE(lfs::format_for_developer(reader.error()).find("unsupported bits"),
-                  std::string::npos);
-        auto document = ProjectDocument::open(path);
-        ASSERT_FALSE(document);
-        EXPECT_EQ(document.error().code(), lfs::ErrorCode::Unsupported);
-
-        ReaderOptions inspect_options;
-        inspect_options.allow_unsupported_inspection = true;
-        auto inspection = require_result(ProjectReader::open(path, inspect_options));
-        EXPECT_EQ(inspection.open_state(), OpenState::UnsupportedNewer);
-        EXPECT_TRUE(inspection.commit().required_reader_capabilities.contains(10));
-        EXPECT_TRUE(inspection.commit().required_writer_capabilities.contains(10));
-        ASSERT_FALSE(inspection.chunks().empty());
-        auto payload = inspection.read_chunk(inspection.chunks().front());
-        ASSERT_FALSE(payload);
-        EXPECT_EQ(payload.error().code(), lfs::ErrorCode::Unsupported);
     }
 
     TEST(P8CompatibilityTest,

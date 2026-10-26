@@ -11,7 +11,7 @@ from . import rml_widgets as w
 from .default_reset import LabelDefaultReset, values_match
 from .rendering_defaults import confirm_apply_defaults
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .collision_rendering import CollisionRendering
+from .collision_panel import CollisionPanel
 from .selection_groups import GROUPS_LIST_ID, SelectionGroupsSection
 from .types import Panel
 from .selected_splat import active_splat_node
@@ -341,7 +341,7 @@ class RenderingPanel(Panel):
             commit_value=self._commit_render_setting,
         )
         self._reactive_binding = PanelStateBinding()
-        self._collision = CollisionRendering()
+        self._collision = CollisionPanel()
 
     def capture_chrome(self):
         return {"version": 2, "collapsed": sorted(self._collapsed)}

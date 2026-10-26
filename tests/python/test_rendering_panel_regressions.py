@@ -6,6 +6,8 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
+from unittest.mock import MagicMock
+from test_depth_view_scrub import attach_fields, Event
 
 import pytest
 
@@ -384,10 +386,9 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
 
 
 def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_panel_module, monkeypatch):
-    from lfs_plugins import collision_panel, collision_rendering
+    from lfs_plugins import collision_panel
     from lfs_plugins.panels import PANEL_SPECS, _register_lazy_panel
-    from unittest.mock import MagicMock
-    lf = collision_rendering.lf
+    lf = collision_panel.lf
     monkeypatch.setattr(lf.ui, "Panel", collision_panel.Panel, raising=False)
     monkeypatch.setattr(lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
     monkeypatch.setattr(lf, "register_class", lambda *_: None, raising=False)
@@ -396,7 +397,7 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     monkeypatch.setattr(lf.ui, "get_panel_object", lambda _: panel, raising=False)
     state = {"has_collision": True, "target_uuid": "first", "target_name": "Floor"}
     monkeypatch.setattr(lf, "get_collision_state", lambda: dict(state))
-    collision_rendering.open_collision(export=True)
+    lf.ui.get_panel_object("lfs.collision").show(export=True)
     model = _BindingModelStub()
     panel.on_bind_model(_BindingContextStub(model))
     controls = panel._load()
@@ -405,14 +406,12 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     assert set(model.bindings) == {"collision_automatic", "collision_cleanup"}
     assert not bindings["collision_source"]() and bindings["collision_target"]() == "Floor"
     state.update(target_uuid="second", target_name="Wall")
-    for stage, key in (("Preparing collision", "gallery.transfer.phase.preparing"),
-                       ("Sorting collision records", "gallery.transfer.phase.processing"),
-                       ("Publishing voxel metadata", "export.export"), ("Collision ready", "status.ready")):
-        state.update(source_name="Selected", active=stage == "Sorting collision records", stage=stage, progress=.4)
+    for stage in ("Preparing", "Processing", "Exporting", "Ready"):
+        state.update(source_name="Selected", active=stage == "Processing", stage=stage, progress=.4)
         assert panel.on_update(None)
         assert bindings["collision_source"]() == "Selected"
         assert bindings["collision_active"]() == state.get("active", False)
-        assert bindings["collision_status"]().startswith(key)
+        assert bindings["collision_status"]().startswith(stage)
     other.show()
     assert panel.export_target == ("first", "Floor") and other.export_target is None
     model.handle.dirty_fields.clear()
@@ -420,7 +419,7 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     assert not model.handle.dirty_fields
     for export in (True, False):
         model.handle.dirty_fields.clear()
-        collision_rendering.open_collision(export=export)
+        lf.ui.get_panel_object("lfs.collision").show(export=export)
         assert model.handle.dirty_fields == ["__all__"] and model.func_bindings["export_mode"]() is export
     controls.values.update(size=.005, opacity=.2, area=3., automatic=True)
     for event, name, args in (("generate", "generate_collision", (.005, .2, True, True, 3.)),
@@ -437,7 +436,7 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
         controls.values.update(changes)
         if changes == {"area": 3}:
             controls.state["resolved_voxel_size"] = 0
-        assert controls.resolved_size() == "collision.size_pending"
+        assert controls.resolved_size() == "projects.gallery.review.estimate_pending"
     monkeypatch.setattr(controls, "mount", lambda doc: None)
     panel.on_mount(SimpleNamespace(get_element_by_id=lambda _: None))
     model.handle.dirty_fields.clear()
@@ -841,3 +840,81 @@ def test_outline_new_project_defaults_reset_without_applying_to_scene(
     assert section._default_reset._apply_value(prop, value)
     assert prop not in section._text
     assert saved[prop] == pytest.approx(default)
+
+
+@pytest.fixture
+def controls(rendering_panel_module, monkeypatch):
+    from lfs_plugins import collision_panel as module
+    lf = MagicMock()
+    lf.ui.tr.side_effect = lambda key: key
+    lf.get_collision_state.return_value = {"walk_settings": (.5, .1, .2, 4.)}
+    lf.get_collision_state.side_effect = lambda: dict(lf.get_collision_state.return_value)
+    lf.set_walk_settings.side_effect = lambda *settings: lf.get_collision_state.return_value.update(walk_settings=settings)
+    monkeypatch.setattr(module, "lf", lf)
+    monkeypatch.setitem(sys.modules, "lichtfeld", lf)
+    return module.CollisionPanel()
+
+
+def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
+    from lfs_plugins import collision_panel as module
+    controls.update()
+    scrub, prop = controls.scrubs, "step"
+    keys = attach_fields(scrub)
+    field = scrub._fields[prop]
+    field.input_el.blur = lambda: scrub._on_input_blur(prop, None)
+    enter = Event(key_identifier=keys.KI_RETURN)
+    scrub._on_field_keydown(prop, enter)
+    for draft in ("0", "0.", "0.35"):
+        field.input_el.set_attribute("value", draft)
+        scrub._on_input_change(prop, Event())
+        assert controls.values["step"] == .2
+    module.lf.get_collision_state.return_value = {"walk_settings": (.6, .15, .25, 5.)}
+    controls.update()
+    assert field.input_el.get_attribute("value") == "0.35"
+    scrub._on_input_change(prop, Event(linebreak=True))
+    assert not field.editing
+    module.lf.set_walk_settings.assert_called_once_with(.6, .15, .35, 5.)
+    blocked = RuntimeError("The edited Walk capsule does not fit")
+    blocked.message_key = "collision.walk_blocked"
+    blocked.message_details = "/tmp/collision.walk_no_support/64000001.bin"
+    module.lf.set_walk_settings.side_effect = blocked
+    for draft, error in ((".9", f"{blocked.message_key}\n{blocked.message_details}"),
+                         ("nan", "preferences.viewport_defaults_invalid")):
+        scrub._on_field_keydown(prop, enter)
+        field.input_el.set_attribute("value", draft)
+        scrub._on_input_change(prop, Event(linebreak=True))
+        assert controls.values["step"] == .35
+        assert controls.values["error"] == error and not field.editing
+    scrub._on_field_keydown(prop, enter)
+    assert field.editing
+    assert controls.localized_error(RuntimeError(blocked.message_details)) == blocked.message_details
+
+
+@pytest.mark.parametrize("approved,choice,error", [
+    (False, "common.cancel", ""), (False, "export.export", ""),
+    (True, None, ""), (False, None, ""), (True, None, "destination denied")])
+def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, approved, choice, error):
+    from lfs_plugins import collision_panel as module
+    path = tmp_path / "collision.voxel.json"
+    path.with_suffix(".bin").write_bytes(b"old")
+    controls.export_target = ("first", "Floor")
+    def pick(*args, **kwargs):
+        assert args == ("collision.voxel.json",) and not kwargs
+        controls.export_target = ("second", "Wall")
+        return (str(path) if approved or choice else "", approved)
+    module.lf.ui.save_json_file_dialog_with_confirmation.side_effect = pick
+    if error:
+        module.lf.export_collision.side_effect = RuntimeError(error)
+    controls.run(controls.export)
+    if choice:
+        module.lf.ui.confirm_dialog.assert_called_once()
+        prompt = module.lf.ui.confirm_dialog.call_args.args
+        assert prompt[1] == f"collision.replace_pair\n{path}\n{path.with_suffix('.bin')}"
+        controls.export_target = ("third", "Ceiling")
+        prompt[-1](choice)
+    else:
+        module.lf.ui.confirm_dialog.assert_not_called()
+    expected = [("first", str(path))] if approved or choice == "export.export" else []
+    assert [call.args for call in module.lf.export_collision.call_args_list] == expected
+    assert controls.values["error"] == error
+    assert path.with_suffix(".bin").read_bytes() == b"old" and not path.exists()

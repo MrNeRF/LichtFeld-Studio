@@ -65,6 +65,7 @@ namespace lfs::vis {
             [[nodiscard]] bool collisionWorkerActive() const;
             void dropSceneReplacement();
             bool deferSceneReplacement(std::move_only_function<void()> replacement);
+            [[nodiscard]] bool sceneReplacementRequired() const { return collision_worker_.valid() || collision_replacement_; }
             [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
             [[nodiscard]] float collisionResolvedSize() const;

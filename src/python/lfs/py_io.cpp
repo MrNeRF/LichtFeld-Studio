@@ -353,12 +353,9 @@ namespace lfs::python {
                 if (!matrix.empty()) {
                     if (matrix.size() != 16)
                         throw_invalid_io_argument("transform must contain 16 column-major affine matrix values");
-                    for (int c = 0; c < 4; ++c)
-                        for (int r = 0; r < 4; ++r)
-                            transform[c][r] = matrix[c * 4 + r];
+                    std::memcpy(&transform[0][0], matrix.data(), sizeof(transform));
                 }
-                auto binary = std::filesystem::path(path);
-                binary.replace_extension(".bin");
+                const auto binary = std::filesystem::path(path).replace_extension(".bin");
                 if (!overwrite && (core::native_fs::exists(path) || core::native_fs::exists(binary)))
                     throw_invalid_io_argument("Voxel pair already exists; approve replacement with overwrite=True");
                 PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};

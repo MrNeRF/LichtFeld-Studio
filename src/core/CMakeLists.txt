@@ -80,7 +80,6 @@ set(CORE_SOURCES
         argument_parser.cpp
         camera.cpp
         collision.cpp
-        collision_volume.cpp
         collision_voxelization.cpp
         checkpoint_format.cpp
         crop_polygon.cpp

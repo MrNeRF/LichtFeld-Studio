@@ -1757,6 +1757,17 @@ namespace lfs::vis {
         }
 
         bool createOverlayPipeline(VkFormat color_format, VkFormat depth_format, bool collision = false) {
+            if (collision) {
+                collision_pipeline_attempted = true;
+                VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                VkDescriptorSetLayoutCreateInfo descriptors{};
+                descriptors.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+                descriptors.bindingCount = 1;
+                descriptors.pBindings = &binding;
+                if (!vk_try_bool(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &collision_layout),
+                                 "vkCreateDescriptorSetLayout", "Collision preview descriptor layout"))
+                    return false;
+            }
             if (!collision && (context == nullptr || !context->hasFillModeNonSolid())) {
                 // VK_POLYGON_MODE_LINE is optional. Keep the pass usable on
                 // conformant devices that do not expose fillModeNonSolid; the UI
@@ -2561,19 +2572,6 @@ namespace lfs::vis {
             return true;
         }
 
-        bool createCollisionPipeline() {
-            collision_pipeline_attempted = true;
-            VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-            VkDescriptorSetLayoutCreateInfo descriptors{};
-            descriptors.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            descriptors.bindingCount = 1;
-            descriptors.pBindings = &binding;
-            if (!vk_try_bool(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &collision_layout),
-                             "vkCreateDescriptorSetLayout", "Collision preview descriptor layout"))
-                return false;
-            return createOverlayPipeline(color_format_cached, depth_format_cached, true);
-        }
-
         void prepareCollision(const VulkanMeshPassParams& params) {
             if (collision_frames.size() <= params.frame_slot)
                 collision_frames.resize(params.frame_slot + 1);
@@ -2581,7 +2579,7 @@ namespace lfs::vis {
             for (const auto& item : params.items) {
                 if (!item.collision)
                     continue;
-                if (!collision_pipeline_attempted && !createCollisionPipeline())
+                if (!collision_pipeline_attempted && !createOverlayPipeline(color_format_cached, depth_format_cached, true))
                     LOG_ERROR("Collision preview pipeline failed; other rendering is unaffected");
                 if (!collision_pipeline)
                     break;
@@ -2635,7 +2633,8 @@ namespace lfs::vis {
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             VkDescriptorPoolCreateInfo pool{};
             pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pool.maxSets = pool.poolSizeCount = 1;
+            pool.maxSets = 1;
+            pool.poolSizeCount = 1;
             pool.pPoolSizes = &size;
             if (!vk_try_bool(vkCreateDescriptorPool(device, &pool, nullptr, &frame.pool),
                              "vkCreateDescriptorPool", "Collision preview descriptors"))

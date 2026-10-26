@@ -2,22 +2,17 @@
 import json
 
 import pytest
+from test_splat_data_color_range import _load_splat
 
 
 @pytest.mark.gpu
 def test_generate_save_and_decode_voxels(lf, numpy, gpu_available, tmp_path):
     if not gpu_available:
         pytest.skip("CUDA device unavailable")
-    fields = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
-              "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
-    point = numpy.zeros(1, dtype=[(name, "<f4") for name in fields])
-    point["opacity"], point["rot_0"] = 2, 1
-    for name in ("scale_0", "scale_1", "scale_2"):
-        point[name] = numpy.log(.02)
+    splats = _load_splat(lf, tmp_path)
+    splats.scaling_raw.fill_(float(numpy.log(.02)))
     source = tmp_path / "small.ply"
-    header = "ply\nformat binary_little_endian 1.0\nelement vertex 1\n"
-    header += "".join(f"property float {name}\n" for name in fields) + "end_header\n"
-    source.write_bytes(header.encode() + point.tobytes())
+    lf.io.save_ply(splats, source)
     settings = lf.io.VoxelSettings()
     settings.voxel_size = .05
     volume = lf.io.generate_voxels(source, settings)

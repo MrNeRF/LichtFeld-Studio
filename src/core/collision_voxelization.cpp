@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/checked_arithmetic.hpp"
 #include "core/collision.hpp"
-#include "core/collision_error.hpp"
 #include "core/cuda/morton.cuh"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -27,8 +26,7 @@ namespace lfs::core::cuda {
         template <class T>
         struct Buffer {
             tensor_ops::ScopedDeviceBuffer storage;
-            Buffer() = default;
-            explicit Buffer(size_t n) { reserve(n); }
+            explicit Buffer(size_t n = 0) { reserve(n); }
             T* data() const { return storage.template as<T>(); }
             size_t capacity() const { return storage.size() / sizeof(T); }
             void reserve(size_t n) {
@@ -107,7 +105,7 @@ namespace lfs::core {
     CollisionVolume generateCollision(const CollisionSource& s, CollisionSettings settings, std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution, std::function<void(uint64_t)> mixed_blocks) {
         using namespace cuda;
         settings.validate();
-        reportProgress(stop, progress, 0, "Preparing collision geometry");
+        reportProgress(stop, progress, 0, collisionStage("gallery.transfer.phase.preparing", "Preparing collision geometry"));
         if (!s.means.is_valid() || s.means.ndim() != 2 || s.means.shape()[1] != 3)
             throw std::invalid_argument("Collision means must have shape [N,3]");
         const auto total = s.means.shape()[0];
@@ -140,7 +138,7 @@ namespace lfs::core {
         }
         if (errors.to(Device::CPU).ptr<uint32_t>()[0])
             throw collisionError("collision.geometry_nonfinite", "Non-finite Gaussian geometry: source or transformed positions, scales, rotations or opacity are not representable", ErrorCode::InvalidArgument);
-        reportProgress(stop, progress, .04f, "Filtering collision sources");
+        reportProgress(stop, progress, .04f, collisionStage("collision.cleanup", "Filtering collision sources"));
         std::array<float, 3> fences{INFINITY, INFINITY, INFINITY};
         float thin = -INFINITY;
         for (int a = 0; a < 3; ++a) {
@@ -267,7 +265,7 @@ namespace lfs::core {
         auto visit = [&](auto&& self, int depth, int edge, uint32_t region_count) -> void {
             const bool split = edge > 4;
             for (uint32_t offset = 0; offset < region_count;) {
-                reportProgress(stop, progress, .2f + .72f * float(std::clamp(completed / volume, 0., 1.)), "Voxelizing collision");
+                reportProgress(stop, progress, .2f + .72f * float(std::clamp(completed / volume, 0., 1.)), collisionStage("new_project.create", "Voxelizing collision"));
                 const auto batch = std::min(region_count - offset, split ? max_regions / 8 : 65536u);
                 output.reserve(split ? size_t(batch) * 8 : batch);
                 LFS_CUDA_CHECK(cudaMemsetAsync(count.data(), 0, 2 * sizeof(uint32_t), stream));
@@ -296,7 +294,7 @@ namespace lfs::core {
             }
         };
         visit(visit, 0, v.edge, 1);
-        reportProgress(stop, progress, .93f, "Sorting collision records");
+        reportProgress(stop, progress, .93f, collisionStage("gallery.transfer.phase.processing", "Sorting collision records"));
         regions.clear();
         gs = {};
         bvh = {};
@@ -354,9 +352,9 @@ namespace lfs::core {
                 v.words[i] = base + 2;
                 const int shift = 3 * (std::countr_zero(unsigned(size)) - 3);
                 for (int c = 0; c < 8; ++c) {
-                    auto next = begin;
-                    while (next < end && ((bricks[next].morton >> shift) & 7) == uint64_t(c))
-                        ++next;
+                    const auto next = std::partition_point(bricks.begin() + begin, bricks.begin() + end,
+                                                           [&](const auto& brick) { return ((brick.morton >> shift) & 7) == uint64_t(c); }) -
+                                      bricks.begin();
                     self(self, base + c, size / 2, begin, next);
                     begin = next;
                 }
@@ -366,12 +364,12 @@ namespace lfs::core {
                 }
             }
         };
-        reportProgress(stop, progress, .96f, "Assembling occupancy");
+        reportProgress(stop, progress, .96f, collisionStage("gallery.transfer.phase.processing", "Assembling occupancy"));
         build(build, 0, v.edge, 0, bricks.size());
         if (!v.occupied_count)
             throw collisionError("collision.empty", "No occupied cells; lower opacity or check the source");
         v.validate();
-        reportProgress(stop, progress, 1, "Collision ready");
+        reportProgress(stop, progress, 1, collisionStage("status.ready", "Collision ready"));
         return v;
     }
 } // namespace lfs::core

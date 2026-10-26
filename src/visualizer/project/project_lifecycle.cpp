@@ -2824,9 +2824,11 @@ namespace lfs::vis::project {
         return gui && gui->asyncTasks().sceneReplacementPending();
     }
 
-    bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()> retry) {
+    bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry) {
         auto* gui = viewer_.getGuiManager();
-        return gui && gui->asyncTasks().deferSceneReplacement([retry = std::move(retry)]() mutable {
+        if (!gui || !gui->asyncTasks().sceneReplacementRequired())
+            return false;
+        return gui->asyncTasks().deferSceneReplacement([retry = std::move(retry)]() mutable {
             if (auto result = retry(); !result) {
                 LOG_ERROR("Deferred project switch failed: {}", developerError(result.error()));
                 publishProjectToast(std::move(result).error(), gui::error_op::kOpenProject);
@@ -8060,7 +8062,6 @@ namespace lfs::vis::project {
 
     struct ProjectLifecycle::PreparedOpen {
         std::shared_ptr<ProjectDocument> candidate;
-        std::filesystem::path normalized;
         std::unique_ptr<lfs::core::Scene> shell;
         PreparedGuiSessionRestore session;
         lfs::io::project::ParameterManagerSnapshot parameters;
@@ -8182,16 +8183,17 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        auto prepared = std::make_shared<PreparedOpen>(
-            std::move(candidate), std::move(*normalized), std::move(*shell), std::move(*session),
-            std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
-            std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at});
-        auto commit = [this, prepared = std::move(prepared)] { return commitOpen(std::move(*prepared)); };
-        return deferCollisionSwitch(commit) ? lfs::Result<void>{} : commit();
+        std::move_only_function<lfs::Result<void>()> commit =
+            [this, prepared = PreparedOpen{
+                       std::move(candidate), std::move(*shell), std::move(*session),
+                       std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
+                       std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
+        return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
     }
 
-    lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen prepared) {
-        auto& [candidate, normalized, shell, session, parameters, discard_master, disposition, after_open, stages] = prepared;
+    lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen&& prepared) {
+        auto& [candidate, shell, session, parameters, discard_master, disposition, after_open, stages] = prepared;
+        const auto& normalized = candidate->source_path();
         const auto& [started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at] = stages;
         if (auto preflight = preflightSwitch(disposition); !preflight)
             return preflight;
@@ -8212,7 +8214,7 @@ namespace lfs::vis::project {
         const auto opening_stage = std::format(
             "Opening {}…",
             lfs::core::path_to_utf8(
-                normalized.filename()));
+                normalized->filename()));
         project_open_job_ = viewer_.jobs().init(
             JobType::ProjectOpen, opening_stage);
         if (!project_open_job_) {
@@ -8308,7 +8310,7 @@ namespace lfs::vis::project {
         const auto shell_selected_nodes =
             selectedNodeUuids(viewer_);
         const bool opened_scratch =
-            isScratchPath(normalized);
+            isScratchPath(*normalized);
         if (!opened_scratch) {
             removeScratchAutosave();
             const std::lock_guard lock(
@@ -8316,7 +8318,7 @@ namespace lfs::vis::project {
             rememberProject(
                 settings_,
                 candidate->project_uuid(),
-                normalized);
+                *normalized);
         }
         if (!opened_scratch) {
             if (auto persisted = persistSettings();
@@ -8365,7 +8367,7 @@ namespace lfs::vis::project {
             };
         LOG_DEBUG(
             "Project shell stages: path={} normalize={:.3f} ms document_open={:.3f} ms session_restore={:.3f} ms parameters={:.3f} ms shell_stage={:.3f} ms shell_commit={:.3f} ms lifecycle_install={:.3f} ms hydration_launch={:.3f} ms total={:.3f} ms",
-            lfs::core::path_to_utf8(normalized),
+            lfs::core::path_to_utf8(*normalized),
             milliseconds(started, normalized_at),
             milliseconds(
                 normalized_at,
@@ -8392,7 +8394,7 @@ namespace lfs::vis::project {
         LOG_INFO(
             "Project shell ready in {:.3f} ms: {} (generation {}, {} payload units)",
             shell_ms,
-            lfs::core::path_to_utf8(normalized),
+            lfs::core::path_to_utf8(*normalized),
             candidate->generation(),
             candidate->payload_states().size());
         resetMaintenanceClocks();

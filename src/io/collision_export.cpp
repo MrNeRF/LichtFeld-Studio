@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "io/collision_export.hpp"
-#include "core/collision_error.hpp"
+#include "core/collision.hpp"
 #include "core/logger.hpp"
 #include "io/atomic_output.hpp"
 #include "io/loader.hpp"
@@ -100,12 +100,11 @@ namespace lfs::io {
     }
     void exportCollision(const core::CollisionVolume& v, const std::filesystem::path& path,
                          const glm::mat4& world, std::stop_token stop, ExportProgressCallback progress) try {
-        core::reportProgress(stop, progress, 0, "Preparing voxel export");
+        core::reportProgress(stop, progress, 0, core::collisionStage("runtime.export_preparing_data", "Preparing voxel export"));
         if (!core::path_to_utf8(path.filename()).ends_with(".voxel.json"))
             throw core::collisionError("collision.export_suffix", "Voxel metadata output must end in .voxel.json: " + core::path_to_utf8(path),
                                        lfs::ErrorCode::InvalidArgument, core::path_to_utf8(path));
-        auto binary = path;
-        binary.replace_extension(".bin");
+        const auto binary = std::filesystem::path(path).replace_extension(".bin");
         glm::mat4 flip(1);
         flip[0][0] = flip[1][1] = -1;
         const auto transform = flip * world;
@@ -187,7 +186,7 @@ namespace lfs::io {
         for (size_t i = 0; i < queue.size(); ++i) {
             const auto item = queue[i];
             completed = std::max(completed, .1f + .6f * float(i) / queue.size());
-            core::reportProgress(stop, progress, completed, "Packing voxel tree");
+            core::reportProgress(stop, progress, completed, core::collisionStage("export.export", "Packing voxel tree"));
             if (item.state == 1) {
                 nodes[i] = 0xff000000u;
             } else if (item.size == 4) {
@@ -240,7 +239,7 @@ namespace lfs::io {
             for (const auto* values : {&nodes, &leaves})
                 for (size_t i = 0; i < values->size(); ++i) {
                     if (!(i % 16384))
-                        core::reportProgress(stop, progress, .8f, "Writing voxel binary");
+                        core::reportProgress(stop, progress, .8f, core::collisionStage("export.export", "Writing voxel binary"));
                     const auto w = (*values)[i];
                     const std::array<char, 4> bytes{char(w), char(w >> 8), char(w >> 16), char(w >> 24)};
                     out.write(bytes.data(), bytes.size());
@@ -250,7 +249,7 @@ namespace lfs::io {
         const std::array outputs{&bin, &json};
         std::array<std::filesystem::path, 2> backups;
         std::array<bool, 2> installed{};
-        core::reportProgress(stop, progress, .9f, "Publishing voxel pair");
+        core::reportProgress(stop, progress, .9f, core::collisionStage("export.export", "Publishing voxel pair"));
         try {
             for (int i = 0; i < 2; ++i)
                 if (const auto& target = outputs[i]->output_path(); fs::exists(target)) {
@@ -263,7 +262,7 @@ namespace lfs::io {
                 }
             for (int i = 0; i < 2; ++i) {
                 if (i)
-                    core::reportProgress(stop, progress, .95f, "Publishing voxel metadata");
+                    core::reportProgress(stop, progress, .95f, core::collisionStage("export.export", "Publishing voxel metadata"));
                 if (auto result = outputs[i]->commit(); !result)
                     throw exportError("collision.export_publish", result.error(), core::path_to_utf8(outputs[i]->output_path()));
                 installed[i] = true;

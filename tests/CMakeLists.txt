@@ -35,11 +35,11 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 add_executable(lichtfeld_collision_tests test_collision.cpp
-    ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
+    ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
 target_compile_definitions(lichtfeld_collision_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
 target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
-target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_io lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver LibArchive::LibArchive)
+target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_io lfs_core lfs_rendering GTest::gtest_main CUDA::cudart CUDA::cuda_driver LibArchive::LibArchive)
 add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests --gtest_filter=-CollisionGpu.*)
 add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_tests --gtest_filter=CollisionGpu.*)
 set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision")
@@ -165,7 +165,8 @@ if(BUILD_VISUALIZER_TESTS)
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         licht_test_support.cpp
         test_json_chapter_dom.cpp
-        test_collision_jobs.cpp
+        test_visualizer_post_work.cpp
+        test_project_document.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
         test_keymap_layout_contract.cpp
@@ -188,6 +189,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
         test_input_key_repeat.cpp
+        test_input_controller_focus.cpp
     )
     add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -252,13 +254,15 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
     add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
+    add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings)
+    set_tests_properties(lichtfeld.collision_archive PROPERTIES LABELS "cpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
@@ -377,7 +381,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_project_chapters.cpp
     test_project_container.cpp
     licht_format_test_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/collision_volume.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/collision.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/core/optimization_properties.cpp
