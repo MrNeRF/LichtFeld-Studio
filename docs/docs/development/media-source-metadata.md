@@ -361,6 +361,48 @@ DTDs are rejected before processing their internal/external subsets; external re
 
 Schema references: [Adobe TIFF](https://developer.adobe.com/xmp/docs/xmp-namespaces/tiff/), [Adobe EXIF](https://developer.adobe.com/xmp/docs/xmp-namespaces/exif/), [Expat API](https://libexpat.github.io/doc/api/latest/). Expat is an explicit media dependency using the existing 2.9.0 version override and standard vcpkg port. Its registry selection follows the existing security pins; no separate registry routing is added.
 
+## DJI photo source properties
+
+The image summary also interprets selected properties in the exact
+`http://www.dji.com/drone-dji/1.0/` namespace. They remain source declarations
+under `vendor.dji.*` semantics, independently of standard EXIF/XMP GPS facts.
+The parser does not select a decoder from the camera's manufacturer name.
+The observed DJI `rdf:about="DJI Meta Data"` label is accepted specifically for
+these vendor properties and retained as `xmp_property.rdf_about`. Standard
+properties in that named description are not promoted to unqualified image
+facts. Other nonempty RDF subjects and description qualifiers retain the
+existing Unsupported behavior. A named description cannot supply an Extended
+XMP association or participate in cross-portion altitude derivation.
+
+| Properties | Summary semantics and units |
+| --- | --- |
+| `GpsLatitude`, `GpsLongitude`, historical `GpsLongtitude` | `vendor.dji.position.latitude/longitude`, signed decimal degrees within physical bounds |
+| `AbsoluteAltitude`, `RelativeAltitude` | `vendor.dji.altitude.absolute/relative`, finite signed metres; zero is a valid value |
+| `FlightRollDegree`, `FlightPitchDegree`, `FlightYawDegree` | `vendor.dji.flight.roll/pitch/yaw`, finite source angles in degrees |
+| `GimbalRollDegree`, `GimbalPitchDegree`, `GimbalYawDegree` | `vendor.dji.gimbal.roll/pitch/yaw`, finite source angles in degrees |
+| `GpsStatus`, `AltitudeType`, `Version` | `vendor.dji.gps.status`, `vendor.dji.altitude.type`, `vendor.dji.version`, source text without status normalization |
+| `SurveyingMode`, `CamReverse` | `vendor.dji.surveying_mode`, `vendor.dji.camera.reverse`, unitless integer flags 0/1; other nonnegative modes remain Unsupported with their original text |
+
+Present means the declared scalar passed its syntax and range checks. It does
+not establish a valid GNSS fix, a vertical datum, a camera optical center, an
+exposure epoch or a usable photogrammetric pose. Those qualifications depend on
+the model, metadata version and accompanying source properties. The summary
+does not convert heights, normalize angles or apply camera/gimbal reversal.
+Flight and gimbal observations remain separate; unknown status strings are
+preserved rather than interpreted as RTK or a successful fix.
+
+Equal longitude aliases agree; differing or invalid observations flag that
+vendor semantic using the existing conflict policy. Different standard and
+vendor coordinates do not conflict automatically, since their measured subject
+and epoch may differ. Source handles and namespace/property/description/ordinal
+provenance retain each occurrence. Existing parser, output and text budgets
+apply to these properties too. Unselected DJI properties remain available in
+the original XMP bytes. Their presence does not qualify every DJI device,
+MakerNote, video telemetry format, RTK profile or calibration representation.
+
+Format reference: DJI Media File Metadata Whitepaper, Part 2, sections 3.3.1–3.3.17,
+linked from the [official DJI announcement](https://github.com/dji-sdk/Payload-SDK-Doc/blob/ca93b6470fe8e157550f70ed16ffd8c4d2b5af3a/source/introduction/announcement.md).
+
 ## JPEG Extended XMP interpretation
 
 The existing image summary and `source-metadata` CLI associate JPEG Extended XMP with its Standard XMP packet using `xmpNote:HasExtendedXMP` in the `http://ns.adobe.com/xmp/note/` namespace. The link is one simple attribute or property element, captured with a separate 64-byte bound and validated as a 32-character uppercase hexadecimal identifier after XML whitespace trimming. The collector and interpreter share `source_extended_xmp_segment`, a checked borrowed APP1 framing view; the interpreter adds no JPEG file scanner.

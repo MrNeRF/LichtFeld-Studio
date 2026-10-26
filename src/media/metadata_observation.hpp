@@ -34,6 +34,8 @@ namespace lfs::media {
         const XmpPropertyName* field = nullptr;
         std::size_t description = 0;
         std::size_t ordinal = 0;
+        // Empty for an unqualified image; otherwise a static supported subject label.
+        std::string_view subject;
     };
     struct XmpFragmentInput {
         MetadataRecordHandle source;
@@ -91,7 +93,8 @@ namespace lfs::media {
     // Raw entries stay available; absence never becomes a fabricated zero value.
     [[nodiscard]] LFS_MEDIA_API Result<MetadataSummary> summarizeSourceMetadata(
         const SourceMetadataCatalog&, std::size_t max_facts = 4096, std::size_t max_text_bytes = 64 * 1024);
-    // Interprets standard camera/optics/GPS/civil-time fields already collected.
+    // Interprets collected standard camera/optics/GPS/civil-time fields and
+    // selected DJI photo declarations, with separate vendor semantics.
     // No file reads, timezone inference, datum conversion or image transforms.
     [[nodiscard]] LFS_MEDIA_API Result<MetadataSummary> summarizeImageMetadata(
         const SourceMetadataCatalog&, std::size_t max_facts = 4096, std::size_t max_text_bytes = 64 * 1024);
