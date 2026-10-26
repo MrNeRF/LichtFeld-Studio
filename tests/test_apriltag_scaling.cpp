@@ -177,22 +177,22 @@ TEST(AprilTagScalingTest, LensDistortionRoundTripMatchesModels) {
     const glm::dvec2 pt{0.23, -0.17};
 
     const std::array<double, 5> pinhole_coeffs{-0.12, 0.03, -0.005, 0.001, -0.002};
-    const glm::dvec2 pinhole_dist = applyForwardDistortion(pt, LensModel::Pinhole, pinhole_coeffs);
-    const auto pinhole_inv = invertDistortion(pinhole_dist, LensModel::Pinhole, pinhole_coeffs);
+    const glm::dvec2 pinhole_dist = applyForwardDistortion(pt, lfs::core::CameraModelType::PINHOLE, pinhole_coeffs);
+    const auto pinhole_inv = invertDistortion(pinhole_dist, lfs::core::CameraModelType::PINHOLE, pinhole_coeffs);
     ASSERT_TRUE(pinhole_inv.has_value());
     EXPECT_NEAR(pinhole_inv->x, pt.x, 1e-7);
     EXPECT_NEAR(pinhole_inv->y, pt.y, 1e-7);
 
     const std::array<double, 4> fisheye_coeffs{0.05, -0.02, 0.004, -0.001};
-    const glm::dvec2 fisheye_dist = applyForwardDistortion(pt, LensModel::Fisheye, fisheye_coeffs);
-    const auto fisheye_inv = invertDistortion(fisheye_dist, LensModel::Fisheye, fisheye_coeffs);
+    const glm::dvec2 fisheye_dist = applyForwardDistortion(pt, lfs::core::CameraModelType::FISHEYE, fisheye_coeffs);
+    const auto fisheye_inv = invertDistortion(fisheye_dist, lfs::core::CameraModelType::FISHEYE, fisheye_coeffs);
     ASSERT_TRUE(fisheye_inv.has_value());
     EXPECT_NEAR(fisheye_inv->x, pt.x, 1e-7);
     EXPECT_NEAR(fisheye_inv->y, pt.y, 1e-7);
 
     const std::array<double, 10> thin_prism_coeffs{0.03, -0.01, 0.002, 0.0, 0.001, -0.001, 0.002, 0.0, -0.001, 0.0};
-    const glm::dvec2 tp_dist = applyForwardDistortion(pt, LensModel::ThinPrismFisheye, thin_prism_coeffs);
-    const auto tp_inv = invertDistortion(tp_dist, LensModel::ThinPrismFisheye, thin_prism_coeffs);
+    const glm::dvec2 tp_dist = applyForwardDistortion(pt, lfs::core::CameraModelType::THIN_PRISM_FISHEYE, thin_prism_coeffs);
+    const auto tp_inv = invertDistortion(tp_dist, lfs::core::CameraModelType::THIN_PRISM_FISHEYE, thin_prism_coeffs);
     ASSERT_TRUE(tp_inv.has_value());
     EXPECT_NEAR(tp_inv->x, pt.x, 1e-7);
     EXPECT_NEAR(tp_inv->y, pt.y, 1e-7);
@@ -443,7 +443,7 @@ TEST(AprilTagScalingTest, FinalFitReclassifiesInliersAndRechecksThresholds) {
 TEST(AprilTagScalingTest, OrthographicProjectionAndParallelRays) {
     auto view = makeSyntheticCamera(1, "ortho", {0, 0, 0}, {0, 0, 1},
                                     {0, -1, 0}, 1280, 960, 1000, 1000);
-    view.intrinsics.lens_model = LensModel::Ortho;
+    view.intrinsics.lens_model = lfs::core::CameraModelType::ORTHO;
     for (const double depth : {2.0, 4.0}) {
         const auto pixel = projectWorldPointToDetectedPixel(view, {1, 0, depth});
         ASSERT_TRUE(pixel);

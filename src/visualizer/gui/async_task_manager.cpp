@@ -1044,22 +1044,13 @@ namespace lfs::vis::gui {
                 std::string error;
                 try {
                     const auto progress = [this, job, stop](const std::size_t done, const std::size_t total, const std::string&) {
-                        jobs_.report(job, total ? 0.9f * static_cast<float>(done) / total : 0.0f);
+                        jobs_.report(job, total ? 0.9f * static_cast<float>(done) / total : 0.0f,
+                                     done == total ? LOC("runtime.apriltag_solving") : LOC("runtime.apriltag_scanning"));
                         return !stop.stop_requested() && !jobs_.cancelRequested(job);
                     };
-                    auto views = core::detectAprilTagsInSnapshot(apriltag_state_.snapshot.cameras,
-                                                                 options.detector_config, options.max_image_width, progress);
-                    if (!stop.stop_requested() && !jobs_.cancelRequested(job)) {
-                        jobs_.report(job, std::nullopt, LOC("runtime.apriltag_solving"));
-                        if (solve_scale) {
-                            apriltag_state_.report = core::solveAprilTagScaleFromViews(views, constraints, options);
-                        } else {
-                            apriltag_state_.report.triangulation = geometry::apriltag::triangulateAprilTags(views, options.triangulation_config);
-                            apriltag_state_.report.views = std::move(views);
-                            apriltag_state_.report.success = true;
-                        }
-                        error = apriltag_state_.report.error_message;
-                    }
+                    apriltag_state_.report = core::computeAprilTagSceneScale(
+                        apriltag_state_.snapshot, constraints, options, solve_scale, progress);
+                    error = apriltag_state_.report.error_message;
                 } catch (const std::exception& e) {
                     error = e.what();
                 } catch (...) {
@@ -1103,25 +1094,23 @@ namespace lfs::vis::gui {
             return;
         }
         auto* sm = viewer_->getSceneManager();
-        if (!sm || !apriltag_state_.snapshot.matches(sm->getScene())) {
+        if (!sm) {
             apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
             apriltag_state_.result.error_message = LOC("runtime.apriltag_scene_changed");
             jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
             return;
         }
         try {
-            if (apriltag_state_.apply_to_scene) {
-                apriltag_state_.result = cap::applyAprilTagScaleReport(*sm, apriltag_state_.snapshot,
-                                                                       std::move(apriltag_state_.report), apriltag_state_.targets);
-                if (!apriltag_state_.result.applied) {
-                    jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
-                    return;
-                }
-                if (auto* rm = viewer_->getRenderingManager()) {
+            apriltag_state_.result = cap::applyAprilTagScaleReport(*sm, apriltag_state_.snapshot,
+                                                                   std::move(apriltag_state_.report), apriltag_state_.targets, apriltag_state_.apply_to_scene);
+            if (!apriltag_state_.result.scale_report.success ||
+                (apriltag_state_.apply_to_scene && !apriltag_state_.result.applied)) {
+                jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+                return;
+            }
+            if (apriltag_state_.result.applied) {
+                if (auto* rm = viewer_->getRenderingManager())
                     rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, FrameReason::SceneChange);
-                }
-            } else {
-                apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
             }
             jobs_.report(state->handle, 1.0f, LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
             jobs_.completed(state->handle);
@@ -3528,7 +3517,7 @@ namespace lfs::vis::gui {
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_size, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator)]() mutable
-                                -> std::expected<lfs::core::Tensor, std::string> {
+                            -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();

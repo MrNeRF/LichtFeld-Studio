@@ -4,25 +4,18 @@
 
 #pragma once
 
+#include "core/camera_types.h"
 #include "geometry/apriltag_detector.hpp"
 
 #include <array>
-#include <cstdint>
 #include <glm/glm.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace lfs::geometry::apriltag {
-
-    enum class LensModel : std::uint8_t {
-        Pinhole = 0,
-        Ortho = 1,
-        Fisheye = 2,
-        Equirectangular = 3,
-        ThinPrismFisheye = 4,
-    };
 
     struct CameraIntrinsics {
         double fx = 0.0;
@@ -31,7 +24,7 @@ namespace lfs::geometry::apriltag {
         double cy = 0.0;
         int width = 0;
         int height = 0;
-        LensModel lens_model = LensModel::Pinhole;
+        core::CameraModelType lens_model = core::CameraModelType::PINHOLE;
         std::array<double, 12> distortion{};
         int num_distortion = 0;
     };
@@ -55,12 +48,12 @@ namespace lfs::geometry::apriltag {
 
     [[nodiscard]] glm::dvec2 applyForwardDistortion(
         const glm::dvec2& normalized_xy,
-        LensModel model,
+        core::CameraModelType model,
         std::span<const double> coeffs);
 
     [[nodiscard]] std::optional<glm::dvec2> invertDistortion(
         const glm::dvec2& distorted_xy,
-        LensModel model,
+        core::CameraModelType model,
         std::span<const double> coeffs);
 
     [[nodiscard]] std::optional<Ray3D> unprojectPixelToWorldRay(
@@ -159,6 +152,9 @@ namespace lfs::geometry::apriltag {
         std::span<const TriangulatedTag3D> tags,
         std::span<const TagDistanceConstraint> constraints,
         const ScaleSolverConfig& config = {});
+
+    [[nodiscard]] nlohmann::ordered_json triangulationToJson(const TriangulationSummary& summary);
+    [[nodiscard]] nlohmann::ordered_json scaleResultToJson(const ScaleSolveResult& result);
 
     struct ScaleCalibrationManifest {
         AprilTagFamily family = AprilTagFamily::Tag36h11;

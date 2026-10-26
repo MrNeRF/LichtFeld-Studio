@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -42,7 +41,6 @@ namespace lfs::geometry::apriltag {
         int hamming = 0;
         float decision_margin = 0.0f;
         glm::dvec2 center{0.0, 0.0};
-        std::array<glm::dvec2, 4> corners{};
     };
 
     struct GrayscaleBitmap {
@@ -64,10 +62,6 @@ namespace lfs::geometry::apriltag {
 
         AprilTagDetector(const AprilTagDetector&) = delete;
         AprilTagDetector& operator=(const AprilTagDetector&) = delete;
-        AprilTagDetector(AprilTagDetector&&) noexcept;
-        AprilTagDetector& operator=(AprilTagDetector&&) noexcept;
-
-        [[nodiscard]] const AprilTagDetectorConfig& config() const noexcept;
 
         [[nodiscard]] std::vector<TagDetection2D> detectGrayscale(
             const std::uint8_t* data,
@@ -88,4 +82,3 @@ namespace lfs::geometry::apriltag {
     };
 
 } // namespace lfs::geometry::apriltag
-

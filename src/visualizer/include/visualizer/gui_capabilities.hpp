@@ -158,15 +158,11 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         const core::AprilTagSceneSnapshot& snapshot,
         core::AprilTagSceneScaleReport report,
-        const std::vector<std::string>& requested_targets = {});
-
-    [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult autoScaleSceneWithAprilTags(
-        SceneManager& scene_manager,
-        std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
-        const core::AprilTagSceneScaleOptions& options = {},
         const std::vector<std::string>& requested_targets = {},
-        std::string_view undo_label = "transform.scale_apriltag",
-        const core::AprilTagProgressCallback& progress_callback = {});
+        bool apply_to_scene = true,
+        std::string_view undo_label = "transform.scale_apriltag");
+
+    [[nodiscard]] LFS_VIS_API nlohmann::json aprilTagResultJson(const AprilTagSceneApplyResult& result);
 
     [[nodiscard]] LFS_VIS_API std::expected<size_t, std::string> bakeNodeTransforms(
         SceneManager& scene_manager,

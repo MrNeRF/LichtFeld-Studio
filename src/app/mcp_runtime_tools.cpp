@@ -9,7 +9,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
-#include "rendering/coordinate_conventions.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
@@ -693,36 +693,9 @@ namespace lfs::app {
                     payload["error"] = state->error;
             }
             if (completed || failed) {
-                const auto& result = tasks.aprilTagScanResult();
-                const auto& report = result.scale_report;
-                auto output = json::parse(report.manifest_json, nullptr, false);
-                if (output.is_discarded())
-                    output = json::object();
-                output["success"] = completed && report.success;
-                output["applied"] = result.applied;
-                output["camera_count"] = report.views.size();
-                output["transformed_nodes"] = result.transformed_nodes;
-                output["manifest_saved_path"] = core::path_to_utf8(report.manifest_saved_path);
-                output["triangulated_tags"] = json::array();
-                for (const auto& tag : report.triangulation.tags) {
-                    const auto vis_pos = rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
-                    output["triangulated_tags"].push_back({
-                        {"tag_id", tag.tag_id},
-                        {"position", {tag.position.x, tag.position.y, tag.position.z}},
-                        {"visualizer_position", {vis_pos.x, vis_pos.y, vis_pos.z}},
-                        {"total_observations", tag.total_observations},
-                        {"inlier_observations", tag.inlier_observations},
-                        {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
-                        {"max_reprojection_error_px", tag.max_reprojection_error_px},
-                        {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
-                        {"camera_uids", tag.camera_uids},
-                        {"image_names", tag.image_names},
-                    });
-                }
-                output["rejected_tags"] = json::array();
-                for (const auto& tag : report.triangulation.rejected_tags) {
-                    output["rejected_tags"].push_back({{"tag_id", tag.tag_id}, {"total_observations", tag.total_observations}, {"max_parallax_angle_deg", tag.max_parallax_angle_deg}, {"reason", tag.reason}});
-                }
+                auto output = vis::cap::aprilTagResultJson(tasks.aprilTagScanResult());
+                output["success"] = completed && tasks.aprilTagScanResult().scale_report.success;
+                output.erase("manifest_json");
                 payload["result"] = std::move(output);
             }
             add_runtime_job_links(payload);

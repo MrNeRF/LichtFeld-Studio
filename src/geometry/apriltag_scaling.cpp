@@ -3,14 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "geometry/apriltag_scaling.hpp"
+#include "core/utc_time.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <ctime>
 #include <glm/gtc/matrix_transform.hpp>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <numbers>
+#include <numeric>
 #include <random>
 #include <set>
 
@@ -18,7 +19,6 @@ namespace lfs::geometry::apriltag {
 
     namespace {
 
-        constexpr double kRadToDeg = 180.0 / std::numbers::pi_v<double>;
         constexpr double kEpsilon = 1e-9;
 
         [[nodiscard]] bool isFiniteVec2(const glm::dvec2& v) noexcept {
@@ -142,53 +142,26 @@ namespace lfs::geometry::apriltag {
             return false;
         }
 
-        [[nodiscard]] glm::dvec2 toIntrinsicScalePixel(
-            const CameraObservationView& view,
-            const glm::dvec2& detected_pixel) noexcept {
-            glm::dvec2 pixel = detected_pixel;
-            if (view.detected_image_width > 0 && view.intrinsics.width > 0 &&
-                view.detected_image_width != view.intrinsics.width) {
-                pixel.x *= static_cast<double>(view.intrinsics.width) /
-                           static_cast<double>(view.detected_image_width);
-            }
-            if (view.detected_image_height > 0 && view.intrinsics.height > 0 &&
-                view.detected_image_height != view.intrinsics.height) {
-                pixel.y *= static_cast<double>(view.intrinsics.height) /
-                           static_cast<double>(view.detected_image_height);
-            }
-            return pixel;
-        }
-
-        [[nodiscard]] glm::dvec2 fromIntrinsicScalePixel(
-            const CameraObservationView& view,
-            const glm::dvec2& intrinsic_pixel) noexcept {
-            glm::dvec2 pixel = intrinsic_pixel;
-            if (view.detected_image_width > 0 && view.intrinsics.width > 0 &&
-                view.detected_image_width != view.intrinsics.width) {
-                pixel.x *= static_cast<double>(view.detected_image_width) /
-                           static_cast<double>(view.intrinsics.width);
-            }
-            if (view.detected_image_height > 0 && view.intrinsics.height > 0 &&
-                view.detected_image_height != view.intrinsics.height) {
-                pixel.y *= static_cast<double>(view.detected_image_height) /
-                           static_cast<double>(view.intrinsics.height);
-            }
-            return pixel;
+        [[nodiscard]] glm::dvec2 detectionPixelScale(const CameraObservationView& view) noexcept {
+            return {
+                view.detected_image_width > 0 && view.intrinsics.width > 0
+                    ? static_cast<double>(view.detected_image_width) / view.intrinsics.width
+                    : 1.0,
+                view.detected_image_height > 0 && view.intrinsics.height > 0
+                    ? static_cast<double>(view.detected_image_height) / view.intrinsics.height
+                    : 1.0,
+            };
         }
 
         struct TagRayObservation {
             const CameraObservationView* view = nullptr;
-            TagDetection2D detection{};
+            glm::dvec2 detected_pixel{0.0};
             Ray3D ray{};
         };
 
         [[nodiscard]] std::optional<glm::dvec3> intersectRaysLeastSquares(
             const std::span<const TagRayObservation> observations,
             const std::span<const std::size_t> active_indices) {
-            if (active_indices.size() < 2) {
-                return std::nullopt;
-            }
-
             glm::dmat3 A(0.0);
             glm::dvec3 b(0.0);
 
@@ -221,7 +194,7 @@ namespace lfs::geometry::apriltag {
                 for (std::size_t j = i + 1; j < active_indices.size(); ++j) {
                     const glm::dvec3& d1 = observations[active_indices[j]].ray.direction;
                     const double cos_angle = std::clamp(glm::dot(d0, d1), -1.0, 1.0);
-                    const double angle_deg = std::acos(cos_angle) * kRadToDeg;
+                    const double angle_deg = glm::degrees(std::acos(cos_angle));
                     max_angle_deg = std::max(max_angle_deg, angle_deg);
                 }
             }
@@ -231,55 +204,37 @@ namespace lfs::geometry::apriltag {
         [[nodiscard]] std::optional<double> computeViewReprojectionErrorPx(
             const TagRayObservation& obs,
             const glm::dvec3& world_point) {
-            if (!obs.view) {
-                return std::nullopt;
-            }
             const auto projected = projectWorldPointToDetectedPixel(*obs.view, world_point);
             if (!projected) {
                 return std::nullopt;
             }
-            return glm::length(*projected - obs.detection.center);
-        }
-
-        [[nodiscard]] std::string currentUtcTimestampIso8601() {
-            const std::time_t now = std::time(nullptr);
-            std::tm utc_tm{};
-#if defined(_WIN32)
-            gmtime_s(&utc_tm, &now);
-#else
-            gmtime_r(&now, &utc_tm);
-#endif
-            char buffer[32]{};
-            if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc_tm) == 0) {
-                return "1970-01-01T00:00:00Z";
-            }
-            return std::string(buffer);
+            return glm::length(*projected - obs.detected_pixel);
         }
 
     } // namespace
 
     glm::dvec2 applyForwardDistortion(
         const glm::dvec2& normalized_xy,
-        const LensModel model,
+        const core::CameraModelType model,
         const std::span<const double> coeffs) {
-        if (coeffs.empty() && model == LensModel::Pinhole) {
+        if (coeffs.empty() && model == core::CameraModelType::PINHOLE) {
             return normalized_xy;
         }
 
         double dx = normalized_xy.x;
         double dy = normalized_xy.y;
         switch (model) {
-        case LensModel::Pinhole:
+        case core::CameraModelType::PINHOLE:
             applyPinholeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
             break;
-        case LensModel::Fisheye:
+        case core::CameraModelType::FISHEYE:
             applyFisheyeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
             break;
-        case LensModel::ThinPrismFisheye:
+        case core::CameraModelType::THIN_PRISM_FISHEYE:
             applyThinPrismFisheyeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
             break;
-        case LensModel::Ortho:
-        case LensModel::Equirectangular:
+        case core::CameraModelType::ORTHO:
+        case core::CameraModelType::EQUIRECTANGULAR:
             break;
         }
         return {dx, dy};
@@ -287,20 +242,20 @@ namespace lfs::geometry::apriltag {
 
     std::optional<glm::dvec2> invertDistortion(
         const glm::dvec2& distorted_xy,
-        const LensModel model,
+        const core::CameraModelType model,
         const std::span<const double> coeffs) {
         if (!isFiniteVec2(distorted_xy)) {
             return std::nullopt;
         }
 
-        if ((model == LensModel::Pinhole && !hasNonZeroDistortion(coeffs)) ||
-            model == LensModel::Ortho ||
-            model == LensModel::Equirectangular) {
+        if ((model == core::CameraModelType::PINHOLE && !hasNonZeroDistortion(coeffs)) ||
+            model == core::CameraModelType::ORTHO ||
+            model == core::CameraModelType::EQUIRECTANGULAR) {
             return distorted_xy;
         }
 
         glm::dvec2 est = distorted_xy;
-        if (model == LensModel::Fisheye || model == LensModel::ThinPrismFisheye) {
+        if (model == core::CameraModelType::FISHEYE || model == core::CameraModelType::THIN_PRISM_FISHEYE) {
             const double r_d = glm::length(distorted_xy);
             if (r_d > 1e-8) {
                 const double clamped_theta = std::min(r_d, 1.55);
@@ -364,11 +319,11 @@ namespace lfs::geometry::apriltag {
             return std::nullopt;
         }
 
-        const glm::dvec2 pixel = toIntrinsicScalePixel(view, detected_pixel);
+        const glm::dvec2 pixel = detected_pixel / detectionPixelScale(view);
         glm::dvec3 cam_dir{0.0, 0.0, 1.0};
         glm::dvec3 cam_origin{0.0};
 
-        if (view.intrinsics.lens_model == LensModel::Equirectangular) {
+        if (view.intrinsics.lens_model == core::CameraModelType::EQUIRECTANGULAR) {
             if (view.intrinsics.width <= 0 || view.intrinsics.height <= 0) {
                 return std::nullopt;
             }
@@ -400,7 +355,7 @@ namespace lfs::geometry::apriltag {
             if (!undistorted_xy) {
                 return std::nullopt;
             }
-            if (view.intrinsics.lens_model == LensModel::Ortho) {
+            if (view.intrinsics.lens_model == core::CameraModelType::ORTHO) {
                 cam_origin = glm::dvec3(*undistorted_xy, 0.0);
             } else {
                 cam_dir = glm::dvec3(*undistorted_xy, 1.0);
@@ -448,7 +403,7 @@ namespace lfs::geometry::apriltag {
         }
 
         glm::dvec2 intrinsic_pixel{0.0, 0.0};
-        if (view.intrinsics.lens_model == LensModel::Equirectangular) {
+        if (view.intrinsics.lens_model == core::CameraModelType::EQUIRECTANGULAR) {
             const double norm = glm::length(cam_pt);
             if (norm <= kEpsilon || view.intrinsics.width <= 0 || view.intrinsics.height <= 0) {
                 return std::nullopt;
@@ -463,7 +418,7 @@ namespace lfs::geometry::apriltag {
             if (cam_pt.z <= 1e-6) {
                 return std::nullopt;
             }
-            const glm::dvec2 normalized_xy = view.intrinsics.lens_model == LensModel::Ortho
+            const glm::dvec2 normalized_xy = view.intrinsics.lens_model == core::CameraModelType::ORTHO
                                                  ? glm::dvec2(cam_pt)
                                                  : glm::dvec2(cam_pt) / cam_pt.z;
             const int num_dist = std::clamp(
@@ -485,7 +440,7 @@ namespace lfs::geometry::apriltag {
         if (!isFiniteVec2(intrinsic_pixel)) {
             return std::nullopt;
         }
-        return fromIntrinsicScalePixel(view, intrinsic_pixel);
+        return intrinsic_pixel * detectionPixelScale(view);
     }
 
     TriangulationSummary triangulateAprilTags(
@@ -514,7 +469,7 @@ namespace lfs::geometry::apriltag {
                 }
                 grouped_observations[tag_id].push_back(TagRayObservation{
                     .view = &view,
-                    .detection = det,
+                    .detected_pixel = det.center,
                     .ray = *ray,
                 });
             }
@@ -536,9 +491,7 @@ namespace lfs::geometry::apriltag {
             }
 
             std::vector<std::size_t> all_indices(obs_list.size());
-            for (std::size_t i = 0; i < obs_list.size(); ++i) {
-                all_indices[i] = i;
-            }
+            std::iota(all_indices.begin(), all_indices.end(), std::size_t{0});
 
             const double initial_parallax_deg = computeMaxParallaxDeg(obs_list, all_indices);
             if (initial_parallax_deg < config.min_parallax_angle_deg) {
@@ -553,7 +506,6 @@ namespace lfs::geometry::apriltag {
 
             std::vector<std::size_t> active_indices;
             if (obs_list.size() >= 3) {
-                std::size_t best_inlier_count = 0;
                 double best_error_sum = std::numeric_limits<double>::infinity();
 
                 std::vector<std::array<std::size_t, 2>> pairs;
@@ -594,9 +546,8 @@ namespace lfs::geometry::apriltag {
                         }
                     }
 
-                    if (candidate_inliers.size() > best_inlier_count ||
-                        (candidate_inliers.size() == best_inlier_count && error_sum < best_error_sum)) {
-                        best_inlier_count = candidate_inliers.size();
+                    if (candidate_inliers.size() > active_indices.size() ||
+                        (candidate_inliers.size() == active_indices.size() && error_sum < best_error_sum)) {
                         best_error_sum = error_sum;
                         active_indices = std::move(candidate_inliers);
                     }
@@ -647,7 +598,7 @@ namespace lfs::geometry::apriltag {
                 active_indices.erase(active_indices.begin() + static_cast<std::ptrdiff_t>(worst_pos));
             }
 
-            if (!solved_point || active_indices.size() < static_cast<std::size_t>(required_views)) {
+            if (!solved_point) {
                 summary.rejected_tags.push_back(RejectedTagDiagnostic{
                     .tag_id = tag_id,
                     .total_observations = total_obs,
@@ -771,10 +722,7 @@ namespace lfs::geometry::apriltag {
         const double rel_thresh = std::max(1e-6, config.inlier_relative_threshold);
         const double abs_thresh = std::max(0.0, config.inlier_absolute_threshold);
 
-        const auto isConstraintInlier = [&](const EvaluatedDistanceConstraint& eval, const double scale) noexcept {
-            const double scaled_dist = scale * eval.unscaled_distance;
-            const double abs_err = std::abs(scaled_dist - eval.target_distance);
-            const double rel_err = abs_err / eval.target_distance;
+        const auto isConstraintInlier = [&](const double abs_err, const double rel_err) noexcept {
             return rel_err <= rel_thresh || (abs_thresh > 0.0 && abs_err <= abs_thresh);
         };
 
@@ -793,7 +741,6 @@ namespace lfs::geometry::apriltag {
             }
         }
 
-        int best_inlier_count = 0;
         double best_truncated_loss = std::numeric_limits<double>::infinity();
         std::vector<std::size_t> best_inliers;
 
@@ -810,7 +757,7 @@ namespace lfs::geometry::apriltag {
                 const double abs_err = std::abs(candidate_s * eval.unscaled_distance - eval.target_distance);
                 const double rel_err = abs_err / eval.target_distance;
 
-                if (isConstraintInlier(eval, candidate_s)) {
+                if (isConstraintInlier(abs_err, rel_err)) {
                     current_inliers.push_back(idx);
                     truncated_loss += rel_err * rel_err;
                 } else {
@@ -818,10 +765,8 @@ namespace lfs::geometry::apriltag {
                 }
             }
 
-            const int count = static_cast<int>(current_inliers.size());
-            if (count > best_inlier_count ||
-                (count == best_inlier_count && truncated_loss < best_truncated_loss)) {
-                best_inlier_count = count;
+            if (current_inliers.size() > best_inliers.size() ||
+                (current_inliers.size() == best_inliers.size() && truncated_loss < best_truncated_loss)) {
                 best_truncated_loss = truncated_loss;
                 best_inliers = std::move(current_inliers);
             }
@@ -850,31 +795,21 @@ namespace lfs::geometry::apriltag {
 
         std::vector<std::size_t> polished_inliers;
         for (const std::size_t idx : valid_indices) {
-            if (isConstraintInlier(result.evaluated_constraints[idx], *refined_scale)) {
+            const auto& eval = result.evaluated_constraints[idx];
+            const double abs_err = std::abs(*refined_scale * eval.unscaled_distance - eval.target_distance);
+            if (isConstraintInlier(abs_err, abs_err / eval.target_distance)) {
                 polished_inliers.push_back(idx);
             }
         }
         if (!polished_inliers.empty()) {
-            best_inliers = std::move(polished_inliers);
-            if (const auto second_pass = refineScaleWls(best_inliers);
+            if (const auto second_pass = refineScaleWls(polished_inliers);
                 second_pass && *second_pass > 1e-9) {
                 refined_scale = second_pass;
             }
         }
 
         const double final_scale = *refined_scale;
-        best_inliers.clear();
-        for (const std::size_t idx : valid_indices) {
-            if (isConstraintInlier(result.evaluated_constraints[idx], final_scale)) {
-                best_inliers.push_back(idx);
-            }
-        }
         result.scale_factor = final_scale;
-        result.inlier_count = static_cast<int>(best_inliers.size());
-        result.inlier_ratio = static_cast<double>(result.inlier_count) /
-                              static_cast<double>(result.valid_constraints);
-
-        const std::set<std::size_t> inlier_lookup(best_inliers.begin(), best_inliers.end());
         double sq_err_sum = 0.0;
         double abs_err_sum = 0.0;
         double rel_err_sum = 0.0;
@@ -886,10 +821,11 @@ namespace lfs::geometry::apriltag {
             eval.scaled_distance = final_scale * eval.unscaled_distance;
             eval.absolute_error = std::abs(eval.scaled_distance - eval.target_distance);
             eval.relative_error = eval.absolute_error / eval.target_distance;
-            eval.inlier = inlier_lookup.contains(idx);
+            eval.inlier = isConstraintInlier(eval.absolute_error, eval.relative_error);
             eval.status = eval.inlier ? "Inlier" : "Outlier";
 
             if (eval.inlier) {
+                ++result.inlier_count;
                 sq_err_sum += eval.absolute_error * eval.absolute_error;
                 abs_err_sum += eval.absolute_error;
                 rel_err_sum += eval.relative_error;
@@ -898,6 +834,8 @@ namespace lfs::geometry::apriltag {
                 participating_tags.insert(eval.tag_b);
             }
         }
+        result.inlier_ratio = static_cast<double>(result.inlier_count) /
+                              static_cast<double>(result.valid_constraints);
 
         if (result.inlier_count > 0) {
             const double count_d = static_cast<double>(result.inlier_count);
@@ -910,10 +848,8 @@ namespace lfs::geometry::apriltag {
         glm::dvec3 pivot_sum{0.0};
         std::size_t pivot_count = 0;
         for (const int tag_id : participating_tags) {
-            if (const auto it = tag_positions.find(tag_id); it != tag_positions.end()) {
-                pivot_sum += it->second;
-                ++pivot_count;
-            }
+            pivot_sum += tag_positions.at(tag_id);
+            ++pivot_count;
         }
         if (pivot_count == 0) {
             for (const auto& [tag_id, pos] : tag_positions) {
@@ -943,6 +879,52 @@ namespace lfs::geometry::apriltag {
         return result;
     }
 
+    nlohmann::ordered_json scaleResultToJson(const ScaleSolveResult& result) {
+        return {
+            {"success", result.success},
+            {"error_message", result.error_message},
+            {"scale_factor", result.scale_factor},
+            {"pivot", {result.pivot.x, result.pivot.y, result.pivot.z}},
+            {"total_constraints", result.total_constraints},
+            {"valid_constraints", result.valid_constraints},
+            {"inlier_count", result.inlier_count},
+            {"inlier_ratio", result.inlier_ratio},
+            {"rmse", result.rmse},
+            {"mae", result.mae},
+            {"max_error", result.max_error},
+            {"mean_relative_error", result.mean_relative_error},
+        };
+    }
+
+    nlohmann::ordered_json triangulationToJson(const TriangulationSummary& summary) {
+        using json = nlohmann::ordered_json;
+        json tags_json = json::array();
+        for (const auto& tag : summary.tags) {
+            tags_json.push_back({
+                {"tag_id", tag.tag_id},
+                {"position", {tag.position.x, tag.position.y, tag.position.z}},
+                {"total_observations", tag.total_observations},
+                {"inlier_observations", tag.inlier_observations},
+                {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
+                {"max_reprojection_error_px", tag.max_reprojection_error_px},
+                {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
+                {"camera_uids", tag.camera_uids},
+                {"image_names", tag.image_names},
+            });
+        }
+
+        json rejected_json = json::array();
+        for (const auto& rej : summary.rejected_tags) {
+            rejected_json.push_back({
+                {"tag_id", rej.tag_id},
+                {"total_observations", rej.total_observations},
+                {"max_parallax_angle_deg", rej.max_parallax_angle_deg},
+                {"reason", rej.reason},
+            });
+        }
+        return {{"triangulated_tags", std::move(tags_json)}, {"rejected_tags", std::move(rejected_json)}};
+    }
+
     std::string serializeManifestToJson(
         const ScaleCalibrationManifest& manifest,
         const int indent) {
@@ -951,7 +933,7 @@ namespace lfs::geometry::apriltag {
         json root;
         root["schema_version"] = 1;
         root["timestamp_utc"] = manifest.timestamp_utc.empty()
-                                    ? currentUtcTimestampIso8601()
+                                    ? core::utc_now()
                                     : manifest.timestamp_utc;
         root["tag_family"] = std::string(aprilTagFamilyName(manifest.family));
 
@@ -970,47 +952,8 @@ namespace lfs::geometry::apriltag {
             {"min_inlier_ratio", manifest.solver_config.min_inlier_ratio},
         };
 
-        root["scaling_summary"] = {
-            {"success", manifest.scale_result.success},
-            {"error_message", manifest.scale_result.error_message},
-            {"scale_factor", manifest.scale_result.scale_factor},
-            {"pivot", {manifest.scale_result.pivot.x, manifest.scale_result.pivot.y, manifest.scale_result.pivot.z}},
-            {"total_constraints", manifest.scale_result.total_constraints},
-            {"valid_constraints", manifest.scale_result.valid_constraints},
-            {"inlier_count", manifest.scale_result.inlier_count},
-            {"inlier_ratio", manifest.scale_result.inlier_ratio},
-            {"rmse", manifest.scale_result.rmse},
-            {"mae", manifest.scale_result.mae},
-            {"max_error", manifest.scale_result.max_error},
-            {"mean_relative_error", manifest.scale_result.mean_relative_error},
-        };
-
-        json tags_json = json::array();
-        for (const auto& tag : manifest.triangulation.tags) {
-            tags_json.push_back({
-                {"tag_id", tag.tag_id},
-                {"position", {tag.position.x, tag.position.y, tag.position.z}},
-                {"total_observations", tag.total_observations},
-                {"inlier_observations", tag.inlier_observations},
-                {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
-                {"max_reprojection_error_px", tag.max_reprojection_error_px},
-                {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
-                {"camera_uids", tag.camera_uids},
-                {"image_names", tag.image_names},
-            });
-        }
-        root["triangulated_tags"] = std::move(tags_json);
-
-        json rejected_json = json::array();
-        for (const auto& rej : manifest.triangulation.rejected_tags) {
-            rejected_json.push_back({
-                {"tag_id", rej.tag_id},
-                {"total_observations", rej.total_observations},
-                {"max_parallax_angle_deg", rej.max_parallax_angle_deg},
-                {"reason", rej.reason},
-            });
-        }
-        root["rejected_tags"] = std::move(rejected_json);
+        root["scaling_summary"] = scaleResultToJson(manifest.scale_result);
+        root.update(triangulationToJson(manifest.triangulation));
 
         json constraints_json = json::array();
         for (const auto& eval : manifest.scale_result.evaluated_constraints) {

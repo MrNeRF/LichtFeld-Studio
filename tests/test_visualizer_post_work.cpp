@@ -21688,12 +21688,7 @@ namespace lfs::vis {
         for (int run = 0; run < 2; ++run) {
             ASSERT_TRUE(tasks.startAprilTagScan({}));
             EXPECT_FALSE(tasks.startAprilTagScan({}));
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+            ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
             // The worker publishes a report, but cannot complete or apply it itself.
             EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
             EXPECT_TRUE(tasks.hasPendingMainThreadCompletions());
@@ -21708,12 +21703,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         auto& tasks = viewer.getGuiManager()->asyncTasks();
         ASSERT_TRUE(tasks.startAprilTagScan({}));
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
         tasks.cancelAprilTagScan();
         tasks.pollAprilTagScanCompletion();
         EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
@@ -21725,12 +21715,7 @@ namespace lfs::vis {
         auto& tasks = viewer.getGuiManager()->asyncTasks();
         ASSERT_TRUE(tasks.startAprilTagScan({}));
         viewer.getSceneManager()->getScene().addDataset("replacement");
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
         tasks.pollAprilTagScanCompletion();
         EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
         EXPECT_FALSE(tasks.aprilTagScanResult().applied);
@@ -21743,12 +21728,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         auto& tasks = viewer.getGuiManager()->asyncTasks();
         ASSERT_TRUE(tasks.startAprilTagScan({}, {}, {}, true, false));
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
-               std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
         tasks.pollAprilTagScanCompletion();
         EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
         EXPECT_FALSE(tasks.aprilTagScanResult().scale_report.error_message.empty());

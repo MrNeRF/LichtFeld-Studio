@@ -4,14 +4,14 @@
 
 #include "geometry/apriltag_detector.hpp"
 
-#include "apriltag.h"
-#include "common/image_u8.h"
-#include "tag16h5.h"
-#include "tag25h9.h"
-#include "tag36h10.h"
-#include "tag36h11.h"
-#include "tagCircle21h7.h"
-#include "tagStandard41h12.h"
+#include <apriltag/apriltag.h>
+#include <apriltag/common/image_u8.h>
+#include <apriltag/tag16h5.h>
+#include <apriltag/tag25h9.h>
+#include <apriltag/tag36h10.h>
+#include <apriltag/tag36h11.h>
+#include <apriltag/tagCircle21h7.h>
+#include <apriltag/tagStandard41h12.h>
 
 #include <algorithm>
 #include <cctype>
@@ -23,68 +23,34 @@ namespace lfs::geometry::apriltag {
 
     namespace {
 
-        apriltag_family_t* createFamily(const AprilTagFamily family) {
-            switch (family) {
-            case AprilTagFamily::Tag36h11:
-                return tag36h11_create();
-            case AprilTagFamily::Tag25h9:
-                return tag25h9_create();
-            case AprilTagFamily::Tag16h5:
-                return tag16h5_create();
-            case AprilTagFamily::Tag36h10:
-                return tag36h10_create();
-            case AprilTagFamily::TagStandard41h12:
-                return tagStandard41h12_create();
-            case AprilTagFamily::TagCircle21h7:
-                return tagCircle21h7_create();
-            }
-            return tag36h11_create();
-        }
+        struct Family {
+            AprilTagFamily id;
+            std::string_view name;
+            apriltag_family_t* (*create)();
+            void (*destroy)(apriltag_family_t*);
+        };
 
-        void destroyFamily(const AprilTagFamily family, apriltag_family_t* const tf) {
-            if (!tf) {
-                return;
+        constexpr Family families[] = {
+            {AprilTagFamily::Tag36h11, "tag36h11", tag36h11_create, tag36h11_destroy},
+            {AprilTagFamily::Tag25h9, "tag25h9", tag25h9_create, tag25h9_destroy},
+            {AprilTagFamily::Tag16h5, "tag16h5", tag16h5_create, tag16h5_destroy},
+            {AprilTagFamily::Tag36h10, "tag36h10", tag36h10_create, tag36h10_destroy},
+            {AprilTagFamily::TagStandard41h12, "tagStandard41h12", tagStandard41h12_create, tagStandard41h12_destroy},
+            {AprilTagFamily::TagCircle21h7, "tagCircle21h7", tagCircle21h7_create, tagCircle21h7_destroy},
+        };
+
+        const Family& familyInfo(const AprilTagFamily family) {
+            for (const auto& entry : families) {
+                if (entry.id == family)
+                    return entry;
             }
-            switch (family) {
-            case AprilTagFamily::Tag36h11:
-                tag36h11_destroy(tf);
-                break;
-            case AprilTagFamily::Tag25h9:
-                tag25h9_destroy(tf);
-                break;
-            case AprilTagFamily::Tag16h5:
-                tag16h5_destroy(tf);
-                break;
-            case AprilTagFamily::Tag36h10:
-                tag36h10_destroy(tf);
-                break;
-            case AprilTagFamily::TagStandard41h12:
-                tagStandard41h12_destroy(tf);
-                break;
-            case AprilTagFamily::TagCircle21h7:
-                tagCircle21h7_destroy(tf);
-                break;
-            }
+            return families[0];
         }
 
     } // namespace
 
     std::string_view aprilTagFamilyName(const AprilTagFamily family) noexcept {
-        switch (family) {
-        case AprilTagFamily::Tag36h11:
-            return "tag36h11";
-        case AprilTagFamily::Tag25h9:
-            return "tag25h9";
-        case AprilTagFamily::Tag16h5:
-            return "tag16h5";
-        case AprilTagFamily::Tag36h10:
-            return "tag36h10";
-        case AprilTagFamily::TagStandard41h12:
-            return "tagStandard41h12";
-        case AprilTagFamily::TagCircle21h7:
-            return "tagCircle21h7";
-        }
-        return "tag36h11";
+        return familyInfo(family).name;
     }
 
     std::optional<AprilTagFamily> parseAprilTagFamily(const std::string_view name) noexcept {
@@ -126,18 +92,18 @@ namespace lfs::geometry::apriltag {
             return std::nullopt;
         }
 
-        apriltag_family_t* const tf = createFamily(family);
+        apriltag_family_t* const tf = familyInfo(family).create();
         if (!tf) {
             return std::nullopt;
         }
 
         if (static_cast<std::uint32_t>(tag_id) >= tf->ncodes) {
-            destroyFamily(family, tf);
+            familyInfo(family).destroy(tf);
             return std::nullopt;
         }
 
         image_u8_t* const base_img = apriltag_to_image(tf, static_cast<std::uint32_t>(tag_id));
-        destroyFamily(family, tf);
+        familyInfo(family).destroy(tf);
         if (!base_img) {
             return std::nullopt;
         }
@@ -180,7 +146,7 @@ namespace lfs::geometry::apriltag {
 
         explicit Impl(const AprilTagDetectorConfig& cfg)
             : config(cfg) {
-            family = createFamily(config.family);
+            family = familyInfo(config.family).create();
             detector = apriltag_detector_create();
             if (detector && family) {
                 const int bits_corrected = std::clamp(config.max_hamming, 0, 2);
@@ -198,7 +164,7 @@ namespace lfs::geometry::apriltag {
                 apriltag_detector_destroy(detector);
             }
             if (family) {
-                destroyFamily(config.family, family);
+                familyInfo(config.family).destroy(family);
             }
         }
     };
@@ -208,13 +174,6 @@ namespace lfs::geometry::apriltag {
     }
 
     AprilTagDetector::~AprilTagDetector() = default;
-
-    AprilTagDetector::AprilTagDetector(AprilTagDetector&&) noexcept = default;
-    AprilTagDetector& AprilTagDetector::operator=(AprilTagDetector&&) noexcept = default;
-
-    const AprilTagDetectorConfig& AprilTagDetector::config() const noexcept {
-        return impl_->config;
-    }
 
     std::vector<TagDetection2D> AprilTagDetector::detectGrayscale(
         const std::uint8_t* const data,
@@ -265,9 +224,6 @@ namespace lfs::geometry::apriltag {
                     item.hamming = det->hamming;
                     item.decision_margin = det->decision_margin;
                     item.center = glm::dvec2(det->c[0], det->c[1]);
-                    for (int c = 0; c < 4; ++c) {
-                        item.corners[c] = glm::dvec2(det->p[c][0], det->p[c][1]);
-                    }
                     results.push_back(item);
                 }
                 apriltag_detections_destroy(detections);
@@ -328,4 +284,3 @@ namespace lfs::geometry::apriltag {
     }
 
 } // namespace lfs::geometry::apriltag
-

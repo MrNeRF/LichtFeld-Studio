@@ -12,7 +12,7 @@
 
 #include <filesystem>
 #include <functional>
-#include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <span>
 #include <string>
 #include <vector>
@@ -49,20 +49,6 @@ namespace lfs::core {
         int max_image_width = 0,
         const AprilTagProgressCallback& progress_callback = {});
 
-    [[nodiscard]] LFS_CORE_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInCameras(
-        std::span<const std::shared_ptr<Camera>> cameras,
-        const geometry::apriltag::AprilTagDetectorConfig& detector_config = {},
-        std::span<const glm::mat4> camera_scene_transforms = {},
-        int max_image_width = 0,
-        const AprilTagProgressCallback& progress_callback = {});
-
-    [[nodiscard]] LFS_CORE_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInScene(
-        const Scene& scene,
-        const geometry::apriltag::AprilTagDetectorConfig& detector_config = {},
-        bool active_cameras_only = false,
-        int max_image_width = 0,
-        const AprilTagProgressCallback& progress_callback = {});
-
     struct AprilTagSceneScaleOptions {
         geometry::apriltag::AprilTagDetectorConfig detector_config{};
         geometry::apriltag::TriangulationConfig triangulation_config{};
@@ -82,20 +68,13 @@ namespace lfs::core {
         std::filesystem::path manifest_saved_path;
     };
 
-    [[nodiscard]] LFS_CORE_API bool saveCalibrationManifest(
-        const std::filesystem::path& path,
-        const geometry::apriltag::ScaleCalibrationManifest& manifest,
-        std::string* out_error = nullptr);
+    [[nodiscard]] LFS_CORE_API AprilTagSceneScaleOptions aprilTagSceneScaleOptions(const nlohmann::json& args);
 
     [[nodiscard]] LFS_CORE_API AprilTagSceneScaleReport computeAprilTagSceneScale(
-        const Scene& scene,
+        const AprilTagSceneSnapshot& snapshot,
         std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
         const AprilTagSceneScaleOptions& options = {},
+        bool solve_scale = true,
         const AprilTagProgressCallback& progress_callback = {});
-
-    [[nodiscard]] LFS_CORE_API AprilTagSceneScaleReport solveAprilTagScaleFromViews(
-        std::span<const geometry::apriltag::CameraObservationView> views,
-        std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
-        const AprilTagSceneScaleOptions& options = {});
 
 } // namespace lfs::core

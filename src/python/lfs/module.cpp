@@ -106,6 +106,7 @@
 #include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
+#include <nlohmann/json.hpp>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
@@ -295,6 +296,34 @@ namespace {
         return *viewer;
     }
 
+    lfs::vis::cap::AprilTagSceneApplyResult run_april_tag_scan(
+        lfs::vis::Visualizer& viewer,
+        const lfs::core::AprilTagSceneScaleOptions& options,
+        const std::vector<lfs::geometry::apriltag::TagDistanceConstraint>& constraints = {},
+        const bool solve_scale = false, const bool apply_to_scene = false,
+        const std::vector<std::string>& targets = {}) {
+        nb::gil_scoped_release release;
+        const auto snapshot = april_tag_on_viewer(viewer, [&] {
+            auto* sm = viewer.getSceneManager();
+            if (!sm)
+                throw std::runtime_error("Scene manager not available");
+            return lfs::core::snapshotAprilTagScene(sm->getScene(), options.active_cameras_only);
+        });
+        auto report = lfs::core::computeAprilTagSceneScale(snapshot, constraints, options, solve_scale);
+        return april_tag_on_viewer(viewer, [&] {
+            auto* sm = viewer.getSceneManager();
+            if (!sm)
+                throw std::runtime_error("Scene manager not available");
+            auto result = lfs::vis::cap::applyAprilTagScaleReport(*sm, snapshot, std::move(report), targets, apply_to_scene);
+            if (result.applied) {
+                if (auto* rm = viewer.getRenderingManager())
+                    rm->markDirty(lfs::vis::DirtyFlag::SPLATS | lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY,
+                                  lfs::vis::FrameReason::SceneChange);
+            }
+            return result;
+        });
+    }
+
     lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
     post_project_license_get_to_viewer(lfs::vis::Visualizer& viewer) {
         if (viewer.isOnViewerThread()) {
@@ -440,7 +469,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                    -> lfs::Result<void> {
+                -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -4076,75 +4105,32 @@ Example:
            const int max_image_width) -> nb::dict {
             auto& viewer = april_tag_worker_viewer();
 
-            const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
-            if (!parsed_family) {
-                throw std::invalid_argument("Unsupported AprilTag family: " + family);
+            const auto options = lfs::core::aprilTagSceneScaleOptions({
+                {"family", family},
+                {"min_views", min_views},
+                {"min_parallax_deg", min_parallax_deg},
+                {"max_reprojection_error_px", max_reprojection_error_px},
+                {"max_hamming", max_hamming},
+                {"min_decision_margin", min_decision_margin},
+                {"active_cameras_only", active_cameras_only},
+                {"max_image_width", max_image_width},
+            });
+            const auto result = run_april_tag_scan(viewer, options);
+            if (!result.scale_report.success)
+                throw std::runtime_error(result.error_message);
+            const auto output = lfs::vis::cap::aprilTagResultJson(result);
+            const nlohmann::json detection = {
+                {"camera_count", output["camera_count"]},
+                {"triangulated_tags", output["triangulated_tags"]},
+                {"rejected_tags", output["rejected_tags"]},
+            };
+            auto out = nb::cast<nb::dict>(nb::module_::import_("json").attr("loads")(detection.dump()));
+            const auto tuple = nb::module_::import_("builtins").attr("tuple");
+            for (auto item : nb::cast<nb::list>(out["triangulated_tags"])) {
+                auto tag = nb::cast<nb::dict>(item);
+                tag["position"] = tuple(tag["position"]);
+                tag["visualizer_position"] = tuple(tag["visualizer_position"]);
             }
-
-            lfs::geometry::apriltag::AprilTagDetectorConfig det_cfg;
-            det_cfg.family = *parsed_family;
-            det_cfg.max_hamming = max_hamming;
-            det_cfg.min_decision_margin = min_decision_margin;
-
-            lfs::geometry::apriltag::TriangulationConfig tri_cfg;
-            tri_cfg.min_views = min_views;
-            tri_cfg.min_parallax_angle_deg = min_parallax_deg;
-            tri_cfg.max_reprojection_error_px = max_reprojection_error_px;
-            tri_cfg.max_hamming = max_hamming;
-            tri_cfg.min_decision_margin = min_decision_margin;
-
-            std::vector<lfs::geometry::apriltag::CameraObservationView> views;
-            lfs::geometry::apriltag::TriangulationSummary summary;
-            {
-                nb::gil_scoped_release release;
-                const auto snapshot = april_tag_on_viewer(viewer, [&] {
-                    auto* sm = viewer.getSceneManager();
-                    if (!sm)
-                        throw std::runtime_error("Scene manager not available");
-                    return lfs::core::snapshotAprilTagScene(sm->getScene(), active_cameras_only);
-                });
-                views = lfs::core::detectAprilTagsInSnapshot(snapshot.cameras, det_cfg, max_image_width);
-                summary = lfs::geometry::apriltag::triangulateAprilTags(views, tri_cfg);
-                if (!april_tag_on_viewer(viewer, [&] {
-                        auto* sm = viewer.getSceneManager();
-                        return sm && snapshot.matches(sm->getScene());
-                    })) {
-                    throw std::runtime_error(LOC("runtime.apriltag_scene_changed"));
-                }
-            }
-
-            nb::list tags_list;
-            for (const auto& tag : summary.tags) {
-                const glm::vec3 vis_pos =
-                    lfs::rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
-                nb::dict item;
-                item["tag_id"] = tag.tag_id;
-                item["position"] = nb::make_tuple(tag.position.x, tag.position.y, tag.position.z);
-                item["visualizer_position"] = nb::make_tuple(vis_pos.x, vis_pos.y, vis_pos.z);
-                item["total_observations"] = tag.total_observations;
-                item["inlier_observations"] = tag.inlier_observations;
-                item["mean_reprojection_error_px"] = tag.mean_reprojection_error_px;
-                item["max_reprojection_error_px"] = tag.max_reprojection_error_px;
-                item["max_parallax_angle_deg"] = tag.max_parallax_angle_deg;
-                item["camera_uids"] = tag.camera_uids;
-                item["image_names"] = tag.image_names;
-                tags_list.append(std::move(item));
-            }
-
-            nb::list rejected_list;
-            for (const auto& rej : summary.rejected_tags) {
-                nb::dict item;
-                item["tag_id"] = rej.tag_id;
-                item["total_observations"] = rej.total_observations;
-                item["max_parallax_angle_deg"] = rej.max_parallax_angle_deg;
-                item["reason"] = rej.reason;
-                rejected_list.append(std::move(item));
-            }
-
-            nb::dict out;
-            out["camera_count"] = views.size();
-            out["triangulated_tags"] = std::move(tags_list);
-            out["rejected_tags"] = std::move(rejected_list);
             return out;
         },
         nb::arg("family") = "tag36h11",
@@ -4177,98 +4163,37 @@ Example:
            const std::vector<std::string>& targets) -> nb::dict {
             auto& viewer = april_tag_worker_viewer();
 
-            const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
-            if (!parsed_family) {
-                throw std::invalid_argument("Unsupported AprilTag family: " + family);
-            }
-
             std::vector<lfs::geometry::apriltag::TagDistanceConstraint> constraints;
             constraints.reserve(constraints_in.size());
-            for (const auto& [tag_a, tag_b, dist] : constraints_in) {
-                constraints.push_back(lfs::geometry::apriltag::TagDistanceConstraint{
-                    .tag_a = tag_a,
-                    .tag_b = tag_b,
-                    .target_distance = dist,
-                });
-            }
-
-            lfs::core::AprilTagSceneScaleOptions options;
-            options.detector_config.family = *parsed_family;
-            options.detector_config.max_hamming = max_hamming;
-            options.detector_config.min_decision_margin = min_decision_margin;
-
-            options.triangulation_config.min_views = min_views;
-            options.triangulation_config.min_parallax_angle_deg = min_parallax_deg;
-            options.triangulation_config.max_reprojection_error_px = max_reprojection_error_px;
-            options.triangulation_config.max_hamming = max_hamming;
-            options.triangulation_config.min_decision_margin = min_decision_margin;
-
-            options.solver_config.inlier_relative_threshold = inlier_relative_threshold;
-            options.solver_config.inlier_absolute_threshold = inlier_absolute_threshold;
-            options.solver_config.min_inliers = min_inliers;
-            options.solver_config.min_inlier_ratio = min_inlier_ratio;
-
-            options.active_cameras_only = active_cameras_only;
-            options.max_image_width = max_image_width;
-            if (!manifest_path.empty()) {
-                options.manifest_output_path = python_utf8_path(manifest_path);
-            }
-
-            lfs::vis::cap::AprilTagSceneApplyResult res;
-            {
-                nb::gil_scoped_release release;
-                const auto snapshot = april_tag_on_viewer(viewer, [&] {
-                    auto* sm = viewer.getSceneManager();
-                    if (!sm)
-                        throw std::runtime_error("Scene manager not available");
-                    return lfs::core::snapshotAprilTagScene(sm->getScene(), options.active_cameras_only);
-                });
-                const auto views = lfs::core::detectAprilTagsInSnapshot(
-                    snapshot.cameras, options.detector_config, options.max_image_width);
-                auto report = lfs::core::solveAprilTagScaleFromViews(views, constraints, options);
-                res = april_tag_on_viewer(viewer, [&] {
-                    auto* sm = viewer.getSceneManager();
-                    if (!sm)
-                        throw std::runtime_error("Scene manager not available");
-                    if (apply_to_scene) {
-                        auto applied = lfs::vis::cap::applyAprilTagScaleReport(*sm, snapshot, std::move(report), targets);
-                        if (applied.applied) {
-                            if (auto* rm = viewer.getRenderingManager()) {
-                                rm->markDirty(lfs::vis::DirtyFlag::SPLATS | lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY,
-                                              lfs::vis::FrameReason::SceneChange);
-                            }
-                        }
-                        return applied;
-                    }
-                    if (!snapshot.matches(sm->getScene())) {
-                        report.success = false;
-                        report.error_message = LOC("runtime.apriltag_scene_changed");
-                    }
-                    lfs::vis::cap::AprilTagSceneApplyResult result;
-                    result.error_message = report.error_message;
-                    result.scale_report = std::move(report);
-                    return result;
-                });
-            }
-
-            const auto& sr = res.scale_report.scale_result;
-            nb::dict out;
-            out["success"] = apply_to_scene ? res.applied : res.scale_report.success;
-            out["applied"] = res.applied;
-            out["error_message"] = res.error_message;
-            out["scale_factor"] = sr.scale_factor;
-            out["pivot"] = nb::make_tuple(sr.pivot.x, sr.pivot.y, sr.pivot.z);
-            out["total_constraints"] = sr.total_constraints;
-            out["valid_constraints"] = sr.valid_constraints;
-            out["inlier_count"] = sr.inlier_count;
-            out["inlier_ratio"] = sr.inlier_ratio;
-            out["rmse"] = sr.rmse;
-            out["mae"] = sr.mae;
-            out["max_error"] = sr.max_error;
-            out["mean_relative_error"] = sr.mean_relative_error;
-            out["transformed_nodes"] = res.transformed_nodes;
-            out["manifest_json"] = res.scale_report.manifest_json;
-            out["manifest_saved_path"] = lfs::core::path_to_utf8(res.scale_report.manifest_saved_path);
+            for (const auto& [tag_a, tag_b, distance] : constraints_in)
+                constraints.push_back({tag_a, tag_b, distance});
+            const auto options = lfs::core::aprilTagSceneScaleOptions({
+                {"family", family},
+                {"min_views", min_views},
+                {"min_parallax_deg", min_parallax_deg},
+                {"max_reprojection_error_px", max_reprojection_error_px},
+                {"max_hamming", max_hamming},
+                {"min_decision_margin", min_decision_margin},
+                {"active_cameras_only", active_cameras_only},
+                {"max_image_width", max_image_width},
+                {"manifest_path", manifest_path},
+                {"inlier_relative_threshold", inlier_relative_threshold},
+                {"inlier_absolute_threshold", inlier_absolute_threshold},
+                {"min_inliers", min_inliers},
+                {"min_inlier_ratio", min_inlier_ratio},
+            });
+            const auto result = run_april_tag_scan(viewer, options, constraints, true, apply_to_scene, targets);
+            const auto output = lfs::vis::cap::aprilTagResultJson(result);
+            nlohmann::json scaling;
+            for (const auto* key : {"success", "applied", "error_message", "scale_factor", "pivot",
+                                    "total_constraints", "valid_constraints", "inlier_count", "inlier_ratio",
+                                    "rmse", "mae", "max_error", "mean_relative_error", "transformed_nodes",
+                                    "manifest_json", "manifest_saved_path"})
+                scaling[key] = output[key];
+            scaling["success"] = apply_to_scene ? result.applied : result.scale_report.success;
+            auto out = nb::cast<nb::dict>(nb::module_::import_("json").attr("loads")(scaling.dump()));
+            const auto& pivot = result.scale_report.scale_result.pivot;
+            out["pivot"] = nb::make_tuple(pivot.x, pivot.y, pivot.z);
             return out;
         },
         nb::arg("constraints"),

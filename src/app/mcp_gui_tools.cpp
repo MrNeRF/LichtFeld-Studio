@@ -4828,174 +4828,84 @@ namespace lfs::app {
                 .on_success = transform_operator_result,
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "transform.detect_apriltags",
-                .description = "Start an AprilTag detection job; read results with runtime.job_describe for apriltag.scan",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"family", json{{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
-                        {"min_views", json{{"type", "integer"}, {"description", "Minimum number of camera views per tag (default: 2)"}}},
-                        {"min_parallax_deg", json{{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
-                        {"max_reprojection_error_px", json{{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
-                        {"max_hamming", json{{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
-                        {"min_decision_margin", json{{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
-                        {"active_cameras_only", json{{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
-                        {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}}},
-                    .required = {}},
-                .metadata = {
-                    .category = "transform",
-                    .kind = "mutation",
-                    .runtime = "gui",
-                    .thread_affinity = "gui_thread",
-                    .long_running = true,
-                    .user_visible = true,
-                }},
-            [viewer_impl](const json& args) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    geometry::apriltag::AprilTagDetectorConfig det_cfg;
-                    if (args.contains("family") && args["family"].is_string()) {
-                        const auto fam = geometry::apriltag::parseAprilTagFamily(args["family"].get<std::string>());
-                        if (!fam)
-                            return json{{"error", "Unsupported AprilTag family: " + args["family"].get<std::string>()}};
-                        det_cfg.family = *fam;
-                    }
-                    det_cfg.max_hamming = args.value("max_hamming", 1);
-                    det_cfg.min_decision_margin = args.value("min_decision_margin", 25.0f);
-
-                    geometry::apriltag::TriangulationConfig tri_cfg;
-                    tri_cfg.min_views = args.value("min_views", 2);
-                    tri_cfg.min_parallax_angle_deg = args.value("min_parallax_deg", 1.5);
-                    tri_cfg.max_reprojection_error_px = args.value("max_reprojection_error_px", 3.0);
-                    tri_cfg.max_hamming = det_cfg.max_hamming;
-                    tri_cfg.min_decision_margin = det_cfg.min_decision_margin;
-
-                    const bool active_only = args.value("active_cameras_only", false);
-                    const int max_width = args.value("max_image_width", 0);
-
-                    auto* gui = viewer_impl->getGuiManager();
-                    if (!gui)
-                        return json{{"error", "GUI manager not initialized"}};
-                    core::AprilTagSceneScaleOptions options;
-                    options.detector_config = det_cfg;
-                    options.triangulation_config = tri_cfg;
-                    options.active_cameras_only = active_only;
-                    options.max_image_width = max_width;
-                    if (!gui->asyncTasks().startAprilTagScan(std::move(options))) {
-                        return json{{"error", "AprilTag scan could not start or is already running"}};
-                    }
-                    return json{{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
+        for (const bool solve_scale : {false, true}) {
+            json properties{
+                {"family", {{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
+                {"min_views", {{"type", "integer"}, {"description", "Minimum number of camera views per tag (default: 2)"}}},
+                {"min_parallax_deg", {{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
+                {"max_reprojection_error_px", {{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
+                {"max_hamming", {{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
+                {"min_decision_margin", {{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
+                {"active_cameras_only", {{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
+                {"max_image_width", {{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
+            };
+            if (solve_scale) {
+                properties.update(json{
+                    {"constraints", {{"type", "array"}, {"description", "Array of {tag_a, tag_b, distance} constraints in real-world units"}}},
+                    {"inlier_relative_threshold", {{"type", "number"}, {"description", "RANSAC relative error threshold (default: 0.02)"}}},
+                    {"inlier_absolute_threshold", {{"type", "number"}, {"description", "Optional RANSAC absolute error floor (default: 0.0)"}}},
+                    {"min_inliers", {{"type", "integer"}, {"description", "Minimum required inlier constraints (default: 1)"}}},
+                    {"min_inlier_ratio", {{"type", "number"}, {"description", "Minimum required inlier ratio (default: 0.5)"}}},
+                    {"manifest_path", {{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
+                    {"apply_to_scene", {{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
+                    {"targets", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Explicit partial targets; omitted targets scale the complete scene"}}},
                 });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "transform.scale_by_apriltags",
-                .description = "Start an AprilTag scene calibration job; read results with runtime.job_describe for apriltag.scan",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"constraints", json{{"type", "array"}, {"description", "Array of {tag_a, tag_b, distance} constraints in real-world units"}}},
-                        {"family", json{{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
-                        {"inlier_relative_threshold", json{{"type", "number"}, {"description", "RANSAC relative error threshold (default: 0.02)"}}},
-                        {"inlier_absolute_threshold", json{{"type", "number"}, {"description", "Optional RANSAC absolute error floor (default: 0.0)"}}},
-                        {"min_inliers", json{{"type", "integer"}, {"description", "Minimum required inlier constraints (default: 1)"}}},
-                        {"min_inlier_ratio", json{{"type", "number"}, {"description", "Minimum required inlier ratio (default: 0.5)"}}},
-                        {"min_views", json{{"type", "integer"}, {"description", "Minimum camera views per tag (default: 2)"}}},
-                        {"min_parallax_deg", json{{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
-                        {"max_reprojection_error_px", json{{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
-                        {"max_hamming", json{{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
-                        {"min_decision_margin", json{{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
-                        {"active_cameras_only", json{{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
-                        {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
-                        {"manifest_path", json{{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
-                        {"apply_to_scene", json{{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
-                        {"targets", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Explicit partial targets; omitted targets scale the complete scene"}}}},
-                    .required = {"constraints"}},
-                .metadata = {
-                    .category = "transform",
-                    .kind = "mutation",
-                    .runtime = "gui",
-                    .thread_affinity = "gui_thread",
-                    .long_running = true,
-                    .user_visible = true,
-                }},
-            [viewer_impl](const json& args) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    if (!args.contains("constraints") || !args["constraints"].is_array())
-                        return json{{"error", "'constraints' must be an array of {tag_a, tag_b, distance} objects"}};
-
-                    std::vector<geometry::apriltag::TagDistanceConstraint> constraints;
-                    for (const auto& item : args["constraints"]) {
-                        if (!item.is_object() || !item.contains("tag_a") || !item.contains("tag_b"))
-                            return json{{"error", "Each constraint must contain 'tag_a', 'tag_b', and 'distance'"}};
-                        const double dist = item.contains("distance")
-                                                ? item["distance"].get<double>()
-                                                : item.value("target_distance", 0.0);
-                        constraints.push_back(geometry::apriltag::TagDistanceConstraint{
-                            .tag_a = item["tag_a"].get<int>(),
-                            .tag_b = item["tag_b"].get<int>(),
-                            .target_distance = dist,
-                        });
-                    }
-
-                    core::AprilTagSceneScaleOptions options;
-                    if (args.contains("family") && args["family"].is_string()) {
-                        const auto fam = geometry::apriltag::parseAprilTagFamily(args["family"].get<std::string>());
-                        if (!fam)
-                            return json{{"error", "Unsupported AprilTag family: " + args["family"].get<std::string>()}};
-                        options.detector_config.family = *fam;
-                    }
-                    options.detector_config.max_hamming = args.value("max_hamming", 1);
-                    options.detector_config.min_decision_margin = args.value("min_decision_margin", 25.0f);
-
-                    options.triangulation_config.min_views = args.value("min_views", 2);
-                    options.triangulation_config.min_parallax_angle_deg = args.value("min_parallax_deg", 1.5);
-                    options.triangulation_config.max_reprojection_error_px = args.value("max_reprojection_error_px", 3.0);
-                    options.triangulation_config.max_hamming = options.detector_config.max_hamming;
-                    options.triangulation_config.min_decision_margin = options.detector_config.min_decision_margin;
-
-                    options.solver_config.inlier_relative_threshold = args.value("inlier_relative_threshold", 0.02);
-                    options.solver_config.inlier_absolute_threshold = args.value("inlier_absolute_threshold", 0.0);
-                    options.solver_config.min_inliers = args.value("min_inliers", 1);
-                    options.solver_config.min_inlier_ratio = args.value("min_inlier_ratio", 0.5);
-
-                    options.active_cameras_only = args.value("active_cameras_only", false);
-                    options.max_image_width = args.value("max_image_width", 0);
-                    if (args.contains("manifest_path") && args["manifest_path"].is_string()) {
-                        const auto path_str = args["manifest_path"].get<std::string>();
-                        if (!path_str.empty())
-                            options.manifest_output_path = core::utf8_to_path(path_str);
-                    }
-
-                    std::vector<std::string> targets;
-                    if (args.contains("targets") && args["targets"].is_array()) {
-                        for (const auto& t : args["targets"]) {
-                            if (t.is_string())
-                                targets.push_back(t.get<std::string>());
+            }
+            registry.register_tool(
+                McpTool{
+                    .name = solve_scale ? "transform.scale_by_apriltags" : "transform.detect_apriltags",
+                    .description = solve_scale
+                                       ? "Start an AprilTag scene calibration job; read results with runtime.job_describe for apriltag.scan"
+                                       : "Start an AprilTag detection job; read results with runtime.job_describe for apriltag.scan",
+                    .input_schema = {
+                        .type = "object",
+                        .properties = std::move(properties),
+                        .required = solve_scale ? std::vector<std::string>{"constraints"} : std::vector<std::string>{}},
+                    .metadata = {
+                        .category = "transform",
+                        .kind = "mutation",
+                        .runtime = "gui",
+                        .thread_affinity = "gui_thread",
+                        .long_running = true,
+                        .user_visible = true,
+                    }},
+                [viewer_impl, solve_scale](const json& args) -> json {
+                    return post_and_wait(viewer_impl, [viewer_impl, solve_scale, args]() -> json {
+                        if (!viewer_impl->getSceneManager())
+                            return {{"error", "Scene manager not initialized"}};
+                        auto* gui = viewer_impl->getGuiManager();
+                        if (!gui)
+                            return {{"error", "GUI manager not initialized"}};
+                        std::vector<geometry::apriltag::TagDistanceConstraint> constraints;
+                        if (solve_scale) {
+                            if (!args.contains("constraints") || !args["constraints"].is_array())
+                                return {{"error", "'constraints' must be an array of {tag_a, tag_b, distance} objects"}};
+                            for (const auto& item : args["constraints"]) {
+                                if (!item.is_object() || !item.contains("tag_a") || !item.contains("tag_b"))
+                                    return {{"error", "Each constraint must contain 'tag_a', 'tag_b', and 'distance'"}};
+                                constraints.push_back({item["tag_a"].get<int>(), item["tag_b"].get<int>(),
+                                                       item.contains("distance") ? item["distance"].get<double>() : item.value("target_distance", 0.0)});
+                            }
                         }
-                    }
-
-                    const bool apply_to_scene = args.value("apply_to_scene", true);
-                    auto* gui = viewer_impl->getGuiManager();
-                    if (!gui)
-                        return json{{"error", "GUI manager not initialized"}};
-                    if (!gui->asyncTasks().startAprilTagScan(std::move(options), std::move(constraints),
-                                                             std::move(targets), true, apply_to_scene)) {
-                        return json{{"error", "AprilTag scan could not start or is already running"}};
-                    }
-                    return json{{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
+                        std::vector<std::string> targets;
+                        if (solve_scale && args.contains("targets") && args["targets"].is_array()) {
+                            for (const auto& target : args["targets"]) {
+                                if (target.is_string())
+                                    targets.push_back(target.get<std::string>());
+                            }
+                        }
+                        try {
+                            if (!gui->asyncTasks().startAprilTagScan(core::aprilTagSceneScaleOptions(args),
+                                                                     std::move(constraints), std::move(targets), solve_scale,
+                                                                     solve_scale && args.value("apply_to_scene", true)))
+                                return {{"error", "AprilTag scan could not start or is already running"}};
+                        } catch (const std::invalid_argument& e) {
+                            return {{"error", e.what()}};
+                        }
+                        return {{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
+                    });
                 });
-            });
+        }
 
         registry.register_tool(
             McpTool{
