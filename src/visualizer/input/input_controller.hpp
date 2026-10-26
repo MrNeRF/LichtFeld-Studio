@@ -9,6 +9,7 @@
 #include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/camera_browse_repeat.hpp"
+#include "input/gamepad_navigation.hpp"
 #include "input/input_bindings.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
@@ -143,6 +144,12 @@ namespace lfs::vis {
 
         // Update function for continuous input (WASD movement and inertia)
         void update(float delta_time);
+        bool configureGamepadNavigation(input::GamepadNavigationSettings settings, SDL_JoystickID device);
+        void suspendGamepadNavigation();
+        [[nodiscard]] const input::GamepadNavigationSettings& gamepadNavigationSettings() const { return gamepad_settings_; }
+        [[nodiscard]] const char* gamepadNavigationStatus() const { return gamepad_settings_.enabled ? gamepad_session_.status() : "disabled"; }
+        [[nodiscard]] SDL_JoystickID gamepadNavigationDevice() const;
+        [[nodiscard]] SplitViewPanelId gamepadNavigationPanel() const;
 
         // Check if continuous input is active (WASD keys or camera drag)
         [[nodiscard]] bool isContinuousInputActive() const {
@@ -170,7 +177,7 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
+            return gamepad_frame_demand_ || camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -207,6 +214,15 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        bool updateGamepadNavigation(float delta_time);
+        void stopGamepadMotion();
+        input::GamepadNavigationSettings gamepad_settings_;
+        input::GamepadNavigationSession gamepad_session_;
+        uint64_t gamepad_click_epoch_ = 0;
+        bool gamepad_owned_ = false;
+        bool gamepad_frame_demand_ = false;
+        bool gamepad_click_candidate_ = false;
+        glm::dvec2 gamepad_press_pos_{0};
         core::WalkState walk_state_;
         core::CapsuleQuery walkQuery() const;
         struct PanelInteractionState {

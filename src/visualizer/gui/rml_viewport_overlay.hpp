@@ -132,6 +132,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        void syncGamepadIndicator();
         friend class ViewportDepthLayoutTestAccess;
         friend class VramHudHeaderClickTest;
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;

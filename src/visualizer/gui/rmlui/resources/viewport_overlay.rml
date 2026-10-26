@@ -6,6 +6,7 @@
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
+    <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden"></div>
     <div id="comparison-name-left" class="comparison-name hidden"></div>
     <div id="comparison-name-right" class="comparison-name hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>

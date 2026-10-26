@@ -112,3 +112,41 @@ def test_controller_diagnostics_are_localized_in_every_shipped_language():
     for path in root.glob("*.json"):
         data = json.loads(path.read_text(encoding="utf-8"))
         assert all(data.get(key) for key in required), path.name
+
+
+def test_navigation_configuration_is_independent_of_diagnostic_selection(section, monkeypatch):
+    subject, state, selected, records, dirty = section
+    ui = subject.sync.__globals__["lf"].ui
+    navigation = dict(enabled=True, selected=22, dead_zone=0.2, look_speed=2.0, move_speed=1.2,
+                      status="viewport", mode="walk")
+    changes = []
+    monkeypatch.setattr(ui, "get_gamepad_navigation_state", lambda: dict(navigation), raising=False)
+    monkeypatch.setattr(ui, "set_gamepad_navigation", lambda *args: changes.append(args) or True, raising=False)
+    state.update(selected=11, generation=1)
+    subject.sync()
+    assert subject.navigation_status() == "gamepad.navigation.viewport"
+    subject.configure(look_speed=3.0)
+    assert changes == [(True, 22, 0.2, 3.0, 1.2)]
+    subject.deactivate()
+    assert selected == [0]
+    assert subject.navigation["selected"] == 22
+    assert subject.navigation["enabled"]
+
+
+def test_native_configuration_failure_is_shown_without_changing_settings(section, monkeypatch):
+    subject, state, selected, records, dirty = section
+    ui = subject.sync.__globals__["lf"].ui
+    monkeypatch.setattr(ui, "set_gamepad_navigation", lambda *args: False, raising=False)
+    subject.configure(enabled=True, selected=99)
+    assert subject.navigation_status() == "gamepad.unavailable"
+    assert "gamepad_navigation_status" in dirty
+
+
+def test_navigation_status_and_presets_exist_in_every_locale():
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    keys = {"gamepad.navigation." + state for state in
+            ("disabled", "no_device", "suspended", "projection", "mapping", "viewport", "neutral", "ready", "moving")}
+    keys.update("gamepad.preset." + mode for mode in ("orbit", "trackball", "fpv", "drone", "walk"))
+    for path in root.glob("*.json"):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        assert all(values.get(key) for key in keys), path.name

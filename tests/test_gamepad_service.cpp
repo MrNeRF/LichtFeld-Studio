@@ -174,3 +174,21 @@ TEST_F(GamepadServiceTest, RemovalDiscardsQueuedPressesAndRepeatedShutdownIsSafe
     EXPECT_FALSE(service.snapshot().available);
     EXPECT_TRUE(service.snapshot().devices.empty());
 }
+
+TEST_F(GamepadServiceTest, DiagnosticSelectionDoesNotStealNavigationAndBothInvalidateOnRemoval) {
+    const auto navigation = attach();
+    const auto diagnostic = attach();
+    ASSERT_NE(navigation, 0u);
+    ASSERT_NE(diagnostic, 0u);
+    pump();
+    ASSERT_TRUE(service.selectNavigation(navigation));
+    ASSERT_TRUE(service.select(diagnostic));
+    EXPECT_EQ(service.navigationSample().id, navigation);
+    EXPECT_EQ(service.snapshot().selected, diagnostic);
+    ASSERT_TRUE(service.select(0));
+    EXPECT_EQ(service.navigationSample().id, navigation);
+    ASSERT_TRUE(SDL_DetachVirtualJoystick(navigation));
+    pump();
+    EXPECT_EQ(service.navigationSample().id, 0u);
+    EXPECT_EQ(service.snapshot().navigation_selected, 0u);
+}

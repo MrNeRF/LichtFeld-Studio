@@ -374,6 +374,37 @@
       </div>
 
       <div class="preferences-section" data-if="show_input">
+        <div class="section-header text-accent">@tr:gamepad.navigation_title</div>
+        <div class="section-content">
+          <div class="preferences-row preferences-checkbox-row">
+            <span class="preferences-label">@tr:gamepad.navigation_enabled</span>
+            <input type="checkbox" data-checked="gamepad_navigation_enabled" />
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.navigation_device</span>
+            <select class="preferences-select" data-value="gamepad_navigation_id">
+              <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
+            </select>
+          </div>
+          <span class="preferences-description">@tr:gamepad.navigation_help</span>
+          <span class="preferences-description">{{ gamepad_navigation_status }}</span>
+          <span class="preferences-description">{{ gamepad_navigation_preset }}</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.dead_zone</span>
+            <input type="range" data-value="gamepad_dead_zone" min="0.05" max="0.5" step="0.01" />
+            <span>{{ gamepad_dead_zone }}</span>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.look_speed</span>
+            <input type="range" data-value="gamepad_look_speed" min="0.1" max="5" step="0.1" />
+            <span>{{ gamepad_look_speed }}</span>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.move_speed</span>
+            <input type="range" data-value="gamepad_move_speed" min="0.1" max="5" step="0.1" />
+            <span>{{ gamepad_move_speed }}</span>
+          </div>
+        </div>
         <div class="section-header text-accent">@tr:gamepad.title</div>
         <div class="section-content">
           <span class="preferences-description">@tr:gamepad.help</span>

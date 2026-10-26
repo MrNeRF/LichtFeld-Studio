@@ -5437,6 +5437,40 @@ namespace lfs::python {
                                                            },
                                                                                    false); }, nb::arg("device_id"), "Select a connected controller for input testing, or zero for none.");
 
+        m.def("get_gamepad_navigation_state", [] {
+            using State = std::tuple<bool, uint32_t, float, float, float, std::string, std::string>;
+            const auto state = invoke_on_viewer([]() -> State {
+                auto* controller = vis::InputController::instance();
+                auto* window = vis::services().windowOrNull();
+                if (!controller || !window)
+                    return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit"};
+                const auto& settings = controller->gamepadNavigationSettings();
+                return {settings.enabled, window->gamepads().navigationSample().id,
+                        settings.dead_zone, settings.look_speed, settings.move_speed,
+                        controller->gamepadNavigationStatus(),
+                        vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode())};
+            }, State{false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit"});
+            nb::dict result;
+            result["enabled"] = std::get<0>(state);
+            result["selected"] = std::get<1>(state);
+            result["dead_zone"] = std::get<2>(state);
+            result["look_speed"] = std::get<3>(state);
+            result["move_speed"] = std::get<4>(state);
+            result["status"] = std::get<5>(state);
+            result["mode"] = std::get<6>(state);
+            return result;
+        }, "Read this session's gamepad navigation settings and routing status.");
+
+        m.def("set_gamepad_navigation", [](bool enabled, uint32_t device, float dead_zone, float look_speed, float move_speed) {
+            return invoke_on_viewer([=] {
+                if (auto* controller = vis::InputController::instance())
+                    return controller->configureGamepadNavigation({enabled, dead_zone, look_speed, move_speed}, device);
+                return false;
+            }, false);
+        }, nb::arg("enabled"), nb::arg("device_id"), nb::arg("dead_zone") = 0.15f,
+           nb::arg("look_speed") = 1.5f, nb::arg("move_speed") = 1.0f,
+           "Configure this session's navigation controller; requires viewport click and neutral before motion.");
+
         m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
         m.def("set_rendering_defaults_json", [](const std::string& serialized) {
             if (auto result = vis::UserPreferences::instance().setRenderingDefaults(serialized); !result)

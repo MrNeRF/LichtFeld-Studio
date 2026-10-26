@@ -1740,6 +1740,7 @@ class PreferencesPanel(Panel):
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
             self._keymap.reset_to_default()
+            self._gamepad_test.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
 
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_viewport_overlay.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
@@ -1545,11 +1546,38 @@ namespace lfs::vis::gui {
         markRenderNeeded(RenderReason::ThemePresentation);
     }
 
+    void RmlViewportOverlay::syncGamepadIndicator() {
+        auto* element = document_ ? document_->GetElementById("gamepad-navigation-indicator") : nullptr;
+        if (!element)
+            return;
+        const auto* controller = InputController::instance();
+        const bool enabled = controller && controller->gamepadNavigationSettings().enabled;
+        if (element->IsClassSet("hidden") == enabled) {
+            element->SetClass("hidden", !enabled);
+            markRenderNeeded(RenderReason::DocumentHook);
+        }
+        if (!enabled)
+            return;
+        const std::string key = "gamepad.navigation." + std::string(controller->gamepadNavigationStatus());
+        const auto device = controller->gamepadNavigationDevice();
+        const auto device_label = device ? "#" + std::to_string(device) : std::string("—");
+        const auto text = std::format("{} · {} · {} · {} · {}", LOC("gamepad.navigation_title"), device_label,
+                                      controller->gamepadNavigationPanel() == SplitViewPanelId::Right ? "R" : "L",
+                                      InputController::cameraNavigationModeName(controller->cameraNavigationMode()), LOC(key));
+        const auto encoded = Rml::StringUtilities::EncodeRml(text);
+        if (element->GetInnerRML() != encoded) {
+            element->SetInnerRML(encoded);
+            markRenderNeeded(RenderReason::DocumentHook);
+        }
+    }
+
     void RmlViewportOverlay::renderCached() {
         if (!rml_context_ || !document_)
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+
+        syncGamepadIndicator();
 
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
@@ -1603,6 +1631,8 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+
+        syncGamepadIndicator();
 
         if (!doc_registered_) {
             lfs::python::register_rml_document("viewport_overlay", document_);

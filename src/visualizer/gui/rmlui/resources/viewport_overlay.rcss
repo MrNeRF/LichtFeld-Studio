@@ -2257,3 +2257,9 @@ body {
     text-overflow: ellipsis;
     pointer-events: none;
 }
+
+.gamepad-navigation-indicator {
+    left: 12dp;
+    bottom: 12dp;
+    max-width: 600dp;
+}

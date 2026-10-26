@@ -2833,6 +2833,15 @@ def set_gamepad_test_device(device_id: int) -> bool:
     """Select a connected mapped controller for diagnostics; zero clears selection."""
     ...
 
+def get_gamepad_navigation_state() -> dict:
+    """Read session settings and the viewport navigation routing status."""
+    ...
+
+def set_gamepad_navigation(enabled: bool, device_id: int, dead_zone: float = 0.15,
+                          look_speed: float = 1.5, move_speed: float = 1.0) -> bool:
+    """Select/configure the navigation controller independently of input testing."""
+    ...
+
 def get_rendering_defaults_json() -> str:
     """
     Get user defaults for new projects; project VIEW values are independent overrides.

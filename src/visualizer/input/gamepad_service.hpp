@@ -42,11 +42,13 @@ namespace lfs::vis::input {
         std::vector<GamepadDevice> devices;
         SDL_JoystickID selected = 0;
         GamepadSample sample;
+        SDL_JoystickID navigation_selected = 0;
+        GamepadSample navigation_sample;
     };
 
     // Viewer-thread service. SDL IDs identify connections, never saved profiles.
     // Snapshots contain values only and remain valid after a handle is closed.
-    // Selection currently addresses diagnostics, not camera navigation ownership.
+    // Diagnostics and navigation have independent selections and edge buffers.
     class LFS_VIS_API GamepadService {
     public:
         GamepadService();
@@ -60,9 +62,13 @@ namespace lfs::vis::input {
         void handleEvent(const SDL_Event& event);
         bool sample();
         [[nodiscard]] bool select(SDL_JoystickID id);
+        [[nodiscard]] bool selectNavigation(SDL_JoystickID id);
+        [[nodiscard]] const GamepadSample& navigationSample() const;
+        [[nodiscard]] SDL_JoystickID diagnosticSelected() const;
         [[nodiscard]] GamepadSnapshot snapshot() const;
 
     private:
+        bool readSample(SDL_JoystickID id, GamepadSample& sample);
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

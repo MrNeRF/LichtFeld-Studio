@@ -46,6 +46,10 @@ namespace lfs::vis::input {
         }
 
         void remove(SDL_JoystickID id) {
+            if (state.navigation_selected == id) {
+                state.navigation_selected = 0;
+                state.navigation_sample = {};
+            }
             if (state.selected == id) {
                 // No automatic fallback to another device, even with identical names.
                 state.selected = 0;
@@ -82,6 +86,8 @@ namespace lfs::vis::input {
     }
 
     void GamepadService::shutdown() {
+        impl_->state.navigation_selected = 0;
+        impl_->state.navigation_sample = {};
         impl_->state.selected = 0;
         impl_->state.sample = {};
         impl_->connections.clear();
@@ -122,6 +128,9 @@ namespace lfs::vis::input {
                 impl_->add(event.gdevice.which);
             break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            if (event.gbutton.which == impl_->state.navigation_selected &&
+                event.gbutton.button < SDL_GAMEPAD_BUTTON_COUNT)
+                impl_->state.navigation_sample.pressed[event.gbutton.button] = true;
             if (event.gbutton.which == impl_->state.selected &&
                 event.gbutton.button < SDL_GAMEPAD_BUTTON_COUNT)
                 impl_->state.sample.pressed[event.gbutton.button] = true;
@@ -133,6 +142,7 @@ namespace lfs::vis::input {
 
     void GamepadService::beginFrame() {
         impl_->state.sample.pressed.fill(false);
+        impl_->state.navigation_sample.pressed.fill(false);
     }
 
     bool GamepadService::select(SDL_JoystickID id) {
@@ -151,14 +161,36 @@ namespace lfs::vis::input {
     bool GamepadService::sample() {
         if (!impl_->initialized)
             return false;
-        const auto previous = impl_->state.sample;
+        const bool diagnostic_changed = readSample(impl_->state.selected, impl_->state.sample);
+        return readSample(impl_->state.navigation_selected, impl_->state.navigation_sample) || diagnostic_changed;
+    }
+
+    bool GamepadService::selectNavigation(SDL_JoystickID id) {
+        if (id != 0 && std::none_of(impl_->connections.begin(), impl_->connections.end(),
+                                    [id](const auto& c) { return c.device.id == id && c.handle; }))
+            return false;
+        impl_->state.navigation_selected = id;
+        impl_->state.navigation_sample = {};
+        sample();
+        return true;
+    }
+
+    const GamepadSample& GamepadService::navigationSample() const {
+        return impl_->state.navigation_sample;
+    }
+
+    SDL_JoystickID GamepadService::diagnosticSelected() const {
+        return impl_->state.selected;
+    }
+
+    bool GamepadService::readSample(SDL_JoystickID id, GamepadSample& sample) {
+        const auto previous = sample;
         auto found = std::find_if(impl_->connections.begin(), impl_->connections.end(),
-                                  [this](const auto& c) { return c.device.id == impl_->state.selected; });
+                                  [id](const auto& c) { return c.device.id == id; });
         if (found == impl_->connections.end() || !found->handle || !SDL_GamepadConnected(found->handle.get())) {
-            impl_->state.sample = {};
-            return previous != impl_->state.sample;
+            sample = {};
+            return previous != sample;
         }
-        auto& sample = impl_->state.sample;
         auto* pad = found->handle.get();
         sample.id = found->device.id;
         sample.generation = found->device.generation;

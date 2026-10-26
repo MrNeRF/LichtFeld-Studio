@@ -995,7 +995,10 @@ namespace lfs::vis {
             devices_changed |= event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         }
         gamepad_events_.clear();
-        if (gamepads_.sample() || devices_changed)
+        const bool sample_changed = gamepads_.sample();
+        const bool needs_samples = gamepads_.diagnosticSelected() != 0 ||
+                                   (input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
+        if (devices_changed || (sample_changed && needs_samples))
             lfs::python::request_redraw();
     }
 
