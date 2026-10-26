@@ -47,25 +47,8 @@ namespace {
             {"recursive", true},
             {"dry_run", true},
             {"timeout_minutes", 45},
-            {"defaults", {
-                {"strategy", "mrnf"},
-                {"iterations", 30000},
-                {"export", "ply,spz"},
-                {"use_depth_loss", true}
-            }},
-            {"jobs", {
-                {
-                    {"dataset", (temp.path() / "scene_a").string()},
-                    {"name", "custom_scene_a"}
-                },
-                {
-                    {"dataset", (temp.path() / "scene_b").string()},
-                    {"strategy", "mcmc"},
-                    {"iter", 45000},
-                    {"output", (temp.path() / "custom_out_b").string()}
-                }
-            }}
-        };
+            {"defaults", {{"strategy", "mrnf"}, {"iterations", 30000}, {"export", "ply,spz"}, {"use_depth_loss", true}}},
+            {"jobs", {{{"dataset", (temp.path() / "scene_a").string()}, {"name", "custom_scene_a"}}, {{"dataset", (temp.path() / "scene_b").string()}, {"strategy", "mcmc"}, {"iter", 45000}, {"output", (temp.path() / "custom_out_b").string()}}}}};
 
         {
             std::ofstream out(config_path);
@@ -108,15 +91,9 @@ namespace {
         TempDirectoryGuard temp;
         const auto config_path = temp.path() / "batch_array.json";
 
-        nlohmann::json j = nlohmann::json::array({
-            {
-                {"dataset", (temp.path() / "scene_1").string()},
-                {"output", (temp.path() / "out_1").string()}
-            },
-            {
-                {"path", (temp.path() / "scene_2").string()}
-            }
-        });
+        nlohmann::json j = nlohmann::json::array({{{"dataset", (temp.path() / "scene_1").string()},
+                                                   {"output", (temp.path() / "out_1").string()}},
+                                                  {{"path", (temp.path() / "scene_2").string()}}});
 
         {
             std::ofstream out(config_path);
@@ -151,8 +128,7 @@ namespace {
             "20000",
             "--export",
             "ply,spz",
-            "--use-depth-loss"
-        };
+            "--use-depth-loss"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(res.has_value()) << res.error();
@@ -185,8 +161,7 @@ namespace {
             "batch",
             "./scene_folder",
             "-o",
-            "./outputs"
-        };
+            "./outputs"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(res.has_value()) << res.error();
@@ -196,8 +171,7 @@ namespace {
     TEST(BatchTrainerTest, ParseMissingInputsFails) {
         std::vector<const char*> argv = {
             "lichtfeld-studio",
-            "batch-train"
-        };
+            "batch-train"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         EXPECT_FALSE(res.has_value());
@@ -208,8 +182,7 @@ namespace {
             "lichtfeld-studio",
             "batch-train",
             "--no-download",
-            "./my_datasets"
-        };
+            "./my_datasets"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(res.has_value()) << res.error();
@@ -228,8 +201,7 @@ namespace {
             "--add-splat",
             "model.ply",
             "--freeze",
-            "./my_datasets"
-        };
+            "./my_datasets"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(res.has_value()) << res.error();
@@ -378,6 +350,15 @@ namespace {
         EXPECT_TRUE(valid);
         EXPECT_FALSE(fs::exists(log_path));
         EXPECT_FALSE(fs::exists(job.output_path));
+    }
+
+    TEST(BatchTimeoutTest, OneMinuteUsesSingular) {
+        EXPECT_EQ(lfs::app::batch_timeout_message(1), "Job timed out after 1 minute");
+    }
+
+    TEST(BatchTimeoutTest, OtherDurationsUsePlural) {
+        EXPECT_EQ(lfs::app::batch_timeout_message(2), "Job timed out after 2 minutes");
+        EXPECT_EQ(lfs::app::batch_timeout_message(60), "Job timed out after 60 minutes");
     }
 
 } // namespace

@@ -23,7 +23,8 @@ namespace lfs::app {
         const lfs::core::param::BatchTrainingParameters& params,
         std::string& error);
 
+    std::string batch_timeout_message(int minutes);
+
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params);
 
 } // namespace lfs::app
-

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/batch_trainer.hpp"
+#include "batch_process.hpp"
 
 #include "core/argument_parser.hpp"
 #include "core/executable_path.hpp"
@@ -30,8 +31,8 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>
 #include "python/windows_process_utils.hpp"
+#include <windows.h>
 #else
 #include <fcntl.h>
 #include <poll.h>
@@ -48,50 +49,18 @@ namespace lfs::app {
         using std::filesystem::path;
         using json = nlohmann::json;
 
-        std::atomic<bool> g_batch_interrupted{false};
         std::atomic<int> g_interrupt_count{0};
 #ifndef _WIN32
-        std::atomic<pid_t> g_active_child_pid{0};
-#else
-        std::atomic<HANDLE> g_active_child_process{nullptr};
-        std::atomic<HANDLE> g_active_child_job{nullptr};
-        std::atomic<DWORD> g_active_child_pid{0};
-#endif
+        std::atomic<int> g_interrupt_signal{SIGINT};
 
-#ifndef _WIN32
-        void handle_sigint(int sig) {
-            const int count = ++g_interrupt_count;
-            g_batch_interrupted.store(true);
-            pid_t child = g_active_child_pid.load();
-            if (child > 0) {
-                if (count == 1) {
-                    kill(child, sig);
-                } else {
-                    kill(child, SIGKILL);
-                }
-            }
+        void handle_sigint(int signal) {
+            g_interrupt_signal.store(signal);
+            ++g_interrupt_count;
         }
 #else
         BOOL WINAPI handle_console_ctrl(DWORD ctrl_type) {
             if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT) {
-                const int count = ++g_interrupt_count;
-                g_batch_interrupted.store(true);
-
-                const DWORD child_pid = g_active_child_pid.load();
-                HANDLE job = g_active_child_job.load();
-                HANDLE child = g_active_child_process.load();
-
-                if (count == 1) {
-                    if (child_pid > 0) {
-                        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child_pid);
-                    }
-                } else {
-                    if (job != nullptr) {
-                        TerminateJobObject(job, 130);
-                    } else if (child != nullptr) {
-                        TerminateProcess(child, 130);
-                    }
-                }
+                ++g_interrupt_count;
                 return TRUE;
             }
             return FALSE;
@@ -100,9 +69,9 @@ namespace lfs::app {
 
         struct ScopedSignalHandler {
             ScopedSignalHandler() {
-                g_batch_interrupted.store(false);
                 g_interrupt_count.store(0);
 #ifndef _WIN32
+                g_interrupt_signal.store(SIGINT);
                 struct sigaction sa{};
                 sa.sa_handler = handle_sigint;
                 sigemptyset(&sa.sa_mask);
@@ -420,7 +389,7 @@ namespace lfs::app {
             result.dataset_path = job.dataset_path;
             result.output_path = job.output_path;
 
-            if (g_batch_interrupted.load()) {
+            if (g_interrupt_count.load() > 0) {
                 result.cancelled = true;
                 result.exit_code = 130;
                 result.error_message = "Cancelled by user";
@@ -445,7 +414,7 @@ namespace lfs::app {
             const auto child_args = build_child_args(job, params);
             const auto start_time = std::chrono::steady_clock::now();
 
-            if (g_batch_interrupted.load()) {
+            if (g_interrupt_count.load() > 0) {
                 result.cancelled = true;
                 result.exit_code = 130;
                 result.error_message = "Cancelled by user";
@@ -465,7 +434,14 @@ namespace lfs::app {
                 result.error_message = "Failed to create process pipe";
                 return result;
             }
-            SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+            if (!SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0)) {
+                const DWORD error = GetLastError();
+                CloseHandle(hReadPipe);
+                CloseHandle(hWritePipe);
+                result.exit_code = 1;
+                result.error_message = std::format("Failed to start child process (system error {})", error);
+                return result;
+            }
 
             STARTUPINFOW si = {};
             si.cb = sizeof(si);
@@ -476,41 +452,42 @@ namespace lfs::app {
             PROCESS_INFORMATION pi = {};
             std::wstring cmdline = lfs::python::detail::build_win32_cmdline(executable, child_args);
 
-            HANDLE hJob = CreateJobObjectW(nullptr, nullptr);
-            if (hJob != nullptr) {
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
-                jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-            }
-
-            DWORD creation_flags = CREATE_NEW_PROCESS_GROUP;
-            if (hJob != nullptr) {
-                creation_flags |= CREATE_SUSPENDED;
-            }
+            HANDLE hJob = nullptr;
+            const DWORD creation_flags = CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
 
             if (!CreateProcessW(executable.c_str(), cmdline.data(), nullptr, nullptr, TRUE,
                                 creation_flags, nullptr, nullptr, &si, &pi)) {
-                if (hJob != nullptr) {
-                    CloseHandle(hJob);
-                }
+                const DWORD error = GetLastError();
                 CloseHandle(hReadPipe);
                 CloseHandle(hWritePipe);
                 result.success = false;
                 result.exit_code = 1;
-                result.error_message = std::format("CreateProcessW failed: {}", GetLastError());
+                result.error_message = std::format("Failed to start child process (system error {})", error);
                 return result;
             }
 
             CloseHandle(hWritePipe);
 
-            if (hJob != nullptr) {
-                AssignProcessToJobObject(hJob, pi.hProcess);
-                ResumeThread(pi.hThread);
+            const DWORD setup_error = detail::prepare_batch_child(pi, hJob, g_interrupt_count);
+            if (setup_error != ERROR_SUCCESS) {
+                if (hJob != nullptr)
+                    CloseHandle(hJob);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                CloseHandle(hReadPipe);
+                result.exit_code = 1;
+                result.error_message = std::format("Failed to start child process (system error {})", setup_error);
+                return result;
             }
 
-            g_active_child_process.store(pi.hProcess);
-            g_active_child_job.store(hJob);
-            g_active_child_pid.store(pi.dwProcessId);
+            int forwarded_interrupts = 0;
+            const auto forward_cancel = [&]() {
+                return detail::forward_pending_batch_cancel(g_interrupt_count.load(), forwarded_interrupts,
+                                                            [&](const bool force) {
+                                                                return (!force && GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId)) ||
+                                                                       detail::stop_batch_child(pi.hProcess, hJob, 130);
+                                                            });
+            };
 
             HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
             char buffer[4096];
@@ -522,6 +499,12 @@ namespace lfs::app {
             constexpr DWORD MAX_DRAIN_PER_CYCLE = 64 * 1024;
 
             while (!child_done) {
+                // Also delivers an interrupt received during ResumeThread, before the first wait.
+                if (!forward_cancel()) {
+                    result.exit_code = 1;
+                    result.error_message = std::format("Failed to stop child process (system error {})", GetLastError());
+                    break;
+                }
                 DWORD total_bytes_read_this_iteration = 0;
                 if (pipe_open) {
                     while (total_bytes_read_this_iteration < MAX_DRAIN_PER_CYCLE) {
@@ -553,20 +536,26 @@ namespace lfs::app {
 
                 const DWORD wait_time = (total_bytes_read_this_iteration > 0) ? 0 : 50;
                 DWORD wait_res = WaitForSingleObject(pi.hProcess, wait_time);
+                if (wait_res == WAIT_FAILED) {
+                    result.exit_code = 1;
+                    result.error_message = std::format("Failed to stop child process (system error {})", GetLastError());
+                    detail::stop_batch_child(pi.hProcess, hJob, 1);
+                    break;
+                }
                 if (wait_res == WAIT_OBJECT_0) {
                     child_done = true;
-                    g_active_child_job.store(nullptr);
-                    g_active_child_process.store(nullptr);
-                    g_active_child_pid.store(0);
 
                     if (pipe_open) {
-                        while (true) {
+                        DWORD drained = 0;
+                        while (drained < MAX_DRAIN_PER_CYCLE) {
                             DWORD bytesAvailable = 0;
                             if (!PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &bytesAvailable, nullptr) || bytesAvailable == 0) {
                                 break;
                             }
                             DWORD toRead = std::min<DWORD>(static_cast<DWORD>(sizeof(buffer) - 1), bytesAvailable);
+                            toRead = std::min<DWORD>(toRead, MAX_DRAIN_PER_CYCLE - drained);
                             if (ReadFile(hReadPipe, buffer, toRead, &bytesRead, nullptr) && bytesRead > 0) {
+                                drained += bytesRead;
                                 buffer[bytesRead] = '\0';
                                 DWORD bytesWritten = 0;
                                 WriteFile(hStdOut, buffer, bytesRead, &bytesWritten, nullptr);
@@ -580,17 +569,15 @@ namespace lfs::app {
                         }
                     }
 
-                    if (g_batch_interrupted.load()) {
+                    if (g_interrupt_count.load() > 0) {
                         result.cancelled = true;
                         result.error_message = "Cancelled by user";
-                        if (result.exit_code == 0) {
-                            result.exit_code = 130;
-                        }
+                        result.exit_code = 130;
                     }
                     break;
                 }
 
-                if (g_batch_interrupted.load()) {
+                if (g_interrupt_count.load() > 0) {
                     result.cancelled = true;
                     result.error_message = "Cancelled by user";
                     if (result.exit_code == 0) {
@@ -598,41 +585,31 @@ namespace lfs::app {
                     }
 
                     const int count = g_interrupt_count.load();
-                    if (count >= 2) {
+                    if (count >= 2 && !cancel_message_printed) {
                         std::println(stderr, "\n[Batch] Second interrupt received. Force terminating child process...");
-                        g_active_child_job.store(nullptr);
-                        g_active_child_process.store(nullptr);
-                        g_active_child_pid.store(0);
-                        if (hJob != nullptr) {
-                            TerminateJobObject(hJob, 130);
-                        } else {
-                            TerminateProcess(pi.hProcess, 130);
-                        }
-                        WaitForSingleObject(pi.hProcess, INFINITE);
-                        child_done = true;
-                        break;
+                        cancel_message_printed = true;
                     } else if (!cancel_message_printed) {
                         std::println(stderr, "\n[Batch] Interrupt received. Waiting for child process to save and shut down cleanly... (Press Ctrl+C again to force kill)");
                         cancel_message_printed = true;
                     }
                 }
 
-                if (!child_done && !g_batch_interrupted.load() && params.timeout_minutes > 0) {
+                if (!child_done && g_interrupt_count.load() == 0 && params.timeout_minutes > 0) {
                     const auto elapsed_sec = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - start_time).count();
+                                                 std::chrono::steady_clock::now() - start_time)
+                                                 .count();
                     if (elapsed_sec > params.timeout_minutes * 60) {
                         if (!timeout_triggered) {
                             timeout_triggered = true;
                             result.timed_out = true;
                             result.exit_code = 124;
-                            result.error_message = std::format("Job timed out after {} minutes", params.timeout_minutes);
-                            std::println(stderr, "\n[Batch] Job timed out after {} minutes. Sending stop signal to child process... (Press Ctrl+C to abort, twice to force kill)", params.timeout_minutes);
+                            result.error_message = batch_timeout_message(params.timeout_minutes);
+                            std::println(stderr, "\n[Batch] {}. Sending a stop signal to the child process... (Press Ctrl+C to abort, twice to force kill)", result.error_message);
                             BOOL stopped = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId);
                             if (!stopped) {
-                                if (hJob != nullptr) {
-                                    TerminateJobObject(hJob, 124);
-                                } else {
-                                    TerminateProcess(pi.hProcess, 124);
+                                if (!detail::stop_batch_child(pi.hProcess, hJob, 124)) {
+                                    result.error_message = std::format("Failed to stop child process (system error {})", GetLastError());
+                                    break;
                                 }
                             }
                         }
@@ -649,9 +626,6 @@ namespace lfs::app {
                 result.exit_code = 130;
             }
 
-            g_active_child_job.store(nullptr);
-            g_active_child_process.store(nullptr);
-            g_active_child_pid.store(0);
             if (hJob != nullptr) {
                 CloseHandle(hJob);
             }
@@ -685,7 +659,7 @@ namespace lfs::app {
             sigaddset(&block_mask, SIGTERM);
             sigprocmask(SIG_BLOCK, &block_mask, &orig_mask);
 
-            if (g_batch_interrupted.load()) {
+            if (g_interrupt_count.load() > 0) {
                 sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
                 close(pipe_fds[0]);
                 close(pipe_fds[1]);
@@ -707,7 +681,8 @@ namespace lfs::app {
             }
 
             if (pid == 0) {
-                sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
+                if (!detail::prepare_batch_child(orig_mask))
+                    _exit(127);
                 dup2(pipe_fds[1], STDOUT_FILENO);
                 dup2(pipe_fds[1], STDERR_FILENO);
                 close(pipe_fds[0]);
@@ -717,7 +692,26 @@ namespace lfs::app {
                 _exit(127);
             }
 
-            g_active_child_pid.store(pid);
+            if (!detail::register_batch_child(pid)) {
+                const int error = errno;
+                kill(pid, SIGKILL);
+                while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR) {}
+                sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
+                close(pipe_fds[0]);
+                close(pipe_fds[1]);
+                result.exit_code = 1;
+                result.error_message = std::format("Failed to start child process (system error {})", error);
+                return result;
+            }
+
+            int forwarded_interrupts = 0;
+            const auto forward_cancel = [&]() {
+                return detail::forward_pending_batch_cancel(g_interrupt_count.load(), forwarded_interrupts,
+                                                            [&](const bool force) {
+                                                                return detail::signal_batch_child(pid, force ? SIGKILL : g_interrupt_signal.load());
+                                                            });
+            };
+            forward_cancel();
             sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
 
             close(pipe_fds[1]);
@@ -729,6 +723,11 @@ namespace lfs::app {
             constexpr size_t MAX_DRAIN_PER_CYCLE = 64 * 1024;
 
             while (!child_done) {
+                if (!forward_cancel()) {
+                    result.exit_code = 1;
+                    result.error_message = std::format("Failed to stop child process (system error {})", errno);
+                    break;
+                }
                 struct pollfd pfd{};
                 pfd.fd = pipe_fds[0];
                 pfd.events = POLLIN | POLLHUP;
@@ -757,12 +756,14 @@ namespace lfs::app {
                 pid_t wait_res = waitpid(pid, &status, WNOHANG);
                 if (wait_res == pid) {
                     child_done = true;
-                    g_active_child_pid.store(0);
                     sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
 
-                    // Drain any remaining buffered output
+                    // Drain remaining output without waiting for inherited pipe writers.
+                    size_t drained = 0;
                     ssize_t bytes_read = 0;
-                    while ((bytes_read = read(pipe_fds[0], buffer, sizeof(buffer) - 1)) > 0) {
+                    while (drained < MAX_DRAIN_PER_CYCLE &&
+                           (bytes_read = read(pipe_fds[0], buffer, std::min(sizeof(buffer) - 1, MAX_DRAIN_PER_CYCLE - drained))) > 0) {
+                        drained += static_cast<size_t>(bytes_read);
                         buffer[bytes_read] = '\0';
                         ssize_t written = ::write(STDOUT_FILENO, buffer, bytes_read);
                         static_cast<void>(written);
@@ -781,18 +782,16 @@ namespace lfs::app {
                         }
                     }
 
-                    if (g_batch_interrupted.load()) {
+                    if (g_interrupt_count.load() > 0) {
                         result.cancelled = true;
                         result.error_message = "Cancelled by user";
-                        if (result.exit_code == 0) {
-                            result.exit_code = 130;
-                        }
+                        result.exit_code = 130;
                     }
                     break;
                 }
                 sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
 
-                if (!child_done && g_batch_interrupted.load()) {
+                if (!child_done && g_interrupt_count.load() > 0) {
                     result.cancelled = true;
                     result.error_message = "Cancelled by user";
                     if (result.exit_code == 0) {
@@ -800,16 +799,9 @@ namespace lfs::app {
                     }
 
                     const int count = g_interrupt_count.load();
-                    if (count >= 2) {
+                    if (count >= 2 && !cancel_message_printed) {
                         std::println(stderr, "\n[Batch] Second interrupt received. Force killing child process (PID {})...", pid);
-                        sigprocmask(SIG_BLOCK, &block_mask, nullptr);
-                        g_active_child_pid.store(0);
-                        kill(pid, SIGKILL);
-                        waitpid(pid, &status, 0);
-                        sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
-                        child_done = true;
-                        result.exit_code = 130;
-                        break;
+                        cancel_message_printed = true;
                     } else if (!cancel_message_printed) {
                         std::println(stderr, "\n[Batch] Interrupt received. Waiting for child process to save and shut down cleanly... (Press Ctrl+C again to force kill)");
                         cancel_message_printed = true;
@@ -817,24 +809,24 @@ namespace lfs::app {
                 }
 
                 // Timeout check: disarmed if interrupted
-                if (!child_done && !g_batch_interrupted.load() && params.timeout_minutes > 0) {
+                if (!child_done && g_interrupt_count.load() == 0 && params.timeout_minutes > 0) {
                     const auto elapsed_sec = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - start_time).count();
+                                                 std::chrono::steady_clock::now() - start_time)
+                                                 .count();
                     if (elapsed_sec > params.timeout_minutes * 60) {
                         if (!timeout_triggered) {
                             timeout_triggered = true;
                             result.timed_out = true;
                             result.exit_code = 124;
-                            result.error_message = std::format("Job timed out after {} minutes", params.timeout_minutes);
-                            std::println(stderr, "\n[Batch] Job timed out after {} minutes. Sending SIGTERM to PID {}... (Press Ctrl+C to abort, twice to force kill)", params.timeout_minutes, pid);
-                            kill(pid, SIGTERM);
+                            result.error_message = batch_timeout_message(params.timeout_minutes);
+                            std::println(stderr, "\n[Batch] {}. Sending a stop signal to the child process... (Press Ctrl+C to abort, twice to force kill)", result.error_message);
+                            detail::signal_batch_child(pid, SIGTERM);
                         }
                     }
                 }
             }
 
             close(pipe_fds[0]);
-            g_active_child_pid.store(0);
 #endif
 
             const auto end_time = std::chrono::steady_clock::now();
@@ -1036,6 +1028,10 @@ namespace lfs::app {
         return true;
     }
 
+    std::string batch_timeout_message(const int minutes) {
+        return std::format("Job timed out after {} {}", minutes, minutes == 1 ? "minute" : "minutes");
+    }
+
     int run_batch_training(const lfs::core::param::BatchTrainingParameters& params) {
         ScopedSignalHandler signal_handler;
 
@@ -1123,7 +1119,7 @@ namespace lfs::app {
         results.reserve(jobs.size());
 
         for (size_t i = 0; i < jobs.size(); ++i) {
-            if (g_batch_interrupted.load()) {
+            if (g_interrupt_count.load() > 0) {
                 std::println("\n[Batch] Training interrupted by user. Aborting remaining {} job(s)...", jobs.size() - i);
                 cancel_remaining_jobs(jobs, i, results, "Cancelled before start");
                 break;

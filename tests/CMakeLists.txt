@@ -34,6 +34,13 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_batch_process_tests test_batch_process.cpp)
+target_compile_features(lichtfeld_batch_process_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_batch_process_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
+set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
+
 add_executable(lichtfeld_collision_tests test_collision.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
 target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
