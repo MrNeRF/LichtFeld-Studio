@@ -38,7 +38,6 @@ class GamepadTestSection:
                        lambda value, n=name: self.configure(**{n: float(value)}))
         model.bind_func("gamepad_navigation_status", self.navigation_status)
         model.bind_func("gamepad_navigation_show_status", self.show_navigation_status)
-        model.bind_func("gamepad_navigation_mode", lambda: lf.ui.tr("preferences.navigation_" + self.navigation.get("mode", "orbit")))
         model.bind_func("gamepad_navigation_preset", lambda: lf.ui.tr("gamepad.preset." + self.navigation.get("mode", "orbit")))
         self.handle = model.get_handle()
         self.sync()
@@ -178,7 +177,7 @@ class GamepadTestSection:
         if changed:
             for name in ("gamepad_test_id", "gamepad_test_status", "gamepad_test_axes", "gamepad_test_buttons"):
                 self.handle.dirty(name)
-            for name in ("navigation_enabled", "navigation_id", "navigation_status", "navigation_show_status", "navigation_mode", "navigation_preset", "dead_zone", "look_speed", "move_speed"):
+            for name in ("navigation_enabled", "navigation_id", "navigation_status", "navigation_show_status", "navigation_preset", "dead_zone", "look_speed", "move_speed"):
                 self.handle.dirty("gamepad_" + name)
 
     def status(self):
