@@ -270,18 +270,24 @@ namespace {
 
     TEST(BatchTrainerTest, ResolveBatchJobsReservesExplicitNames) {
         TempDirectoryGuard temp;
-        const auto site = temp.path() / "scene";
-        fs::create_directories(site);
-        std::ofstream(site / "transforms.json") << "{}";
+        const auto site_a = temp.path() / "siteA" / "scene";
+        const auto site_b = temp.path() / "siteB" / "scene";
+        const auto site_c = temp.path() / "siteC" / "scene_2";
+        fs::create_directories(site_a);
+        fs::create_directories(site_b);
+        fs::create_directories(site_c);
+        std::ofstream(site_a / "transforms.json") << "{}";
+        std::ofstream(site_b / "transforms.json") << "{}";
+        std::ofstream(site_c / "transforms.json") << "{}";
 
         lfs::core::param::BatchTrainingParameters params;
         // Three jobs: two default names (will be "scene"), one explicit "scene_2"
         lfs::core::param::BatchJobItem j1;
-        j1.dataset_path = site;
+        j1.dataset_path = site_a;
         lfs::core::param::BatchJobItem j2;
-        j2.dataset_path = site;
+        j2.dataset_path = site_b;
         lfs::core::param::BatchJobItem j3;
-        j3.dataset_path = site;
+        j3.dataset_path = site_c;
         j3.name = "scene_2";
 
         params.jobs = {j1, j2, j3};
@@ -340,6 +346,38 @@ namespace {
         EXPECT_EQ(jobs[0].name, "bicycle");
         EXPECT_EQ(jobs[1].name, "kitchen");
         EXPECT_EQ(jobs[2].name, "room");
+    }
+
+    TEST(BatchTrainerTest, ValidateJobArgumentsRejectsHelpWithoutExiting) {
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "/tmp/fake_dataset";
+        job.output_path = "/tmp/fake_output";
+        job.extra_args = {"--help"};
+
+        lfs::core::param::BatchTrainingParameters params;
+        std::string error;
+        const bool valid = lfs::app::validate_job_arguments(job, params, error);
+        EXPECT_FALSE(valid);
+        EXPECT_FALSE(error.empty());
+    }
+
+    TEST(BatchTrainerTest, ValidateJobArgumentsDoesNotCreateLogFile) {
+        TempDirectoryGuard temp;
+        const auto log_path = temp.path() / "test_validate_no_side_effects.log";
+        ASSERT_FALSE(fs::exists(log_path));
+
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "/tmp/fake_dataset";
+        job.output_path = temp.path() / "outputs";
+        job.extra_args = {"--log-file", log_path.string()};
+
+        lfs::core::param::BatchTrainingParameters params;
+        std::string error;
+        const bool valid = lfs::app::validate_job_arguments(job, params, error);
+
+        EXPECT_TRUE(valid);
+        EXPECT_FALSE(fs::exists(log_path));
+        EXPECT_FALSE(fs::exists(job.output_path));
     }
 
 } // namespace

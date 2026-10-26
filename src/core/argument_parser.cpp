@@ -706,7 +706,8 @@ namespace {
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params,
-        const bool create_output_directory = true) {
+        const bool create_output_directory = true,
+        const bool validate_only = false) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -1025,12 +1026,19 @@ namespace {
                 parser.Prog(args.front());
                 parser.ParseArgs(std::vector<std::string>(args.begin() + 1, args.end()));
             } catch (const ::args::Help&) {
-                std::print("{}", parser.Help());
+                if (!validate_only) {
+                    std::print("{}", parser.Help());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::Completion& e) {
-                std::print("{}", e.what());
+                if (!validate_only) {
+                    std::print("{}", e.what());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
+                if (validate_only) {
+                    return std::unexpected(std::format("Parse error: {}", e.what()));
+                }
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
             }
 
@@ -1063,7 +1071,7 @@ namespace {
             }
 
             // Initialize logger (CLI args override environment variable)
-            {
+            if (!validate_only) {
                 auto level = lfs::core::LogLevel::Info;
                 std::string log_file_path;
                 std::string filter_pattern;
@@ -1106,6 +1114,13 @@ namespace {
                 }
                 if (!log_file_path.empty()) {
                     LOG_DEBUG("Logging to file: {}", log_file_path);
+                }
+            } else {
+                if (log_level) {
+                    auto level = lfs::core::LogLevel::Info;
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
             }
 
@@ -1394,7 +1409,7 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    if (create_output_directory) {
+                    if (create_output_directory && !validate_only) {
                         // Create output directory
                         std::error_code ec;
                         lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
@@ -1418,7 +1433,7 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    if (create_output_directory) {
+                    if (create_output_directory && !validate_only) {
                         // Create output directory if provided
                         std::error_code ec;
                         lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
@@ -2067,7 +2082,7 @@ namespace {
 
 // Public interface
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory) {
+lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory, const bool validate_only) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
@@ -2082,7 +2097,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
             args.insert(args.begin() + 1, "-v");
     }
 
-    auto parse_result = parse_arguments(args, *params, create_output_directory);
+    auto parse_result = parse_arguments(args, *params, create_output_directory, validate_only);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -2092,6 +2107,9 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
 
     const auto [result, apply_overrides] = *parse_result;
     if (result == ParseResult::Help) {
+        if (validate_only) {
+            return std::unexpected("Help requested in training arguments");
+        }
         std::exit(0);
     }
 

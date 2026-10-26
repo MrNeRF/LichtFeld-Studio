@@ -18,13 +18,25 @@ namespace lfs::app {
             pending_signal_ = 0;
             previous_sigint_ = std::signal(SIGINT, &HeadlessRunCoordinator::signal_handler);
             previous_sigterm_ = std::signal(SIGTERM, &HeadlessRunCoordinator::signal_handler);
-            if (previous_sigint_ == SIG_ERR || previous_sigterm_ == SIG_ERR) {
+#ifdef SIGBREAK
+            previous_sigbreak_ = std::signal(SIGBREAK, &HeadlessRunCoordinator::signal_handler);
+#endif
+            if (previous_sigint_ == SIG_ERR || previous_sigterm_ == SIG_ERR
+#ifdef SIGBREAK
+                || previous_sigbreak_ == SIG_ERR
+#endif
+            ) {
                 if (previous_sigint_ != SIG_ERR) {
                     std::signal(SIGINT, previous_sigint_);
                 }
                 if (previous_sigterm_ != SIG_ERR) {
                     std::signal(SIGTERM, previous_sigterm_);
                 }
+#ifdef SIGBREAK
+                if (previous_sigbreak_ != SIG_ERR) {
+                    std::signal(SIGBREAK, previous_sigbreak_);
+                }
+#endif
                 throw std::runtime_error("Failed to install headless signal handlers");
             }
             monitor_ = std::jthread([this](const std::stop_token token) { monitor_signals(token); });
@@ -35,6 +47,9 @@ namespace lfs::app {
         static void install_signal_handlers() {
             std::signal(SIGINT, &HeadlessRunCoordinator::signal_handler);
             std::signal(SIGTERM, &HeadlessRunCoordinator::signal_handler);
+#ifdef SIGBREAK
+            std::signal(SIGBREAK, &HeadlessRunCoordinator::signal_handler);
+#endif
         }
 
         [[nodiscard]] static void (*signal_handler_for_test())(int) {
@@ -52,6 +67,11 @@ namespace lfs::app {
             if (previous_sigterm_ != SIG_ERR) {
                 std::signal(SIGTERM, previous_sigterm_);
             }
+#ifdef SIGBREAK
+            if (previous_sigbreak_ != SIG_ERR) {
+                std::signal(SIGBREAK, previous_sigbreak_);
+            }
+#endif
         }
 
         HeadlessRunCoordinator(const HeadlessRunCoordinator&) = delete;
@@ -78,7 +98,11 @@ namespace lfs::app {
         using SignalHandler = void (*)(int);
 
         static void signal_handler(const int signal) noexcept {
-            if (signal == SIGINT || signal == SIGTERM) {
+            if (signal == SIGINT || signal == SIGTERM
+#ifdef SIGBREAK
+                || signal == SIGBREAK
+#endif
+            ) {
                 pending_signal_ = signal;
             }
         }
@@ -99,6 +123,9 @@ namespace lfs::app {
 
         SignalHandler previous_sigint_ = SIG_DFL;
         SignalHandler previous_sigterm_ = SIG_DFL;
+#ifdef SIGBREAK
+        SignalHandler previous_sigbreak_ = SIG_DFL;
+#endif
         std::stop_source stop_source_;
         std::atomic<int> received_signal_{0};
         std::jthread monitor_;

@@ -86,6 +86,6 @@ namespace lfs::core::args {
 
     // Legacy interface - prefer parse_args()
     LFS_CORE_API std::expected<std::unique_ptr<param::TrainingParameters>, std::string>
-    parse_args_and_params(int argc, const char* const argv[], bool create_output_directory = true);
+    parse_args_and_params(int argc, const char* const argv[], bool create_output_directory = true, bool validate_only = false);
 
 } // namespace lfs::core::args
