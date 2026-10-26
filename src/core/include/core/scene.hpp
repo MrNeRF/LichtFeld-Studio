@@ -650,8 +650,9 @@ namespace lfs::core {
             glm::mat4 transform;
             NodeId node_id = NULL_NODE;
             bool is_selected = false;
+            std::shared_ptr<const CollisionVolume> collision{};
         };
-        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
+        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes(bool include_collision = false) const;
 
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
         [[nodiscard]] std::vector<int> getVisibleNodeActiveShDegrees() const;

@@ -402,7 +402,7 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     state.update(target_uuid="second", target_name="Wall")
     assert panel.on_update(None)
     other.show()
-    assert panel.controls.target() == ("first", "Floor") and other.controls.export_target is None
+    assert panel.controls.export_target == ("first", "Floor") and other.controls.export_target is None
     model.handle.dirty_fields.clear()
     assert panel.on_update(None) is False
     assert not model.handle.dirty_fields

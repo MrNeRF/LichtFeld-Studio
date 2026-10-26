@@ -45,15 +45,13 @@ class CollisionRendering:
         self.error = ""
         self.state = {}
         self.scrubs = ScrubFieldController(
-            {f"collision_{key}": spec for key, spec in SPECS.items()},
-            lambda prop: self.values[prop.removeprefix("collision_")],
-            self.set_value, commit_value=self.commit,
+            SPECS, self.values.__getitem__, self.set_value, commit_value=self.commit,
             on_error=self.show_error,
         )
 
     def mount(self, doc):
         self.update()
-        for group, keys in (("size", ("size",)), ("generator", ("opacity", "area")), ("walk", ("height", "radius", "step", "speed"))):
+        for group, keys in (("size", ("size",)), ("generator", ("opacity", "area")), ("walk", WALK_FIELDS)):
             container = doc.get_element_by_id(f"collision-{group}-fields")
             if container is not None:
                 for key in keys:
@@ -62,7 +60,7 @@ class CollisionRendering:
                     row = w.slider(container, key, label=lf.ui.tr(localized_key),
                                    min=spec.min_value, max=spec.max_value, step=spec.step, value=self.values[key])
                     row.query_selector(".setting-row__label-col").set_attribute("data-lfs-i18n", localized_key)
-                    row.query_selector("input").set_attribute("data-value", f"collision_{key}")
+                    row.query_selector("input").set_attribute("data-value", key)
                     if group != "walk":
                         row.set_attribute("data-tooltip", "tooltip.collision." + ("voxel_size" if key == "size" else key))
         self.scrubs.mount(doc)
@@ -80,11 +78,10 @@ class CollisionRendering:
         return lf.ui.tr(key) + (f"\n{details}" if details else "")
 
     def set_value(self, prop, value):
-        self.values[prop.removeprefix("collision_")] = value
+        self.values[prop] = value
         invalidate_panel(self.handle, "*")
 
-    def commit(self, prop, value):
-        key = prop.removeprefix("collision_")
+    def commit(self, key, value):
         if key in WALK_FIELDS:
             def apply():
                 settings = list(lf.get_collision_state()["walk_settings"])
@@ -97,22 +94,17 @@ class CollisionRendering:
         self.handle = model.get_handle()
         self.update()
         model.bind_func("collision_has_collision", lambda: self.state.get("has_collision", False))
-        error = lambda: self.error or self.localized_error(self.state.get("error" if self.popup else "walk_error", ""))
-        model.bind_func("collision_error", error)
-        model.bind_func("collision_has_error", lambda: bool(error()))
+        model.bind_func("collision_error", lambda: self.error or self.localized_error(self.state.get("error" if self.popup else "walk_error", "")))
         if not self.popup:
             return
         for key in ("automatic", "cleanup"):
             model.bind(f"collision_{key}", lambda k=key: self.values[k],
-                       lambda value, k=key: self.set_value(f"collision_{k}", value))
+                       lambda value, k=key: self.set_value(k, value))
         model.bind_func("collision_resolved_size", self.resolved_size)
-        model.bind_func("collision_can_generate", lambda: bool(self.state.get("source_name")) and not self.state.get("active"))
-        model.bind_func("collision_source", lambda: self.state.get("source_name", ""))
-        model.bind_func("collision_active", lambda: self.state.get("active", False))
-        model.bind_func("collision_progress", lambda: self.state.get("progress", 0))
-        model.bind_func("collision_has_source", lambda: bool(self.state.get("source_name")))
-        model.bind_func("collision_target", lambda: self.target()[1])
-        model.bind_func("collision_exportable", lambda: bool(self.target()[0]) and not self.state.get("active", False))
+        for key, field, default in (("collision_source", "source_name", ""), ("collision_active", "active", False), ("collision_progress", "progress", 0)):
+            model.bind_func(key, lambda k=field, d=default: self.state.get(k, d))
+        model.bind_func("collision_target", lambda: self.export_target[1] if self.export_target else "")
+        model.bind_func("collision_exportable", lambda: bool(self.export_target and self.export_target[0]) and not self.state.get("active", False))
         model.bind_func("collision_status", lambda: f'{lf.ui.tr(STAGES.get(self.state.get("stage"), "training_panel.running"))} {self.state.get("progress", 0):.0%}')
         model.bind_event("collision_generate", lambda *_: self.run(lambda: lf.generate_collision(
             *self.generation_settings())))
@@ -139,12 +131,8 @@ class CollisionRendering:
             self.show_error(exc)
         invalidate_panel(self.handle, "*")
 
-    def target(self):
-        return self.export_target if self.export_target is not None else (
-            self.state.get("target_uuid", ""), self.state.get("target_name", ""))
-
     def export(self, *_):
-        uuid, _ = self.target()
+        uuid, _ = self.export_target or ("", "")
         if not uuid or self.state.get("active"):
             return
         destination, confirmed = lf.ui.save_json_file_dialog_with_confirmation(self.path)
@@ -169,7 +157,7 @@ class CollisionRendering:
         changed = state != self.state
         self.state = state
         for key, value in zip(WALK_FIELDS, state.get("walk_settings", ())):
-            if self.scrubs._active_prop != f"collision_{key}":
+            if self.scrubs._active_prop != key:
                 self.values[key] = value
         changed |= self.scrubs.sync_all()
         if changed:

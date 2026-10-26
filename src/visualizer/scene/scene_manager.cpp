@@ -3854,7 +3854,7 @@ namespace lfs::vis {
             }
         }
 
-        state.meshes = scene_.getVisibleMeshes();
+        state.meshes = scene_.getVisibleMeshes(true);
         for (auto& vm : state.meshes) {
             vm.transform = rendering::dataWorldTransformToVisualizerWorld(vm.transform);
             vm.is_selected = selection_.isNodeSelected(vm.node_id);

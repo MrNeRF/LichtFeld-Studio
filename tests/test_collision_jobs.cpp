@@ -24,8 +24,10 @@
 #include <cuda_runtime.h>
 #include <fstream>
 #include <future>
+#include <glm/ext/matrix_relational.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <semaphore>
 #include <tuple>
 
 namespace lfs::vis::gui {
@@ -35,7 +37,7 @@ namespace lfs::vis::gui {
         lfs::test::licht::TemporaryDirectory temporary_;
         std::optional<lfs::test::licht::ScopedEnvironmentVariable> home_;
         std::unique_ptr<VisualizerImpl> viewer_;
-        std::promise<void> release_;
+        std::binary_semaphore release_{0};
         enum class Outcome { Generate,
                              Fail,
                              PublishedExport };
@@ -72,12 +74,15 @@ namespace lfs::vis::gui {
             std::erase_if(result, [](const auto* node) { return node->type != NodeType::COLLISION; });
             return result;
         }
+        std::stop_token launch(std::function<bool(std::stop_token, const ProgressCallback&)> work) {
+            tasks().launchCollision(std::move(work));
+            return tasks().collision_stop_.get_token();
+        }
         void start(NodeId source, Outcome outcome = Outcome::Generate) {
-            release_ = std::promise<void>{};
             tasks().collision_source_ = scene().collisionSourceIdentity(source);
             tasks().collision_resolved_size_ = .25f;
-            tasks().launchCollision([this, release = release_.get_future().share(), outcome](std::stop_token, const ProgressCallback&) {
-                release.wait();
+            tasks().launchCollision([this, outcome](std::stop_token, const ProgressCallback&) {
+                release_.acquire();
                 if (outcome == Outcome::Fail)
                     throw std::runtime_error("fixture generation failure");
                 if (outcome == Outcome::PublishedExport)
@@ -86,23 +91,14 @@ namespace lfs::vis::gui {
                 return false;
             });
         }
-        std::stop_token launch(std::function<bool(std::stop_token, const ProgressCallback&)> work) {
-            tasks().launchCollision(std::move(work));
-            return tasks().collision_stop_.get_token();
-        }
         void finish() {
-            release_.set_value();
+            release_.release();
             if (tasks().collision_worker_.valid())
                 tasks().collision_worker_.wait();
             tasks().pollCollision();
             ASSERT_TRUE(tasks().collisionJob());
             EXPECT_FALSE(tasks().collisionJob()->running());
             EXPECT_FALSE(app_store().collision_state.get().active);
-        }
-        void expectMatrix(const glm::mat4& actual, const glm::mat4& expected) {
-            for (int column = 0; column < 4; ++column)
-                for (int row = 0; row < 4; ++row)
-                    EXPECT_NEAR(actual[column][row], expected[column][row], 1e-5f);
         }
     };
 
@@ -154,7 +150,7 @@ namespace lfs::vis::gui {
                 EXPECT_FLOAT_EQ(tasks().collisionResolvedSize(), .25f);
                 const auto uuid = colliders().front()->uuid;
                 const auto volume = colliders().front()->collision;
-                expectMatrix(scene().getWorldTransform(colliders().front()->id), glm::mat4(1));
+                EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(colliders().front()->id), glm::mat4(1), 1e-5f)));
                 const auto unrelated = scene().addGroup("Unrelated later edit");
                 (void)op::undoHistory().undo();
                 EXPECT_TRUE(colliders().empty());
@@ -164,9 +160,9 @@ namespace lfs::vis::gui {
                 ASSERT_NE(restored, nullptr);
                 EXPECT_EQ(restored->parent_id, source);
                 EXPECT_EQ(restored->collision, volume);
-                expectMatrix(restored->transform(), local);
+                EXPECT_TRUE(glm::all(glm::equal(restored->transform(), local, 1e-5f)));
                 scene().setNodeTransform(parent, glm::translate(glm::mat4(1), glm::vec3(8, 9, 10)));
-                expectMatrix(scene().getWorldTransform(restored->id), scene().getWorldTransform(source) * local);
+                EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(restored->id), scene().getWorldTransform(source) * local, 1e-5f)));
             }
             scene().removeNodeById(parent);
         }
@@ -194,14 +190,12 @@ namespace lfs::vis::gui {
             EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
             auto dispatched = std::make_shared<std::promise<void>>();
             auto ready = dispatched->get_future();
-            release_ = {};
-            auto release = release_.get_future().share();
             auto batches = std::make_shared<std::atomic<int>>(0);
-            const auto token = launch([dispatched, batches, release, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
+            const auto token = launch([this, dispatched, batches, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
                 (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
                     if (stage == "Voxelizing collision" && ++*batches == 2) {
                         dispatched->set_value();
-                        if (release.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
+                        if (!release_.try_acquire_for(std::chrono::seconds(10)))
                             throw std::runtime_error("Collision stage release timed out");
                     }
                     return progress(value, stage);
@@ -308,7 +302,8 @@ namespace lfs::vis::gui {
                 manager.selectNode(name);
             scene().setNodeVisibility("First", visible);
             settings.collision_preview_opacity = opacity;
-            const auto items = buildViewportMeshDrawItems({}, settings, {0, 0, 1});
+            context.scene_state = manager.buildRenderState({.metadata_only = true});
+            const auto items = buildViewportMeshDrawItems(context.scene_state, settings, {0, 0, 1});
             ASSERT_EQ(items.size(), visible ? 2 : 1);
             if (visible)
                 EXPECT_EQ(items[0].model, lfs::rendering::dataWorldTransformToVisualizerWorld(transform));

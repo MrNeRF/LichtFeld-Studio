@@ -1960,11 +1960,11 @@ namespace lfs::core {
         return mask;
     }
 
-    std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes() const {
+    std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes(bool include_collision) const {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
-            if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
-                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id});
+            if (((node->type == NodeType::MESH && node->mesh) || (include_collision && node->collision)) && isNodeEffectivelyVisible(node->id)) {
+                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id, false, node->collision});
             }
         }
         return result;
@@ -4311,20 +4311,13 @@ namespace lfs::core {
             const Scene& scene;
             ~DepthGuard() { scene.noteLiveModelLockReleased(); }
         } depth_guard{*this};
-        const auto* node = getNodeById(id);
-        if (!node || node->type != NodeType::SPLAT)
-            throw collisionError("collision.source_unavailable", "Select one loaded splat node to voxelize");
-        const auto* model = consolidated_ ? getCombinedModel() : node->model.get();
-        if (!model)
-            throw collisionError("collision.source_unavailable", "The selected splat payload is not loaded");
+        if (consolidated_)
+            (void)getCombinedModel();
         const auto captured_identity = collisionSourceIdentity(id);
         if (!captured_identity)
             throw collisionError("collision.source_unavailable", "The selected splat payload is not loaded");
-        const auto inverse = glm::inverse(captured_identity->world_transform);
-        for (int column = 0; column < 4; ++column)
-            for (int row = 0; row < 4; ++row)
-                if (!std::isfinite(inverse[column][row]))
-                    throw collisionError("collision.source_transform_invalid", "Collision source transform must be invertible");
+        (void)core::collisionInverse(captured_identity->world_transform);
+        const auto* model = captured_identity->model;
         size_t begin = 0, count = model->size();
         if (consolidated_) {
             const auto slot = std::find_if(consolidated_node_slots_.begin(), consolidated_node_slots_.end(), [&](const auto& entry) {

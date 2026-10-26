@@ -18,14 +18,11 @@
 namespace lfs::core {
     struct MeshData;
     struct CollisionVolume;
-    struct SceneNode;
 } // namespace lfs::core
 
 namespace lfs::vis {
 
     class VulkanContext;
-    class SceneManager;
-    [[nodiscard]] bool hasVisibleCollisionPreview(const SceneManager& manager);
 
     // GPU-rendered mesh draw item. Full PBR (Cook-Torrance: GGX + Smith + Schlick) with
     // albedo / normal / metallic-roughness textures, vertex colors, Reinhard tonemap +

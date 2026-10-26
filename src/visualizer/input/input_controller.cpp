@@ -644,22 +644,18 @@ namespace lfs::vis {
     }
 
     core::CapsuleQuery InputController::walkQuery() const {
-        struct Collider {
-            std::shared_ptr<const core::CollisionVolume> volume;
-            glm::mat4 transform;
-        };
-        std::vector<Collider> colliders;
+        std::vector<core::Scene::VisibleMesh> colliders;
         if (const auto* manager = services().sceneOrNull()) {
             const auto& scene = manager->getScene();
             for (const auto* node : scene.getNodes())
                 if (node && node->type == core::NodeType::COLLISION && node->collision)
-                    colliders.push_back({node->collision, lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id))});
+                    colliders.push_back({.mesh = nullptr, .transform = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id)), .collision = node->collision});
         }
         if (colliders.empty())
             throw core::collisionError("collision.walk_no_collision", "No collision nodes are loaded");
         return [colliders = std::move(colliders)](glm::vec3 feet, glm::vec3 up, float height, float radius) {
             return std::ranges::any_of(colliders, [&](const auto& collider) {
-                return core::collisionCapsuleIntersects(*collider.volume, collider.transform, feet, up, height, radius);
+                return core::collisionCapsuleIntersects(*collider.collision, collider.transform, feet, up, height, radius);
             });
         };
     }

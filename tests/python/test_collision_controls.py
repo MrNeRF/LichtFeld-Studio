@@ -24,7 +24,7 @@ def controls(monkeypatch):
 def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
     from lfs_plugins import collision_rendering as module
     controls.update()
-    scrub, prop = controls.scrubs, "collision_step"
+    scrub, prop = controls.scrubs, "step"
     keys = attach_fields(scrub)
     field = scrub._fields[prop]
     field.input_el.blur = lambda: scrub._on_input_blur(prop, None)
@@ -60,7 +60,7 @@ def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, ap
     from lfs_plugins import collision_rendering as module
     path = tmp_path / "collision.voxel.json"
     path.with_suffix(".bin").write_bytes(b"old")
-    controls.state = {"target_uuid": "first", "target_name": "Floor"}
+    controls.export_target = ("first", "Floor")
     def pick(*args, **kwargs):
         assert args == ("collision.voxel.json",) and not kwargs
         controls.state["target_uuid"] = "second"
@@ -89,14 +89,15 @@ def test_bindings_generation_resolution_and_idle_updates(controls):
     model.bind_event.side_effect = events.__setitem__
     controls.bind(model)
     assert {call.args[0] for call in model.bind.call_args_list} == {"collision_automatic", "collision_cleanup"}
-    assert not bindings["collision_can_generate"]()
+    assert not bindings["collision_source"]()
     for changes in ({"source_name": "Selected"}, {"active": True, "progress": .4, "stage": "Sorting collision records"},
                     {"active": False, "error": "/tmp/output.bin: denied"}):
         module.lf.get_collision_state.return_value.update(changes)
         assert controls.update()
         assert controls.update() is False
-        assert bindings["collision_can_generate"]() == (not controls.state.get("active", False))
-    controls.state.update(target_uuid="internal-id", target_name="Floor")
+        assert bindings["collision_source"]() == "Selected"
+        assert bindings["collision_active"]() == controls.state.get("active", False)
+    controls.export_target = ("internal-id", "Floor")
     assert bindings["collision_target"]() == "Floor"
     controls.values.update(size=.005, opacity=.2, area=3., automatic=True)
     events["collision_generate"]()

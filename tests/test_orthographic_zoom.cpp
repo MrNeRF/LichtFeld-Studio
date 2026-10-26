@@ -10,15 +10,12 @@
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "licht_test_support.hpp"
-#include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
-#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include <cmath>
 #include <cstdlib>
-#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <optional>
 #include <string>
