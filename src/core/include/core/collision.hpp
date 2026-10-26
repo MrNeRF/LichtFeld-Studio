@@ -18,6 +18,7 @@ namespace lfs::core {
         Tensor means, scales, rotations, opacity, deleted;
         glm::mat4 transform{1};
     };
+    LFS_CORE_API glm::mat4 collisionInverse(const glm::mat4& transform);
     LFS_CORE_API CollisionSource captureCollisionSource(const SplatData&, const glm::mat4& transform = glm::mat4(1), size_t begin = 0, size_t count = SIZE_MAX);
     struct LFS_CORE_API CollisionVolume {
         static constexpr uint32_t brick_tag = 0x80000000u;

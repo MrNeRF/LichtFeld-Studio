@@ -100,20 +100,8 @@ namespace lfs::core {
         if (!finite(feet) || !finite(up) || !std::isfinite(height) || !std::isfinite(radius) ||
             radius <= 0 || height < 2 * radius || glm::length(up) < 1e-6f)
             throw collisionError("preferences.viewport_defaults_invalid", "Invalid collision capsule", ErrorCode::InvalidArgument);
-        for (int i = 0; i < 4; ++i)
-            for (int j = 0; j < 4; ++j)
-                if (!std::isfinite(transform[i][j]))
-                    throw collisionError("collision.source_transform_invalid", "Non-finite collision transform", ErrorCode::InvalidArgument);
-        const double determinant = glm::determinant(glm::dmat3(transform));
-        if (!std::isfinite(determinant) || determinant == 0 ||
-            transform[0][3] != 0 || transform[1][3] != 0 || transform[2][3] != 0 || transform[3][3] != 1)
-            throw collisionError("collision.source_transform_invalid", "Invalid collision transform", ErrorCode::InvalidArgument);
+        const auto inverse = collisionInverse(transform);
         up = glm::normalize(up);
-        const auto inverse = glm::inverse(transform);
-        for (int i = 0; i < 4; ++i)
-            for (int j = 0; j < 4; ++j)
-                if (!std::isfinite(inverse[i][j]))
-                    throw collisionError("collision.source_transform_invalid", "Collision inverse transform is not representable", ErrorCode::InvalidArgument);
         const auto linear = glm::mat3(inverse);
         const auto transposed = glm::transpose(linear);
         float norm1 = 0, norm_inf = 0, max_scale = 0;

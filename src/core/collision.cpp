@@ -2,12 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
 #include "core/collision_error.hpp"
-#include "core/splat_data.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cuda_runtime.h>
 #include <format>
-#include <set>
 namespace lfs::core {
     void CollisionSettings::validate() const {
         if (!std::isfinite(voxel_size) || voxel_size <= 0 || !std::isfinite(opacity) || opacity < 0 || opacity >= 1 ||
@@ -18,63 +15,18 @@ namespace lfs::core {
                                  ErrorCode::InvalidArgument,
                                  std::format("voxel_size={}; opacity={}; max_gaussian_area={}; cleanup={}", voxel_size, opacity, max_gaussian_area, cleanup));
     }
-    CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform, size_t begin, size_t count) {
-        struct ReadFence {
-            std::set<cudaStream_t> streams;
-            cudaError_t finish() noexcept {
-                auto first_error = cudaSuccess;
-                for (const auto stream : streams) {
-                    const auto status = cudaStreamSynchronize(stream);
-                    if (first_error == cudaSuccess)
-                        first_error = status;
-                    ensure_cuda_success(status, "cudaStreamSynchronize(collision capture)",
-                                        "Finishing source reads before releasing the caller's writer exclusion",
-                                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-                }
-                streams.clear();
-                return first_error;
-            }
-            ~ReadFence() { (void)finish(); }
-        } fence;
-        for (const auto* tensor : {&data.means_raw(), &data.scaling_raw(), &data.rotation_raw(),
-                                   &data.opacity_raw(), &data.deleted()})
-            if (tensor->is_valid() && tensor->device() == Device::CUDA)
-                fence.streams.insert(tensor->stream());
-        if (!fence.streams.empty())
-            fence.streams.insert(getCurrentCUDAStream());
-        // Clones use the allocation/current stream; activations and deferred inputs
-        // may use their home streams. Fence all of them, including partial LOD work.
-        if (begin > data.size() || (count != SIZE_MAX && count > data.size() - begin))
-            throw collisionError("collision.source_unavailable", "Collision source range is unavailable");
-        count = std::min(count, data.size() - begin);
-        const auto slice = [&](const Tensor& tensor) { return tensor.slice(0, begin, begin + count); };
-        SplatData view;
-        view.means_raw() = slice(data.means_raw());
-        view.scaling_raw() = slice(data.scaling_raw());
-        view.rotation_raw() = slice(data.rotation_raw());
-        view.opacity_raw() = slice(data.opacity_raw());
-        if (data.deleted().is_valid())
-            view.deleted() = slice(data.deleted()).to(DataType::Bool);
-        if (data.lod_tree && data.lod_tree->has_tree()) {
-            if (data.size() != data.lod_tree->total_nodes())
-                throw collisionError("collision.source_unavailable", "Collision requires resident original LOD leaves; load the complete model first");
-            std::vector<bool> interior(count);
-            for (size_t i = 0; i < count; ++i)
-                interior[i] = data.lod_tree->child_count_at(begin + i) != 0;
-            auto hidden = Tensor::from_vector(interior, {count}, view.means_raw().device());
-            view.deleted() = view.deleted().is_valid() ? hidden.logical_or(view.deleted()) : hidden;
-            if (data.lod_tree->lod_opacity_encoded)
-                view.opacity_raw() = view.opacity_raw().logit();
-        }
-        CollisionSource source{view.means_raw().to(DataType::Float32), view.get_scaling().to(DataType::Float32),
-                               view.get_rotation().to(DataType::Float32), view.get_opacity().to(DataType::Float32),
-                               view.deleted(), transform};
-        // Materialize lazy activations while the caller still excludes source writers.
-        for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
-            if (tensor->is_valid())
-                (void)tensor->data_ptr();
-        LFS_ENSURE_CUDA_SUCCESS(fence.finish(), "Collision capture failed");
-        return source;
+    glm::mat4 collisionInverse(const glm::mat4& transform) {
+        const double determinant = glm::determinant(glm::dmat3(transform));
+        const auto inverse = glm::inverse(transform);
+        if (!std::isfinite(determinant) || determinant == 0 || transform[0][3] != 0 ||
+            transform[1][3] != 0 || transform[2][3] != 0 || transform[3][3] != 1)
+            throw collisionError("collision.source_transform_invalid", "Collision transform must be invertible and affine", ErrorCode::InvalidArgument);
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                if (!std::isfinite(transform[column][row]) || !std::isfinite(inverse[column][row]))
+                    throw collisionError("collision.source_transform_invalid", "Collision transform or inverse is not finite", ErrorCode::InvalidArgument,
+                                         std::format("transform[{}][{}]={}; inverse={}", column, row, transform[column][row], inverse[column][row]));
+        return inverse;
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
         if (glm::any(glm::lessThan(p, glm::ivec3(0))) || glm::any(glm::greaterThanEqual(p, dimensions)))
