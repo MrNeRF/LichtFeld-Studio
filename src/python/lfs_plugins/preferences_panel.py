@@ -10,6 +10,7 @@ from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
 
 from .keymap_bindings import KeymapBindingsSection
+from .gamepad_preferences import GamepadTestSection
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .rendering_defaults import RenderingDefaultsSection, vignette_value, set_vignette_value
@@ -112,6 +113,7 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_catalog = []
         self._scene_upscaler_presets = {}
         self._keymap = KeymapBindingsSection()
+        self._gamepad_test = GamepadTestSection()
         self._theme_catalog = []
         self._theme_families = []
         self._language_catalog = []
@@ -347,6 +349,7 @@ class PreferencesPanel(Panel):
         self._handle = model.get_handle()
         self._portal_state_binding.set_handle(self._handle)
         self._keymap.bind(model)
+        self._gamepad_test.bind(model)
         self._reload_file_associations()
 
     def on_mount(self, doc):
@@ -393,6 +396,7 @@ class PreferencesPanel(Panel):
             self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._gamepad_test.close()
         self._rendering_defaults.unmount()
         self._portal_state_binding.close()
         self._scrub_fields.unmount()
@@ -402,6 +406,10 @@ class PreferencesPanel(Panel):
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
+        if self._section == "input":
+            self._gamepad_test.sync()
+        else:
+            self._gamepad_test.deactivate()
         self._refresh_project_folders()
         self._consume_section_request()
         self._sync_mcp_runtime()

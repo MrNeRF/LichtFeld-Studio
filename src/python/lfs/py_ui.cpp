@@ -28,6 +28,7 @@
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
+#include "window/window_manager.hpp"
 #include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
@@ -5384,6 +5385,57 @@ namespace lfs::python {
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
+
+        m.def("get_gamepad_test_state", [] {
+            const auto state = invoke_on_viewer([] {
+                if (get_visualizer())
+                    if (auto* window = vis::services().windowOrNull())
+                        return window->gamepads().snapshot();
+                return vis::input::GamepadSnapshot{};
+            }, vis::input::GamepadSnapshot{});
+            nb::dict result;
+            result["available"] = state.available;
+            result["error"] = state.error;
+            result["selected"] = state.selected;
+            result["generation"] = state.sample.generation;
+            nb::list devices;
+            for (const auto& device : state.devices) {
+                nb::dict entry;
+                entry["id"] = device.id;
+                entry["name"] = device.name;
+                entry["mapped"] = device.mapped;
+                entry["type"] = static_cast<int>(device.type);
+                entry["error"] = device.error;
+                devices.append(entry);
+            }
+            result["devices"] = devices;
+            nb::list axes, has_axes, buttons, pressed, labels;
+            for (auto axis : state.sample.axes)
+                axes.append(axis);
+            for (auto present : state.sample.has_axis)
+                has_axes.append(present);
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                if (state.sample.buttons[i])
+                    buttons.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+                if (state.sample.pressed[i])
+                    pressed.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+            }
+            for (auto label : state.sample.labels)
+                labels.append(static_cast<int>(label));
+            result["axes"] = axes;
+            result["has_axes"] = has_axes;
+            result["buttons"] = buttons;
+            result["pressed"] = pressed;
+            result["labels"] = labels;
+            return result; }, "Read connected controllers and the selected diagnostic sample; never moves the camera.");
+
+        m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
+                                                               if (get_visualizer())
+                                                                   if (auto* window = vis::services().windowOrNull())
+                                                                       return window->gamepads().select(id);
+                                                               return false;
+                                                           },
+                                                                                   false); }, nb::arg("device_id"), "Select a connected controller for input testing, or zero for none.");
 
         m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
         m.def("set_rendering_defaults_json", [](const std::string& serialized) {

@@ -3391,5 +3391,13 @@
   "collision.height": "Head height",
   "collision.radius": "Body radius",
   "collision.step": "Step height",
-  "collision.replace_pair": "Replace the existing voxel pair?"
+  "collision.replace_pair": "Replace the existing voxel pair?",
+  "gamepad.title": "Controller input test",
+  "gamepad.help": "Select a controller to inspect its sticks, triggers and buttons. This test does not move the camera.",
+  "gamepad.none": "No controller selected",
+  "gamepad.empty": "No controllers connected",
+  "gamepad.unavailable": "Controller input unavailable",
+  "gamepad.unmapped": "Mapping required",
+  "gamepad.axes": "Sticks and triggers",
+  "gamepad.buttons": "Buttons"
 }

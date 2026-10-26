@@ -2825,6 +2825,14 @@ def set_camera_browse_repeat_rate(rate: float, persist: bool = True) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_gamepad_test_state() -> dict:
+    """Read connected controllers and the selected input-test sample; does not move the camera."""
+    ...
+
+def set_gamepad_test_device(device_id: int) -> bool:
+    """Select a connected mapped controller for diagnostics; zero clears selection."""
+    ...
+
 def get_rendering_defaults_json() -> str:
     """
     Get user defaults for new projects; project VIEW values are independent overrides.

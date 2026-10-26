@@ -3391,5 +3391,13 @@
   "collision.height": "Hauteur de la tête",
   "collision.radius": "Rayon du corps",
   "collision.step": "Hauteur de marche",
-  "collision.replace_pair": "Remplacer la paire de fichiers de voxels existante ?"
+  "collision.replace_pair": "Remplacer la paire de fichiers de voxels existante ?",
+  "gamepad.title": "Test des entrées de la manette",
+  "gamepad.help": "Sélectionnez une manette pour vérifier ses sticks, gâchettes et boutons. Ce test ne déplace pas la caméra.",
+  "gamepad.none": "Aucune manette sélectionnée",
+  "gamepad.empty": "Aucune manette connectée",
+  "gamepad.unavailable": "Entrée de manette indisponible",
+  "gamepad.unmapped": "Configuration requise",
+  "gamepad.axes": "Sticks et gâchettes",
+  "gamepad.buttons": "Boutons"
 }

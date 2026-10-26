@@ -3391,5 +3391,13 @@
   "collision.height": "Hoofdhoogte",
   "collision.radius": "Lichaamsstraal",
   "collision.step": "Staphoogte",
-  "collision.replace_pair": "Het bestaande voxelpaar vervangen?"
+  "collision.replace_pair": "Het bestaande voxelpaar vervangen?",
+  "gamepad.title": "Controllerinvoer testen",
+  "gamepad.help": "Selecteer een controller om sticks, triggers en knoppen te testen. Deze test verplaatst de camera niet.",
+  "gamepad.none": "Geen controller geselecteerd",
+  "gamepad.empty": "Geen controllers aangesloten",
+  "gamepad.unavailable": "Controllerinvoer niet beschikbaar",
+  "gamepad.unmapped": "Toewijzing vereist",
+  "gamepad.axes": "Sticks en triggers",
+  "gamepad.buttons": "Knoppen"
 }

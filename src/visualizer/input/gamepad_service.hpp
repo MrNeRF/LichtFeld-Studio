@@ -1,0 +1,70 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "core/export.hpp"
+#include <SDL3/SDL_gamepad.h>
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+union SDL_Event;
+
+namespace lfs::vis::input {
+
+    struct GamepadDevice {
+        SDL_JoystickID id = 0;
+        uint64_t generation = 0;
+        std::string name;
+        bool mapped = false;
+        SDL_GamepadType type = SDL_GAMEPAD_TYPE_UNKNOWN;
+        std::string error;
+    };
+
+    struct GamepadSample {
+        SDL_JoystickID id = 0;
+        uint64_t generation = 0;
+        std::array<float, SDL_GAMEPAD_AXIS_COUNT> axes{};
+        std::array<bool, SDL_GAMEPAD_AXIS_COUNT> has_axis{};
+        std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{};
+        std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> has_button{};
+        std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> pressed{};
+        std::array<SDL_GamepadButtonLabel, 4> labels{};
+        bool operator==(const GamepadSample&) const = default;
+    };
+
+    struct GamepadSnapshot {
+        bool available = false;
+        std::string error;
+        std::vector<GamepadDevice> devices;
+        SDL_JoystickID selected = 0;
+        GamepadSample sample;
+    };
+
+    // Viewer-thread service. SDL IDs identify connections, never saved profiles.
+    // Snapshots contain values only and remain valid after a handle is closed.
+    // Selection currently addresses diagnostics, not camera navigation ownership.
+    class LFS_VIS_API GamepadService {
+    public:
+        GamepadService();
+        ~GamepadService();
+        GamepadService(const GamepadService&) = delete;
+        GamepadService& operator=(const GamepadService&) = delete;
+
+        bool initialize();
+        void shutdown();
+        void beginFrame();
+        void handleEvent(const SDL_Event& event);
+        bool sample();
+        [[nodiscard]] bool select(SDL_JoystickID id);
+        [[nodiscard]] GamepadSnapshot snapshot() const;
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+
+} // namespace lfs::vis::input

@@ -168,6 +168,7 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_analog_navigation.cpp
+        test_gamepad_service.cpp
         licht_test_support.cpp
         test_collision_scene.cpp
         test_collision_jobs.cpp
@@ -846,6 +847,7 @@ set(TEST_FILES
     test_viewport.cpp
     test_navigation_up_axis.cpp
     test_analog_navigation.cpp
+    test_gamepad_service.cpp
     test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
     test_input_key_repeat.cpp

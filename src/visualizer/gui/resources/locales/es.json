@@ -3391,5 +3391,13 @@
   "collision.height": "Altura de la cabeza",
   "collision.radius": "Radio del cuerpo",
   "collision.step": "Altura del escalón",
-  "collision.replace_pair": "¿Reemplazar el par de archivos de vóxeles existente?"
+  "collision.replace_pair": "¿Reemplazar el par de archivos de vóxeles existente?",
+  "gamepad.title": "Prueba de entrada del mando",
+  "gamepad.help": "Selecciona un mando para comprobar sus sticks, gatillos y botones. Esta prueba no mueve la cámara.",
+  "gamepad.none": "Ningún mando seleccionado",
+  "gamepad.empty": "No hay mandos conectados",
+  "gamepad.unavailable": "Entrada del mando no disponible",
+  "gamepad.unmapped": "Se requiere una asignación",
+  "gamepad.axes": "Sticks y gatillos",
+  "gamepad.buttons": "Botones"
 }

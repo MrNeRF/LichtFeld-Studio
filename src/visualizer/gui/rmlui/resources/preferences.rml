@@ -374,6 +374,22 @@
       </div>
 
       <div class="preferences-section" data-if="show_input">
+        <div class="section-header text-accent">@tr:gamepad.title</div>
+        <div class="section-content">
+          <span class="preferences-description">@tr:gamepad.help</span>
+          <select class="preferences-select" data-value="gamepad_test_id">
+            <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
+          </select>
+          <span class="preferences-description">{{ gamepad_test_status }}</span>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.axes</span>
+            <span>{{ gamepad_test_axes }}</span>
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.buttons</span>
+            <span>{{ gamepad_test_buttons }}</span>
+          </div>
+        </div>
         <div class="section-header text-accent" data-class-is-expanded="navigation_expanded" data-event-click="toggle_section('navigation')">
           <span class="section-arrow text-accent" data-class-is-expanded="navigation_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.camera_navigation</span>

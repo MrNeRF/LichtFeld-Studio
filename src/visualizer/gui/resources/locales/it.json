@@ -3391,5 +3391,13 @@
   "collision.height": "Altezza della testa",
   "collision.radius": "Raggio del corpo",
   "collision.step": "Altezza del gradino",
-  "collision.replace_pair": "Sostituire la coppia di file voxel esistente?"
+  "collision.replace_pair": "Sostituire la coppia di file voxel esistente?",
+  "gamepad.title": "Test ingressi joypad",
+  "gamepad.help": "Seleziona un joypad per verificare stick, grilletti e pulsanti. Questo test non muove la camera.",
+  "gamepad.none": "Nessun joypad selezionato",
+  "gamepad.empty": "Nessun joypad collegato",
+  "gamepad.unavailable": "Ingresso joypad non disponibile",
+  "gamepad.unmapped": "Mappatura necessaria",
+  "gamepad.axes": "Stick e grilletti",
+  "gamepad.buttons": "Pulsanti"
 }

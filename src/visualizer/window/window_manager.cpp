@@ -13,6 +13,7 @@
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "vulkan_context.hpp"
@@ -573,6 +574,7 @@ namespace lfs::vis {
     }
 
     WindowManager::~WindowManager() {
+        gamepads_.shutdown();
         // Release our Wayland proxies/queue while SDL's borrowed display is
         // still alive. One context also avoids rebinding globals on panel reload.
         native_file_drag_.reset();
@@ -720,6 +722,8 @@ namespace lfs::vis {
         input_router_.setInputController(ic);
         if (input_controller_) {
             input_controller_->setInputRouter(&input_router_);
+            if (window_)
+                gamepads_.initialize();
         }
     }
 
@@ -951,6 +955,20 @@ namespace lfs::vis {
     }
 
     void WindowManager::dispatchQueuedEvent(const SDL_Event& event) {
+        // This path can run inside SDL's event watch. Defer handle ownership
+        // changes until the native pump has returned, outside watcher locks.
+        switch (event.type) {
+        case SDL_EVENT_JOYSTICK_ADDED:
+        case SDL_EVENT_JOYSTICK_REMOVED:
+        case SDL_EVENT_GAMEPAD_ADDED:
+        case SDL_EVENT_GAMEPAD_REMOVED:
+        case SDL_EVENT_GAMEPAD_REMAPPED:
+        case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            gamepad_events_.push_back(event);
+            break;
+        default:
+            break;
+        }
         const SDL_WindowID id = window_ ? SDL_GetWindowID(window_) : 0;
         if (auto* gui = services().guiOrNull())
             gui->prepareInput();
@@ -970,6 +988,17 @@ namespace lfs::vis {
             dispatchQueuedEvent(event);
     }
 
+    void WindowManager::flushGamepadEvents() {
+        bool devices_changed = false;
+        for (const auto& event : gamepad_events_) {
+            gamepads_.handleEvent(event);
+            devices_changed |= event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        }
+        gamepad_events_.clear();
+        if (gamepads_.sample() || devices_changed)
+            lfs::python::request_redraw();
+    }
+
     bool WindowManager::drainQueuedEvents() {
         bool drained = false;
         SDL_Event event;
@@ -982,6 +1011,7 @@ namespace lfs::vis {
 
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
+        gamepads_.beginFrame();
         SDL_Event event;
         // Drain previously queued events before pumping new native events.
         drainQueuedEvents();
@@ -994,6 +1024,7 @@ namespace lfs::vis {
             updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
+        flushGamepadEvents();
         suppressFrameInputForManualResize();
         pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();
@@ -1013,6 +1044,7 @@ namespace lfs::vis {
         if (native_drag_scheduler_ && native_drag_scheduler_->busy())
             timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
+        gamepads_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
             vulkan_context_->hasPendingSwapchainResize()) {
@@ -1041,6 +1073,7 @@ namespace lfs::vis {
             updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
+        flushGamepadEvents();
         suppressFrameInputForManualResize();
         pinFrameInputForValueDrag();
         flushPendingTitlebarDoubleClick();

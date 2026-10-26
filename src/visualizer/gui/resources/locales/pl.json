@@ -3391,5 +3391,13 @@
   "collision.height": "Wysokość głowy",
   "collision.radius": "Promień ciała",
   "collision.step": "Wysokość stopnia",
-  "collision.replace_pair": "Zastąpić istniejącą parę plików wokseli?"
+  "collision.replace_pair": "Zastąpić istniejącą parę plików wokseli?",
+  "gamepad.title": "Test wejścia kontrolera",
+  "gamepad.help": "Wybierz kontroler, aby sprawdzić drążki, spusty i przyciski. Ten test nie porusza kamerą.",
+  "gamepad.none": "Nie wybrano kontrolera",
+  "gamepad.empty": "Brak podłączonych kontrolerów",
+  "gamepad.unavailable": "Wejście kontrolera niedostępne",
+  "gamepad.unmapped": "Wymagane mapowanie",
+  "gamepad.axes": "Drążki i spusty",
+  "gamepad.buttons": "Przyciski"
 }

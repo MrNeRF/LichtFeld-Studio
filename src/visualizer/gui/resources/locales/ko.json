@@ -3391,5 +3391,13 @@
   "collision.height": "머리 높이",
   "collision.radius": "몸 반경",
   "collision.step": "단차 높이",
-  "collision.replace_pair": "기존 복셀 파일 쌍을 교체하시겠습니까?"
+  "collision.replace_pair": "기존 복셀 파일 쌍을 교체하시겠습니까?",
+  "gamepad.title": "컨트롤러 입력 테스트",
+  "gamepad.help": "컨트롤러를 선택하여 스틱, 트리거 및 버튼을 확인하세요. 이 테스트는 카메라를 움직이지 않습니다.",
+  "gamepad.none": "선택된 컨트롤러 없음",
+  "gamepad.empty": "연결된 컨트롤러 없음",
+  "gamepad.unavailable": "컨트롤러 입력을 사용할 수 없음",
+  "gamepad.unmapped": "매핑 필요",
+  "gamepad.axes": "스틱 및 트리거",
+  "gamepad.buttons": "버튼"
 }

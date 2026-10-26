@@ -3391,5 +3391,13 @@
   "collision.height": "头部高度",
   "collision.radius": "身体半径",
   "collision.step": "台阶高度",
-  "collision.replace_pair": "替换现有的体素文件对吗？"
+  "collision.replace_pair": "替换现有的体素文件对吗？",
+  "gamepad.title": "控制器输入测试",
+  "gamepad.help": "选择控制器以检查摇杆、扳机和按钮。此测试不会移动相机。",
+  "gamepad.none": "未选择控制器",
+  "gamepad.empty": "未连接控制器",
+  "gamepad.unavailable": "控制器输入不可用",
+  "gamepad.unmapped": "需要映射",
+  "gamepad.axes": "摇杆和扳机",
+  "gamepad.buttons": "按钮"
 }

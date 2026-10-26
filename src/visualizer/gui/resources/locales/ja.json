@@ -3391,5 +3391,13 @@
   "collision.height": "頭の高さ",
   "collision.radius": "身体の半径",
   "collision.step": "段差の高さ",
-  "collision.replace_pair": "既存のボクセルファイルのペアを置き換えますか？"
+  "collision.replace_pair": "既存のボクセルファイルのペアを置き換えますか？",
+  "gamepad.title": "コントローラー入力テスト",
+  "gamepad.help": "コントローラーを選択してスティック、トリガー、ボタンを確認します。このテストではカメラは動きません。",
+  "gamepad.none": "コントローラー未選択",
+  "gamepad.empty": "コントローラーが接続されていません",
+  "gamepad.unavailable": "コントローラー入力を利用できません",
+  "gamepad.unmapped": "マッピングが必要です",
+  "gamepad.axes": "スティックとトリガー",
+  "gamepad.buttons": "ボタン"
 }

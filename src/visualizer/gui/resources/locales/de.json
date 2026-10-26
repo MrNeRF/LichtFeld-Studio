@@ -3391,5 +3391,13 @@
   "collision.height": "Kopfhöhe",
   "collision.radius": "Körperradius",
   "collision.step": "Stufenhöhe",
-  "collision.replace_pair": "Das vorhandene Voxel-Dateipaar ersetzen?"
+  "collision.replace_pair": "Das vorhandene Voxel-Dateipaar ersetzen?",
+  "gamepad.title": "Controller-Eingabetest",
+  "gamepad.help": "Wählen Sie einen Controller, um Sticks, Trigger und Tasten zu prüfen. Dieser Test bewegt die Kamera nicht.",
+  "gamepad.none": "Kein Controller ausgewählt",
+  "gamepad.empty": "Keine Controller verbunden",
+  "gamepad.unavailable": "Controller-Eingabe nicht verfügbar",
+  "gamepad.unmapped": "Zuordnung erforderlich",
+  "gamepad.axes": "Sticks und Trigger",
+  "gamepad.buttons": "Tasten"
 }

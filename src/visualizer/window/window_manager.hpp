@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "input/gamepad_service.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
 #include <chrono>
@@ -105,6 +106,7 @@ namespace lfs::vis {
         [[nodiscard]] InputController* inputController() const { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
+        [[nodiscard]] input::GamepadService& gamepads() { return gamepads_; }
 
     private:
         friend class WindowInputDispatchTest;
@@ -112,6 +114,8 @@ namespace lfs::vis {
         void processEvent(const ::SDL_Event& event);
         void dispatchQueuedEvent(const ::SDL_Event& event);
         void dispatchPolledEvent(const ::SDL_Event& event);
+        void flushGamepadEvents();
+        std::vector<SDL_Event> gamepad_events_;
         bool drainQueuedEvents();
         static bool watchEvent(void* userdata, ::SDL_Event* event);
         bool pumping_events_ = false;
@@ -129,6 +133,7 @@ namespace lfs::vis {
         };
 
         SDL_Window* window_ = nullptr;
+        input::GamepadService gamepads_;
         std::unique_ptr<VulkanContext> vulkan_context_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
