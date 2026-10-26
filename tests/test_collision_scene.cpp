@@ -87,9 +87,9 @@ namespace {
     TEST_F(CollisionArchive, ReadAndSaveFailuresAreTransactional) {
         auto document = require_result(ProjectDocument::open(path));
         const auto baseline = read_file_bytes(path);
-        detail::set_max_payload_materialized_bytes_for_testing(1);
+        lfs::io::project::detail::set_max_payload_materialized_bytes_for_testing(1);
         auto limited = ProjectDocument::open(path);
-        detail::set_max_payload_materialized_bytes_for_testing(std::nullopt);
+        lfs::io::project::detail::set_max_payload_materialized_bytes_for_testing(std::nullopt);
         ASSERT_FALSE(limited);
         EXPECT_EQ(limited.error().code(), lfs::ErrorCode::ResourceExhausted);
         const auto bytes = encodeCollision(*volume);
