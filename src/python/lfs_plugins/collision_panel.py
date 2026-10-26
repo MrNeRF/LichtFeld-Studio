@@ -5,7 +5,7 @@ import lichtfeld as lf
 from .collision_rendering import CollisionRendering
 from .panels import panel_class
 from .types import Panel
-from .ui import RuntimeState, PanelStateBinding
+from .ui import RuntimeState, PanelStateBinding, invalidate_panel
 
 __lfs_panel_classes__ = ["CollisionPanel"]
 __lfs_panel_ids__ = ["lfs.collision"]
@@ -18,16 +18,17 @@ class CollisionPanel(Panel):
         self.binding = PanelStateBinding()
 
     def show(self, export=False):
-        self.controls.export_mode = export
-        state = lf.get_collision_state() if export else {}
-        self.controls.export_target = (state.get("target_uuid", ""), state.get("target_name", ""))
-        self.controls.invalidate()
+        state = lf.get_collision_state() if export else None
+        self.controls.export_target = None if state is None else (
+            state.get("target_uuid", ""), state.get("target_name", ""))
+        invalidate_panel(self.controls.handle, "*")
         lf.ui.set_panel_enabled(self.id, True)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("collision")
-        model.bind_func("panel_label", lambda: lf.ui.tr("export.export" if self.controls.export_mode else "collision.title"))
-        model.bind_func("export_mode", lambda: self.controls.export_mode)
+        model.bind_func("panel_label", lambda: lf.ui.tr(
+            "export.export" if self.controls.export_target is not None else "collision.title"))
+        model.bind_func("export_mode", lambda: self.controls.export_target is not None)
         self.controls.bind(model)
 
     def on_mount(self, doc):

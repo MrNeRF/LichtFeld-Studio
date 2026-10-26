@@ -972,14 +972,11 @@ namespace lfs::io::project {
                 collisions.emplace(uuid, volume);
                 deferred_geometry_keys.erase({FOURCC_COLV, uuid});
                 return volume;
-            } catch (const std::bad_alloc& error) {
-                // LFS-CENSUS-OK(empty-catch): allocation failures stay inside the project Result boundary.
-                return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
-                    lfs::ErrorCode::ResourceExhausted, "A collision payload could not be allocated.", error.what(), "COLV");
             } catch (const std::exception& error) {
-                // LFS-CENSUS-OK(empty-catch): malformed binary data cannot escape project loading.
+                // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
                 return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
-                    lfs::ErrorCode::DataLoss, "A collision payload is invalid.", error.what(), "COLV");
+                    dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
+                    "A collision payload could not be decoded.", error.what(), "COLV");
             }
         }
 
@@ -3640,14 +3637,10 @@ namespace lfs::io::project {
             return {};
         try {
             volume->validate();
-        } catch (const std::bad_alloc& error) {
-            // LFS-CENSUS-OK(empty-catch): first adoption validates once; subsequent saves reuse the immutable volume.
-            return fail<void>(lfs::ErrorCode::ResourceExhausted,
-                              "A collision payload could not be validated in memory.", error.what(), "COLV");
         } catch (const std::exception& error) {
-            // LFS-CENSUS-OK(empty-catch): invalid caller-owned occupancy cannot enter the document.
-            return fail<void>(lfs::ErrorCode::InvalidArgument,
-                              "A collision payload is invalid.", error.what(), "COLV");
+            // LFS-CENSUS-OK(empty-catch): validate first adoption through the Result boundary.
+            return fail<void>(dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
+                              "A collision payload could not be validated.", error.what(), "COLV");
         }
         impl_->deferred_geometry_keys.erase({FOURCC_COLV, instance_uuid});
         impl_->collisions.insert_or_assign(instance_uuid, std::move(volume));
@@ -5092,17 +5085,10 @@ namespace lfs::io::project {
         report.commit_uuid = impl_->source_reader->commit().commit_uuid;
         report.snapshot_uuid = impl_->source_reader->commit().snapshot_uuid;
         return report;
-    } catch (const std::bad_alloc& error) {
-        // LFS-CENSUS-OK(empty-catch): serialization allocation failures are returned to the save job.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::ResourceExhausted,
-                                               "The project could not be serialized in memory.", error.what(), "project.save");
-    } catch (const std::length_error& error) {
-        // LFS-CENSUS-OK(empty-catch): bounded serializers reject unrepresentable chapters before publication.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::ResourceExhausted,
-                                               "The project exceeds its serialization budget.", error.what(), "project.save");
     } catch (const std::exception& error) {
-        // LFS-CENSUS-OK(empty-catch): legacy chapter serializers throw; callers use the Result contract.
-        return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::InvalidArgument,
+        // LFS-CENSUS-OK(empty-catch): serialization failures settle the save Result before publication.
+        const bool exhausted = dynamic_cast<const std::bad_alloc*>(&error) || dynamic_cast<const std::length_error*>(&error);
+        return fail<ProjectDocumentSaveReport>(exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
                                                "The project could not be serialized.", error.what(), "project.save");
     }
 

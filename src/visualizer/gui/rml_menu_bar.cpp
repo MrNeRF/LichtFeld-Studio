@@ -2071,17 +2071,20 @@ namespace lfs::vis::gui {
 
         if (render_buttons != render_buttons_) {
             render_buttons_ = std::move(render_buttons);
-            menu_model_.DirtyVariable("menu_render_buttons");
+            if (menu_model_)
+                menu_model_.DirtyVariable("menu_render_buttons");
             render_needed_ = true;
         }
         if (camera_buttons != camera_buttons_) {
             camera_buttons_ = std::move(camera_buttons);
-            menu_model_.DirtyVariable("menu_camera_buttons");
+            if (menu_model_)
+                menu_model_.DirtyVariable("menu_camera_buttons");
             render_needed_ = true;
         }
         if (projection_buttons != projection_buttons_) {
             projection_buttons_ = std::move(projection_buttons);
-            menu_model_.DirtyVariable("menu_projection_buttons");
+            if (menu_model_)
+                menu_model_.DirtyVariable("menu_projection_buttons");
             render_needed_ = true;
         }
     }

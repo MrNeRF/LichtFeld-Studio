@@ -3,13 +3,12 @@
 #include "app/voxelizer.hpp"
 #include "collision_fixture.hpp"
 #include "core/argument_parser.hpp"
-#include "core/collision_error.hpp"
-#include "core/cuda/collision_voxelization.hpp"
-#include "io/atomic_output.hpp"
+#include "core/cuda/collision_voxelization_kernels.hpp"
+#include "core/native_fs.hpp"
 #include "io/collision_export.hpp"
+#include "licht_test_support.hpp"
 #include <array>
 #include <bit>
-#include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <tuple>
@@ -34,19 +33,16 @@ namespace {
     namespace fs = lfs::core::native_fs;
     using collision_test::cells;
     using lfs::core::CollisionVolume;
+    using namespace lfs::test::licht;
     struct CollisionExportTest : testing::Test {
-        fs::path directory = lfs::io::make_atomic_temp_output_path(fs::temp_directory_path() / "voxel_test");
+        TemporaryDirectory temporary{"voxel_test"};
+        const fs::path& directory = temporary.path;
         fs::path path = directory / "scene.voxel.json", binary = directory / "scene.voxel.bin";
-        void SetUp() override { fs::create_directories(directory); }
-        void TearDown() override { fs::remove_all(directory); }
         static std::string read(const fs::path& p) {
-            std::ifstream in(fs::native_path(p), std::ios::binary);
-            return {std::istreambuf_iterator<char>(in), {}};
+            const auto bytes = read_file_bytes(fs::native_path(p));
+            return bytes.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         }
-        static void write(const fs::path& p, const std::string& text) {
-            std::ofstream out(fs::native_path(p), std::ios::binary);
-            out << text;
-        }
+        static void write(const fs::path& p, std::string_view text) { write_file_bytes(fs::native_path(p), std::as_bytes(std::span(text))); }
         static CollisionVolume volume(glm::ivec3 dims = {5, 3, 2}) {
             return *collision_test::box({2, 4, 6}, dims, .25f);
         }
@@ -69,31 +65,28 @@ namespace {
             };
             const int edge = 4 << j.at("treeDepth").get<int>();
             std::vector<bool> result(size_t(edge) * edge * edge);
-            for (const auto cell : cells(glm::ivec3(edge))) {
-                auto p = cell;
-                int size = edge;
-                size_t index = 0;
-                while (index < nodes) {
-                    const auto value = word(index), mask = value >> 24, pointer = value & 0xffffff;
-                    if (value == 0xff000000 || size == 4) {
-                        if (value != 0xff000000 && size_t(pointer) * 2 + 1 >= leaves)
-                            throw std::runtime_error("Decoder leaf exceeds leafDataCount");
+            auto visit = [&](auto&& self, size_t index, glm::ivec3 origin, int size) -> void {
+                if (index >= nodes || size < 4)
+                    throw std::runtime_error("Decoder node exceeds topology bounds");
+                const auto value = word(index), mask = value >> 24, pointer = value & 0xffffff;
+                if (value == 0xff000000 || size == 4) {
+                    if (value != 0xff000000 && size_t(pointer) * 2 + 1 >= leaves)
+                        throw std::runtime_error("Decoder leaf exceeds leafDataCount");
+                    for (const auto p : cells(glm::ivec3(size))) {
+                        const auto cell = origin + p;
                         const int bit = p.x + 4 * p.y + 16 * p.z;
                         result[cell.x + edge * (cell.y + edge * cell.z)] = value == 0xff000000 ||
                                                                            ((word(nodes + 2 * pointer + bit / 32) >> (bit % 32)) & 1);
-                        break;
                     }
-                    size /= 2;
-                    const auto high = p / size;
-                    const int child = high.x + 2 * high.y + 4 * high.z;
-                    if (!(mask & (1u << child)))
-                        break;
-                    index = pointer + std::popcount(mask & ((1u << child) - 1));
-                    if (index >= nodes)
-                        throw std::runtime_error("Decoder node exceeds nodeCount");
-                    p %= size;
+                } else {
+                    size_t child_index = pointer;
+                    for (const auto p : cells(glm::ivec3(2)))
+                        if (mask & (1u << (p.x + 2 * p.y + 4 * p.z)))
+                            self(self, child_index++, origin + p * (size / 2), size / 2);
                 }
-            }
+            };
+            if (nodes)
+                visit(visit, 0, {}, edge);
             return result;
         }
     };
@@ -111,14 +104,8 @@ namespace {
         for (const auto count : {size_t(64'000'000), SIZE_MAX})
             EXPECT_THROW(lfs::core::cuda::collisionOutputBytes(count, 1), lfs::Exception);
         EXPECT_NO_THROW(lfs::io::checkCollisionExportMixedBlocks(14'680'064));
-        for (uint64_t count : {uint64_t(14'680'065), UINT64_MAX}) {
-            try {
-                lfs::io::checkCollisionExportMixedBlocks(count);
-                FAIL() << "Mixed-leaf overflow was accepted";
-            } catch (const lfs::Exception& e) {
-                EXPECT_EQ(lfs::core::collisionErrorField(e.error(), "message_key"), "collision.output_limit");
-            }
-        }
+        for (uint64_t count : {uint64_t(14'680'065), UINT64_MAX})
+            collision_test::expectError([&] { lfs::io::checkCollisionExportMixedBlocks(count); }, "collision.output_limit");
     }
     TEST_F(CollisionExportTest, EverySignedPermutationPreservesCellsAndLogicalBlockBounds) {
         for (const auto [dims, kind] : {std::tuple{glm::ivec3(4), 0}, {glm::ivec3(4), 1}, {glm::ivec3(4), 2}, {glm::ivec3(8), 1}, {glm::ivec3(24, 16, 12), 1}, {glm::ivec3(21, 13, 9), 1}, {glm::ivec3(5, 3, 2), 2}}) {
@@ -209,7 +196,10 @@ namespace {
                             fs::remove(entry.path());
                     return true;
                 };
-                EXPECT_THROW(lfs::io::exportCollision(volume(), path, glm::mat4(1), {}, inject), std::runtime_error);
+                if (cancel)
+                    EXPECT_THROW(lfs::io::exportCollision(volume(), path, glm::mat4(1), {}, inject), lfs::core::OperationCancelled);
+                else
+                    collision_test::expectError([&] { lfs::io::exportCollision(volume(), path, glm::mat4(1), {}, inject); }, "collision.export_publish");
                 preserved();
             }
         }

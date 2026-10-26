@@ -31,19 +31,38 @@ namespace lfs::core {
             for (int i = 1; i < count; ++i) {
                 const float left = times[i - 1], right = times[i], mid = (left + right) * .5f;
                 const auto point = a + delta * mid;
-                float numerator = 0, denominator = 0;
-                for (int axis = 0; axis < 3; ++axis) {
-                    if (point[axis] >= lo[axis] && point[axis] <= hi[axis])
-                        continue;
-                    const float bound = point[axis] < lo[axis] ? lo[axis] : hi[axis];
-                    numerator += delta[axis] * (a[axis] - bound);
-                    denominator += delta[axis] * delta[axis];
-                }
+                const auto bound = glm::clamp(point, lo, hi);
+                const auto slope = delta * glm::vec3(glm::notEqual(point, bound));
+                const float numerator = glm::dot(slope, a - bound), denominator = glm::dot(slope, slope);
                 const float t = denominator > 0 ? glm::clamp(-numerator / denominator, left, right) : mid;
                 const auto p = a + delta * t;
                 const auto distance = p - glm::clamp(p, lo, hi);
                 if (glm::dot(distance, distance) < radius * radius)
                     return true;
+            }
+            return false;
+        }
+        template <typename Hit, typename Contact>
+        bool scanSweep(float length, float extent, float spacing, const Hit& hit, const Contact& contact) {
+            const double required = std::ceil(double(length) / spacing);
+            if (required > 4096)
+                throw collisionError("collision.walk_budget", "Walk movement exceeds the sweep budget", ErrorCode::ResourceExhausted);
+            const int count = std::max(1, static_cast<int>(required));
+            float clear = 0;
+            for (int i = 1; i <= count; ++i) {
+                float boundary = extent * i / count;
+                if (hit(boundary)) {
+                    for (int j = 0; j < 16; ++j) {
+                        const float mid = (clear + boundary) * .5f;
+                        if (hit(mid))
+                            boundary = mid;
+                        else
+                            clear = mid;
+                    }
+                    if (contact(boundary))
+                        return true;
+                } else
+                    clear = boundary;
             }
             return false;
         }
@@ -56,32 +75,16 @@ namespace lfs::core {
             const float length = glm::length(delta);
             if (length == 0)
                 return {start};
-            const double required = std::ceil(double(length) / spacing);
-            if (required > 4096)
-                throw collisionError("collision.walk_budget", "Walk movement exceeds the sweep budget", ErrorCode::ResourceExhausted);
-            const int count = std::max(1, static_cast<int>(required));
-            float clear = 0;
-            auto clear_position = start;
-            for (int i = 1; i <= count; ++i) {
-                float contact = float(i) / count;
-                const auto candidate = start + delta * contact;
-                if (hit(candidate)) {
-                    for (int j = 0; j < 16; ++j) {
-                        const float mid = (clear + contact) * .5f;
-                        const auto point = start + delta * mid;
-                        if (hit(point))
-                            contact = mid;
-                        else {
-                            clear = mid;
-                            clear_position = point;
-                        }
-                    }
-                    return {clear_position, true};
-                }
-                clear = contact;
-                clear_position = candidate;
-            }
-            return {clear_position};
+            Sweep result{start};
+            const auto probe = [&](float t) {
+                const auto point = start + delta * t;
+                if (hit(point))
+                    return true;
+                result.position = point;
+                return false;
+            };
+            result.hit = scanSweep(length, 1, spacing, probe, [](float) { return true; });
+            return result;
         }
     } // namespace
     void WalkSettings::validate() const {
@@ -112,25 +115,26 @@ namespace lfs::core {
                 if (!std::isfinite(inverse[i][j]))
                     throw collisionError("collision.source_transform_invalid", "Collision inverse transform is not representable", ErrorCode::InvalidArgument);
         const auto linear = glm::mat3(inverse);
+        const auto transposed = glm::transpose(linear);
         float norm1 = 0, norm_inf = 0, max_scale = 0;
         bool orthogonal = true;
         for (int i = 0; i < 3; ++i) {
-            float row = 0, column = 0;
             max_scale = std::max(max_scale, glm::length(linear[i]));
-            for (int j = 0; j < 3; ++j) {
-                column += std::abs(linear[i][j]);
-                row += std::abs(linear[j][i]);
+            for (int j = 0; j < 3; ++j)
                 if (i != j && std::abs(glm::dot(linear[i], linear[j])) > 1e-5f * glm::length(linear[i]) * glm::length(linear[j]))
                     orthogonal = false;
-            }
-            norm1 = std::max(norm1, column);
-            norm_inf = std::max(norm_inf, row);
+            norm1 = std::max(norm1, glm::dot(glm::abs(linear[i]), glm::vec3(1)));
+            norm_inf = std::max(norm_inf, glm::dot(glm::abs(transposed[i]), glm::vec3(1)));
         }
         // Exact for rigid/uniform transforms; conservative for nonuniform scale/shear.
         const float world_radius = radius;
         radius *= orthogonal ? max_scale : std::sqrt(norm1 * norm_inf);
         const auto a = glm::vec3(inverse * glm::vec4(feet + up * world_radius, 1));
         const auto b = glm::vec3(inverse * glm::vec4(feet + up * (height - world_radius), 1));
+        const auto overlaps = [&](glm::ivec3 lo, glm::ivec3 hi) {
+            return segmentBox(a, b, volume.origin + glm::vec3(lo) * volume.settings.voxel_size,
+                              volume.origin + glm::vec3(hi) * volume.settings.voxel_size, radius);
+        };
         size_t visited = 0;
         auto visit = [&](auto&& self, uint32_t index, glm::ivec3 lo, int edge) -> bool {
             const auto value = volume.words[index];
@@ -138,9 +142,7 @@ namespace lfs::core {
                 return false;
             if (++visited > 2'000'000)
                 throw collisionError("collision.walk_budget", "Walk query exceeds the tree budget", ErrorCode::ResourceExhausted);
-            const auto hi = glm::min(lo + edge, volume.dimensions);
-            if (!segmentBox(a, b, volume.origin + glm::vec3(lo) * volume.settings.voxel_size,
-                            volume.origin + glm::vec3(hi) * volume.settings.voxel_size, radius))
+            if (!overlaps(lo, glm::min(lo + edge, volume.dimensions)))
                 return false;
             if (value == 1)
                 return true;
@@ -149,10 +151,7 @@ namespace lfs::core {
                     if (!(volume.words[(value & ~CollisionVolume::brick_tag) + bit / 32] & (1u << (bit % 32))))
                         continue;
                     const auto p = lo + glm::ivec3(bit % 4, (bit / 4) % 4, bit / 16);
-                    if (glm::any(glm::greaterThanEqual(p, volume.dimensions)))
-                        continue;
-                    if (segmentBox(a, b, volume.origin + glm::vec3(p) * volume.settings.voxel_size,
-                                   volume.origin + glm::vec3(p + 1) * volume.settings.voxel_size, radius))
+                    if (glm::all(glm::lessThan(p, volume.dimensions)) && overlaps(p, p + 1))
                         return true;
                 }
                 return false;
@@ -199,38 +198,20 @@ namespace lfs::core {
             throw collisionError("collision.walk_blocked", "Walk capsule overlaps collision geometry at its current position");
         const auto displacement = velocity * dt;
         const auto travel = sweep(feet, displacement, spacing, hit);
-        bool stepped = false;
-        if (travel.hit && settings.step > 0) {
-            auto foot_hit = [&](float lift) {
-                return blocked(feet + displacement + up * lift, up, 2 * settings.radius, settings.radius);
-            };
-            const double required = std::ceil(double(settings.step) / spacing);
-            if (required > 4096)
-                throw collisionError("collision.walk_budget", "Walk step exceeds the sweep budget", ErrorCode::ResourceExhausted);
-            const int count = std::max(1, static_cast<int>(required));
-            float low = 0;
-            for (int i = 1; i <= count && !stepped; ++i) {
-                float high = settings.step * i / count;
-                if (foot_hit(high)) {
-                    low = high;
-                    continue;
-                }
-                for (int j = 0; j < 16; ++j) {
-                    const float mid = (low + high) * .5f;
-                    if (foot_hit(mid))
-                        low = mid;
-                    else
-                        high = mid;
-                }
-                const auto lift = sweep(feet, up * high, spacing, hit);
-                const auto across = sweep(lift.position, displacement, spacing, hit);
-                const auto down = sweep(across.position, -up * (high + settings.radius * .001f), spacing, hit);
-                if (!lift.hit && !across.hit && down.hit) {
-                    feet = down.position;
-                    stepped = true;
-                }
-            }
-        }
+        const auto foot_clear = [&](float lift) {
+            return !blocked(feet + displacement + up * lift, up, 2 * settings.radius, settings.radius);
+        };
+        const auto try_step = [&](float high) {
+            const auto lift = sweep(feet, up * high, spacing, hit);
+            const auto across = sweep(lift.position, displacement, spacing, hit);
+            const auto down = sweep(across.position, -up * (high + settings.radius * .001f), spacing, hit);
+            if (lift.hit || across.hit || !down.hit)
+                return false;
+            feet = down.position;
+            return true;
+        };
+        const bool stepped = travel.hit && settings.step > 0 &&
+                             scanSweep(settings.step, settings.step, spacing, foot_clear, try_step);
         if (!stepped) {
             feet = travel.position;
             if (travel.hit)
@@ -241,11 +222,12 @@ namespace lfs::core {
                     feet = sweep(feet, delta, spacing, hit).position;
                 }
         }
-        const auto down = sweep(feet, -up * std::max(settings.step, settings.radius * .001f), spacing, hit);
+        const auto support_delta = -up * std::max(settings.step, settings.radius * .001f);
+        const auto down = sweep(feet, support_delta, spacing, hit);
         if (!down.hit) {
             // Refuse an unsupported move while retaining Walk and its last safe body.
             // Actual removal of the supporting geometry remains an explicit failure.
-            if (!sweep(state.feet, -up * std::max(settings.step, settings.radius * .001f), spacing, hit).hit)
+            if (!sweep(state.feet, support_delta, spacing, hit).hit)
                 throw collisionError("collision.walk_no_support", "Walk support is no longer present");
             return;
         }

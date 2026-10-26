@@ -8,6 +8,9 @@
 #include "core/splat_data.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rml_menu_bar.hpp"
+#include "input/input_bindings.hpp"
+#include "input/input_controller.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
@@ -16,8 +19,10 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include <condition_variable>
+#include <algorithm>
+#include <atomic>
 #include <cuda_runtime.h>
+#include <fstream>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -53,7 +58,7 @@ namespace lfs::vis::gui {
         void TearDown() override {
             if (!viewer_)
                 return;
-            if (tasks().collision_thread_ && tasks().collision_thread_->joinable()) {
+            if (tasks().collision_worker_.valid()) {
                 tasks().cancelCollision();
                 finish();
             }
@@ -63,22 +68,16 @@ namespace lfs::vis::gui {
         AsyncTaskManager& tasks() { return viewer_->getGuiManager()->asyncTasks(); }
         Scene& scene() { return viewer_->getScene(); }
         std::vector<const SceneNode*> colliders() {
-            std::vector<const SceneNode*> result;
-            for (const auto* node : scene().getNodes())
-                if (node->type == NodeType::COLLISION)
-                    result.push_back(node);
+            auto result = scene().getNodes();
+            std::erase_if(result, [](const auto* node) { return node->type != NodeType::COLLISION; });
             return result;
         }
         void start(NodeId source, Outcome outcome = Outcome::Generate) {
             release_ = std::promise<void>{};
-            Scene::CollisionSourceIdentity identity;
-            (void)scene().captureCollisionSource(source, &identity);
-            tasks().collision_source_ = identity;
+            tasks().collision_source_ = scene().collisionSourceIdentity(source);
             tasks().collision_resolved_size_ = .25f;
-            tasks().launchCollision([this, release = release_.get_future().share(), outcome](std::stop_token stop, const ProgressCallback&) {
-                while (release.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready)
-                    if (stop.stop_requested() && outcome != Outcome::PublishedExport)
-                        throw OperationCancelled{};
+            tasks().launchCollision([this, release = release_.get_future().share(), outcome](std::stop_token, const ProgressCallback&) {
+                release.wait();
                 if (outcome == Outcome::Fail)
                     throw std::runtime_error("fixture generation failure");
                 if (outcome == Outcome::PublishedExport)
@@ -89,12 +88,12 @@ namespace lfs::vis::gui {
         }
         std::stop_token launch(std::function<bool(std::stop_token, const ProgressCallback&)> work) {
             tasks().launchCollision(std::move(work));
-            return tasks().collision_thread_->get_stop_token();
+            return tasks().collision_stop_.get_token();
         }
         void finish() {
             release_.set_value();
-            if (tasks().collision_thread_)
-                tasks().collision_thread_->join();
+            if (tasks().collision_worker_.valid())
+                tasks().collision_worker_.wait();
             tasks().pollCollision();
             ASSERT_TRUE(tasks().collisionJob());
             EXPECT_FALSE(tasks().collisionJob()->running());
@@ -141,6 +140,8 @@ namespace lfs::vis::gui {
                 model.notify_deleted_mask_changed();
             } else if (edit == 7 || edit == 9)
                 tasks().cancelCollision();
+            if (edit == 9)
+                ASSERT_TRUE(viewer_->clearScene());
             finish();
             const auto expected = edit == 0 || edit == 9 ? JobStatus::Completed
                                   : edit == 7            ? JobStatus::Canceled
@@ -191,39 +192,105 @@ namespace lfs::vis::gui {
             EXPECT_EQ(owned.means.size(0), 4);
             EXPECT_FALSE(owned.means.is_view());
             EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
-            std::promise<void> dispatched;
-            auto ready = dispatched.get_future();
-            int batches = 0;
-            const auto token = launch([&, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
+            auto dispatched = std::make_shared<std::promise<void>>();
+            auto ready = dispatched->get_future();
+            release_ = {};
+            auto release = release_.get_future().share();
+            auto batches = std::make_shared<std::atomic<int>>(0);
+            const auto token = launch([dispatched, batches, release, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
                 (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
-                    if (stage == "Voxelizing collision" && ++batches == 2) {
-                        dispatched.set_value();
-                        std::mutex mutex;
-                        std::unique_lock lock(mutex);
-                        std::condition_variable_any changed;
-                        changed.wait(lock, stop, [] { return false; });
+                    if (stage == "Voxelizing collision" && ++*batches == 2) {
+                        dispatched->set_value();
+                        if (release.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
+                            throw std::runtime_error("Collision stage release timed out");
                     }
                     return progress(value, stage);
                 });
                 return false;
             });
-            ASSERT_EQ(ready.wait_for(std::chrono::seconds(10)), std::future_status::ready) << tasks().collisionJob()->error << " batches=" << batches;
-            if (replacement < 2)
-                ASSERT_TRUE(viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
-            else if (replacement == 2)
+            ASSERT_EQ(ready.wait_for(std::chrono::seconds(10)), std::future_status::ready) << tasks().collisionJob()->error << " batches=" << batches->load();
+            if (replacement == 0) {
+                for (const auto* name : {"missing.licht", "corrupt.licht"}) {
+                    const auto invalid = temporary_.path / name;
+                    if (*name == 'c')
+                        std::ofstream(invalid) << "not a project";
+                    EXPECT_FALSE(viewer_->projectOpen(invalid, ProjectSwitchDisposition::DiscardChanges));
+                    EXPECT_FALSE(token.stop_requested());
+                    EXPECT_TRUE(tasks().collisionWorkerActive());
+                    EXPECT_NE(scene().getNodeById(source), nullptr);
+                }
+            }
+            const auto started = std::chrono::steady_clock::now();
+            if (replacement < 2) {
+                const auto opened = viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges);
+                ASSERT_TRUE(opened);
+                EXPECT_EQ(*opened, ProjectOpenOutcome::Deferred);
+            } else if (replacement == 2)
                 ASSERT_TRUE(viewer_->clearScene());
             else
                 events::cmd::NewProject{.discard_changes = true}.emit();
+            EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
+            EXPECT_NE(scene().getNodeById(source), nullptr);
+            EXPECT_TRUE(tasks().sceneReplacementPending());
+            int callbacks = 0;
+            for (int frame = 0; frame < 3; ++frame) {
+                ASSERT_TRUE(viewer_->postWork({.run = [&] { ++callbacks; }, .cancel = [] {}}));
+                viewer_->pumpPostedWorkForProjectWrite();
+                tasks().pollImportCompletion();
+                EXPECT_NE(scene().getNodeById(source), nullptr);
+            }
+            EXPECT_EQ(callbacks, 3);
+            finish();
+            EXPECT_FALSE(tasks().sceneReplacementPending());
+            EXPECT_EQ(scene().getNodeById(source), nullptr);
             ASSERT_NE(scene().restoreNodeWithUuid(std::move(reused)), NULL_NODE);
             EXPECT_TRUE(token.stop_requested());
-            EXPECT_EQ(batches, 2);
+            EXPECT_EQ(batches->load(), 2);
             EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
             EXPECT_TRUE(colliders().empty());
         }
     }
 
-    TEST_F(CollisionJobsTest, DrawRequestsTrackVisibilityTransformsAndOpacityNotSelection) {
-        auto& manager = *viewer_->getSceneManager();
+    class CollisionUiTest : public ::testing::Test {
+    protected:
+        SceneManager manager;
+        Scene& scene() { return manager.getScene(); }
+        void SetUp() override {
+            services().set(&manager);
+            input::InputBindings::setPersistenceEnabled(false);
+        }
+        void TearDown() override {
+            services().clear();
+            input::InputBindings::setPersistenceEnabled(true);
+        }
+        void enterWalk(RmlMenuBar& bar) { bar.dispatchToolbarAction("set_camera_navigation_mode", "walk"); }
+        bool walkEnabled(RmlMenuBar& bar) {
+            bar.rebuildToolbarButtons();
+            return bar.camera_buttons_.back().enabled;
+        }
+    };
+
+    TEST_F(CollisionUiTest, WalkRejectionDoesNotEscapeNativeDispatch) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::Orbit);
+        RmlMenuBar bar;
+        EXPECT_FALSE(walkEnabled(bar));
+        EXPECT_NO_THROW(enterWalk(bar));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_collision"));
+        const auto floor = scene().addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        scene().setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        scene().setNodeVisibility(floor, false);
+        EXPECT_TRUE(walkEnabled(bar));
+        viewport.camera.t = {0, 20, 0};
+        EXPECT_NO_THROW(enterWalk(bar));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_support"));
+        EXPECT_EQ(controller.cameraNavigationMode(), InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
+    }
+
+    TEST_F(CollisionUiTest, DrawRequestsTrackVisibilityTransformsAndOpacityNotSelection) {
         const auto volume = collision_test::box({}, glm::ivec3(1), .05f);
         scene().addCollision("First", volume);
         scene().addCollision("Second", volume);

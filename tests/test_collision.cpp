@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
 #include "core/collision_walk.hpp"
-#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include <chrono>
@@ -15,6 +14,38 @@
 #include <tuple>
 
 using namespace lfs::core;
+
+TEST(Collision, MalformedTopologyAndSettings) {
+    CollisionVolume volume{.dimensions = {5, 5, 5}, .edge = 8, .words = {3, 0, 0, 0, 0, 0, 0, 0, 0}};
+    ASSERT_NO_THROW(volume.validate());
+    for (const auto pointer : {2u, 4u, CollisionVolume::brick_tag, UINT32_MAX}) {
+        SCOPED_TRACE(pointer);
+        volume.words[1] = pointer;
+        EXPECT_THROW(volume.validate(), std::invalid_argument);
+    }
+    volume.words = {1};
+    volume.occupied_count = 125;
+    ASSERT_NO_THROW(volume.validate());
+    for (const uint64_t count : {uint64_t(126), UINT64_MAX}) {
+        volume.occupied_count = count;
+        EXPECT_THROW(volume.validate(), std::invalid_argument);
+    }
+    for (const float invalid : {-1.f, INFINITY, NAN})
+        for (const auto field : {&CollisionSettings::voxel_size, &CollisionSettings::opacity, &CollisionSettings::max_gaussian_area}) {
+            CollisionSettings settings;
+            settings.*field = invalid;
+            collision_test::expectError([&] { settings.validate(); }, "collision.settings_invalid");
+        }
+    for (const auto settings : {CollisionSettings{.voxel_size = 0}, CollisionSettings{.opacity = 1},
+                                CollisionSettings{.max_gaussian_area = 1, .cleanup = false}})
+        collision_test::expectError([&] { settings.validate(); }, "collision.settings_invalid");
+    volume.occupied_count = 125;
+    for (const auto settings : {CollisionSettings{}, CollisionSettings{.opacity = 0},
+                                CollisionSettings{.max_gaussian_area = 1}, CollisionSettings{.cleanup = false}}) {
+        volume.settings = settings;
+        EXPECT_NO_THROW(volume.validate());
+    }
+}
 
 namespace {
     using collision_test::cells;
@@ -68,7 +99,18 @@ namespace {
             gs.push_back({{.8f, .1f, 0}, {.04f, .04f, .04f}, {1, 0, 0, 0}, .01f});
         auto input = source(gs);
         CollisionSettings settings{.04f, .1f, 0, false, false};
-        const auto volume = generateCollision(input, settings);
+        uint64_t mixed = 0;
+        const auto volume = generateCollision(input, settings, {}, {}, {}, [&](uint64_t value) {
+            EXPECT_GE(value, mixed);
+            mixed = value;
+        });
+        uint64_t expected_mixed = 0;
+        for (const auto block : cells((volume.dimensions + 3) / 4)) {
+            const auto count = std::ranges::count_if(cells(glm::ivec3(4)), [&](auto p) { return volume.occupied(block * 4 + p); });
+            expected_mixed += count > 0 && count < 64;
+        }
+        EXPECT_GT(expected_mixed, 0);
+        EXPECT_EQ(mixed, expected_mixed);
         EXPECT_THROW(generateCollision(input, settings, {}, {}, {}, [](uint64_t value) {
                          if (value)
                              throw OperationCancelled();
@@ -176,6 +218,13 @@ namespace {
         float resolved = 0;
         const auto base = generateCollision(source(gs), settings, {}, {}, [&](float size) { resolved = size; });
         EXPECT_FLOAT_EQ(resolved, base.settings.voxel_size);
+        auto explicit_settings = base.settings;
+        explicit_settings.auto_resolution = false;
+        const auto explicit_volume = generateCollision(source(gs), explicit_settings);
+        EXPECT_EQ(base.words, explicit_volume.words);
+        EXPECT_EQ(base.origin, explicit_volume.origin);
+        EXPECT_EQ(base.dimensions, explicit_volume.dimensions);
+        EXPECT_EQ(base.occupied_count, explicit_volume.occupied_count);
         for (float scale : {.01f, 10.f})
             for (bool baked : {false, true}) {
                 auto scaled = gs;
@@ -199,7 +248,7 @@ namespace {
         input.opacity = Tensor::zeros({1});
         EXPECT_THROW(generateCollision(input, settings), lfs::Exception);
         input = source({{{0, 0, 0}, {INFINITY, .1f, .1f}}});
-        EXPECT_THROW(generateCollision(input, settings), std::invalid_argument);
+        collision_test::expectError([&] { generateCollision(input, settings); }, "collision.geometry_nonfinite");
         input = source({{{0, 0, 0}, {.1f, .1f, .1f}}});
         EXPECT_THROW(generateCollision(input, settings, {}, [](float, const auto&) { return false; }), std::runtime_error);
     }
@@ -208,6 +257,17 @@ namespace {
         return [volumes = std::move(volumes), transform](auto feet, auto up, float height, float radius) {
             return std::ranges::any_of(volumes, [&](const auto& v) { return collisionCapsuleIntersects(*v, transform, feet, up, height, radius); });
         };
+    }
+    void advanceFrames(WalkState& state, const WalkSettings& settings, const CapsuleQuery& query, glm::vec3 up,
+                       glm::vec3 velocity, int frames, float dt, bool hold_position = false) {
+        const auto grounded = state.feet;
+        for (int frame = 0; frame < frames; ++frame) {
+            ASSERT_NO_THROW(advanceWalk(state, settings, up, velocity, dt, query));
+            ASSERT_FALSE(query(state.feet, up, settings.height, settings.radius));
+            ASSERT_TRUE(state.grounded);
+            if (hold_position)
+                ASSERT_EQ(state.feet, grounded);
+        }
     }
     TEST(CollisionWalk, AnalyticalClearanceAndTransformedSegment) {
         const auto v = box({}, glm::ivec3(1));
@@ -233,15 +293,10 @@ namespace {
         EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), lfs::Exception);
         settleWalk(state, settings, {0, 1, 0}, query);
         EXPECT_NEAR(state.eye.y, settings.height, .001f);
-        for (int i = 0; i < 500; ++i)
-            advanceWalk(state, settings, {0, 1, 0}, {10, 0, 0}, .1f, query);
+        advanceFrames(state, settings, query, {0, 1, 0}, {10, 0, 0}, 500, .1f);
         EXPECT_LE(state.eye.x, .251f);
         const auto grounded = state.feet;
-        for (int i = 0; i < 500; ++i) {
-            ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {0, 0, 100}, .1f, query));
-            EXPECT_EQ(state.feet, grounded);
-            EXPECT_TRUE(state.grounded);
-        }
+        advanceFrames(state, settings, query, {0, 1, 0}, {0, 0, 100}, 500, .1f, true);
         for (bool edit_geometry : {false, true}) {
             settings.height = edit_geometry ? 1.7f : 2.1f;
             transform[3].y = edit_geometry ? .1f : 0;
@@ -261,10 +316,8 @@ namespace {
             WalkSettings settings;
             WalkState state{.eye = {0, 1.7f, 0}, .presentation = {0, 1.7f, 0}};
             settleWalk(state, settings, {0, 1, 0}, query);
-            for (int i = 0; i < 550; ++i) {
-                ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, i < 50 ? glm::vec3(.5f, 0, 0) : glm::vec3(0), i < 50 ? .05f : .016f, query));
-                ASSERT_FALSE(query(state.feet, {0, 1, 0}, settings.height, settings.radius));
-            }
+            advanceFrames(state, settings, query, {0, 1, 0}, {.5f, 0, 0}, 50, .05f);
+            advanceFrames(state, settings, query, {0, 1, 0}, {}, 500, .016f);
             EXPECT_EQ(state.eye.x > 1, height == 1.85f);
             if (height == 1.85f)
                 EXPECT_NEAR(state.eye.y, 1.8f, .001f);
@@ -275,14 +328,8 @@ namespace {
         auto exercise = [](const auto& query, WalkSettings settings, glm::vec3 up, glm::vec3 eye, glm::vec3 velocity) {
             WalkState state{.eye = eye};
             ASSERT_NO_THROW(settleWalk(state, settings, up, query));
-            const auto grounded = state.feet;
-            for (int frame = 0; frame < 700; ++frame) {
-                ASSERT_NO_THROW(advanceWalk(state, settings, up, frame < 500 ? glm::vec3(0) : velocity, .016f, query));
-                ASSERT_FALSE(query(state.feet, up, settings.height, settings.radius));
-                ASSERT_TRUE(state.grounded);
-                if (velocity == glm::vec3(0))
-                    ASSERT_EQ(state.feet, grounded);
-            }
+            advanceFrames(state, settings, query, up, {}, 500, .016f, velocity == glm::vec3(0));
+            advanceFrames(state, settings, query, up, velocity, 200, .016f, velocity == glm::vec3(0));
         };
         for (float translation : {0.f, 100.f, 1000.f, -10000.f})
             for (float scale : {.01f, 1.f, 100.f})

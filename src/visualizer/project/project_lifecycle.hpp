@@ -623,7 +623,10 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            std::move_only_function<lfs::Result<void>()> retry = {});
+        bool deferCollisionSwitch(std::move_only_function<lfs::Result<void>()> retry);
+        [[nodiscard]] bool collisionSwitchPending() const;
         [[nodiscard]] lfs::Result<void>
         openRecovered(
             const std::filesystem::path& master_path,

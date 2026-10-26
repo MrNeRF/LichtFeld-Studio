@@ -38,7 +38,6 @@ STAGES = {
 class CollisionRendering:
     def __init__(self, popup=False):
         self.popup = popup
-        self.export_mode = False
         self.export_target = None
         self.handle = None
         self.values = dict(size=.05, opacity=.1, area=0., automatic=False, cleanup=True)
@@ -70,7 +69,7 @@ class CollisionRendering:
 
     def show_error(self, message):
         self.error = self.localized_error(message)
-        self.invalidate()
+        invalidate_panel(self.handle, "*")
 
     @staticmethod
     def localized_error(message):
@@ -80,12 +79,9 @@ class CollisionRendering:
         details = getattr(message, "message_details", "")
         return lf.ui.tr(key) + (f"\n{details}" if details else "")
 
-    def invalidate(self):
-        invalidate_panel(self.handle, "*")
-
     def set_value(self, prop, value):
         self.values[prop.removeprefix("collision_")] = value
-        self.invalidate()
+        invalidate_panel(self.handle, "*")
 
     def commit(self, prop, value):
         key = prop.removeprefix("collision_")
@@ -96,27 +92,28 @@ class CollisionRendering:
                 lf.set_walk_settings(*settings)
             self.run(apply)
             self.update()
-            self.invalidate()
 
     def bind(self, model):
         self.handle = model.get_handle()
         self.update()
-        for key in (*SPECS, "automatic", "cleanup"):
+        model.bind_func("collision_has_collision", lambda: self.state.get("has_collision", False))
+        error = lambda: self.error or self.localized_error(self.state.get("error" if self.popup else "walk_error", ""))
+        model.bind_func("collision_error", error)
+        model.bind_func("collision_has_error", lambda: bool(error()))
+        if not self.popup:
+            return
+        for key in ("automatic", "cleanup"):
             model.bind(f"collision_{key}", lambda k=key: self.values[k],
                        lambda value, k=key: self.set_value(f"collision_{k}", value))
         model.bind_func("collision_resolved_size", self.resolved_size)
         model.bind_func("collision_can_generate", lambda: bool(self.state.get("source_name")) and not self.state.get("active"))
         model.bind_func("collision_source", lambda: self.state.get("source_name", ""))
-        model.bind_func("collision_has_collision", lambda: self.state.get("has_collision", False))
         model.bind_func("collision_active", lambda: self.state.get("active", False))
         model.bind_func("collision_progress", lambda: self.state.get("progress", 0))
         model.bind_func("collision_has_source", lambda: bool(self.state.get("source_name")))
         model.bind_func("collision_target", lambda: self.target()[1])
         model.bind_func("collision_exportable", lambda: bool(self.target()[0]) and not self.state.get("active", False))
         model.bind_func("collision_status", lambda: f'{lf.ui.tr(STAGES.get(self.state.get("stage"), "training_panel.running"))} {self.state.get("progress", 0):.0%}')
-        error = lambda: self.error or self.localized_error(self.state.get("error" if self.popup else "walk_error", ""))
-        model.bind_func("collision_error", error)
-        model.bind_func("collision_has_error", lambda: bool(error()))
         model.bind_event("collision_generate", lambda *_: self.run(lambda: lf.generate_collision(
             *self.generation_settings())))
         model.bind_event("collision_cancel", lambda *_: self.run(lf.cancel_collision))
@@ -140,10 +137,10 @@ class CollisionRendering:
             action()
         except (RuntimeError, ValueError) as exc:
             self.show_error(exc)
-        self.invalidate()
+        invalidate_panel(self.handle, "*")
 
     def target(self):
-        return self.export_target if self.popup and self.export_mode and self.export_target else (
+        return self.export_target if self.export_target is not None else (
             self.state.get("target_uuid", ""), self.state.get("target_name", ""))
 
     def export(self, *_):
@@ -176,7 +173,7 @@ class CollisionRendering:
                 self.values[key] = value
         changed |= self.scrubs.sync_all()
         if changed:
-            self.invalidate()
+            invalidate_panel(self.handle, "*")
         return changed
 
 

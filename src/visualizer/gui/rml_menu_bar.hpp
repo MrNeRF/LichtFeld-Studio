@@ -189,6 +189,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
+        friend class CollisionUiTest;
         void bindModel();
         bool updateTheme();
         void rebuildLabels();

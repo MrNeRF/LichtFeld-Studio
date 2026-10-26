@@ -2094,12 +2094,11 @@ namespace lfs::vis {
         bool createStagingBuffer(VkDeviceSize size,
                                  const void* data,
                                  VkBuffer& buffer,
-                                 VmaAllocation& alloc,
-                                 VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT) const {
+                                 VmaAllocation& alloc) const {
             VkBufferCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             info.size = size;
-            info.usage = usage;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;

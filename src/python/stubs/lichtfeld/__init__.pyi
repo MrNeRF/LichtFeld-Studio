@@ -74,6 +74,8 @@ class OperatorResult(enum.Enum):
 class ProjectOpenOutcome(enum.Enum):
     OPENED = 0
 
+    DEFERRED = 2
+
     RECOVERY_PROMPT_PENDING = 1
 
 class Hook(enum.Enum):

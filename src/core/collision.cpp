@@ -3,48 +3,45 @@
 #include "core/collision.hpp"
 #include "core/collision_error.hpp"
 #include "core/splat_data.hpp"
-#include "cuda/collision_voxelization.hpp"
 #include <algorithm>
-#include <bit>
 #include <cmath>
 #include <cuda_runtime.h>
+#include <format>
+#include <set>
 namespace lfs::core {
     void CollisionSettings::validate() const {
         if (!std::isfinite(voxel_size) || voxel_size <= 0 || !std::isfinite(opacity) || opacity < 0 || opacity >= 1 ||
-            !std::isfinite(max_gaussian_area) || max_gaussian_area < 0)
-            throw std::invalid_argument("Cell size must be positive, opacity must be in [0,1), and maximum area must be nonnegative");
-        if (!cleanup && max_gaussian_area > 0)
-            throw std::invalid_argument("Maximum Gaussian area requires cleanup filtering");
+            !std::isfinite(max_gaussian_area) || max_gaussian_area < 0 || (!cleanup && max_gaussian_area > 0))
+            throw collisionError("collision.settings_invalid",
+                                 std::format("Invalid collision settings: voxel_size={} must be finite and positive, opacity={} must be finite in [0,1), max_gaussian_area={} must be finite and nonnegative and requires cleanup={} when positive",
+                                             voxel_size, opacity, max_gaussian_area, cleanup),
+                                 ErrorCode::InvalidArgument,
+                                 std::format("voxel_size={}; opacity={}; max_gaussian_area={}; cleanup={}", voxel_size, opacity, max_gaussian_area, cleanup));
     }
     CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform, size_t begin, size_t count) {
         struct ReadFence {
-            std::vector<cudaStream_t> streams;
+            std::set<cudaStream_t> streams;
             cudaError_t finish() noexcept {
                 auto first_error = cudaSuccess;
                 for (const auto stream : streams) {
                     const auto status = cudaStreamSynchronize(stream);
-                    if (status != cudaSuccess) {
-                        if (first_error == cudaSuccess)
-                            first_error = status;
-                        ensure_cuda_success(status, "cudaStreamSynchronize(collision capture)",
-                                            "Finishing source reads before releasing the caller's writer exclusion",
-                                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-                    }
+                    if (first_error == cudaSuccess)
+                        first_error = status;
+                    ensure_cuda_success(status, "cudaStreamSynchronize(collision capture)",
+                                        "Finishing source reads before releasing the caller's writer exclusion",
+                                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
                 streams.clear();
                 return first_error;
             }
             ~ReadFence() { (void)finish(); }
         } fence;
-        fence.streams.reserve(6);
         for (const auto* tensor : {&data.means_raw(), &data.scaling_raw(), &data.rotation_raw(),
                                    &data.opacity_raw(), &data.deleted()})
-            if (tensor->is_valid() && tensor->device() == Device::CUDA &&
-                std::find(fence.streams.begin(), fence.streams.end(), tensor->stream()) == fence.streams.end())
-                fence.streams.push_back(tensor->stream());
-        if (!fence.streams.empty() &&
-            std::find(fence.streams.begin(), fence.streams.end(), getCurrentCUDAStream()) == fence.streams.end())
-            fence.streams.push_back(getCurrentCUDAStream());
+            if (tensor->is_valid() && tensor->device() == Device::CUDA)
+                fence.streams.insert(tensor->stream());
+        if (!fence.streams.empty())
+            fence.streams.insert(getCurrentCUDAStream());
         // Clones use the allocation/current stream; activations and deferred inputs
         // may use their home streams. Fence all of them, including partial LOD work.
         if (begin > data.size() || (count != SIZE_MAX && count > data.size() - begin))
@@ -76,9 +73,7 @@ namespace lfs::core {
         for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
             if (tensor->is_valid())
                 (void)tensor->data_ptr();
-        const auto status = fence.finish();
-        if (status != cudaSuccess)
-            throw std::runtime_error(std::string("Collision capture failed: ") + cudaGetErrorString(status));
+        LFS_ENSURE_CUDA_SUCCESS(fence.finish(), "Collision capture failed");
         return source;
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
@@ -143,58 +138,5 @@ namespace lfs::core {
         if (count != occupied_count || std::find(seen.begin(), seen.end(), false) != seen.end())
             throw std::invalid_argument("Collision occupancy count or topology is invalid");
     }
-    CollisionVolume generateCollision(const CollisionSource& source, CollisionSettings settings,
-                                      std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution, std::function<void(uint64_t)> mixed_blocks) {
-        settings.validate();
-        auto output = cuda::voxelizeCollision(source, settings, stop, progress, resolution, mixed_blocks);
-        auto& v = output.volume;
-        auto& bricks = output.bricks;
-        v.words.assign(1, 0);
-        auto build = [&](auto&& self, uint32_t i, int size, size_t begin, size_t end) -> void {
-            if (begin == end)
-                return;
-            reportProgress(stop, {}, 0, "");
-            if ((bricks[begin].morton >> 57) && (4 << (bricks[begin].morton >> 57)) == uint64_t(size)) {
-                v.words[i] = 1;
-                v.occupied_count += uint64_t(size) * size * size;
-            } else if (size == 4) {
-                const auto mask = bricks[begin].mask;
-                v.occupied_count += std::popcount(mask);
-                if (mask == ~uint64_t(0)) {
-                    v.words[i] = 1;
-                } else {
-                    if (v.words.size() > CollisionVolume::max_words - 2)
-                        throw std::length_error("Collision brick pointer exceeds the packed address range");
-                    v.words[i] = CollisionVolume::brick_tag | uint32_t(v.words.size());
-                    v.words.push_back(uint32_t(mask));
-                    v.words.push_back(uint32_t(mask >> 32));
-                }
-            } else {
-                if (v.words.size() > CollisionVolume::max_words - 8)
-                    throw std::length_error("Collision branch pointer exceeds the packed address range");
-                const auto base = uint32_t(v.words.size());
-                v.words.resize(base + 8);
-                v.words[i] = base + 2;
-                const int shift = 3 * (std::countr_zero(unsigned(size)) - 3);
-                for (int c = 0; c < 8; ++c) {
-                    auto next = begin;
-                    while (next < end && ((bricks[next].morton >> shift) & 7) == uint64_t(c))
-                        ++next;
-                    self(self, base + c, size / 2, begin, next);
-                    begin = next;
-                }
-                if (std::all_of(v.words.begin() + base, v.words.begin() + base + 8, [](auto n) { return n == 1; })) {
-                    v.words[i] = 1;
-                    v.words.resize(base);
-                }
-            }
-        };
-        reportProgress(stop, progress, .96f, "Assembling occupancy");
-        build(build, 0, v.edge, 0, bricks.size());
-        if (!v.occupied_count)
-            throw collisionError("collision.empty", "No occupied cells; lower opacity or check the source");
-        v.validate();
-        reportProgress(stop, progress, 1, "Collision ready");
-        return std::move(v);
-    }
+
 } // namespace lfs::core

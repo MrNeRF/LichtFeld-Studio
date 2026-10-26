@@ -2,8 +2,8 @@
 
 Tools > Collision generates a voxel child from one selected loaded splat, even if hidden.
 The source stays unchanged; the collider follows its source and has an editable transform.
-Cell size uses scene units; Auto reports the resolved size. Opacity, cleanup and maximum
-Gaussian area control occupancy. A maximum area requires cleanup.
+Cell size uses scene units. Auto reports its size and targets 8M surface samples, leaving
+headroom without guaranteeing exportability. Opacity and cleanup/area filters control occupancy.
 
 Visible colliders preview regardless of selection. Rendering > Collision controls preview
 opacity (40% by default) and live Walk settings. Enter Walk from either camera toolbar;

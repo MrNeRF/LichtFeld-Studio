@@ -2,11 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/collision.hpp"
+#include "core/collision_error.hpp"
 #include <algorithm>
+#include <gtest/gtest.h>
 #include <memory>
 #include <ranges>
 namespace collision_test {
     using namespace lfs::core;
+    template <class F>
+    void expectError(F&& action, std::string_view key) {
+        try {
+            action();
+            FAIL() << "Collision error was not thrown";
+        } catch (const lfs::Exception& error) {
+            EXPECT_EQ(collisionErrorField(error.error(), "message_key"), key);
+        }
+    }
     inline auto cells(glm::ivec3 dimensions) {
         return std::views::iota(0, dimensions.x * dimensions.y * dimensions.z) |
                std::views::transform([dimensions](int i) {

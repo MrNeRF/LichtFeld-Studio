@@ -2816,9 +2816,22 @@ namespace lfs::vis::project {
                 "Save the current project or retry with explicit discard authorization",
                 kProjectSwitchDirtyField);
         }
-        if (auto* gui = viewer_.getGuiManager())
-            gui->asyncTasks().cancelCollision(true);
         return {};
+    }
+
+    bool ProjectLifecycle::collisionSwitchPending() const {
+        auto* gui = viewer_.getGuiManager();
+        return gui && gui->asyncTasks().sceneReplacementPending();
+    }
+
+    bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()> retry) {
+        auto* gui = viewer_.getGuiManager();
+        return gui && gui->asyncTasks().deferSceneReplacement([retry = std::move(retry)]() mutable {
+            if (auto result = retry(); !result) {
+                LOG_ERROR("Deferred project switch failed: {}", developerError(result.error()));
+                publishProjectToast(std::move(result).error(), gui::error_op::kOpenProject);
+            }
+        });
     }
 
     std::optional<std::filesystem::path>
@@ -7327,17 +7340,10 @@ namespace lfs::vis::project {
                 sync_finished - sync_started)
                 .count());
         return {};
-    } catch (const std::bad_alloc& error) {
-        // LFS-CENSUS-OK(empty-catch): capture failure must settle the save request, not escape into the frame loop.
-        return fail<void>(lfs::ErrorCode::ResourceExhausted,
-                          "The project could not be captured in memory.", error.what(), "project.capture");
-    } catch (const std::length_error& error) {
-        // LFS-CENSUS-OK(empty-catch): chapter size limits fail the request rather than triggering a frame retry.
-        return fail<void>(lfs::ErrorCode::ResourceExhausted,
-                          "The project exceeds its serialization budget.", error.what(), "project.capture");
     } catch (const std::exception& error) {
-        // LFS-CENSUS-OK(empty-catch): serializers and legacy scene APIs report exceptions through the save Result.
-        return fail<void>(lfs::ErrorCode::InvalidArgument,
+        // LFS-CENSUS-OK(empty-catch): capture failures settle the save request, never the frame loop.
+        const bool exhausted = dynamic_cast<const std::bad_alloc*>(&error) || dynamic_cast<const std::length_error*>(&error);
+        return fail<void>(exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
                           "The project could not be captured.", error.what(), "project.capture");
     }
 
@@ -7885,14 +7891,14 @@ namespace lfs::vis::project {
             if (isRecoveryDismissed(
                     offered_identity)) {
                 if (candidate.untitled_scratch) {
-                    return ProjectOpenOutcome::Opened;
+                    return collisionSwitchPending() ? ProjectOpenOutcome::Deferred : ProjectOpenOutcome::Opened;
                 }
                 auto opened = openMaster(
                     *normalized, disposition);
                 if (!opened) {
                     return std::move(opened).error();
                 }
-                return ProjectOpenOutcome::Opened;
+                return collisionSwitchPending() ? ProjectOpenOutcome::Deferred : ProjectOpenOutcome::Opened;
             }
             // The offered sidecar is the unsaved state
             // the user just authorized discarding for
@@ -7919,7 +7925,7 @@ namespace lfs::vis::project {
                 if (!opened) {
                     return std::move(opened).error();
                 }
-                return ProjectOpenOutcome::Opened;
+                return collisionSwitchPending() ? ProjectOpenOutcome::Deferred : ProjectOpenOutcome::Opened;
             }
             auto* gui =
                 viewer_.getGuiManager();
@@ -7967,7 +7973,7 @@ namespace lfs::vis::project {
                 recovery_inspected_at,
                 open_finished),
             milliseconds(open_started, open_finished));
-        return ProjectOpenOutcome::Opened;
+        return collisionSwitchPending() ? ProjectOpenOutcome::Deferred : ProjectOpenOutcome::Opened;
     }
 
     lfs::Result<void>
@@ -7999,12 +8005,16 @@ namespace lfs::vis::project {
         }
         auto opened =
             openMaster(
-                temporary, disposition);
+                temporary, disposition, [this, master_path, sidecar_path, disposition] {
+                    return openRecovered(master_path, sidecar_path, disposition);
+                });
         if (!opened) {
             static_cast<void>(
                 session->release());
             return opened;
         }
+        if (collisionSwitchPending())
+            return {};
         session->attach_document();
         recovered_master_path_ =
             master_path;
@@ -8054,7 +8064,8 @@ namespace lfs::vis::project {
     lfs::Result<void>
     ProjectLifecycle::openMaster(
         const std::filesystem::path& path,
-        const ProjectSwitchDisposition disposition) {
+        const ProjectSwitchDisposition disposition,
+        std::move_only_function<lfs::Result<void>()> retry) {
         recovery_prompt_pending_ = false;
         if (auto preflight =
                 preflightSwitch(disposition);
@@ -8186,6 +8197,13 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
+        if (!retry)
+            retry = [this, path, disposition] { return openMaster(path, disposition); };
+        if (deferCollisionSwitch(std::move(retry))) {
+            viewer_.jobs().free(*project_open_job_);
+            project_open_job_.reset();
+            return {};
+        }
         stopHydrationThreads(false);
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
@@ -9065,6 +9083,8 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(created).error());
         }
+        if (deferCollisionSwitch([this, disposition] { return newProject(disposition); }))
+            return {};
         if (!viewer_.getDataLoader() ||
             !viewer_.getDataLoader()->clearScene()) {
             return fail<void>(
@@ -9373,6 +9393,18 @@ namespace lfs::vis::project {
         if (!normalized) {
             return lfs::Status::failure(
                 std::move(normalized).error());
+        }
+        if (auto preflight = preflightSwitch(disposition); !preflight)
+            return preflight;
+        if (deferCollisionSwitch([this] {
+                viewer_.performPendingTrainingAction();
+                return lfs::Result<void>{};
+            })) {
+            viewer_.pending_training_action_ = VisualizerImpl::PendingTrainingAction::CreateProject;
+            viewer_.pending_create_project_path_ = path;
+            viewer_.pending_create_allow_existing_destination_replacement_ = allow_existing_destination_replacement;
+            viewer_.pending_new_project_disposition_ = disposition;
+            return {};
         }
         if (auto created = newProject(disposition); !created) {
             return created;
@@ -10758,10 +10790,14 @@ namespace lfs::vis::project {
         const std::filesystem::path& scratch_path,
         const ProjectSwitchDisposition disposition) {
         auto opened = openMaster(
-            scratch_path, disposition);
+            scratch_path, disposition, [this, scratch_path, disposition] {
+                return openScratchRecovered(scratch_path, disposition);
+            });
         if (!opened) {
             return opened;
         }
+        if (collisionSwitchPending())
+            return {};
         scene_dirty_.store(
             true, std::memory_order_release);
         if (document_ && document_->source_path() &&

@@ -14,6 +14,11 @@ namespace lfs::io {
     namespace {
         namespace fs = core::native_fs;
         using I3 = glm::ivec3;
+        lfs::Exception exportError(std::string_view key, const Error& error, std::string details) {
+            return lfs::Exception(to_lfs_error(error, LFS_SOURCE_SITE_CURRENT())
+                                      .with_context("export collision voxels", LFS_SOURCE_SITE_CURRENT(),
+                                                    lfs::SmallFields{}.add("message_key", key).add("message_details", std::move(details))));
+        }
         struct Cursor {
             uint32_t index;
             I3 p;
@@ -40,30 +45,23 @@ namespace lfs::io {
             lo = glm::max(lo, cursor.p);
             hi = glm::min(hi, cursor.p + cursor.size);
             if (glm::any(glm::greaterThanEqual(lo, hi)))
-                return -1;
+                return 0;
             const auto value = v.words[cursor.index];
             if (value <= 1)
-                return int(value);
-            int result = -1;
-            auto merge = [&](int child) {
-                if (result < 0)
-                    result = child;
-                else if (child >= 0 && result != child)
-                    result = 2;
-                return result == 2;
-            };
+                return 1 << value;
+            int result = 0; // Bit 0: empty cells; bit 1: occupied cells.
             if (value & core::CollisionVolume::brick_tag) {
                 const auto base = value & ~core::CollisionVolume::brick_tag;
                 const uint64_t mask = v.words[base] | (uint64_t(v.words[base + 1]) << 32);
                 for (int z = lo.z; z < hi.z; ++z)
                     for (int y = lo.y; y < hi.y; ++y)
                         for (int x = lo.x; x < hi.x; ++x)
-                            if (merge((mask >> ((x - cursor.p.x) + 4 * (y - cursor.p.y) + 16 * (z - cursor.p.z))) & 1))
-                                return 2;
+                            if ((result |= 1 << ((mask >> ((x - cursor.p.x) + 4 * (y - cursor.p.y) + 16 * (z - cursor.p.z))) & 1)) == 3)
+                                return result;
             } else {
                 for (int c = 0; c < 8; ++c)
-                    if (merge(classify(v, cursor.child(value - 2, c), lo, hi, stop)))
-                        return 2;
+                    if ((result |= classify(v, cursor.child(value - 2, c), lo, hi, stop)) == 3)
+                        return result;
             }
             return result;
         }
@@ -74,8 +72,9 @@ namespace lfs::io {
                 body(out);
             out.close();
             if (!out)
-                throw std::runtime_error(std::format("Cannot write '{}': {}", core::path_to_utf8(path),
-                                                     std::strerror(errno ? errno : EIO)));
+                throw exportError("collision.export_write",
+                                  Error{ErrorCode::WRITE_FAILURE, std::format("Cannot write voxel output: {}", std::strerror(errno ? errno : EIO)), path},
+                                  core::path_to_utf8(path));
         }
     } // namespace
     void checkCollisionExportMixedBlocks(uint64_t mixed) {
@@ -103,10 +102,11 @@ namespace lfs::io {
         return source;
     }
     void exportCollision(const core::CollisionVolume& v, const std::filesystem::path& path,
-                         const glm::mat4& world, std::stop_token stop, ExportProgressCallback progress) {
+                         const glm::mat4& world, std::stop_token stop, ExportProgressCallback progress) try {
         core::reportProgress(stop, progress, 0, "Preparing voxel export");
         if (!core::path_to_utf8(path.filename()).ends_with(".voxel.json"))
-            throw std::invalid_argument("Voxel metadata output must end in .voxel.json");
+            throw core::collisionError("collision.export_suffix", "Voxel metadata output must end in .voxel.json: " + core::path_to_utf8(path),
+                                       lfs::ErrorCode::InvalidArgument, core::path_to_utf8(path));
         auto binary = path;
         binary.replace_extension(".bin");
         glm::mat4 flip(1);
@@ -170,7 +170,7 @@ namespace lfs::io {
                 return 0;
             cursor.descend(v, lo, hi);
             const auto state = classify(v, cursor, lo, hi, stop);
-            return state == 1 && (lo != q || hi != q + size) ? 2 : state;
+            return state & 2 ? (state == 2 && lo == q && hi == q + size ? 1 : 2) : 0;
         };
         struct Pending {
             uint32_t index;
@@ -239,7 +239,7 @@ namespace lfs::io {
         const nlohmann::json scene_bounds{{"min", xyz(scene_lo)}, {"max", xyz(scene_hi)}};
         const nlohmann::json metadata{{"version", "1.1"}, {"asset", {{"generator", "LichtFeld Studio"}}}, {"gridBounds", bounds}, {"sceneBounds", scene_bounds}, {"voxelResolution", resolution}, {"leafSize", 4}, {"treeDepth", depth}, {"numInteriorNodes", interiors}, {"numMixedLeaves", leaves.size() / 2}, {"nodeCount", nodes.size()}, {"leafDataCount", leaves.size()}};
         if (auto result = ensure_output_parent_directory(path); !result)
-            throw std::runtime_error(result.error().format());
+            throw exportError("collision.export_write", result.error(), core::path_to_utf8(path));
         ScopedAtomicOutputFile bin(binary), json(path);
         write(bin.temp_path(), [&](std::ostream& out) {
             for (const auto* values : {&nodes, &leaves})
@@ -252,41 +252,52 @@ namespace lfs::io {
                 }
         });
         write(json.temp_path(), [&](std::ostream& out) { out << metadata.dump(2) << '\n'; });
-        std::array targets{binary, path};
+        const std::array outputs{&bin, &json};
         std::array<std::filesystem::path, 2> backups;
         std::array<bool, 2> installed{};
         core::reportProgress(stop, progress, .9f, "Publishing voxel pair");
         try {
             for (int i = 0; i < 2; ++i)
-                if (fs::exists(targets[i])) {
-                    if (!fs::is_regular_file(targets[i]))
-                        throw std::runtime_error("Not a regular output file: " + core::path_to_utf8(targets[i]));
-                    const auto backup = make_atomic_temp_output_path(targets[i]);
-                    fs::rename(targets[i], backup);
+                if (const auto& target = outputs[i]->output_path(); fs::exists(target)) {
+                    if (!fs::is_regular_file(target))
+                        throw exportError("collision.export_publish", Error{ErrorCode::NOT_A_FILE, "Not a regular voxel output file", target},
+                                          core::path_to_utf8(target));
+                    const auto backup = make_atomic_temp_output_path(target);
+                    fs::rename(target, backup);
                     backups[i] = backup;
                 }
-            if (auto result = bin.commit(); !result)
-                throw std::runtime_error(result.error().format());
-            installed[0] = true;
-            core::reportProgress(stop, progress, .95f, "Publishing voxel metadata");
-            if (auto result = json.commit(); !result)
-                throw std::runtime_error(result.error().format());
-            installed[1] = true;
+            for (int i = 0; i < 2; ++i) {
+                if (i)
+                    core::reportProgress(stop, progress, .95f, "Publishing voxel metadata");
+                if (auto result = outputs[i]->commit(); !result)
+                    throw exportError("collision.export_publish", result.error(), core::path_to_utf8(outputs[i]->output_path()));
+                installed[i] = true;
+            }
         } catch (...) {
             const auto failure = std::current_exception();
-            std::string errors;
+            std::string recovery_paths;
             for (int i = 0; i < 2; ++i) {
+                const auto& target = outputs[i]->output_path();
                 std::error_code ec;
                 if (installed[i])
-                    fs::remove(targets[i], ec);
+                    fs::remove(target, ec);
                 if (!ec && !backups[i].empty())
-                    fs::rename(backups[i], targets[i], ec);
+                    fs::rename(backups[i], target, ec);
                 if (ec)
-                    errors += std::format(" Restore '{}' from '{}': {}.", core::path_to_utf8(targets[i]),
-                                          core::path_to_utf8(backups[i]), ec.message());
+                    recovery_paths += std::format("\n{} <- {} ({}: {})", core::path_to_utf8(target), core::path_to_utf8(backups[i]), ec.value(), ec.message());
             }
-            if (!errors.empty())
-                throw std::runtime_error("Voxel publication failed; recovery files retained." + errors);
+            if (!recovery_paths.empty()) {
+                try {
+                    std::rethrow_exception(failure);
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Original voxel publication failure before rollback error: {}", error.what());
+                } catch (...) {
+                    LOG_ERROR("Original voxel publication failure was a non-standard exception");
+                }
+                throw exportError("collision.export_publish",
+                                  Error{ErrorCode::WRITE_FAILURE, "Voxel publication failed; recovery files retained." + recovery_paths},
+                                  recovery_paths);
+            }
             std::rethrow_exception(failure);
         }
         for (const auto& backup : backups)
@@ -296,5 +307,8 @@ namespace lfs::io {
                 if (ec)
                     LOG_WARN("Voxel pair saved; cannot remove backup '{}': {}", core::path_to_utf8(backup), ec.message());
             }
+    } catch (const std::filesystem::filesystem_error& error) {
+        throw exportError("collision.export_publish", Error{ErrorCode::WRITE_FAILURE, error.what()},
+                          std::format("{}\n{} ({})", core::path_to_utf8(error.path1()), core::path_to_utf8(error.path2()), error.code().value()));
     }
 } // namespace lfs::io

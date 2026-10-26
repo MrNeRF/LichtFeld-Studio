@@ -367,6 +367,7 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     panel = module.RenderingPanel()
 
     assert module.RenderingPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.RenderingPanel.__dict__
 
     panel.on_bind_model(_BindingContextStub(model))
     panel._subscribe_reactive_state()
@@ -401,7 +402,7 @@ def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_pan
     state.update(target_uuid="second", target_name="Wall")
     assert panel.on_update(None)
     other.show()
-    assert panel.controls.target() == ("first", "Floor") and not other.controls.export_mode
+    assert panel.controls.target() == ("first", "Floor") and other.controls.export_target is None
     model.handle.dirty_fields.clear()
     assert panel.on_update(None) is False
     assert not model.handle.dirty_fields

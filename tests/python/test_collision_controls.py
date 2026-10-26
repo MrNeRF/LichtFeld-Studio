@@ -18,7 +18,7 @@ def controls(monkeypatch):
     lf.set_walk_settings.side_effect = lambda *settings: lf.get_collision_state.return_value.update(walk_settings=settings)
     monkeypatch.setattr(module, "lf", lf)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf)
-    return module.CollisionRendering()
+    return module.CollisionRendering(popup=True)
 
 
 def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
@@ -43,14 +43,13 @@ def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
     blocked = RuntimeError("The edited Walk capsule does not fit")
     blocked.message_key = "collision.walk_blocked"
     module.lf.set_walk_settings.side_effect = blocked
-    scrub._on_field_keydown(prop, enter)
-    field.input_el.set_attribute("value", ".9")
-    scrub._on_input_change(prop, Event(linebreak=True))
-    assert controls.values["step"] == .35 and controls.error == "collision.walk_blocked"
-    scrub._on_field_keydown(prop, enter)
-    field.input_el.set_attribute("value", "nan")
-    scrub._on_input_change(prop, Event(linebreak=True))
-    assert controls.error == "preferences.viewport_defaults_invalid" and not field.editing
+    for draft, error in ((".9", "collision.walk_blocked"),
+                         ("nan", "preferences.viewport_defaults_invalid")):
+        scrub._on_field_keydown(prop, enter)
+        field.input_el.set_attribute("value", draft)
+        scrub._on_input_change(prop, Event(linebreak=True))
+        assert controls.values["step"] == .35
+        assert controls.error == error and not field.editing
     scrub._on_field_keydown(prop, enter)
     assert field.editing
 
@@ -89,6 +88,7 @@ def test_bindings_generation_resolution_and_idle_updates(controls):
     model.bind_func.side_effect = bindings.__setitem__
     model.bind_event.side_effect = events.__setitem__
     controls.bind(model)
+    assert {call.args[0] for call in model.bind.call_args_list} == {"collision_automatic", "collision_cleanup"}
     assert not bindings["collision_can_generate"]()
     for changes in ({"source_name": "Selected"}, {"active": True, "progress": .4, "stage": "Sorting collision records"},
                     {"active": False, "error": "/tmp/output.bin: denied"}):
@@ -101,6 +101,8 @@ def test_bindings_generation_resolution_and_idle_updates(controls):
     controls.values.update(size=.005, opacity=.2, area=3., automatic=True)
     events["collision_generate"]()
     module.lf.generate_collision.assert_called_once_with(.005, .2, True, True, 3.)
+    events["collision_cancel"]()
+    module.lf.cancel_collision.assert_called_once_with()
     controls.state.update(resolved_voxel_size=.01234, generation_settings=(.00500000007, .200000001, True, True, 3.))
     assert controls.resolved_size() == "0.01234"
     for changes in ({"cleanup": False}, {"cleanup": True, "area": 1}, {"area": 3}):
