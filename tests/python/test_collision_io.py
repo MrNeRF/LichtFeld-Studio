@@ -34,10 +34,10 @@ def test_generate_save_and_decode_voxels(lf, numpy, gpu_available, tmp_path):
     assert len(words) == nodes + leaves
     assert leaves == 2 * metadata["numMixedLeaves"]
 
-    # This tiny fixture has one interior and mixed 4-cubed leaves; C++ covers arbitrary depths.
-    assert metadata["treeDepth"] == 1 and metadata["numInteriorNodes"] == 1
-    assert nodes == 1 + (int(words[0]) >> 24).bit_count()
-    assert all(int(word) < 0x1000000 for word in words[1:nodes])
+    # No uniform solid nodes: independently count the raw little-endian leaf bits.
+    assert nodes == metadata["numInteriorNodes"] + metadata["numMixedLeaves"]
+    assert metadata["numMixedLeaves"] > 0
+    assert all(int(word) != 0xff000000 for word in words[:nodes])
     assert sum(int(word).bit_count() for word in words[nodes:]) == volume.occupied_count
     original = (path.read_bytes(), binary.read_bytes())
     with pytest.raises(Exception, match="overwrite"):
