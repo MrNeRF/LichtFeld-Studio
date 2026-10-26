@@ -192,6 +192,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_input_controller_focus.cpp
     )
     add_executable(lichtfeld_visualizer_tests
+        test_main.cpp
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
     # Focused RmlUi migration contracts for the retained master interface.
@@ -223,6 +224,7 @@ if(BUILD_VISUALIZER_TESTS)
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
     )
     target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
+        LFS_TEST_SKIP_GPU_PREWARM
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
@@ -231,7 +233,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_visualizer
         lfs_core
         lfs_python_runtime
-        GTest::gtest_main
+        GTest::gtest
         Zep::Zep
         SDL3::SDL3
         ZLIB::ZLIB

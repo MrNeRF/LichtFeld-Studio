@@ -447,8 +447,6 @@ class VisualizerImplResetTest : public ::testing::Test {
 protected:
     void SetUp() override {
         isolated_home_.emplace(temporary_.path / "home");
-        if (initialize_logger_)
-            lfs::core::Logger::get().init(lfs::core::LogLevel::Info, "", "", false, (temporary_.path / "home").string());
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
@@ -461,8 +459,6 @@ protected:
         lfs::vis::services().clear();
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::clearProjectLocationPreference();
-        if (initialize_logger_)
-            lfs::core::Logger::get().reset_for_testing();
         isolated_home_.reset();
     }
 
@@ -642,7 +638,6 @@ protected:
 
     lfs::test::licht::TemporaryDirectory temporary_{"lfs-visualizer-project"};
     std::optional<ScopedLfsHome> isolated_home_;
-    const bool initialize_logger_ = !lfs::core::Logger::get().is_ready();
 };
 
 namespace {
