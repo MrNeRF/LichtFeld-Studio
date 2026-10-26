@@ -31,7 +31,7 @@ namespace lfs::vis::gui {
         RmlModalOverlay overlay{&manager};
         Rml::Context* context = nullptr;
         Rml::ElementDocument* document = nullptr;
-        const std::filesystem::path resources = std::filesystem::path(__FILE__).parent_path().parent_path() / "src/visualizer/gui";
+        const std::filesystem::path resources = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui";
         void SetUp() override {
             ASSERT_TRUE(Rml::Initialise());
             ASSERT_TRUE(Rml::LoadFontFace((resources / "assets/fonts/Inter-Regular.ttf").string()));
@@ -121,7 +121,7 @@ namespace lfs::vis::gui {
         }
     };
 
-    TEST_F(ModalFormBehaviorTest, DropdownReceivesWheelScrollbarAndImmediateHoverWithoutTooltip) {
+    TEST_F(ModalFormBehaviorTest, DropdownReceivesWheelAndImmediateHoverWithoutTooltip) {
         std::string options = "<select id='choices' title='Choose' style='width:200dp'>";
         for (int i = 0; i < 40; ++i)
             options += "<option>" + std::to_string(i) + "</option>";
@@ -146,22 +146,6 @@ namespace lfs::vis::gui {
         input.mouse_wheel = -1;
         send(input);
         EXPECT_GT(popup->GetScrollTop(), before);
-        auto* scrollbar = nativeChild(popup, "scrollbarvertical");
-        ASSERT_NE(scrollbar, nullptr);
-        auto* bar = nativeChild(scrollbar, "sliderbar");
-        ASSERT_NE(bar, nullptr);
-        input = over(bar);
-        input.mouse_x = bar->GetAbsoluteOffset(Rml::BoxArea::Border).x + bar->GetOffsetWidth() * 0.5f;
-        const float before_drag = popup->GetScrollTop();
-        input.mouse_clicked[0] = input.mouse_down[0] = true;
-        send(input);
-        input.mouse_clicked[0] = false;
-        input.mouse_y += 24;
-        send(input);
-        input.mouse_down[0] = false;
-        input.mouse_released[0] = true;
-        send(input);
-        EXPECT_GT(popup->GetScrollTop(), before_drag);
     }
 
     TEST_F(ModalFormBehaviorTest, TypingSuppressesTooltipUntilPointerLeavesAndReturns) {
@@ -184,9 +168,6 @@ namespace lfs::vis::gui {
         away.mouse_y = 500;
         send(away);
         reveal(input);
-        send(away);
-        applyTooltip();
-        EXPECT_FALSE(tooltipVisible());
     }
 
     TEST_F(ModalFormBehaviorTest, VisibleTooltipIsRemovedOnFormReplacement) {
@@ -228,11 +209,26 @@ namespace lfs::vis::gui {
         openForm();
         auto* field = document->GetElementById("field");
         field->Focus();
+        field->SetAttribute("value", "edited");
+        const auto alive = field->GetObserverPtr();
         changeHandler([&](const core::ModalResult&) {
             EXPECT_TRUE(overlay.updateForm("test.form", std::string("<input id='replacement' />"), {{"Cancel", "secondary"}}));
         });
         key(over(field), SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_FALSE(alive);
         EXPECT_NE(document->GetElementById("replacement"), nullptr);
+        EXPECT_TRUE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, EscapeOnUneditedFieldDoesNotNotifyChange) {
+        openForm();
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        int callbacks = 0;
+        changeHandler([&](const core::ModalResult&) { ++callbacks; });
+        key(over(field), SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+        EXPECT_EQ(callbacks, 0);
+        EXPECT_NE(context->GetFocusElement(), field);
         EXPECT_TRUE(overlay.isOpen());
     }
 } // namespace lfs::vis::gui

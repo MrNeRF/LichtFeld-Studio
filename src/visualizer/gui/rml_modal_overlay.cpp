@@ -251,7 +251,6 @@ namespace lfs::vis::gui {
         if (!rml_context_ || active_.has_value())
             return;
 
-        resetTooltip();
         text_input_revert_.clear();
         if (document_) {
             lfs::python::unregister_rml_document("modal_overlay");
@@ -381,7 +380,6 @@ namespace lfs::vis::gui {
         el_backdrop_->SetProperty("display", "block");
         el_dialog_->SetProperty("display", "block");
 
-        resetTooltip();
         active_ = std::move(req);
         rml_context_->Update();
         rml_manager_->activateInput(rml_context_, [this](const PanelInputState& event) { processInput(event); });
@@ -551,18 +549,10 @@ namespace lfs::vis::gui {
     }
 
     void RmlModalOverlay::resetTooltip() {
-        // The tooltip lives under the document body, outside the dialog/content.
-        // Resetting only its controller leaves an already visible node behind.
-        bool changed = tooltip_.hasActiveState();
-        if (document_) {
-            if (auto* tooltip = document_->GetElementById("frame-tooltip"); tooltip && tooltip->IsClassSet("visible")) {
-                tooltip->SetClass("visible", false);
-                changed = true;
-            }
-        }
-        tooltip_ = {};
+        tooltip_.setHover({}, nullptr);
+        render_needed_ |= tooltip_.apply(document_ ? document_->GetElementById("body") : nullptr,
+                                         last_mouse_x_, last_mouse_y_, width_, height_);
         tooltip_suppressed_target_ = nullptr;
-        render_needed_ |= changed;
     }
 
     void RmlModalOverlay::bindTextInputRevert() {
@@ -623,9 +613,9 @@ namespace lfs::vis::gui {
             render_needed_ = true;
         }
         auto* hover = rml_context_->GetHoverElement();
-        const bool interacting = input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2] ||
+        const bool interacting = input.mouse_down[0] ||
                                  input.mouse_clicked[0] || input.mouse_released[0] ||
-                                 !input.input_events.empty() || rml_input::hasOpenKeyboardPopup(rml_context_);
+                                 !input.input_events.empty();
         auto* tooltip_target = hover;
         while (tooltip_target && tooltip_target->GetAttribute<Rml::String>("data-tooltip", "").empty() &&
                tooltip_target->GetAttribute<Rml::String>("title", "").empty())
@@ -639,7 +629,7 @@ namespace lfs::vis::gui {
             if (tooltip_target && tooltip_target == tooltip_suppressed_target_)
                 tooltip_.setHover({}, nullptr);
             else
-                tooltip_.setHover(resolveRmlTooltip(hover), tooltip_target ? tooltip_target : hover);
+                tooltip_.setHover(resolveRmlTooltip(hover), tooltip_target);
         }
 
         auto* const text_input_handler =
