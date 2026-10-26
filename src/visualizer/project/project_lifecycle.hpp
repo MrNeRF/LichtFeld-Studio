@@ -270,6 +270,9 @@ namespace lfs::vis::project {
         boundDocument() const noexcept {
             return document_;
         }
+        [[nodiscard]] std::uint64_t documentEpoch() const noexcept {
+            return epoch_.load(std::memory_order_acquire);
+        }
         void recoverDeferredPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);
         [[nodiscard]] bool isScratchBoundSession() const;

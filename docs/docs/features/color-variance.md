@@ -4,7 +4,7 @@ title: Color variance loss
 
 # Color variance loss
 
-The color variance loss makes the splats that cover a pixel agree on its color, instead of reaching the photo by blending very different colors. A model trained this way shows less noise in a stochastic renderer, which draws only some of the splats per sample. LichtFeld Studio's viewport blends every splat, so it does not show that noise; the loss is meant for models that will be viewed with stochastic rendering. It is off by default.
+The color variance loss makes the splats that cover a pixel agree on its color, instead of reaching the photo by blending very different colors. A model trained this way shows less noise in a stochastic renderer, which draws only some of the splats per sample. LichtFeld Studio's viewport blends every splat by default, so it shows that noise only in its [stochastic modes](stochastic-rendering.md); the loss is meant for models that will be viewed with stochastic rendering. It is off by default.
 
 ```sh
 LichtFeld-Studio -d ./dataset -o ./output --headless --no-exposure-correction \

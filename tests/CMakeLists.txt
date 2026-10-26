@@ -34,6 +34,20 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_collision_tests test_collision.cpp)
+target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
+target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
+add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests --gtest_filter=-CollisionGpu.*)
+add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_tests --gtest_filter=CollisionGpu.*)
+set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision")
+set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120)
+add_executable(lichtfeld_voxelize_cli_tests test_voxelize_cli.cpp
+    ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
+target_compile_features(lichtfeld_voxelize_cli_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_voxelize_cli_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(lichtfeld_voxelize_cli_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_voxelize_cli_tests PRIVATE lfs_io lfs_core GTest::gtest_main LibArchive::LibArchive)
+add_test(NAME lichtfeld.voxelize_cli COMMAND lichtfeld_voxelize_cli_tests)
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
@@ -153,8 +167,12 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        licht_test_support.cpp
+        test_collision_scene.cpp
+        test_collision_jobs.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
+        test_keymap_layout_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
@@ -210,6 +228,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_training
         lfs_io
         lfs_visualizer
         lfs_core
@@ -237,12 +256,15 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
+    set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
         return()
     endif()
@@ -2027,6 +2049,28 @@ add_test(NAME lichtfeld.decimate.perf
     COMMAND lichtfeld_tests --gtest_filter=SplatDecimate.DecimatePerfSmoke)
 set_tests_properties(lichtfeld.decimate.perf PROPERTIES
     LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)
+
+# Focused Vulkan stochastic renderer contracts.
+if(TARGET lfs_vulkan_rasterizer)
+    add_executable(stochastic_tests test_stochastic_resampling.cpp)
+    target_compile_features(stochastic_tests PRIVATE cxx_std_23)
+    target_link_libraries(stochastic_tests PRIVATE lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    get_target_property(_stochastic_shader_dir lfs_vulkan_rasterizer LFS_VULKAN_RASTERIZER_SPV_DIR)
+    target_compile_definitions(stochastic_tests PRIVATE
+        LFS_STOCHASTIC_TEST_SPIRV_DIR="${_stochastic_shader_dir}/generated")
+    add_test(NAME lichtfeld.stochastic COMMAND stochastic_tests)
+    set_tests_properties(lichtfeld.stochastic PROPERTIES LABELS "gpu" TIMEOUT 120)
+    # Test private history state without widening the Windows DLL exports.
+    add_executable(stochastic_viewport_tests
+        test_stochastic_viewport.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
+    target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
+    target_include_directories(stochastic_viewport_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(stochastic_viewport_tests PRIVATE
+        lfs_visualizer lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    add_test(NAME lichtfeld.stochastic_viewport COMMAND stochastic_viewport_tests)
+endif()
 
 # Focused CUDA renderer contracts.
 add_executable(color_variance_tests test_main.cpp test_color_variance.cpp)

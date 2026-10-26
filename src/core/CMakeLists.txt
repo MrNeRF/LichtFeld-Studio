@@ -79,6 +79,9 @@ set(CORE_SOURCES
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
+        collision.cpp
+        collision_walk.cpp
+        collision_voxelization.cpp
         checkpoint_format.cpp
         crop_polygon.cpp
         image_loader.cpp

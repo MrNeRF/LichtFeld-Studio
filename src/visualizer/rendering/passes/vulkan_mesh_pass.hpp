@@ -17,11 +17,15 @@
 
 namespace lfs::core {
     struct MeshData;
-}
+    struct CollisionVolume;
+    struct SceneNode;
+} // namespace lfs::core
 
 namespace lfs::vis {
 
     class VulkanContext;
+    class SceneManager;
+    [[nodiscard]] bool hasVisibleCollisionPreview(const SceneManager& manager);
 
     // GPU-rendered mesh draw item. Full PBR (Cook-Torrance: GGX + Smith + Schlick) with
     // albedo / normal / metallic-roughness textures, vertex colors, Reinhard tonemap +
@@ -29,6 +33,8 @@ namespace lfs::vis {
     // wired (master defaults shadow_enabled=false; will be a follow-up depth-only pass).
     struct VulkanMeshDrawItem {
         const lfs::core::MeshData* mesh = nullptr;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision{};
+        float collision_opacity = 1.0f;
         glm::mat4 model{1.0f};
         glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
         bool camera_relative_light = false;

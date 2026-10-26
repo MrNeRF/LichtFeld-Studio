@@ -60,10 +60,12 @@ def _install_recording_lf(monkeypatch):
         "SCALE",
         "ALIGN",
         "CROP_BOX",
+        "WALK",
     )
     action_names = (
         "NONE",
         "CAMERA_ORBIT",
+        "EXIT_WALK",
         "CAMERA_PAN",
         "CAMERA_ZOOM",
         "CAMERA_ROLL",

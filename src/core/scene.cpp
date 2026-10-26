@@ -4,6 +4,7 @@
 
 #include "core/scene.hpp"
 #include "core/camera.hpp"
+#include "core/collision.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_bus.hpp"
@@ -266,6 +267,8 @@ namespace lfs::core {
         if (restore_staging_) {
             return;
         }
+        if (type == MutationType::MODEL_CHANGED)
+            collision_content_generation_.fetch_add(1, std::memory_order_release);
         pending_mutations_ |= static_cast<uint32_t>(type);
 
         if (type == MutationType::NODE_ADDED ||
@@ -778,6 +781,7 @@ namespace lfs::core {
     }
 
     void Scene::clear(const bool internal_import) {
+        ++collision_scene_epoch_;
         if (!internal_import)
             events::state::SceneReplacing{.scene = this}.emit();
         Transaction txn(*this);
@@ -4273,6 +4277,77 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addCollision(const std::string& name, std::shared_ptr<const CollisionVolume> volume, NodeId parent) {
+        if (!volume)
+            throw std::invalid_argument("Collision volume is missing");
+        if (parent != NULL_NODE && (!getNodeById(parent) || !isSceneNodeParentCompatible(getNodeById(parent)->type, NodeType::COLLISION)))
+            throw std::invalid_argument("Invalid collision parent");
+        auto node = std::make_unique<SceneNode>();
+        node->parent_id = parent;
+        node->type = NodeType::COLLISION;
+        node->name = makeUniqueNodeName(name_to_id_, name);
+        node->collision = std::move(volume);
+        return insertNode(std::move(node), false, std::nullopt, nullptr);
+    }
+
+    std::optional<Scene::CollisionSourceIdentity> Scene::collisionSourceIdentity(NodeId id) const {
+        std::optional<std::shared_lock<std::shared_mutex>> lock;
+        if (auto* mutex = liveModelMutex(); mutex && live_model_lock_depth() == 0)
+            lock.emplace(*mutex);
+        const auto* node = getNodeById(id);
+        const auto* model = consolidated_ ? cached_combined_.get() : (node ? node->model.get() : nullptr);
+        if (!node || node->type != NodeType::SPLAT || !model)
+            return std::nullopt;
+        return CollisionSourceIdentity{
+            node->uuid, id, node->parent_id, collision_scene_epoch_,
+            collision_content_generation_.load(std::memory_order_acquire), model,
+            model->deleted_mask_version(), model->param_layout_generation(), getWorldTransform(id)};
+    }
+
+    std::vector<CollisionSource> Scene::captureCollisionSources(NodeId id, CollisionSourceIdentity* identity) const {
+        std::optional<std::shared_lock<std::shared_mutex>> lock;
+        if (auto* mutex = liveModelMutex(); mutex && live_model_lock_depth() == 0)
+            lock.emplace(*mutex);
+        noteLiveModelLockAcquired();
+        struct DepthGuard {
+            const Scene& scene;
+            ~DepthGuard() { scene.noteLiveModelLockReleased(); }
+        } depth_guard{*this};
+        const auto* node = getNodeById(id);
+        if (!node || node->type != NodeType::SPLAT)
+            throw std::runtime_error("Select one loaded splat node to voxelize");
+        const auto* model = consolidated_ ? getCombinedModel() : node->model.get();
+        if (!model)
+            throw std::runtime_error("The selected splat payload is not loaded");
+        const auto captured_identity = collisionSourceIdentity(id);
+        if (!captured_identity)
+            throw std::runtime_error("The selected splat payload is not loaded");
+        const auto inverse = glm::inverse(captured_identity->world_transform);
+        for (int column = 0; column < 4; ++column)
+            for (int row = 0; row < 4; ++row)
+                if (!std::isfinite(inverse[column][row]))
+                    throw std::runtime_error("Collision source transform must be invertible");
+        // Capture fences successful and exceptional reads before this writer lock is released.
+        auto source = captureCollisionSource(*model, getWorldTransform(id));
+        if (consolidated_) {
+            size_t begin = 0;
+            const auto slot = std::find_if(consolidated_node_slots_.begin(), consolidated_node_slots_.end(), [&](const auto& entry) {
+                if (entry.id == id)
+                    return true;
+                begin += entry.gaussian_count;
+                return false;
+            });
+            if (slot == consolidated_node_slots_.end() || begin + slot->gaussian_count > source.means.shape()[0])
+                throw std::runtime_error("The selected consolidated splat range is unavailable");
+            for (auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
+                if (tensor->is_valid())
+                    *tensor = tensor->slice(0, begin, begin + slot->gaussian_count);
+        }
+        if (identity)
+            *identity = *captured_identity;
+        return {std::move(source)};
+    }
+
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {
         assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
 
@@ -4504,6 +4579,11 @@ namespace lfs::core {
         node->georef_pose = std::move(desc.georef_pose);
 
         switch (desc.type) {
+        case NodeType::COLLISION:
+            if (!desc.collision)
+                throw std::invalid_argument("Cannot restore collision: payload is missing");
+            node->collision = std::move(desc.collision);
+            break;
         case NodeType::SPLAT:
             if (!desc.model &&
                 desc.payload_hydration == PayloadHydrationState::Loaded) {
@@ -4662,6 +4742,7 @@ namespace lfs::core {
         // that graph cannot race reads from the target's captured inputs.
         pollCombinedModelBuild();
 
+        ++collision_scene_epoch_;
         nodes_.swap(staged->nodes_);
         id_to_index_.swap(staged->id_to_index_);
         name_to_id_.swap(staged->name_to_id_);
@@ -5035,6 +5116,8 @@ namespace lfs::core {
                         tensor = tensor.clone();
                 }
                 new_id = addPointCloud(new_name, std::move(cloned), parent_id);
+            } else if (src_type == NodeType::COLLISION && src->collision) {
+                new_id = addCollision(new_name, src->collision, parent_id);
             } else if (src_type == NodeType::MESH) {
                 const auto* src_for_mesh = getNodeById(src_id);
                 if (src_for_mesh && src_for_mesh->mesh) {
@@ -5919,6 +6002,9 @@ namespace lfs::core {
             total_max = glm::max(total_max, max_b);
             has_bounds = true;
         };
+        if (node->collision)
+            expand_bounds(node->collision->origin, node->collision->origin +
+                                                       glm::vec3(node->collision->dimensions) * node->collision->settings.voxel_size);
 
         if (node->model && node->model->size() > 0) {
             const auto generation = bounds_generation_.load(std::memory_order_acquire);
