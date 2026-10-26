@@ -146,3 +146,149 @@ TEST(AnalogNavigation, OpposingKeysCancelWithoutLosingHeldState) {
     camera.advanceDrone(0.1f, opposed);
     expectVectorNear(camera.t, initial);
 }
+
+TEST(AnalogNavigation, LookAndOrbitUseAngularRatesWithoutChangingPointerState) {
+    for (bool orbit : {false, true}) {
+        for (bool trackball : {false, true}) {
+            auto reference = cameraAtOrigin();
+            reference.t = {0, 0, 5};
+            reference.pivot = glm::vec3(0);
+            reference.initScreenPos({123, 456});
+            for (int frame = 0; frame < 60; ++frame) {
+                if (orbit)
+                    reference.advanceOrbit(1.0f / 60, {0.5f, 0}, trackball);
+                else
+                    reference.advanceLook(1.0f / 60, {0.5f, 0});
+            }
+            for (int fps : {30, 144}) {
+                auto camera = cameraAtOrigin();
+                camera.t = {0, 0, 5};
+                camera.pivot = glm::vec3(0);
+                camera.initScreenPos({123, 456});
+                for (int frame = 0; frame < fps; ++frame) {
+                    if (orbit)
+                        camera.advanceOrbit(1.0f / fps, {0.5f, 0}, trackball);
+                    else
+                        camera.advanceLook(1.0f / fps, {0.5f, 0});
+                }
+                expectVectorNear(camera.t, reference.t, 1e-4f);
+                expectVectorNear(camera.pivot, reference.pivot, 1e-4f);
+                for (int col = 0; col < 3; ++col)
+                    expectVectorNear(camera.R[col], reference.R[col], 1e-4f);
+                EXPECT_EQ(camera.prePos, glm::vec2(123, 456));
+                EXPECT_FALSE(camera.isOrbiting);
+                EXPECT_FALSE(camera.hasOrbitMomentum());
+            }
+        }
+    }
+}
+
+TEST(AnalogNavigation, UprightLookPreservesPositionAndLimitsPitchInBothFrames) {
+    for (auto axis : {lfs::vis::NavigationUpAxis::LegacyY, lfs::vis::NavigationUpAxis::DataZ}) {
+        auto camera = cameraAtOrigin();
+        camera.setNavigationUpAxis(axis);
+        camera.R = lfs::vis::navigationFrame(axis);
+        camera.updatePivotFromCamera(5);
+        const auto position = camera.t;
+        for (int frame = 0; frame < 120; ++frame)
+            camera.advanceLook(1.0f / 60, {0, 3});
+        expectVectorNear(camera.t, position);
+        EXPECT_NEAR(glm::length(camera.pivot - camera.t), 5.0f, 1e-4f);
+        const auto forward = lfs::rendering::cameraForward(camera.R);
+        EXPECT_NEAR(glm::dot(forward, camera.navigationUp()), std::sin(glm::radians(89.0f)), 1e-4f);
+        EXPECT_NEAR(glm::determinant(camera.R), 1.0f, 1e-4f);
+    }
+}
+
+TEST(AnalogNavigation, PanUsesSceneCappedDistanceAndTranslatesCameraAndPivotTogether) {
+    auto camera = cameraAtOrigin();
+    camera.setSceneExtent(2);
+    camera.initScreenPos({12, 34});
+    const auto pivot = camera.pivot;
+    camera.advancePan(0.5f, {0.5f, 0.25f});
+    expectVectorNear(camera.t, {0.5f, 0.25f, 0});
+    expectVectorNear(camera.pivot - pivot, camera.t);
+    EXPECT_EQ(camera.prePos, glm::vec2(12, 34));
+    EXPECT_FALSE(camera.hasPanMomentum());
+}
+
+TEST(AnalogNavigation, RelativeDollyIsFrameRateIndependentAndKeepsPivot) {
+    for (int fps : {30, 60, 144}) {
+        auto camera = cameraAtOrigin();
+        camera.t = {0, 0, 5};
+        camera.pivot = glm::vec3(0);
+        camera.initScreenPos({12, 34});
+        float scale = 100;
+        for (int frame = 0; frame < fps; ++frame) {
+            camera.advanceDolly(1.0f / fps, 0.5f);
+            scale = camera.advanceOrthographicDolly(1.0f / fps, 0.5f, scale);
+        }
+        EXPECT_NEAR(glm::length(camera.t), 5.0f * std::exp(-0.5f), 1e-4f);
+        EXPECT_NEAR(scale, 100.0f * std::exp(0.5f), 0.002f);
+        expectVectorNear(camera.pivot, glm::vec3(0));
+        EXPECT_EQ(camera.prePos, glm::vec2(12, 34));
+        camera.advanceDolly(1, std::numeric_limits<float>::max());
+        EXPECT_NEAR(glm::length(camera.t), 0.1f, 1e-6f);
+        camera.advanceDolly(1, -std::numeric_limits<float>::max());
+        EXPECT_NEAR(glm::length(camera.t), lfs::rendering::DEFAULT_FAR_PLANE, 0.01f);
+        EXPECT_FLOAT_EQ(camera.advanceOrthographicDolly(1, std::numeric_limits<float>::max(), 100), 10000);
+        EXPECT_FLOAT_EQ(camera.advanceOrthographicDolly(1, -std::numeric_limits<float>::max(), 100), 1);
+    }
+}
+
+TEST(AnalogNavigation, DroneLookUpdatesTheTargetAndSettlesThroughTheExistingIntegrator) {
+    auto camera = cameraAtOrigin();
+    camera.enterDrone();
+    camera.initScreenPos({12, 34});
+    const auto rotation = camera.R;
+    const auto position = camera.t;
+    camera.advanceDroneLook(0.1f, {1, 0.5f});
+    EXPECT_EQ(camera.R, rotation);
+    EXPECT_TRUE(camera.hasDroneMotion());
+    EXPECT_EQ(camera.prePos, glm::vec2(12, 34));
+    for (int frame = 0; frame < 600; ++frame)
+        camera.advanceDrone(1.0f / 60, Movement{});
+    EXPECT_FALSE(camera.hasDroneMotion());
+    EXPECT_NE(camera.R, rotation);
+    expectVectorNear(camera.t, position);
+    EXPECT_NEAR(glm::determinant(camera.R), 1.0f, 1e-4f);
+}
+
+TEST(AnalogNavigation, DollyHandlesOffAxisPivotsAndDoesNotSnapExistingOutOfRangeViews) {
+    auto camera = cameraAtOrigin();
+    camera.t = {3, 0, 4};
+    camera.pivot = glm::vec3(0);
+    camera.advanceDolly(0.5f, 1);
+    expectVectorNear(camera.t, glm::vec3(3, 0, 4) * std::exp(-0.5f));
+    camera.t = {0, 0, lfs::rendering::DEFAULT_FAR_PLANE * 2};
+    const auto distant = camera.t;
+    camera.advanceDolly(1, -1);
+    expectVectorNear(camera.t, distant);
+    camera.advanceDolly(1, 0.1f);
+    EXPECT_LT(glm::length(camera.t), glm::length(distant));
+    EXPECT_FLOAT_EQ(camera.advanceOrthographicDolly(1, -1, 0.5f), 0.5f);
+    EXPECT_FLOAT_EQ(camera.advanceOrthographicDolly(1, 1, 20000), 20000);
+}
+
+TEST(AnalogNavigation, InvalidContinuousRatesAndTimeStepsLeaveTheCameraUntouched) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    for (float dt : {-1.0f, 0.0f, nan, inf, 0.1f}) {
+        for (float rate : {0.0f, nan, inf}) {
+            auto camera = cameraAtOrigin();
+            camera.initScreenPos({12, 34});
+            const auto before = camera;
+            camera.advanceLook(dt, {rate, 0});
+            camera.advanceOrbit(dt, {rate, 0});
+            camera.advancePan(dt, {rate, 0});
+            camera.advanceDolly(dt, rate);
+            camera.advanceDroneLook(dt, {rate, 0});
+            EXPECT_EQ(camera.advanceOrthographicDolly(dt, rate, 100), 100);
+            EXPECT_EQ(camera.t, before.t);
+            EXPECT_EQ(camera.pivot, before.pivot);
+            EXPECT_EQ(camera.R, before.R);
+            EXPECT_EQ(camera.prePos, before.prePos);
+            EXPECT_FALSE(camera.hasDroneMotion());
+        }
+    }
+}
