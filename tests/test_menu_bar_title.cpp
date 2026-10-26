@@ -12,10 +12,10 @@
 #include "ipc/view_context.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/render_pass.hpp"
+#include "scene/scene_manager.hpp"
 #include "screen/screen_service.hpp"
 #include "screen/view3d_space.hpp"
 #include "test_view_targets.hpp"
-#include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL_keycode.h>

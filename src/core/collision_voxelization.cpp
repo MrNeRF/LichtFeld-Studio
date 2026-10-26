@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "cuda/collision_voxelization.hpp"
 #include "core/cuda/morton.cuh"
+#include "core/cuda_allocation.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
-#include "core/cuda_allocation.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include <bit>
 #include <climits>

@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/error.hpp"
-#include "dirty_flags.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
+#include "dirty_flags.hpp"
 #include "lod_page_cache.hpp"
 #include "render_target_id.hpp"
 #include "rendering/rendering.hpp"

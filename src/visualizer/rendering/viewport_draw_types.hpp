@@ -12,7 +12,7 @@
 namespace lfs::core {
     struct MeshData;
     struct CollisionVolume;
-}
+} // namespace lfs::core
 namespace lfs::vis {
     struct ViewportOverlayVertex {
         glm::vec2 position{0.0f};

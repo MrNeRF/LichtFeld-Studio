@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
-#include "cuda_backend_test.hpp"
-#include "tensor_test_support.hpp"
 #include "core/collision_walk.hpp"
-#include "core/cuda_error.hpp"
 #include "core/cuda/collision_voxelization.hpp"
+#include "core/cuda_error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
+#include "tensor_test_support.hpp"
 #include <atomic>
 #include <chrono>
 #include <cuda_runtime.h>
