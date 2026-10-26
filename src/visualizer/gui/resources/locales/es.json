@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Proporción de cámara",
     "mip_filter": "Reducir el aliasing para gaussianas de subpíxel",
     "appearance_correction": "Aplicar la corrección de exposición/color aprendida",
     "ppisp_mode": "Auto usa el controlador entrenado, Manual permite ajustar los deslizadores",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "Activar la reproducción en bucle",
     "seq_loop_on": "Desactivar la reproducción en bucle",
     "seq_add": "Añadir fotograma clave en la posición actual",
-    "seq_speed": "Velocidad de reproducción (clic para cambiar)",
+    "seq_speed": "Elegir velocidad de reproducción",
     "seq_clip_duration": "Duración del clip (clic para editar, en segundos)",
     "seq_snap": "Ajustar los fotogramas clave a la cuadrícula (Ctrl invierte al arrastrar, clic derecho para opciones)",
     "seq_follow": "La vista principal sigue al cabezal (reproducción y arrastre)",
@@ -1541,7 +1542,12 @@
     "point_size": "Tamaño del Punto",
     "scale_camera": "Escala",
     "fov": "Campo de visión de la cámara en grados",
-    "selection_colors": "Colores para la visualización de la selección"
+    "selection_colors": "Colores para la visualización de la selección",
+    "seq_snap_options": "Intervalo de ajuste",
+    "seq_preview_options": "Tamaño de vista previa",
+    "seq_path_menu": "Archivos de ruta de cámara",
+    "seq_ply_menu": "Archivos de secuencia PLY",
+    "seq_projection": "Proyección"
   },
   "exit_popup": {
     "title": "¿Salir de la Aplicación?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "Datos de popularidad no disponibles."
   },
   "sequencer": {
+    "export_resolution_hint": "Dimensiones pares: 16–8192 píxeles por lado.",
+    "export_fps_hint": "Escribe los FPS o elige un valor con la flecha. Se admiten decimales y fracciones (1–1000 FPS).",
+    "export_framing_hint": "Ajustar conserva toda la imagen con bandas negras. Recortar rellena automáticamente el formato sin deformar. Estirar deforma la imagen.",
+    "export_stretch": "Estirar",
+    "export_crop": "Rellenar / recortar",
+    "export_fit": "Ajustar (bandas negras)",
+    "export_framing": "Ajuste de imagen",
+    "camera_aspect_hint": "Proporción global de la secuencia. Enteros: 1–8192. La vista principal no cambia.",
+    "camera_height": "Relación de altura",
+    "camera_width": "Relación de anchura",
+    "camera_aspect": "Proporción de cámara",
+    "export_settings": "Exportación de vídeo",
+    "export_preset": "Preajuste de resolución",
+    "preset_landscape": "Horizontal",
+    "preset_portrait": "Vertical",
+    "preset_square": "Cuadrado",
+    "export_framerate": "Fotogramas de vídeo (FPS)",
+    "export_quality": "Calidad",
+    "export_quality_hint": "Hacia la derecha: mayor calidad y archivos más grandes. Un CRF menor indica mayor calidad. CRF: 0–51.",
+    "export_no_keyframes": "Añade un fotograma clave de cámara para exportar.",
     "edit_focal_length": "Editar la Longitud Focal...",
     "edit_focal_length_title": "Editar la Longitud Focal",
     "play": "Reproducir (Espacio)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "El easing controla el movimiento de salida\n(el último fotograma clave no tiene segmento de salida)",
     "time_seconds": "Tiempo (s)",
     "loop_point_tooltip": "Punto de bucle @ {} (vuelve al inicio)",
-    "keyframe_tooltip": "Fotograma clave @ {} (doble clic para editar)"
+    "keyframe_tooltip": "Fotograma clave @ {} (doble clic para editar)",
+    "export_width": "Anchura (px)",
+    "export_height": "Altura (px)",
+    "export_lock": "Mantener proporciones",
+    "export_aspect": "Proporción",
+    "export_swap": "Intercambiar anchura / altura",
+    "ply_fps": "FPS PLY",
+    "load_camera_path": "Cargar ruta de cámara…",
+    "save_camera_path": "Guardar ruta de cámara…",
+    "clear_camera_path": "Borrar línea de tiempo de cámara…",
+    "clear_camera_path_hint": "¿Borrar fotogramas clave de cámara y clips de animación? Se conserva la secuencia PLY cargada.",
+    "load_ply_sequence": "Cargar secuencia PLY…"
   },
   "file_association": {
     "title": "Establecer como Aplicación Predeterminada",

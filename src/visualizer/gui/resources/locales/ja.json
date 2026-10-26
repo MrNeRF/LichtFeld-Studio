@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "カメラのアスペクト比",
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "ループ再生を有効にする",
     "seq_loop_on": "ループ再生を無効にする",
     "seq_add": "現在の位置にキーフレームを追加",
-    "seq_speed": "再生速度（クリックで切替）",
+    "seq_speed": "再生速度を選択",
     "seq_clip_duration": "クリップの長さ (クリックで編集、秒単位)",
     "seq_snap": "キーフレームをグリッドにスナップ（ドラッグ中はCtrlで反転、右クリックでオプション）",
     "seq_follow": "メインビューがプレイヘッドに追従（再生中およびスクラブ時）",
@@ -1541,7 +1542,12 @@
     "point_size": "ポイントサイズ",
     "scale_camera": "スケール",
     "fov": "カメラの視野角（度）",
-    "selection_colors": "選択範囲の可視化色"
+    "selection_colors": "選択範囲の可視化色",
+    "seq_snap_options": "スナップ間隔",
+    "seq_preview_options": "プレビューサイズ",
+    "seq_path_menu": "カメラパスのファイル",
+    "seq_ply_menu": "PLYシーケンスのファイル",
+    "seq_projection": "投影方式"
   },
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "人気データを利用できません。"
   },
   "sequencer": {
+    "export_resolution_hint": "各辺の寸法は16–8192ピクセルの偶数です。",
+    "export_fps_hint": "FPSを入力するか、矢印からプリセットを選択します。小数と分数を使用できます（1–1000 FPS）。",
+    "export_framing_hint": "全体表示は黒帯を付けて画像全体を保持します。切り抜きは比率を維持して出力画面を自動的に埋めます。引き伸ばしは画像を変形します。",
+    "export_stretch": "引き伸ばす",
+    "export_crop": "拡大して切り抜く",
+    "export_fit": "全体を表示（黒帯）",
+    "export_framing": "画像の調整",
+    "camera_aspect_hint": "シーケンス全体のカメラ比率。整数：1–8192。メインビューポートは変更されません。",
+    "camera_height": "高さの比率",
+    "camera_width": "幅の比率",
+    "camera_aspect": "カメラのアスペクト比",
+    "export_settings": "動画の書き出し",
+    "export_preset": "解像度プリセット",
+    "preset_landscape": "横長",
+    "preset_portrait": "縦長",
+    "preset_square": "正方形",
+    "export_framerate": "動画フレームレート (FPS)",
+    "export_quality": "画質",
+    "export_quality_hint": "右に動かすほど高画質になり、ファイルが大きくなります。CRFが低いほど高画質です。 CRF: 0–51.",
+    "export_no_keyframes": "書き出すにはカメラキーフレームを追加してください。",
     "edit_focal_length": "焦点距離を編集...",
     "edit_focal_length_title": "焦点距離を編集",
     "play": "再生 (スペース)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "イージングは出ていく動きを制御します\n（最後のキーフレームには出力セグメントがありません）",
     "time_seconds": "時間 (s)",
     "loop_point_tooltip": "ループポイント @ {} (開始位置に戻る)",
-    "keyframe_tooltip": "キーフレーム @ {} (ダブルクリックで編集)"
+    "keyframe_tooltip": "キーフレーム @ {} (ダブルクリックで編集)",
+    "export_width": "幅 (px)",
+    "export_height": "高さ (px)",
+    "export_lock": "縦横比を固定",
+    "export_aspect": "縦横比",
+    "export_swap": "幅と高さを入れ替え",
+    "ply_fps": "PLY FPS",
+    "load_camera_path": "カメラパスを読み込む…",
+    "save_camera_path": "カメラパスを保存…",
+    "clear_camera_path": "カメラタイムラインを消去…",
+    "clear_camera_path_hint": "カメラのキーフレームとアニメーションクリップを消去しますか？読み込んだPLYシーケンスは保持されます。",
+    "load_ply_sequence": "PLYシーケンスを読み込む…"
   },
   "file_association": {
     "title": "既定のアプリケーションに設定",

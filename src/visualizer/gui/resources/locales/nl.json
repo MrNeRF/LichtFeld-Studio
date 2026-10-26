@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Cameraverhouding",
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Modus",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "Herhaald afspelen inschakelen",
     "seq_loop_on": "Herhaald afspelen uitschakelen",
     "seq_add": "Keyframe toevoegen op huidige positie",
-    "seq_speed": "Afspeelsnelheid (klik om te wisselen)",
+    "seq_speed": "Afspeelsnelheid kiezen",
     "seq_clip_duration": "Clipduur (klik om te bewerken, in seconden)",
     "seq_snap": "Keyframes uitlijnen op raster (Ctrl keert om tijdens slepen, rechtsklik voor opties)",
     "seq_follow": "Hoofdweergave volgt de afspeelkop (afspelen en scrubben)",
@@ -1541,7 +1542,12 @@
     "point_size": "Punt Grootte",
     "scale_camera": "Schaal",
     "fov": "Camera gezichtsveld in graden",
-    "selection_colors": "Kleuren voor selectie visualisatie"
+    "selection_colors": "Kleuren voor selectie visualisatie",
+    "seq_snap_options": "Uitlijninterval",
+    "seq_preview_options": "Voorbeeldgrootte",
+    "seq_path_menu": "Camerapadbestanden",
+    "seq_ply_menu": "PLY-reeksbestanden",
+    "seq_projection": "Projectie"
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "Populariteitsgegevens niet beschikbaar."
   },
   "sequencer": {
+    "export_resolution_hint": "Even afmetingen: 16–8192 pixels per zijde.",
+    "export_fps_hint": "Typ de FPS of kies een waarde met de pijl. Decimalen en breuken zijn toegestaan (1–1000 FPS).",
+    "export_framing_hint": "Passend behoudt het hele beeld met zwarte balken. Bijsnijden vult het uitvoerformaat automatisch zonder vervorming. Uitrekken vervormt het beeld.",
+    "export_stretch": "Uitrekken",
+    "export_crop": "Vullen / bijsnijden",
+    "export_fit": "Passend (zwarte balken)",
+    "export_framing": "Beeldaanpassing",
+    "camera_aspect_hint": "Globale cameraverhouding voor deze reeks. Gehele getallen: 1–8192. Het hoofdvenster blijft ongewijzigd.",
+    "camera_height": "Hoogteverhouding",
+    "camera_width": "Breedteverhouding",
+    "camera_aspect": "Cameraverhouding",
+    "export_settings": "Video exporteren",
+    "export_preset": "Resolutievoorinstelling",
+    "preset_landscape": "Liggend",
+    "preset_portrait": "Staand",
+    "preset_square": "Vierkant",
+    "export_framerate": "Videobeeldsnelheid (FPS)",
+    "export_quality": "Kwaliteit",
+    "export_quality_hint": "Naar rechts: hogere kwaliteit en grotere bestanden. Een lagere CRF betekent hogere kwaliteit. CRF: 0–51.",
+    "export_no_keyframes": "Voeg een camerakeyframe toe om te exporteren.",
     "edit_focal_length": "Brandpuntsafstand bewerken...",
     "edit_focal_length_title": "Brandpuntsafstand bewerken",
     "play": "Afspelen (Spatie)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "Easing regelt de uitgaande beweging\n(Laatste keyframe heeft geen uitgaand segment)",
     "time_seconds": "Tijd (s)",
     "loop_point_tooltip": "Luspunt @ {} (keert terug naar begin)",
-    "keyframe_tooltip": "Keyframe @ {} (dubbelklik om te bewerken)"
+    "keyframe_tooltip": "Keyframe @ {} (dubbelklik om te bewerken)",
+    "export_width": "Breedte (px)",
+    "export_height": "Hoogte (px)",
+    "export_lock": "Beeldverhouding behouden",
+    "export_aspect": "Beeldverhouding",
+    "export_swap": "Breedte / hoogte wisselen",
+    "ply_fps": "PLY-FPS",
+    "load_camera_path": "Camerapad laden…",
+    "save_camera_path": "Camerapad opslaan…",
+    "clear_camera_path": "Cameratijdlijn wissen…",
+    "clear_camera_path_hint": "Camerakeyframes en animatieclips wissen? De geladen PLY-reeks blijft behouden.",
+    "load_ply_sequence": "PLY-reeks laden…"
   },
   "file_association": {
     "title": "Instellen als standaardtoepassing",

@@ -47,6 +47,7 @@
 #include <functional>
 #include <initializer_list>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -1852,7 +1853,23 @@ namespace lfs::vis::project {
                     }),
                 optional_field("custom_width", &Preferences::custom_width),
                 optional_field("custom_height", &Preferences::custom_height),
-                optional_field("framerate", &Preferences::framerate),
+                optional_field("camera_width", &Preferences::camera_width),
+                optional_field("camera_height", &Preferences::camera_height),
+                // Older readers only know the integer key; keep it usable.
+                custom_field<Preferences>(
+                    "framerate",
+                    [](const Preferences& prefs) {
+                        const int denominator = std::max(prefs.framerate_denominator, 1);
+                        return Json(std::clamp<int64_t>((int64_t{prefs.framerate} + denominator / 2) / denominator, 1, 1000));
+                    },
+                    [](const Json& json, Preferences& prefs, std::string_view, const std::string_view field) {
+                        if (const auto value = scalar<int>(json, field))
+                            prefs.framerate = *value;
+                        return lfs::Result<void>{};
+                    }),
+                optional_field("framerate_numerator", &Preferences::framerate),
+                optional_field("framerate_denominator", &Preferences::framerate_denominator),
+                optional_field("export_fit", &Preferences::export_fit),
                 optional_field("quality", &Preferences::quality),
             };
             return fields;
@@ -4216,6 +4233,53 @@ namespace lfs::vis::project {
                     ui,
                     "SEQR.preferences",
                     sequencer_preference_fields());
+                // Older projects derived the camera framing from export size.
+                // Preserve that image when introducing an independent camera ratio.
+                if (!preferences->contains("camera_width") || !preferences->contains("camera_height") ||
+                    ui.camera_width < 1 || ui.camera_width > 8192 || ui.camera_height < 1 || ui.camera_height > 8192) {
+                    const int width = std::clamp(ui.outputWidth(), 1, 8192);
+                    const int height = std::clamp(ui.outputHeight(), 1, 8192);
+                    const int divisor = std::gcd(width, height);
+                    ui.camera_width = width / divisor;
+                    ui.camera_height = height / divisor;
+                }
+                const auto fps_integer = [&](const char* key) -> std::optional<int> {
+                    const auto value = preferences->find(key);
+                    if (value == preferences->end())
+                        return std::nullopt;
+                    if (value->is_number_unsigned()) {
+                        const auto number = value->get<uint64_t>();
+                        return std::in_range<int>(number) ? std::optional(static_cast<int>(number)) : std::nullopt;
+                    }
+                    if (!value->is_number_integer())
+                        return std::nullopt;
+                    const auto number = value->get<int64_t>();
+                    return std::in_range<int>(number) ? std::optional(static_cast<int>(number)) : std::nullopt;
+                };
+                const auto legacy_fps = fps_integer("framerate");
+                const auto numerator = fps_integer("framerate_numerator");
+                const auto denominator = fps_integer("framerate_denominator");
+                const auto valid_rate = [](const int n, const int d) {
+                    return d > 0 && n >= d && int64_t{n} <= 1000LL * d;
+                };
+                ui.framerate = std::clamp(legacy_fps.value_or(30), 1, 1000);
+                ui.framerate_denominator = 1;
+                if (numerator && denominator && valid_rate(*numerator, *denominator)) {
+                    const auto rounded = (int64_t{*numerator} + *denominator / 2) / *denominator;
+                    // Old writers preserve unknown exact fields. A changed legacy
+                    // value must win over the stale pair they leave behind.
+                    if (!legacy_fps || *legacy_fps < 1 || *legacy_fps > 1000 || *legacy_fps == rounded) {
+                        ui.framerate = *numerator;
+                        ui.framerate_denominator = *denominator;
+                    }
+                } else if (!preferences->contains("framerate_numerator") && legacy_fps && denominator &&
+                           valid_rate(*legacy_fps, *denominator)) {
+                    // Earlier revisions stored the numerator in the legacy key.
+                    ui.framerate = *legacy_fps;
+                    ui.framerate_denominator = *denominator;
+                }
+                if (!preferences->contains("export_fit") || ui.export_fit < 0 || ui.export_fit > 2)
+                    ui.export_fit = 0;
             }
             // Controller values are canonical over the UI mirrors.
             ui.playback_speed =

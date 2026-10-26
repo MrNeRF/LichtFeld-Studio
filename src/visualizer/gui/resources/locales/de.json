@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Kamera-Seitenverhältnis",
     "mip_filter": "Aliasing für Sub-Pixel-Gaussians reduzieren",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "Schleifenwiedergabe aktivieren",
     "seq_loop_on": "Schleifenwiedergabe deaktivieren",
     "seq_add": "Keyframe an aktueller Position hinzufügen",
-    "seq_speed": "Wiedergabegeschwindigkeit (Klick zum Wechseln)",
+    "seq_speed": "Wiedergabegeschwindigkeit auswählen",
     "seq_clip_duration": "Clipdauer (zum Bearbeiten klicken, in Sekunden)",
     "seq_snap": "Keyframes am Raster einrasten (Strg kehrt beim Ziehen um, Rechtsklick für Optionen)",
     "seq_follow": "Hauptansicht folgt dem Abspielkopf (Wiedergabe und Scrubbing)",
@@ -1541,7 +1542,12 @@
     "point_size": "Punktgröße",
     "scale_camera": "Skalieren",
     "fov": "Kamera-Sichtfeld in Grad",
-    "selection_colors": "Farben für Auswahl-Visualisierung"
+    "selection_colors": "Farben für Auswahl-Visualisierung",
+    "seq_snap_options": "Einrastintervall",
+    "seq_preview_options": "Vorschaugröße",
+    "seq_path_menu": "Kamerapfad-Dateien",
+    "seq_ply_menu": "PLY-Sequenzdateien",
+    "seq_projection": "Projektion"
   },
   "exit_popup": {
     "title": "Anwendung beenden?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "Beliebtheitsdaten nicht verfügbar."
   },
   "sequencer": {
+    "export_resolution_hint": "Gerade Abmessungen: 16–8192 Pixel pro Seite.",
+    "export_fps_hint": "FPS eingeben oder mit dem Pfeil eine Vorgabe wählen. Dezimalzahlen und Brüche sind möglich (1–1000 FPS).",
+    "export_framing_hint": "Einpassen erhält das ganze Bild mit schwarzen Balken. Zuschneiden füllt das Ausgabeformat automatisch ohne Verzerrung. Strecken verzerrt das Bild.",
+    "export_stretch": "Strecken",
+    "export_crop": "Füllen / Zuschneiden",
+    "export_fit": "Einpassen (schwarze Balken)",
+    "export_framing": "Bildanpassung",
+    "camera_aspect_hint": "Globales Kameraverhältnis dieser Sequenz. Ganze Zahlen: 1–8192. Das Hauptansichtsfenster bleibt unverändert.",
+    "camera_height": "Höhenverhältnis",
+    "camera_width": "Breitenverhältnis",
+    "camera_aspect": "Kamera-Seitenverhältnis",
+    "export_settings": "Videoexport",
+    "export_preset": "Auflösungsvorgabe",
+    "preset_landscape": "Querformat",
+    "preset_portrait": "Hochformat",
+    "preset_square": "Quadratisch",
+    "export_framerate": "Video-Bildrate (FPS)",
+    "export_quality": "Qualität",
+    "export_quality_hint": "Nach rechts: höhere Qualität und größere Dateien. Ein niedrigerer CRF bedeutet höhere Qualität. CRF: 0–51.",
+    "export_no_keyframes": "Zum Export einen Kamera-Keyframe hinzufügen.",
     "edit_focal_length": "Brennweite bearbeiten...",
     "edit_focal_length_title": "Brennweite bearbeiten",
     "play": "Abspielen (Leertaste)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "Easing steuert die ausgehende Bewegung\n(Letzter Keyframe hat kein ausgehendes Segment)",
     "time_seconds": "Zeit (s)",
     "loop_point_tooltip": "Schleifenpunkt @ {} (kehrt zum Anfang zurück)",
-    "keyframe_tooltip": "Keyframe @ {} (Doppelklick zum Bearbeiten)"
+    "keyframe_tooltip": "Keyframe @ {} (Doppelklick zum Bearbeiten)",
+    "export_width": "Breite (px)",
+    "export_height": "Höhe (px)",
+    "export_lock": "Seitenverhältnis beibehalten",
+    "export_aspect": "Seitenverhältnis",
+    "export_swap": "Breite / Höhe tauschen",
+    "ply_fps": "PLY-FPS",
+    "load_camera_path": "Kamerapfad laden…",
+    "save_camera_path": "Kamerapfad speichern…",
+    "clear_camera_path": "Kamera-Zeitleiste löschen…",
+    "clear_camera_path_hint": "Kamera-Keyframes und Animationsclips löschen? Die geladene PLY-Sequenz bleibt erhalten.",
+    "load_ply_sequence": "PLY-Sequenz laden…"
   },
   "file_association": {
     "title": "Als Standardanwendung festlegen",

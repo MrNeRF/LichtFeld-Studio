@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "카메라 화면 비율",
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "반복 재생 활성화",
     "seq_loop_on": "반복 재생 비활성화",
     "seq_add": "현재 위치에 키프레임 추가",
-    "seq_speed": "재생 속도 (클릭으로 전환)",
+    "seq_speed": "재생 속도 선택",
     "seq_clip_duration": "클립 길이 (클릭하여 편집, 초 단위)",
     "seq_snap": "키프레임을 그리드에 스냅 (드래그 중 Ctrl로 반전, 우클릭으로 옵션)",
     "seq_follow": "메인 뷰가 플레이헤드를 따라감 (재생 및 스크럽)",
@@ -1541,7 +1542,12 @@
     "point_size": "포인트 크기",
     "scale_camera": "크기 조절",
     "fov": "카메라 시야각 (도)",
-    "selection_colors": "선택 영역 시각화 색상"
+    "selection_colors": "선택 영역 시각화 색상",
+    "seq_snap_options": "스냅 간격",
+    "seq_preview_options": "미리보기 크기",
+    "seq_path_menu": "카메라 경로 파일",
+    "seq_ply_menu": "PLY 시퀀스 파일",
+    "seq_projection": "투영 방식"
   },
   "exit_popup": {
     "title": "애플리케이션을 종료하시겠습니까?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "인기도 데이터를 사용할 수 없습니다."
   },
   "sequencer": {
+    "export_resolution_hint": "각 변은 16–8192픽셀의 짝수여야 합니다.",
+    "export_fps_hint": "FPS를 입력하거나 화살표로 프리셋을 선택하세요. 소수와 분수를 사용할 수 있습니다 (1–1000 FPS).",
+    "export_framing_hint": "전체 맞춤은 검은 여백과 함께 전체 이미지를 유지합니다. 자르기는 비율을 유지하며 출력 화면을 자동으로 채웁니다. 늘이기는 이미지를 왜곡합니다.",
+    "export_stretch": "늘이기",
+    "export_crop": "채우기 / 자르기",
+    "export_fit": "전체 맞춤 (검은 여백)",
+    "export_framing": "이미지 맞춤",
+    "camera_aspect_hint": "시퀀스 전체의 카메라 비율입니다. 정수: 1–8192. 기본 뷰포트는 변경되지 않습니다.",
+    "camera_height": "높이 비율",
+    "camera_width": "너비 비율",
+    "camera_aspect": "카메라 화면 비율",
+    "export_settings": "동영상 내보내기",
+    "export_preset": "해상도 프리셋",
+    "preset_landscape": "가로",
+    "preset_portrait": "세로",
+    "preset_square": "정사각형",
+    "export_framerate": "동영상 프레임 속도 (FPS)",
+    "export_quality": "화질",
+    "export_quality_hint": "오른쪽으로 이동하면 화질과 파일 크기가 증가합니다. CRF가 낮을수록 화질이 높습니다. CRF: 0–51.",
+    "export_no_keyframes": "내보내려면 카메라 키프레임을 추가하세요.",
     "edit_focal_length": "초점 거리 편집...",
     "edit_focal_length_title": "초점 거리 편집",
     "play": "재생 (스페이스)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "이집은 나가는 움직임을 제어합니다\n(마지막 키프레임에는 나가는 구간이 없습니다)",
     "time_seconds": "시간 (s)",
     "loop_point_tooltip": "반복 지점 @ {} (시작으로 돌아감)",
-    "keyframe_tooltip": "키프레임 @ {} (더블클릭으로 편집)"
+    "keyframe_tooltip": "키프레임 @ {} (더블클릭으로 편집)",
+    "export_width": "너비 (px)",
+    "export_height": "높이 (px)",
+    "export_lock": "화면 비율 유지",
+    "export_aspect": "화면 비율",
+    "export_swap": "너비 / 높이 바꾸기",
+    "ply_fps": "PLY FPS",
+    "load_camera_path": "카메라 경로 불러오기…",
+    "save_camera_path": "카메라 경로 저장…",
+    "clear_camera_path": "카메라 타임라인 지우기…",
+    "clear_camera_path_hint": "카메라 키프레임과 애니메이션 클립을 지울까요? 불러온 PLY 시퀀스는 유지됩니다.",
+    "load_ply_sequence": "PLY 시퀀스 불러오기…"
   },
   "file_association": {
     "title": "기본 응용 프로그램으로 설정",

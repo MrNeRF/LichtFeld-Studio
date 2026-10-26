@@ -660,8 +660,8 @@ namespace lfs::vis::gui {
                                                cam_state.focal_length_mm,
                                                width,
                                                height,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
@@ -674,8 +674,8 @@ namespace lfs::vis::gui {
                                                width,
                                                height,
                                                std::nullopt,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
@@ -686,8 +686,8 @@ namespace lfs::vis::gui {
                                                width,
                                                height,
                                                std::nullopt,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
@@ -1724,6 +1724,10 @@ namespace lfs::vis::gui {
             options.width = evt.width;
             options.height = evt.height;
             options.framerate = evt.framerate;
+            options.framerate_denominator = evt.framerate_denominator;
+            options.camera_width = evt.camera_width;
+            options.camera_height = evt.camera_height;
+            options.framing = static_cast<lfs::io::video::VideoFrameFit>(evt.framing);
             options.crf = evt.crf;
             if (const auto* rendering = viewer_->getRenderingManager())
                 options.spherical_video = rendering->getSettings().equirectangular;
@@ -3287,16 +3291,20 @@ namespace lfs::vis::gui {
         }
 
         const auto export_options = *validated_options;
-        const auto render_settings = rendering_manager->getSettings();
+        auto render_settings = rendering_manager->getSettings();
         const float duration = timeline.clipDuration();
-        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
+        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate, export_options.framerate_denominator);
         const int width = export_options.width;
         const int height = export_options.height;
+        const auto render_size = render_settings.equirectangular ? lfs::io::video::VideoFrameGeometry{width, height} : lfs::io::video::videoCameraRenderSize(width, height, export_options.camera_width, export_options.camera_height, export_options.framing);
+
+        if (export_options.camera_width > 0 && render_settings.orthographic && !render_settings.equirectangular)
+            render_settings.ortho_scale *= static_cast<float>(render_size.height) / std::max(1, rendering_manager->getRenderedSize().y);
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
         for (int i = 0; i < total_frames; ++i) {
-            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate);
+            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate, export_options.framerate_denominator);
             frame_states.push_back(timeline.evaluate(time));
             if (sequence)
                 sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
@@ -3327,7 +3335,7 @@ namespace lfs::vis::gui {
 
         const auto job = video_export_state_.job;
         video_export_state_.thread.emplace(
-            [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
+            [this, job, viewer = viewer_, path = path, export_options = export_options, total_frames, width, height, render_size,
              engine, scene_manager, rendering_manager, render_settings,
              sequence_uuid, sequence_frames = std::move(sequence_frames),
              encoder = std::move(encoder),
@@ -3396,10 +3404,10 @@ namespace lfs::vis::gui {
                         return postToViewerAndWait(
                             viewer,
                             [viewer, engine, scene_manager, rendering_manager, environment_state,
-                             mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
+                             mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_size, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame],
-                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator)]() mutable
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();
@@ -3438,8 +3446,8 @@ namespace lfs::vis::gui {
                                     *snapshot_ptr,
                                     render_settings,
                                     cam_state,
-                                    width,
-                                    height);
+                                    render_size.width,
+                                    render_size.height);
                             });
                     };
                     auto frame_tensor = render_frame();
@@ -3481,7 +3489,7 @@ namespace lfs::vis::gui {
                     }
 
                     const auto* const gpu_ptr = image_hwc.data_ptr();
-                    auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
+                    auto write_result = encoder->writeFrameGpu(gpu_ptr, render_size.width, render_size.height, nullptr);
                     if (!write_result) {
                         error_msg =
                             write_result.error();

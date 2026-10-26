@@ -788,6 +788,7 @@ set(TEST_FILES
     test_number_format.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
+    test_video_reframe.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp
     test_uv_runner.cpp
@@ -893,6 +894,8 @@ set(TEST_FILES
     test_viewport_depth_layout.cpp
     test_viewport_select.cpp
     test_sequencer_regressions.cpp
+    test_sequencer_export_settings.cpp
+    test_sequencer_export_workflow.cpp
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
     test_modal_form_behavior.cpp

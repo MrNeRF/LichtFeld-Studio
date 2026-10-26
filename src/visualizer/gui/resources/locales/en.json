@@ -1368,6 +1368,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Camera aspect ratio",
     "mip_filter": "Reduce aliasing for sub-pixel Gaussians",
     "appearance_correction": "Apply learned exposure/color correction",
     "ppisp_mode": "Auto uses the trained controller, Manual allows slider adjustments",
@@ -1414,7 +1415,7 @@
     "seq_loop_off": "Enable loop playback",
     "seq_loop_on": "Disable loop playback",
     "seq_add": "Add keyframe at current position",
-    "seq_speed": "Playback speed (click to cycle)",
+    "seq_speed": "Playback speed (click to choose)",
     "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_snap": "Snap keyframes to grid (Ctrl inverts while dragging, right-click for options)",
     "seq_follow": "Main view follows the playhead (playback and scrubbing)",
@@ -1552,7 +1553,12 @@
     "point_size": "Point Size",
     "scale_camera": "Scale",
     "fov": "Camera field of view in degrees",
-    "selection_colors": "Colors for selection visualization"
+    "selection_colors": "Colors for selection visualization",
+    "seq_snap_options": "Snap interval",
+    "seq_preview_options": "Preview size",
+    "seq_path_menu": "Camera path files",
+    "seq_ply_menu": "PLY sequence files",
+    "seq_projection": "Projection"
   },
   "exit_popup": {
     "title": "Exit Application?",
@@ -2426,6 +2432,26 @@
     "popularity_unavailable": "Popularity data unavailable."
   },
   "sequencer": {
+    "export_resolution_hint": "Even dimensions: 16–8192 pixels per side.",
+    "export_fps_hint": "Type an FPS value or choose a preset with the arrow. Decimals and fractions are supported (1–1000 FPS).",
+    "export_framing_hint": "Fit preserves the full image with black bars. Crop automatically fills the output without distortion. Stretch distorts the image.",
+    "export_stretch": "Stretch",
+    "export_crop": "Fill / crop",
+    "export_fit": "Fit (black bars)",
+    "export_framing": "Image fitting",
+    "camera_aspect_hint": "Global camera ratio for this sequence. Integers: 1–8192. The main viewport is unchanged.",
+    "camera_height": "Height ratio",
+    "camera_width": "Width ratio",
+    "camera_aspect": "Camera aspect ratio",
+    "export_settings": "Video export",
+    "export_preset": "Resolution preset",
+    "preset_landscape": "Landscape",
+    "preset_portrait": "Portrait",
+    "preset_square": "Square",
+    "export_framerate": "Video frame rate (FPS)",
+    "export_quality": "Quality",
+    "export_quality_hint": "Move right for higher quality and larger files. Lower CRF means higher quality. CRF: 0–51.",
+    "export_no_keyframes": "Add a camera keyframe to export.",
     "edit_focal_length": "Edit Focal Length...",
     "edit_focal_length_title": "Edit Focal Length",
     "play": "Play (Space)",
@@ -2457,7 +2483,18 @@
     "easing_tooltip": "Easing controls outgoing motion\n(last keyframe has no outgoing segment)",
     "time_seconds": "Time (s)",
     "loop_point_tooltip": "Loop Point @ {} (returns to start)",
-    "keyframe_tooltip": "Keyframe @ {} (double-click to edit)"
+    "keyframe_tooltip": "Keyframe @ {} (double-click to edit)",
+    "export_width": "Width (px)",
+    "export_height": "Height (px)",
+    "export_lock": "Maintain aspect ratio",
+    "export_aspect": "Aspect ratio",
+    "export_swap": "Swap width / height",
+    "ply_fps": "PLY FPS",
+    "load_camera_path": "Load camera path…",
+    "save_camera_path": "Save camera path…",
+    "clear_camera_path": "Clear camera timeline…",
+    "clear_camera_path_hint": "Clear camera keyframes and animation clips? The loaded PLY sequence is kept.",
+    "load_ply_sequence": "Load PLY sequence…"
   },
   "file_association": {
     "title": "Set as Default Application",

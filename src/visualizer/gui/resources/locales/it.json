@@ -1370,6 +1370,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Proporzione della camera",
     "mip_filter": "Riduci aliasing per Gaussiani sub-pixel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1416,7 +1417,7 @@
     "seq_loop_off": "Attiva la riproduzione in loop",
     "seq_loop_on": "Disattiva la riproduzione in loop",
     "seq_add": "Aggiungi keyframe alla posizione attuale",
-    "seq_speed": "Velocità di riproduzione (clic per cambiare)",
+    "seq_speed": "Velocità di riproduzione (clic per scegliere)",
     "seq_clip_duration": "Durata clip (fai clic per modificare, in secondi)",
     "seq_snap": "Allinea i keyframe alla griglia (Ctrl inverte durante il trascinamento, clic destro per le opzioni)",
     "seq_follow": "La vista principale segue la testina (riproduzione e trascinamento)",
@@ -1554,7 +1555,12 @@
     "point_size": "Dimensione Punto",
     "scale_camera": "Scala",
     "fov": "Campo visivo della fotocamera in gradi",
-    "selection_colors": "Colori per visualizzazione selezione"
+    "selection_colors": "Colori per visualizzazione selezione",
+    "seq_snap_options": "Intervallo di snap",
+    "seq_preview_options": "Dimensione anteprima",
+    "seq_path_menu": "File del percorso camera",
+    "seq_ply_menu": "File della sequenza PLY",
+    "seq_projection": "Proiezione"
   },
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",
@@ -2428,6 +2434,26 @@
     "popularity_unavailable": "Dati sulla popolarità non disponibili."
   },
   "sequencer": {
+    "export_resolution_hint": "Dimensioni pari: 16–8192 pixel per lato.",
+    "export_fps_hint": "Digita gli FPS oppure scegli un preset dalla freccia. Sono ammessi decimali e frazioni (1–1000 FPS).",
+    "export_framing_hint": "Adatta mantiene tutta l’immagine con bande nere. Ritaglia riempie automaticamente il formato senza deformare. Deforma altera le proporzioni.",
+    "export_stretch": "Deforma",
+    "export_crop": "Riempi / ritaglia",
+    "export_fit": "Adatta (bande nere)",
+    "export_framing": "Adattamento immagine",
+    "camera_aspect_hint": "Proporzione globale della sequenza. Interi: 1–8192. Il viewport principale non cambia.",
+    "camera_height": "Rapporto altezza",
+    "camera_width": "Rapporto larghezza",
+    "camera_aspect": "Proporzione della camera",
+    "export_settings": "Esportazione video",
+    "export_preset": "Preset di risoluzione",
+    "preset_landscape": "Orizzontale",
+    "preset_portrait": "Verticale",
+    "preset_square": "Quadrato",
+    "export_framerate": "Fotogrammi video (FPS)",
+    "export_quality": "Qualità",
+    "export_quality_hint": "Verso destra: qualità maggiore e file più grandi. Un CRF più basso indica qualità maggiore. CRF: 0–51.",
+    "export_no_keyframes": "Aggiungi un keyframe della camera per esportare.",
     "edit_focal_length": "Modifica lunghezza focale...",
     "edit_focal_length_title": "Modifica lunghezza focale",
     "play": "Riproduci (Spazio)",
@@ -2459,7 +2485,18 @@
     "easing_tooltip": "L'easing controlla il movimento in uscita\n(L'ultimo fotogramma chiave non ha un segmento in uscita)",
     "time_seconds": "Tempo (s)",
     "loop_point_tooltip": "Punto di ciclo @ {} (torna all'inizio)",
-    "keyframe_tooltip": "Fotogramma chiave @ {} (doppio clic per modificare)"
+    "keyframe_tooltip": "Fotogramma chiave @ {} (doppio clic per modificare)",
+    "export_width": "Larghezza (px)",
+    "export_height": "Altezza (px)",
+    "export_lock": "Mantieni proporzioni",
+    "export_aspect": "Proporzioni",
+    "export_swap": "Scambia larghezza / altezza",
+    "ply_fps": "FPS PLY",
+    "load_camera_path": "Carica percorso camera…",
+    "save_camera_path": "Salva percorso camera…",
+    "clear_camera_path": "Cancella timeline camera…",
+    "clear_camera_path_hint": "Cancellare i keyframe camera e le clip di animazione? La sequenza PLY caricata viene conservata.",
+    "load_ply_sequence": "Carica sequenza PLY…"
   },
   "file_association": {
     "title": "Imposta come applicazione predefinita",

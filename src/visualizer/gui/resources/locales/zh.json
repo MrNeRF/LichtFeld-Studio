@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "相机宽高比",
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "启用循环播放",
     "seq_loop_on": "禁用循环播放",
     "seq_add": "在当前位置添加关键帧",
-    "seq_speed": "播放速度（点击切换）",
+    "seq_speed": "选择播放速度",
     "seq_clip_duration": "片段时长（点击编辑，单位秒）",
     "seq_snap": "将关键帧对齐到网格（拖动时 Ctrl 反转，右键点击查看选项）",
     "seq_follow": "主视图跟随播放头（播放和拖动时）",
@@ -1541,7 +1542,12 @@
     "point_size": "点大小",
     "scale_camera": "缩放",
     "fov": "相机视场角（度）",
-    "selection_colors": "选区可视化颜色"
+    "selection_colors": "选区可视化颜色",
+    "seq_snap_options": "吸附间隔",
+    "seq_preview_options": "预览尺寸",
+    "seq_path_menu": "相机路径文件",
+    "seq_ply_menu": "PLY 序列文件",
+    "seq_projection": "投影方式"
   },
   "exit_popup": {
     "title": "退出应用程序？",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "无法获取人气数据。"
   },
   "sequencer": {
+    "export_resolution_hint": "每边尺寸必须是16–8192像素的偶数。",
+    "export_fps_hint": "直接输入 FPS，或使用箭头选择预设。支持小数和分数（1–1000 FPS）。",
+    "export_framing_hint": "适应添加黑边并保留完整图像。裁剪保持比例并自动填满输出画面。拉伸会使图像变形。",
+    "export_stretch": "拉伸",
+    "export_crop": "填充 / 裁剪",
+    "export_fit": "适应（黑边）",
+    "export_framing": "图像适配",
+    "camera_aspect_hint": "整个序列的相机比例。整数：1–8192。主视口保持不变。",
+    "camera_height": "高度比例",
+    "camera_width": "宽度比例",
+    "camera_aspect": "相机宽高比",
+    "export_settings": "视频导出",
+    "export_preset": "分辨率预设",
+    "preset_landscape": "横向",
+    "preset_portrait": "纵向",
+    "preset_square": "正方形",
+    "export_framerate": "视频帧率 (FPS)",
+    "export_quality": "画质",
+    "export_quality_hint": "向右移动可提高画质，但文件会更大。CRF 越低，画质越高。 CRF: 0–51.",
+    "export_no_keyframes": "请添加相机关键帧以导出。",
     "edit_focal_length": "编辑焦距...",
     "edit_focal_length_title": "编辑焦距",
     "play": "播放 (空格键)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "缓动控制离去运动\n（最后一个关键帧没有离去段）",
     "time_seconds": "时间 (秒)",
     "loop_point_tooltip": "循环点 @ {}（返回起点）",
-    "keyframe_tooltip": "关键帧 @ {}（双击编辑）"
+    "keyframe_tooltip": "关键帧 @ {}（双击编辑）",
+    "export_width": "宽度 (px)",
+    "export_height": "高度 (px)",
+    "export_lock": "保持宽高比",
+    "export_aspect": "宽高比",
+    "export_swap": "交换宽度 / 高度",
+    "ply_fps": "PLY FPS",
+    "load_camera_path": "加载相机路径…",
+    "save_camera_path": "保存相机路径…",
+    "clear_camera_path": "清空相机时间轴…",
+    "clear_camera_path_hint": "清空相机关键帧和动画片段？已加载的 PLY 序列将保留。",
+    "load_ply_sequence": "加载 PLY 序列…"
   },
   "file_association": {
     "title": "设为默认应用程序",

@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Proporcje kamery",
     "mip_filter": "Zmniejsz aliasing dla sub-pikselowych Gaussowskich",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "Włącz odtwarzanie w pętli",
     "seq_loop_on": "Wyłącz odtwarzanie w pętli",
     "seq_add": "Dodaj klatkę kluczową w bieżącej pozycji",
-    "seq_speed": "Prędkość odtwarzania (kliknij, aby zmienić)",
+    "seq_speed": "Wybierz prędkość odtwarzania",
     "seq_clip_duration": "Długość klipu (kliknij, aby edytować, w sekundach)",
     "seq_snap": "Przyciągaj klatki kluczowe do siatki (Ctrl odwraca podczas przeciągania, prawy przycisk myszy dla opcji)",
     "seq_follow": "Widok główny podąża za głowicą odtwarzania (odtwarzanie i przesuwanie)",
@@ -1541,7 +1542,12 @@
     "point_size": "Rozmiar Punktu",
     "scale_camera": "Skala",
     "fov": "Pole widzenia kamery w stopniach",
-    "selection_colors": "Kolory wizualizacji zaznaczenia"
+    "selection_colors": "Kolory wizualizacji zaznaczenia",
+    "seq_snap_options": "Interwał przyciągania",
+    "seq_preview_options": "Rozmiar podglądu",
+    "seq_path_menu": "Pliki ścieżki kamery",
+    "seq_ply_menu": "Pliki sekwencji PLY",
+    "seq_projection": "Projekcja"
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "Dane popularności niedostępne."
   },
   "sequencer": {
+    "export_resolution_hint": "Parzyste wymiary: 16–8192 pikseli na bok.",
+    "export_fps_hint": "Wpisz FPS lub wybierz wartość strzałką. Dozwolone są ułamki dziesiętne i zwykłe (1–1000 FPS).",
+    "export_framing_hint": "Dopasuj zachowuje cały obraz z czarnymi pasami. Przytnij automatycznie wypełnia format bez zniekształceń. Rozciągnij zniekształca obraz.",
+    "export_stretch": "Rozciągnij",
+    "export_crop": "Wypełnij / przytnij",
+    "export_fit": "Dopasuj (czarne pasy)",
+    "export_framing": "Dopasowanie obrazu",
+    "camera_aspect_hint": "Globalne proporcje kamery dla sekwencji. Liczby całkowite: 1–8192. Główny widok pozostaje bez zmian.",
+    "camera_height": "Proporcja wysokości",
+    "camera_width": "Proporcja szerokości",
+    "camera_aspect": "Proporcje kamery",
+    "export_settings": "Eksport wideo",
+    "export_preset": "Ustawienie rozdzielczości",
+    "preset_landscape": "Poziomo",
+    "preset_portrait": "Pionowo",
+    "preset_square": "Kwadrat",
+    "export_framerate": "Klatki wideo (FPS)",
+    "export_quality": "Jakość",
+    "export_quality_hint": "W prawo: wyższa jakość i większe pliki. Niższy CRF oznacza wyższą jakość. CRF: 0–51.",
+    "export_no_keyframes": "Dodaj klatkę kluczową kamery, aby eksportować.",
     "edit_focal_length": "Edytuj ogniskową...",
     "edit_focal_length_title": "Edytuj ogniskową",
     "play": "Odtwarzaj (Spacja)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "Easing kontroluje ruch wychodzący\n(Ostatnia klatka kluczowa nie ma segmentu wychodzącego)",
     "time_seconds": "Czas (s)",
     "loop_point_tooltip": "Punkt pętli @ {} (powrót do początku)",
-    "keyframe_tooltip": "Klatka kluczowa @ {} (kliknij dwukrotnie, aby edytować)"
+    "keyframe_tooltip": "Klatka kluczowa @ {} (kliknij dwukrotnie, aby edytować)",
+    "export_width": "Szerokość (px)",
+    "export_height": "Wysokość (px)",
+    "export_lock": "Zachowaj proporcje",
+    "export_aspect": "Proporcje",
+    "export_swap": "Zamień szerokość / wysokość",
+    "ply_fps": "FPS PLY",
+    "load_camera_path": "Wczytaj ścieżkę kamery…",
+    "save_camera_path": "Zapisz ścieżkę kamery…",
+    "clear_camera_path": "Wyczyść oś czasu kamery…",
+    "clear_camera_path_hint": "Usunąć klatki kluczowe kamery i klipy animacji? Wczytana sekwencja PLY zostanie zachowana.",
+    "load_ply_sequence": "Wczytaj sekwencję PLY…"
   },
   "file_association": {
     "title": "Ustaw jako domyślną aplikację",

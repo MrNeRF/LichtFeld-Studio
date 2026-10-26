@@ -1357,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Proportions de la caméra",
     "mip_filter": "Réduire l'aliasing pour Gaussiens sub-pixel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -1403,7 +1404,7 @@
     "seq_loop_off": "Activer la lecture en boucle",
     "seq_loop_on": "Désactiver la lecture en boucle",
     "seq_add": "Ajouter une image clé à la position actuelle",
-    "seq_speed": "Vitesse de lecture (cliquer pour changer)",
+    "seq_speed": "Choisir la vitesse de lecture",
     "seq_clip_duration": "Durée du clip (cliquer pour modifier, en secondes)",
     "seq_snap": "Aligner les images clés sur la grille (Ctrl inverse pendant le glissement, clic droit pour les options)",
     "seq_follow": "La vue principale suit la tête de lecture (lecture et déplacement)",
@@ -1541,7 +1542,12 @@
     "point_size": "Taille du Point",
     "scale_camera": "Échelle",
     "fov": "Champ de vision de la caméra en degrés",
-    "selection_colors": "Couleurs pour la visualisation de sélection"
+    "selection_colors": "Couleurs pour la visualisation de sélection",
+    "seq_snap_options": "Intervalle d’alignement",
+    "seq_preview_options": "Taille de l’aperçu",
+    "seq_path_menu": "Fichiers du parcours caméra",
+    "seq_ply_menu": "Fichiers de séquence PLY",
+    "seq_projection": "Projection"
   },
   "exit_popup": {
     "title": "Quitter l'Application ?",
@@ -2415,6 +2421,26 @@
     "popularity_unavailable": "Données de popularité indisponibles."
   },
   "sequencer": {
+    "export_resolution_hint": "Dimensions paires : 16–8192 pixels par côté.",
+    "export_fps_hint": "Saisissez les FPS ou choisissez une valeur avec la flèche. Décimales et fractions acceptées (1–1000 FPS).",
+    "export_framing_hint": "Adapter conserve toute l’image avec des bandes noires. Recadrer remplit automatiquement le format sans déformer. Étirer déforme l’image.",
+    "export_stretch": "Étirer",
+    "export_crop": "Remplir / recadrer",
+    "export_fit": "Adapter (bandes noires)",
+    "export_framing": "Adaptation de l’image",
+    "camera_aspect_hint": "Proportions globales de la séquence. Entiers : 1–8192. La vue principale reste inchangée.",
+    "camera_height": "Rapport de hauteur",
+    "camera_width": "Rapport de largeur",
+    "camera_aspect": "Proportions de la caméra",
+    "export_settings": "Export vidéo",
+    "export_preset": "Préréglage de résolution",
+    "preset_landscape": "Paysage",
+    "preset_portrait": "Portrait",
+    "preset_square": "Carré",
+    "export_framerate": "Cadence vidéo (FPS)",
+    "export_quality": "Qualité",
+    "export_quality_hint": "Vers la droite : qualité supérieure et fichiers plus volumineux. Un CRF plus bas améliore la qualité. CRF: 0–51.",
+    "export_no_keyframes": "Ajoutez une image clé de caméra pour exporter.",
     "edit_focal_length": "Modifier la longueur focale...",
     "edit_focal_length_title": "Modifier la longueur focale",
     "play": "Lecture (Espace)",
@@ -2446,7 +2472,18 @@
     "easing_tooltip": "L'easing contrôle le mouvement sortant\n(La dernière image clé n'a pas de segment sortant)",
     "time_seconds": "Temps (s)",
     "loop_point_tooltip": "Point de boucle @ {} (retour au début)",
-    "keyframe_tooltip": "Image clé @ {} (double-clic pour éditer)"
+    "keyframe_tooltip": "Image clé @ {} (double-clic pour éditer)",
+    "export_width": "Largeur (px)",
+    "export_height": "Hauteur (px)",
+    "export_lock": "Conserver les proportions",
+    "export_aspect": "Proportions",
+    "export_swap": "Inverser largeur / hauteur",
+    "ply_fps": "FPS PLY",
+    "load_camera_path": "Charger le parcours caméra…",
+    "save_camera_path": "Enregistrer le parcours caméra…",
+    "clear_camera_path": "Effacer la timeline caméra…",
+    "clear_camera_path_hint": "Effacer les images clés caméra et les clips d’animation ? La séquence PLY chargée est conservée.",
+    "load_ply_sequence": "Charger une séquence PLY…"
   },
   "file_association": {
     "title": "Définir comme application par défaut",
