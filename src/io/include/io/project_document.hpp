@@ -97,6 +97,8 @@ namespace lfs::io::project {
         // Skip Impl::validate after the chapter scan. Hydration re-opens a
         // path the shell already validated; identity is checked by the caller.
         bool skip_validation = false;
+        // Optional validated source: retain its file handle, path and exact commit. Borrowed only during open().
+        const ProjectReader* retained_source = nullptr;
     };
 
     struct ProjectDocumentSaveOptions {

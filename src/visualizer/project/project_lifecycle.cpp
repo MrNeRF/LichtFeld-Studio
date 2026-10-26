@@ -8197,6 +8197,8 @@ namespace lfs::vis::project {
             return preflight;
         auto* manager = viewer_.getSceneManager();
         auto* parameter_manager = viewer_.getParameterManager();
+        if (auto valid = candidate->source_reader()->validate_source_identity(); !valid)
+            return valid;
         stopHydrationThreads();
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
@@ -8518,12 +8520,7 @@ namespace lfs::vis::project {
                 "The active project has no immutable source generation",
                 "hydrate.source");
         }
-        const auto source_path =
-            *document->source_path();
-        const auto project_uuid =
-            document->project_uuid();
-        const auto minimum_generation =
-            document->generation();
+        auto source = document->source_reader()->share();
         hydration_.store(
             Hydration::Hydrating,
             std::memory_order_release);
@@ -8537,8 +8534,7 @@ namespace lfs::vis::project {
         try {
             hydration_threads_.emplace_back(
                 [this, document = std::move(document),
-                 source_path, project_uuid,
-                 minimum_generation,
+                 source = std::move(source),
                  epoch, selection_mutation_serial,
                  restore_ticket,
                  selected_node_uuids =
@@ -8561,13 +8557,14 @@ namespace lfs::vis::project {
                     }
                     auto opened_source =
                         ProjectDocument::open(
-                            source_path,
+                            source.path(),
                             {
                                 .reader = {},
                                 .geometry = {},
                                 .defer_geometry_payloads =
                                     true,
                                 .skip_validation = true,
+                                .retained_source = &source,
                             });
                     if (!opened_source) {
                         if (!stop.stop_requested()) {
@@ -8577,25 +8574,6 @@ namespace lfs::vis::project {
                                     opened_source
                                         .error()),
                                 std::string(opened_source.error().user_message()));
-                        }
-                        return;
-                    }
-                    if (opened_source->project_uuid() !=
-                            project_uuid ||
-                        opened_source->generation() <
-                            minimum_generation) {
-                        if (!stop.stop_requested()) {
-                            markHydrationFailed(
-                                epoch,
-                                std::format(
-                                    "The immutable hydration source changed from project {} generation {} to project {} generation {}",
-                                    project_uuid.to_string(),
-                                    minimum_generation,
-                                    opened_source
-                                        ->project_uuid()
-                                        .to_string(),
-                                    opened_source
-                                        ->generation()));
                         }
                         return;
                     }

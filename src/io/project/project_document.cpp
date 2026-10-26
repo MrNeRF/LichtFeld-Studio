@@ -2067,20 +2067,17 @@ namespace lfs::io::project {
                           const ProjectDocumentOpenOptions& options) {
         const auto open_started =
             std::chrono::steady_clock::now();
-        auto normalized = normalized_absolute_path(path);
+        auto normalized = options.retained_source ? lfs::Result<std::filesystem::path>(options.retained_source->path()) : normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
         }
         const auto normalized_at =
             std::chrono::steady_clock::now();
-        auto reader = ProjectReader::open(*normalized, options.reader);
-        if (!reader) {
+        auto reader = options.retained_source ? lfs::Result<ProjectReader>(options.retained_source->share()) : ProjectReader::open(*normalized, options.reader);
+        if (!reader)
             return std::move(reader).error();
-        }
-        const auto reader_opened_at =
-            std::chrono::steady_clock::now();
-        auto shared_reader = std::make_shared<ProjectReader>(
-            std::move(*reader));
+        const auto reader_opened_at = std::chrono::steady_clock::now();
+        auto shared_reader = std::make_shared<ProjectReader>(std::move(*reader));
         auto impl = std::make_unique<Impl>();
         impl->project_uuid = shared_reader->superblock().project_uuid;
         impl->source_path = *normalized;
@@ -2527,7 +2524,8 @@ namespace lfs::io::project {
                 chapter_scan_finished,
                 open_finished),
             milliseconds(open_started, open_finished));
-        sweep_stale_licht_artifacts(*normalized, false);
+        if (!options.retained_source)
+            sweep_stale_licht_artifacts(*normalized, false);
         return ProjectDocument(std::move(impl));
     }
 

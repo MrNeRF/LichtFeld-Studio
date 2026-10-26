@@ -86,6 +86,9 @@ namespace lfs::vis::gui {
             tasks().pollCollision();
             ASSERT_TRUE(tasks().collisionJob());
             EXPECT_FALSE(tasks().collisionJob()->running());
+            finishOpen();
+        }
+        void finishOpen() {
             const auto open = viewer_->jobs().active(JobType::ProjectOpen);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             while (viewer_->jobs().anyRunning(JobType::ProjectOpen) && std::chrono::steady_clock::now() < deadline) {
@@ -177,11 +180,35 @@ namespace lfs::vis::gui {
                 ASSERT_TRUE(document->edit_scene_graph().upsert_node({.uuid = uuid, .type = "group", .name = "Prepared shell"}));
                 ASSERT_TRUE(document->save(destination));
             }
-            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
+            const auto original = lfs::test::licht::read_file_bytes(path);
+            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Deleted", "Replaced", "SameCommitCopy", "NewGeneration", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
                 SCOPED_TRACE(replacement);
-                const bool retain_source = replacement == "StaleEpoch" || replacement == "CancelClose" || replacement == "DiscardClose";
+                const bool reject_prepared = replacement == "Prepared" || replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy" || replacement == "NewGeneration";
+                const bool retain_source = reject_prepared || replacement == "StaleEpoch" || replacement == "CancelClose" || replacement == "DiscardClose";
+                const auto current_path = temporary_.path / (std::string(replacement) + "-current.licht");
+                if (reject_prepared) {
+                    auto current = lfs::test::licht::make_empty_document(generate_uuid_v4());
+                    (void)lfs::test::licht::require_result(current->save(current_path));
+                    ASSERT_EQ(lfs::test::licht::require_result(viewer_->projectOpen(current_path, ProjectSwitchDisposition::DiscardChanges)), ProjectOpenOutcome::Opened);
+                    ASSERT_NO_FATAL_FAILURE(finishOpen());
+                }
                 const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat());
                 const auto source_uuid = scene().getNodeUuid(source);
+                const auto document = lifecycle().boundDocument();
+                const auto epoch = lifecycle().documentEpoch();
+                const auto sidecar = lfs::io::project::autosave_sidecar_path(current_path);
+                std::vector<std::byte> recovery;
+                if (reject_prepared) {
+                    ASSERT_TRUE(document && document->source_commit_uuid());
+                    scene().setNodeVisibility(source, false);
+                    op::undoHistory().push(std::make_unique<op::PropertyChangeUndoEntry>("node.visible", true, false, [this, source](const std::any& value) { scene().setNodeVisibility(source, std::any_cast<bool>(value)); }, viewer_->getSceneManager()));
+                    ASSERT_TRUE(document->edit_view().dom().set("retained_recovery", true));
+                    ASSERT_TRUE(document->save_autosave(sidecar, {.file_uuid = generate_uuid_v4(), .base_explicit_commit_uuid = *document->source_commit_uuid(), .autosave_sequence = 1, .snapshot_uuid = generate_uuid_v4(), .disk_reserve_bytes = 0}));
+                    ASSERT_EQ(lfs::test::licht::require_result(lfs::io::project::inspect_autosave_recovery(current_path)).disposition, lfs::io::project::RecoveryDisposition::Offer);
+                    recovery = lfs::test::licht::read_file_bytes(sidecar);
+                }
+                const auto undo_generation = op::undoHistory().generation();
+                const auto old_scene = std::tuple{scene().getNodes(), scene().collisionSourceIdentity(source), bool(scene().getNodeById(source)->visible)};
                 if (replacement == "Open") {
                     scene().addSplat("Large unselected source", lfs::test::licht::make_splat(100000));
                     scene().consolidateNodeModels();
@@ -223,11 +250,27 @@ namespace lfs::vis::gui {
                     events::cmd::NewProject{.discard_changes = true}.emit();
                 if (replacement == "Supersede")
                     ASSERT_NO_FATAL_FAILURE(queueOpen(second_path));
+                EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
                 if (replacement == "Prepared")
                     std::filesystem::rename(path, temporary_.path / "prepared.licht");
+                if (replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy")
+                    ASSERT_TRUE(std::filesystem::remove(path));
+                if (replacement == "Replaced")
+                    ASSERT_TRUE(std::filesystem::copy_file(second_path, path));
+                if (replacement == "SameCommitCopy")
+                    lfs::test::licht::write_file_bytes(path, original);
+                if (replacement == "NewGeneration") {
+                    auto newer = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
+                    const auto generation = newer.generation();
+                    const auto commit = newer.source_commit_uuid();
+                    ASSERT_TRUE(newer.edit_view().dom().set("new_generation", true));
+                    ASSERT_TRUE(newer.save(path));
+                    EXPECT_EQ(newer.project_uuid(), first);
+                    EXPECT_GT(newer.generation(), generation);
+                    EXPECT_NE(newer.source_commit_uuid(), commit);
+                }
                 if (replacement == "StaleEpoch")
                     ++tasks().splat_simplify_scene_epoch_;
-                EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
                 if (replacement == "CancelClose" || replacement == "DiscardClose") {
                     ASSERT_TRUE(lifecycle().setAutoSaveOnClose(false));
                     const auto prompts = exit_prompts_;
@@ -257,10 +300,23 @@ namespace lfs::vis::gui {
                         ASSERT_TRUE(lifecycle().boundDocument());
                         EXPECT_EQ(lifecycle().boundDocument()->project_uuid(), expected);
                         EXPECT_NE(scene().getNodeByUuid(expected), nullptr);
-                        EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectGetInfo()).hydration_state, replacement == "Prepared" ? "failed" : "complete");
+                        EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectGetInfo()).hydration_state, "complete");
                     }
                     ASSERT_NE(scene().restoreNodeWithUuid({.uuid = source_uuid, .preferred_id = source, .type = NodeType::SPLAT, .name = "Reused source identity", .model = lfs::test::licht::make_matrix_splat()}), NULL_NODE);
                 } else {
+                    if (reject_prepared) {
+                        EXPECT_EQ(lifecycle().boundDocument(), document);
+                        EXPECT_EQ(lifecycle().documentEpoch(), epoch);
+                        ASSERT_NE(scene().getNodeById(source), nullptr);
+                        EXPECT_EQ((std::tuple{scene().getNodes(), scene().collisionSourceIdentity(source), bool(scene().getNodeById(source)->visible)}), old_scene);
+                        EXPECT_EQ(op::undoHistory().generation(), undo_generation);
+                        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+                        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), recovery);
+                        ASSERT_TRUE(op::undoHistory().undo().success);
+                        EXPECT_TRUE(scene().getNodeById(source)->visible);
+                        ASSERT_TRUE(op::undoHistory().redo().success);
+                        EXPECT_FALSE(scene().getNodeById(source)->visible);
+                    }
                     if (replacement == "CancelClose") {
                         events::cmd::CancelExit{}.emit();
                         EXPECT_FALSE(lifecycle().isApplicationClosePending());
@@ -270,8 +326,8 @@ namespace lfs::vis::gui {
                     EXPECT_NE(scene().getNodeById(source), nullptr);
                     scene().removeNodeById(source);
                 }
-                if (replacement == "Prepared")
-                    std::filesystem::rename(temporary_.path / "prepared.licht", path);
+                if (reject_prepared)
+                    lfs::test::licht::write_file_bytes(path, original);
                 EXPECT_TRUE(token.stop_requested());
                 EXPECT_EQ(batches_, 2);
                 EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
@@ -401,7 +457,14 @@ namespace lfs::vis::gui {
         ASSERT_FALSE(incompatible);
         EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
         EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
-        auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true}));
+        ASSERT_TRUE(reader.validate_source_identity());
+        auto newer = require_result(ProjectDocument::open(path));
+        ASSERT_TRUE(newer.set_collision(scene.getNode("0")->uuid, box({0, 0, 0}, {1, 1, 1})));
+        ASSERT_TRUE(newer.save(path));
+        EXPECT_FALSE(reader.validate_source_identity());
+        std::filesystem::rename(path, temporary.path / "retained.licht");
+        auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true, .retained_source = &reader}));
+        EXPECT_EQ(document.source_commit_uuid(), reader.commit().commit_uuid);
         const auto expected = require_result(capture_scene_graph(scene, {})).to_bytes();
         for (bool deferred : {true, false}) {
             SCOPED_TRACE(deferred);
