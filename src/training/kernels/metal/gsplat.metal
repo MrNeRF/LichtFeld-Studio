@@ -384,6 +384,12 @@ static float gsplat_sigmoid(const float raw) {
     return 1.0f / (1.0f + exp(-raw));
 }
 
+static float gsplat_sigmoid_derivative_from_logit(const float raw) {
+    const float e = exp(-fabs(raw));
+    const float d = 1.0f + e;
+    return e / (d * d);
+}
+
 // Rotation of a unit (w, x, y, z) quaternion, column-major as glm.
 static float3x3 gsplat_rotmat(const float4 q) {
     const float w = q.x, x = q.y, y = q.z, z = q.w;
@@ -1173,7 +1179,6 @@ kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], 
         return;
     device const float* v = p.grads + g * kGsplatGradStride;
     const float3 scale = exp(gsplat_load3(p.scales, g));
-    const float opacity = gsplat_sigmoid(p.opacities[g]);
     for (uint k = 0; k < 3u; ++k) {
         p.means_grad[g * 3u + k] += v[k];
         p.scaling_grad[g * 3u + k] += v[3u + k] * scale[k];
@@ -1182,7 +1187,7 @@ kernel void gsplat_accumulate(constant GsplatAccumulateParams& p [[buffer(0)]], 
     p.scaling_grad[g*3+axis]+=p.flatten_weight*scale[axis]/float(p.count);
     for (uint k = 0; k < 4u; ++k)
         p.rotation_grad[g * 4u + k] += v[6u + k];
-    p.opacity_grad[g] += v[10] * opacity * (1.0f - opacity);
+    p.opacity_grad[g] += v[10] * gsplat_sigmoid_derivative_from_logit(p.opacities[g]);
 
     float basis[16];
     gsplat_sh_basis(gsplat_load3(p.means, g) - p.camera->origin, p.degree, basis);

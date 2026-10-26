@@ -37,9 +37,9 @@ namespace lfs::vis {
             EllipsoidParamStride = 5,
             EllipsoidExtraCount = 15,
             ViewWindow = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
-            // The desktop overlay table the tensor splat projector reads (Metal viewport).
+            // Legacy overlay prefix; polygon-free tensor projection uploads only these slots.
             ParamCount = ViewWindow + 1,
-            // Crop polygon slots, read by the VkSplat shaders only: flags, (half_depth,
+            // Crop polygon slots, read by VkSplat and tensor projection: flags, (half_depth,
             // vertex_count), world->local rows, then two vertices per float4. Packed densely;
             // the first disabled slot ends the list. utils.slang mirrors every index.
             CropPolygonBase = ParamCount,

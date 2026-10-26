@@ -18,6 +18,12 @@ float activate(float x, uint kind) {
     return kind == 0 ? exp(x) : 1.0f / (1.0f + exp(-x));
 }
 
+float sigmoidDerivativeFromLogit(float x) {
+    const float e = exp(-abs(x));
+    const float d = 1.0f + e;
+    return e / (d * d);
+}
+
 [numthreads(256, 1, 1)]
 void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Parameters p) {
     Ptr<float, Access.Read> source = (Ptr<float, Access.Read>)p.source;
@@ -33,7 +39,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Paramet
                 const float gradScale = p.weight / float(p.count);
                 const float derivative = p.kind == 0
                                              ? gradScale * activated
-                                             : gradScale * activated * (1.0f - activated);
+                                             : gradScale * sigmoidDerivativeFromLogit(source[i]);
                 gradient[i] += derivative;
             }
         }

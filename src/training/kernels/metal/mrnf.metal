@@ -279,7 +279,7 @@ kernel void mrnf_gumbel_keys(constant MrnfGumbelParams& p [[buffer(0)]], uint i 
     if (i >= p.count)
         return;
     const float w = p.weights[p.sources != nullptr ? uint(p.sources[i]) : i];
-    if (p.sources == nullptr && w <= 0.0f) {
+    if (p.sources == nullptr && !(w > 0.0f)) {
         p.keys[i] = -1e30f;
         return;
     }

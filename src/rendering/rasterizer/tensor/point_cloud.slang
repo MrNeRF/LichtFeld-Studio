@@ -31,9 +31,11 @@ struct Parameters {
     Ptr<uint8_t, Access.ReadWrite> deleted;
     Ptr<float4, Access.ReadWrite> depthRgba;
     Ptr<float, Access.ReadWrite> linearDepth;
+    Ptr<float2, Access.Read> cropPolygon;
 #ifdef LFS_GPU_VULKAN
     Ptr<PointParameters, Access.Read> point;
 #else
+    uint64_t pointPadding;
     column_major float4x4 viewProjection;
     column_major float4x4 view;
     column_major float4x4 cropToLocal;
@@ -99,10 +101,28 @@ PointVertex pointVertex(uint vertexId : SV_VertexID, uint instanceId : SV_Instan
     bool desaturate = false;
     if ((flags & 1u) != 0u) {
         const float3 local = mul(POINT.cropToLocal, float4(world, 1.0)).xyz;
-        const float3 radius = max(abs(POINT.cropMin.xyz), float3(1.0e-8));
-        const bool inside = (flags & 1024u) != 0u
-                                ? dot(local / radius, local / radius) <= 1.0
-                                : all(local >= POINT.cropMin.xyz) && all(local <= POINT.cropMax.xyz);
+        bool inside;
+        if ((flags & 1024u) != 0u) {
+            const float3 radius = max(abs(POINT.cropMin.xyz), float3(1.0e-8));
+            inside = dot(local / radius, local / radius) <= 1.0;
+        } else if ((flags & 4096u) != 0u) {
+            const uint count = uint(POINT.cropMin.y);
+            inside = abs(local.z) <= POINT.cropMin.x && count >= 3u;
+            if (inside) {
+                bool crossing = false;
+                float2 b = p.cropPolygon[count - 1u];
+                for (uint i = 0; i < count; ++i) {
+                    const float2 a = p.cropPolygon[i];
+                    if ((a.y > local.y) != (b.y > local.y) &&
+                        local.x < (b.x - a.x) * (local.y - a.y) / (b.y - a.y) + a.x)
+                        crossing = !crossing;
+                    b = a;
+                }
+                inside = crossing;
+            }
+        } else {
+            inside = all(local >= POINT.cropMin.xyz) && all(local <= POINT.cropMax.xyz);
+        }
         const bool visible = (flags & 2u) != 0u ? !inside : inside;
         if (!visible) {
             if ((flags & 4u) == 0u)

@@ -49,7 +49,8 @@ namespace lfs::rendering {
     };
 
     // Overlay filters (crop boxes, ellipsoids, view volume, node emphasis) of
-    // the desktop overlay parameter ABI: 207 float4, host bytes uploaded per frame.
+    // the desktop overlay parameter ABI: 207 float4, optionally followed by
+    // 16 polygon records of 38 float4 each. Host bytes are uploaded per frame.
     struct SplatOverlayInputs {
         std::span<const std::byte> parameters;
         std::span<const std::byte> node_mask; // one byte per scene node

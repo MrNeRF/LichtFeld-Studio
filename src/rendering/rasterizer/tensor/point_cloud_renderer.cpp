@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "point_cloud_renderer.hpp"
 
+#include "core/crop_polygon.hpp"
 #include "core/gpu_kernel_module.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
@@ -26,22 +27,22 @@ namespace lfs::rendering {
         constexpr size_t kPaletteEntries = 257;
 
         struct DrawParameters {
-            uint64_t pointers[11]{};
+            uint64_t pointers[12]{};
             std::array<uint32_t, 2> extent{};
             std::array<uint32_t, 2> padding{};
         };
-        static_assert(sizeof(DrawParameters) == 104);
-        static_assert(offsetof(DrawParameters, extent) == 88);
+        static_assert(sizeof(DrawParameters) == 112);
+        static_assert(offsetof(DrawParameters, extent) == 96);
 
         struct InlineDrawParameters {
-            uint64_t pointers[10]{};
+            uint64_t pointers[12]{}; // polygon at 80, padding at 88 before the aligned point block
             PointParameters point;
             std::array<uint32_t, 2> extent{};
             std::array<uint32_t, 2> padding{};
         };
-        static_assert(sizeof(InlineDrawParameters) == 352);
-        static_assert(offsetof(InlineDrawParameters, point) == 80);
-        static_assert(offsetof(InlineDrawParameters, extent) == 336);
+        static_assert(sizeof(InlineDrawParameters) == 368);
+        static_assert(offsetof(InlineDrawParameters, point) == 96);
+        static_assert(offsetof(InlineDrawParameters, extent) == 352);
 
         lfs::Result<void> failure(std::string detail) {
             return lfs::Result<void>::failure(lfs::make_error({
@@ -57,7 +58,7 @@ namespace lfs::rendering {
         core::GpuBackend backend;
         std::unique_ptr<M> module;
         bool buffered_parameters = false;
-        Tensor objects, palette, point_parameters;
+        Tensor objects, palette, point_parameters, crop_polygon;
         Tensor rgba, raster_depth, depth_rgba, linear;
         std::deque<core::TensorUpload> uploads;
 
@@ -143,6 +144,13 @@ namespace lfs::rendering {
         if (in.objects.size() % kSceneObjectBytes || in.objects.size() / kSceneObjectBytes != point.counts[0])
             return failure(std::format("Point scene objects do not match parameters (bytes={}, record_bytes={}, records={}, parameter_count={})",
                                        in.objects.size(), kSceneObjectBytes, in.objects.size() / kSceneObjectBytes, point.counts[0]));
+        const bool polygon_enabled = (flags & 1u) != 0u && (flags & 4096u) != 0u && (flags & 1024u) == 0u;
+        if (polygon_enabled &&
+            (in.crop_polygon.size() % (2 * sizeof(float)) != 0 ||
+             in.crop_polygon.size() / (2 * sizeof(float)) < core::crop_polygon::kMinVertices ||
+             in.crop_polygon.size() / (2 * sizeof(float)) > core::crop_polygon::kMaxVertices ||
+             point.crop_min[1] != float(in.crop_polygon.size() / (2 * sizeof(float)))))
+            return failure("Point crop polygon needs 3 to 64 packed float2 vertices matching crop_min.y");
         const bool selection_enabled = (flags & (32u | 64u)) != 0u;
         if (selection_enabled && in.selection_palette.size() < kPaletteEntries * sizeof(std::array<float, 4>))
             return failure(std::format("Point selection needs at least {} float4 palette records (bytes={}, required={})",
@@ -166,6 +174,8 @@ namespace lfs::rendering {
         if (selection_enabled)
             s.upload(s.palette, in.selection_palette);
 
+        if (polygon_enabled)
+            s.upload(s.crop_polygon, in.crop_polygon);
         const bool buffered = s.buffered_parameters;
         if (buffered)
             s.upload(s.point_parameters, std::as_bytes(std::span(&point, 1)));
@@ -185,12 +195,13 @@ namespace lfs::rendering {
             M::Binding{56, present(in.deleted)},
             M::Binding{64, nullptr},
             M::Binding{72, nullptr},
-            M::Binding{80, &s.point_parameters},
+            M::Binding{80, polygon_enabled ? &s.crop_polygon : nullptr},
+            M::Binding{88, &s.point_parameters},
         };
         auto color_draw = M::Draw{
             .vertex = "pointVertex",
             .fragment = "pointColorFragment",
-            .arguments = {parameter_bytes, std::span(draw_bindings).first(buffered ? 11 : 10)},
+            .arguments = {parameter_bytes, std::span(draw_bindings).first(buffered ? 12 : 11)},
             .color = &s.rgba,
             .depth = &s.raster_depth,
             .vertex_count = 6,
@@ -227,10 +238,11 @@ namespace lfs::rendering {
             M::Binding{64, &s.depth_rgba},
             M::Binding{72, &s.linear, M::Access::ReadWrite},
             M::Binding{80, nullptr},
+            M::Binding{88, nullptr},
         };
         return s.module->dispatch({
             .function = "extractPointDepth",
-            .arguments = {parameter_bytes, std::span(copy_bindings).first(buffered ? 11 : 10)},
+            .arguments = {parameter_bytes, std::span(copy_bindings).first(buffered ? 12 : 11)},
             .groups = {(width + 15u) / 16u, (height + 15u) / 16u, 1},
             .group = {16, 16, 1},
         });

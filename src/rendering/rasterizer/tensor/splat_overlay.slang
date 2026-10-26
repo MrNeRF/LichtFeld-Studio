@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Desktop overlay parameter ABI (buildOverlayParamsCpuFloats): crop boxes and
-// ellipsoids, view window, emphasis and brush. Ported from viewer_overlay.metal.
+// ellipsoids, polygons, view window, emphasis and brush.
 #pragma once
 
 static const uint kOverlayParameterCount = 207;
+static const uint kOverlayPolygonStride = 38;
+static const uint kOverlayPolygonCount = 16;
+static const uint kOverlayPolygonMaxVertices = 64;
 
 bool overlay_enabled(float x) { return x > .5f; }
 
@@ -33,6 +36,52 @@ void overlay_filter(Ptr<float4, Access.Read> p, uint base, bool ellipsoid, int n
             flags |= 1u;
         else
             active = false;
+    }
+}
+
+void overlay_polygon_filter(
+    Ptr<float4, Access.Read> overlay_params,
+    uint flags_idx,
+    float4 polygon_flags,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    if (!overlay_enabled(polygon_flags.x)) return;
+
+    int parent_node_idx = int(round(polygon_flags.w));
+    bool applies = parent_node_idx < 0 || node_idx == parent_node_idx;
+    if (!applies) return;
+
+    float3 local = overlay_transform(overlay_params, flags_idx + 2u, mean_ws);
+    float4 params = overlay_params[flags_idx + 1u];
+    uint count = min(uint(max(int(round(params.y)), 0)), kOverlayPolygonMaxVertices);
+    bool inside = abs(local.z) <= params.x && count >= 3u;
+    if (inside) {
+        bool crossing = false;
+        float4 last_pair = overlay_params[flags_idx + 6u + (count - 1u) / 2u];
+        float2 b = ((count - 1u) & 1u) == 0u ? last_pair.xy : last_pair.zw;
+        for (uint i = 0u; i < count; ++i) {
+            float4 pair = overlay_params[flags_idx + 6u + i / 2u];
+            float2 a = (i & 1u) == 0u ? pair.xy : pair.zw;
+            if ((a.y > local.y) != (b.y > local.y) &&
+                local.x < (b.x - a.x) * (local.y - a.y) / (b.y - a.y) + a.x) {
+                crossing = !crossing;
+            }
+            b = a;
+        }
+        inside = crossing;
+    }
+    bool outside = inside == overlay_enabled(polygon_flags.y);
+    if (outside) {
+        overlay_flags |= 2u;
+        if (overlay_enabled(polygon_flags.z)) {
+            overlay_flags |= 1u;
+        } else {
+            active = false;
+        }
     }
 }
 

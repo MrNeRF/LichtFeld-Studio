@@ -1049,6 +1049,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_adam_sh.cpp
             test_training_ops_metal_fast.cpp
             test_roi_masks.cpp
+            test_roi_polygon_weight_map.cpp
             test_training_snapshot_service.cpp
             test_ppisp_regularizer_portable.cpp
             ${POPSPA_TEST_FILES})
@@ -1678,7 +1679,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
-list(APPEND TEST_FILES test_roi_masks.cpp)
+list(APPEND TEST_FILES test_roi_masks.cpp test_roi_polygon_weight_map.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1691,7 +1692,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         test_training_ops_metal_appearance.cpp
         test_training_ops_metal_adam_sh.cpp
         test_training_ops_metal_densify.cpp
-        test_training_ops_metal_fast.cpp)
+        test_training_ops_metal_fast.cpp
+        test_training_ops_metal_gsplat.cpp)
 endif()
 
 # PyModalRegistry and its native-modal dispatch path for regression tests.

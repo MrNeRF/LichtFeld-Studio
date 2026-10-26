@@ -629,6 +629,40 @@ namespace {
         expect_near(q16, expected, 1e-5, "q16 image");
     }
 
+    TEST_P(PortableGsplat, SaturatedOpacityBackwardPreservesGradient) {
+        auto scene = make_scene(1);
+        scene.means = {0.0, 0.0, 3.0};
+        const auto cam = make_camera(CameraModel::PINHOLE);
+        double reference = 0.0;
+        for (const float logit : {12.f, 17.f, 20.f, 40.f, 80.f}) {
+            SCOPED_TRACE(logit);
+            scene.opacities[0] = logit;
+            forward(scene, cam, 1, D3{0.0, 0.0, 0.0});
+            auto gm = Tensor::zeros({1, 3}, Device::GPU), gs = Tensor::zeros({1, 3}, Device::GPU);
+            auto gr = Tensor::zeros({1, 4}, Device::GPU), go = Tensor::zeros({1, 1}, Device::GPU);
+            auto g0 = Tensor::zeros({1, 1, 3}, Device::GPU);
+            auto gn = Tensor::zeros({lfs::core::sh_swizzled_float_count(1, kRest)}, Device::GPU);
+            std::array<Tensor*, 6> slots{&gm, &gs, &gr, &go, &g0, &gn};
+            const ops::GsplatGradients gradients{&slots, [](void* owner, ops::AdamSlot slot) -> Tensor& {
+                                                     return *(*static_cast<std::array<Tensor*, 6>*>(owner))[static_cast<size_t>(slot)];
+                                                 }};
+            auto densification = Tensor::zeros({2, 1}, Device::GPU);
+            auto edge_scores = Tensor::zeros({1}, Device::GPU), share = Tensor::zeros({1}, Device::GPU);
+            Tensor none;
+            table_->backward(saved_, Tensor::ones({3, kH, kW}, Device::GPU),
+                             Tensor::zeros({1, kH, kW}, Device::GPU), gradients, densification,
+                             none, none, edge_scores, share);
+            const double actual = host(go)[0];
+            const double e = std::exp(-double(logit));
+            const double derivative = e / ((1.0 + e) * (1.0 + e));
+            ASSERT_GT(actual, 0.0);
+            if (logit == 12.f)
+                reference = actual / derivative;
+            else
+                EXPECT_NEAR(actual / derivative / reference, 1.0, 2e-4);
+        }
+    }
+
     TEST_P(PortableGsplat, BackwardMatchesFiniteDifferences) {
         auto scene = make_scene(40);
         const auto cam = make_camera(CameraModel::PINHOLE);
