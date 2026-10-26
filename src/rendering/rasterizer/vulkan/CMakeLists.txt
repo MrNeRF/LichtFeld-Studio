@@ -54,8 +54,14 @@ add_custom_command(
         DEPENDS lfs_generate_stbn
         COMMENT "Generating the 128x128x64 STBN volume"
         VERBATIM)
-target_sources(lfs_vulkan_rasterizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc")
+add_custom_target(lfs_stbn_data DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc")
+add_dependencies(lfs_vulkan_rasterizer lfs_stbn_data)
 target_include_directories(lfs_vulkan_rasterizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+# The Windows preflight compiles sources after building only lfs_shader_headers; the volume is one of their includes.
+if(NOT TARGET lfs_shader_headers)
+    add_custom_target(lfs_shader_headers)
+endif()
+add_dependencies(lfs_shader_headers lfs_stbn_data)
 
 set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
 set_property(TARGET lfs_vulkan_rasterizer PROPERTY
