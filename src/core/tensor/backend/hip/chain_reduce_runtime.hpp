@@ -50,7 +50,6 @@ extern "C" int lfs_hip_chain_reduce_f32(LfsHipContext* context, LfsHipView input
         if (!size) {
             require(operation == LFS_HIP_REDUCE_SUM || operation == LFS_HIP_REDUCE_MEAN, "Empty HIP fused minimum or maximum reduction");
             check(lfs_hip_fill_internal(context, static_cast<float*>(output.buffer->data) + output.offset / sizeof(float), segments, operation == LFS_HIP_REDUCE_SUM ? 0.0f : NAN));
-            check(hipGetLastError());
             return;
         }
         const auto* in = reinterpret_cast<const float*>(static_cast<const char*>(input.buffer->data) + input.offset);
