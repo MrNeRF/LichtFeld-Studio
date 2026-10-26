@@ -173,7 +173,6 @@ namespace lfs::io {
             return state & 2 ? (state == 2 && lo == q && hi == q + size ? 1 : 2) : 0;
         };
         struct Pending {
-            uint32_t index;
             I3 p;
             int size;
             int state;
@@ -184,7 +183,7 @@ namespace lfs::io {
         if (v.occupied_count) {
             Cursor source{0, {}, v.edge};
             const auto state = region({}, edge, source);
-            queue.push_back({0, {}, edge, state, source});
+            queue.push_back({{}, edge, state, source});
         }
         uint32_t interiors = 0;
         float completed = .1f;
@@ -193,7 +192,7 @@ namespace lfs::io {
             completed = std::max(completed, .1f + .6f * float(i) / queue.size());
             core::reportProgress(stop, progress, completed, "Packing voxel tree");
             if (item.state == 1) {
-                nodes[item.index] = 0xff000000u;
+                nodes[i] = 0xff000000u;
             } else if (item.size == 4) {
                 uint64_t mask = 0;
                 // Block-aligned reflection leaves exactly one native brick or a uniform subtree.
@@ -211,7 +210,7 @@ namespace lfs::io {
                 if (leaves.size() / 2 >= (1u << 24))
                     throw core::collisionError("collision.output_limit", "Voxel leaf limit exceeded; increase cell size and regenerate", lfs::ErrorCode::ResourceExhausted,
                                                std::format("{} / {}", leaves.size() / 2, 1u << 24));
-                nodes[item.index] = uint32_t(leaves.size() / 2);
+                nodes[i] = uint32_t(leaves.size() / 2);
                 leaves.push_back(uint32_t(mask));
                 leaves.push_back(uint32_t(mask >> 32));
             } else {
@@ -223,14 +222,14 @@ namespace lfs::io {
                     const auto state = region(p, item.size / 2, source);
                     if (state) {
                         mask |= 1u << c;
-                        queue.push_back({uint32_t(nodes.size()), p, item.size / 2, state, source});
+                        queue.push_back({p, item.size / 2, state, source});
                         nodes.push_back(0);
                     }
                 }
                 if (nodes.size() > (1u << 24))
                     throw core::collisionError("collision.output_limit", "SuperSplat v1.1 export exceeds its 24-bit node index range", lfs::ErrorCode::ResourceExhausted,
                                                std::format("{} / {}", nodes.size(), 1u << 24));
-                nodes[item.index] = (mask << 24) | base;
+                nodes[i] = (mask << 24) | base;
                 ++interiors;
             }
         }

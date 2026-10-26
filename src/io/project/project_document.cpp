@@ -966,18 +966,16 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
-        decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) {
-            try {
-                auto volume = decodeCollision(bytes);
-                collisions.emplace(uuid, volume);
-                deferred_geometry_keys.erase({FOURCC_COLV, uuid});
-                return volume;
-            } catch (const std::exception& error) {
-                // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
-                return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
-                    dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
-                    "A collision payload could not be decoded.", error.what(), "COLV");
-            }
+        decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) try {
+            auto volume = decodeCollision(bytes);
+            collisions.emplace(uuid, volume);
+            deferred_geometry_keys.erase({FOURCC_COLV, uuid});
+            return volume;
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
+            return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
+                dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
+                "A collision payload could not be decoded.", error.what(), "COLV");
         }
 
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
@@ -3708,10 +3706,8 @@ namespace lfs::io::project {
                 .instance_uuid = uuid,
             });
         }
-        for (const auto& [uuid, ignored] : impl_->collisions) {
-            (void)ignored;
+        for (const auto& uuid : impl_->collisions | std::views::keys)
             consider(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
-        }
         for (const auto& key : impl_->deferred_geometry_keys) {
             consider(key);
         }
@@ -4206,10 +4202,6 @@ namespace lfs::io::project {
         }
 
         CommitOptions commit = options.commit;
-        if (!impl_->collisions.empty()) {
-            commit.extra_reader_capabilities.set(COLLISION_VOLUMES_V1);
-            commit.extra_writer_capabilities.set(COLLISION_VOLUMES_V1);
-        }
         if (auto scene_nodes = impl_->scene_graph.nodes(); scene_nodes && std::ranges::any_of(*scene_nodes, [](const auto& node) {
                                                                return node.payload && node.payload->fourcc == "DSRC";
                                                            })) {
@@ -4270,17 +4262,6 @@ namespace lfs::io::project {
             ProjectChapter::from_bytes(impl_->project.to_bytes());
         if (!staged_project) {
             return std::move(staged_project).error();
-        }
-        if (!impl_->collisions.empty()) {
-            auto manifest = staged_project->manifest();
-            if (!manifest)
-                return std::move(manifest).error();
-            if (std::ranges::find(manifest->required_capabilities, "collision-volumes-v1") ==
-                manifest->required_capabilities.end()) {
-                manifest->required_capabilities.push_back("collision-volumes-v1");
-                if (auto updated = staged_project->set_manifest(*manifest); !updated)
-                    return std::move(updated).error();
-            }
         }
         if (auto modified = staged_project->set_modified_at_unix_ns(
                 commit.wallclock_unix_ns);
@@ -4490,10 +4471,8 @@ namespace lfs::io::project {
             desired.insert(
                 ChunkKey{.fourcc = FOURCC_MESH, .instance_uuid = uuid});
         }
-        for (const auto& [uuid, ignored] : impl_->collisions) {
-            (void)ignored;
+        for (const auto& uuid : impl_->collisions | std::views::keys)
             desired.insert(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
-        }
         desired.insert(
             impl_->deferred_geometry_keys.begin(),
             impl_->deferred_geometry_keys.end());

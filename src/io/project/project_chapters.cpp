@@ -2829,13 +2829,10 @@ namespace lfs::io::project {
                 result.crop_polygon = std::move(*parsed);
             }
             if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
-                if (!collision->is_string() ||
-                    !(result.collision = lfs::core::Uuid::from_string(collision->get<std::string>())) ||
-                    result.collision->is_nil())
-                    return fail<SceneNodeRecord>(
-                        lfs::ErrorCode::DataLoss, "Invalid collision payload reference.",
-                        "SCNG collision must reference a COLV UUID; unreleased inline hexadecimal occupancy is unsupported",
-                        "SCNG", "nodes.collision");
+                auto parsed = parse_uuid(*collision, "SCNG", "nodes.collision");
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.collision = *parsed;
             }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
@@ -2859,13 +2856,6 @@ namespace lfs::io::project {
 
     SceneGraphChapter::SceneGraphChapter(JsonChapterDom dom)
         : dom_(std::move(dom)) {}
-
-    std::vector<std::byte> SceneGraphChapter::to_bytes() const {
-        auto bytes = dom_.to_bytes();
-        if (bytes.size() > JsonChapterDom::max_bytes)
-            throw std::length_error("Scene graph exceeds the project JSON chapter size supported by the reader");
-        return bytes;
-    }
 
     lfs::Result<SceneGraphChapter> SceneGraphChapter::parse(
         const std::string_view bytes) {

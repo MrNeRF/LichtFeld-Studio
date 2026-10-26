@@ -15,20 +15,16 @@ namespace lfs::io::project {
             volume.words.size() > (std::vector<std::byte>().max_size() - collision_payload_header_bytes) / sizeof(uint32_t))
             throw std::length_error("Collision payload exceeds its addressable representation");
         std::vector<std::byte> result(collision_payload_header_bytes + volume.words.size() * sizeof(uint32_t));
-        write_u32(result, 0, 0x564c4f43); // COLV
-        write_u32(result, 4, 1);
-        for (int i = 0; i < 3; ++i) {
-            write_f32(result, 8 + i * 4, volume.origin[i]);
-            write_i32(result, 20 + i * 4, volume.dimensions[i]);
-        }
-        write_i32(result, 32, volume.edge);
-        write_u64(result, 36, volume.occupied_count);
-        write_f32(result, 44, volume.settings.voxel_size);
-        write_f32(result, 48, volume.settings.opacity);
-        write_f32(result, 52, volume.settings.max_gaussian_area);
-        write_u32(result, 56, volume.settings.auto_resolution);
-        write_u32(result, 60, volume.settings.cleanup);
-        write_u32(result, 64, static_cast<uint32_t>(volume.words.size()));
+        const uint32_t header[]{
+            0x564c4f43, 1, // COLV, version
+            std::bit_cast<uint32_t>(volume.origin.x), std::bit_cast<uint32_t>(volume.origin.y), std::bit_cast<uint32_t>(volume.origin.z),
+            uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y), uint32_t(volume.dimensions.z), uint32_t(volume.edge),
+            uint32_t(volume.occupied_count), uint32_t(volume.occupied_count >> 32),
+            std::bit_cast<uint32_t>(volume.settings.voxel_size), std::bit_cast<uint32_t>(volume.settings.opacity), std::bit_cast<uint32_t>(volume.settings.max_gaussian_area),
+            volume.settings.auto_resolution, volume.settings.cleanup, uint32_t(volume.words.size())};
+        static_assert(sizeof(header) == collision_payload_header_bytes);
+        for (size_t i = 0; i < std::size(header); ++i)
+            write_u32(result, i * sizeof(uint32_t), header[i]);
         for (size_t i = 0; i < volume.words.size(); ++i)
             write_u32(result, collision_payload_header_bytes + i * sizeof(uint32_t), volume.words[i]);
         return result;

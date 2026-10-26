@@ -90,15 +90,6 @@ namespace {
             return result;
         }
     };
-    TEST_F(CollisionExportTest, InputFailuresPreserveSource) {
-        EXPECT_THROW(lfs::io::loadCollisionSource("missing-collision-input.ply"), std::runtime_error);
-        write(path, "source");
-        lfs::core::args::VoxelizeMode mode;
-        mode.input_path = mode.output_path = path;
-        mode.overwrite = true;
-        EXPECT_EQ(lfs::app::run_voxelizer(mode), 1);
-        EXPECT_EQ(read(path), "source");
-    }
     TEST(CollisionExportLimits, MixedLeafBoundary) {
         EXPECT_EQ(lfs::core::cuda::collisionOutputBytes(64'000'000), 64'000'000 * sizeof(lfs::core::cuda::CollisionBrick));
         for (const auto count : {size_t(64'000'000), SIZE_MAX})
@@ -204,12 +195,14 @@ namespace {
             }
         }
     }
-    TEST_F(CollisionExportTest, LegalLongNamesOverwriteAndErrorsNameTheBlockedPath) {
+    TEST_F(CollisionExportTest, SourceProtectionLongNamesAndBlockedPaths) {
         path = directory / (std::string(240, 'a') + ".voxel.json");
         lfs::io::exportCollision(volume(), path);
         lfs::io::exportCollision(volume(), path);
         const auto blocked = directory / "file";
         write(blocked, "source-preserved");
+        EXPECT_THROW(lfs::io::loadCollisionSource("missing-collision-input.ply"), std::runtime_error);
+        EXPECT_EQ(lfs::app::run_voxelizer({.input_path = blocked, .output_path = blocked, .overwrite = true}), 1);
         try {
             lfs::io::exportCollision(volume(), blocked / "out.voxel.json");
             FAIL();

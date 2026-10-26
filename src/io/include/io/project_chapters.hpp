@@ -472,7 +472,7 @@ namespace lfs::io::project {
             invalidate_parsed_nodes();
             return dom_;
         }
-        [[nodiscard]] std::vector<std::byte> to_bytes() const;
+        [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
         training_model_uuid() const;

@@ -684,7 +684,6 @@ namespace lfs::io::project {
 
             std::vector<StagedNode> staged;
             staged.reserve(payload_units_only ? keep.size() : nodes->size());
-            std::unordered_map<lfs::core::Uuid, std::shared_ptr<const lfs::core::CollisionVolume>> collisions;
             for (const SceneNodeRecord& record : *nodes) {
                 const auto type = parse_node_type(record.type);
                 if (!type) {
@@ -781,22 +780,18 @@ namespace lfs::io::project {
                     };
                 }
                 if (record.collision) {
-                    auto found = collisions.find(*record.collision);
-                    if (found == collisions.end()) {
-                        if (!resolver.collision)
-                            return fail<void>(lfs::ErrorCode::FailedPrecondition,
-                                              "A saved collision payload cannot be resolved.",
-                                              "COLV resolver is missing", record.uuid);
-                        auto payload = resolver.collision(*record.collision);
-                        if (!payload)
-                            return lfs::Result<void>::failure(std::move(payload).error());
-                        if (!*payload)
-                            return fail<void>(lfs::ErrorCode::DataLoss,
-                                              "A saved collision payload resolved to null.",
-                                              "COLV resolver returned null", record.uuid);
-                        found = collisions.emplace(*record.collision, std::move(*payload)).first;
-                    }
-                    desc.collision = found->second;
+                    if (!resolver.collision)
+                        return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                          "A saved collision payload cannot be resolved.",
+                                          "COLV resolver is missing", record.uuid);
+                    auto payload = resolver.collision(*record.collision);
+                    if (!payload)
+                        return lfs::Result<void>::failure(std::move(payload).error());
+                    if (!*payload)
+                        return fail<void>(lfs::ErrorCode::DataLoss,
+                                          "A saved collision payload resolved to null.",
+                                          "COLV resolver returned null", record.uuid);
+                    desc.collision = std::move(*payload);
                 }
                 if (record.cropbox) {
                     desc.cropbox = std::make_unique<lfs::core::CropBoxData>(

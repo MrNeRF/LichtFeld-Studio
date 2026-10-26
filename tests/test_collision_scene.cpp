@@ -55,31 +55,29 @@ namespace {
         EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
         EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
         auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true}));
-        const auto unloaded_copy = temporary.path / "unloaded.licht";
-        ASSERT_TRUE(document.save_as(unloaded_copy));
-        for (const auto& state : document.payload_states())
-            EXPECT_FALSE(state.loaded);
-        Scene target;
-        auto reopened = require_result(ProjectDocument::open(unloaded_copy, {.defer_geometry_payloads = true}));
-        auto shell = require_result(reopened.stage_shell(target));
-        ASSERT_TRUE(reopened.hydrate(target));
-        const auto copy = temporary.path / "loaded.licht";
-        ASSERT_TRUE(reopened.save_as(copy));
-        auto copied = require_result(ProjectDocument::open(copy));
-        Scene loaded;
-        ASSERT_TRUE(copied.hydrate(loaded));
         const auto expected = require_result(capture_scene_graph(scene, {})).to_bytes();
-        for (const auto* restored : {shell.get(), &target, &loaded}) {
-            // Recapture checks local/parent transforms, visibility, node type and shared payload references.
-            EXPECT_EQ(require_result(capture_scene_graph(*restored, {})).to_bytes(), expected);
-            const auto* first = restored->getNode("0");
-            ASSERT_NE(first, nullptr);
-            for (const auto* node : restored->getNodes()) {
-                if (!node->collision)
-                    continue;
-                if (node->name != "12")
-                    EXPECT_EQ(node->collision, first->collision);
-                EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*scene.getNodeByUuid(node->uuid)->collision));
+        for (bool deferred : {true, false}) {
+            SCOPED_TRACE(deferred);
+            const auto copy = temporary.path / (deferred ? "unloaded.licht" : "loaded.licht");
+            ASSERT_TRUE(document.save_as(copy));
+            for (const auto& state : document.payload_states())
+                EXPECT_EQ(state.loaded, !deferred);
+            document = require_result(ProjectDocument::open(copy, {.defer_geometry_payloads = deferred}));
+            Scene target;
+            auto shell = require_result(document.stage_shell(target));
+            ASSERT_TRUE(document.hydrate(target));
+            for (const auto* restored : {shell.get(), &target}) {
+                // Recapture checks local/parent transforms, visibility, node type and shared payload references.
+                EXPECT_EQ(require_result(capture_scene_graph(*restored, {})).to_bytes(), expected);
+                const auto* first = restored->getNode("0");
+                ASSERT_NE(first, nullptr);
+                for (const auto* node : restored->getNodes()) {
+                    if (!node->collision)
+                        continue;
+                    if (node->name != "12")
+                        EXPECT_EQ(node->collision, first->collision);
+                    EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*scene.getNodeByUuid(node->uuid)->collision));
+                }
             }
         }
     }

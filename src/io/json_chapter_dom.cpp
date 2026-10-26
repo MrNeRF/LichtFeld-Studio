@@ -17,6 +17,8 @@ namespace lfs::io {
     namespace {
 
         using Json = nlohmann::ordered_json;
+        constexpr std::size_t MAX_JSON_CHAPTER_BYTES =
+            64ull * 1024 * 1024;
         constexpr std::size_t MAX_JSON_NESTING_DEPTH = 512;
 
         bool exceeds_json_nesting_limit(
@@ -265,13 +267,13 @@ namespace lfs::io {
         : root_(Json::object()) {}
 
     lfs::Result<JsonChapterDom> JsonChapterDom::parse(const std::string_view bytes) {
-        if (bytes.size() > JsonChapterDom::max_bytes) {
+        if (bytes.size() > MAX_JSON_CHAPTER_BYTES) {
             return make_dom_error(
                 lfs::ErrorCode::ResourceExhausted,
                 "The project JSON chapter is too large to load.",
                 std::format(
                     "JSON chapter has {} bytes; maximum is {} bytes",
-                    bytes.size(), JsonChapterDom::max_bytes));
+                    bytes.size(), MAX_JSON_CHAPTER_BYTES));
         }
         if (exceeds_json_nesting_limit(bytes)) {
             return make_dom_error(
@@ -350,6 +352,8 @@ namespace lfs::io {
 
     std::vector<std::byte> JsonChapterDom::to_bytes() const {
         const std::string serialized = dump();
+        if (serialized.size() > MAX_JSON_CHAPTER_BYTES)
+            throw std::length_error("Project JSON chapter exceeds the size supported by the reader");
         std::vector<std::byte> bytes(serialized.size());
         std::memcpy(bytes.data(), serialized.data(), serialized.size());
         return bytes;

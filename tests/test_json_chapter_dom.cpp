@@ -107,6 +107,9 @@ namespace {
                   std::string_view::npos);
 
         const std::string oversized(64ull * 1024 * 1024 + 1, ' ');
+        JsonChapterDom oversized_dom;
+        ASSERT_TRUE(oversized_dom.set("large", oversized));
+        EXPECT_THROW(oversized_dom.to_bytes(), std::length_error);
         auto too_large = JsonChapterDom::parse(oversized);
         ASSERT_FALSE(too_large);
         EXPECT_EQ(too_large.error().code(),
