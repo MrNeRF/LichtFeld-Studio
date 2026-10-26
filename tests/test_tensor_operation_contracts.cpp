@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/nn/ops.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
@@ -237,6 +238,66 @@ namespace {
 
 #ifdef LFS_TENSOR_HIP
     class HipReadbackSnapshots : public lfs::test::TensorBackendContract {};
+
+    TEST_P(HipReadbackSnapshots, EmptyBufferedReadbackRetainsExecutionFault) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        const auto invalid = input.index_select(0, indices);
+        TensorReadback download;
+        download.enqueue_range(invalid, 0, 0);
+        EXPECT_ANY_THROW(download.wait(std::span<std::byte>{}));
+        EXPECT_TRUE(download.pending());
+        EXPECT_ANY_THROW(queue.wait());
+        EXPECT_ANY_THROW(download.wait(std::span<std::byte>{}));
+        TensorReadback valid;
+        valid.enqueue_range(input, 0, 0);
+        EXPECT_NO_THROW(valid.wait(std::span<std::byte>{}));
+        EXPECT_FALSE(valid.pending());
+    }
+
+    TEST_P(HipReadbackSnapshots, RepeatedReadinessQueriesDoNotDiscardFaults) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        TensorFence fence(*GetParam().backend);
+        const auto invalid = input.index_select(0, indices);
+        const std::array<const Tensor*, 1> inputs{&invalid};
+        TensorCompletion completion(inputs);
+        fence.record(static_cast<void*>(nullptr));
+        EXPECT_ANY_THROW(queue.wait());
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            EXPECT_ANY_THROW((void)fence.ready());
+            EXPECT_ANY_THROW((void)completion.ready());
+        }
+        EXPECT_ANY_THROW(fence.wait());
+        EXPECT_ANY_THROW(completion.wait());
+    }
+
+    TEST_P(HipReadbackSnapshots, FailedUploadsRetainTheirErrorAndRetireOwnedStorage) {
+        for (const bool poll_first : {false, true}) {
+            SCOPED_TRACE(poll_first);
+            {
+                const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+                const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+                auto destination = Tensor::zeros({3}, device());
+                const auto source = Tensor::from_vector(std::vector<float>{4, 5, 6}, {3}, Device::CPU);
+                TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+                const auto invalid = input.index_select(0, indices);
+                TensorUpload upload;
+                upload.enqueue(destination, source);
+                EXPECT_ANY_THROW(queue.wait());
+                if (poll_first) {
+                    EXPECT_ANY_THROW((void)upload.poll());
+                    EXPECT_ANY_THROW((void)upload.poll());
+                }
+                EXPECT_ANY_THROW(upload.wait());
+            }
+            // No transfer, Tensor or queue lease may be stranded by a failed
+            // upload destructor, even when the runtime defers native cleanup.
+            EXPECT_TRUE(tensor_backend_selftest(*GetParam().backend));
+        }
+    }
 
     TEST_P(HipReadbackSnapshots, PackedFaultSurvivesContextConsumption) {
         const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());

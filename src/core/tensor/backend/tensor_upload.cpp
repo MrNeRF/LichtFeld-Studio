@@ -77,8 +77,20 @@ namespace lfs::core {
         try {
             wait();
         } catch (const std::exception& e) {
-            LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", e.what());
-            (void)impl_.release();
+#ifdef LFS_TENSOR_HIP
+            if (impl_ && impl_->hip) {
+                // HIP owns the upload snapshot and retires failed releases in
+                // its runtime. It can keep native resources alive without
+                // leaking the outer upload and its Tensor/context leases.
+                LOG_ERROR("HIP tensor upload failed; cleanup delegated to its owned runtime: {}", e.what());
+                impl_->hip.reset();
+                impl_->pending = false;
+            } else
+#endif
+            {
+                LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", e.what());
+                (void)impl_.release();
+            }
         }
 #if LFS_HAS_CUDA
         if (impl_ && impl_->cuda_completion)

@@ -36,6 +36,7 @@ namespace lfs::core {
         std::vector<std::byte> host;
         size_t bytes = 0;
         bool pending = false;
+        bool buffered_gpu_work = false;
     };
 
     TensorReadback::TensorReadback() = default;
@@ -111,7 +112,13 @@ namespace lfs::core {
             state.buffer.reset();
             state.backend = backend;
         }
-        if (state.bytes != 0) {
+        state.buffered_gpu_work = state.bytes != 0 && backend.has_value();
+#ifdef LFS_TENSOR_HIP
+        // An empty HIP transfer is still an execution snapshot: it must retain
+        // errors from preceding work, just like a native zero-byte readback.
+        state.buffered_gpu_work |= backend == GpuBackend::HIP;
+#endif
+        if (state.bytes != 0 || state.buffered_gpu_work) {
             if (backend) {
                 if (!state.buffer) {
                     state.buffer = internal::backend_ops_for(state.source).create_readback_buffer();
@@ -131,6 +138,7 @@ namespace lfs::core {
                     state.buffer.reset();
                     state.source = {};
                     state.bytes = 0;
+                    state.buffered_gpu_work = false;
                     throw;
                 }
             } else {
@@ -302,13 +310,11 @@ namespace lfs::core {
         if (destination.size() != state.bytes) {
             throw std::invalid_argument("TensorReadback destination size mismatch");
         }
-        if (state.bytes != 0) {
-            if (state.backend) {
-                if (!state.buffer->poll(destination.data()))
-                    return false;
-            } else {
-                std::memcpy(destination.data(), state.host.data(), state.bytes);
-            }
+        if (state.buffered_gpu_work) {
+            if (!state.buffer->poll(destination.data()))
+                return false;
+        } else if (state.bytes != 0) {
+            std::memcpy(destination.data(), state.host.data(), state.bytes);
         }
         state.pending = false;
         state.source = {};
@@ -324,7 +330,7 @@ namespace lfs::core {
         if (destination.size() != impl_->bytes) {
             throw std::invalid_argument("TensorReadback destination size mismatch");
         }
-        if (impl_->bytes != 0 && impl_->backend)
+        if (impl_->buffered_gpu_work)
             impl_->buffer->wait();
         if (!poll(destination))
             throw std::runtime_error("TensorReadback did not complete after waiting");

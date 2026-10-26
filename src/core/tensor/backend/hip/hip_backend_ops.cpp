@@ -1199,7 +1199,13 @@ namespace lfs::core::internal {
                 std::lock_guard lock(owner_->mutex);
                 LfsHipError error{};
                 int32_t ready = 0;
-                check(owner_->api.readback_poll(owner_->context, handle_, destination, pending_bytes_, &ready, &error), error);
+                // A null destination explicitly discards a native failed
+                // snapshot. Completion queries have no payload and must not
+                // perform that discard while merely checking readiness.
+                void* target = destination;
+                if (!target && !pending_bytes_)
+                    target = &ready;
+                check(owner_->api.readback_poll(owner_->context, handle_, target, pending_bytes_, &ready, &error), error);
                 return ready != 0;
             }
         };
@@ -1237,7 +1243,9 @@ namespace lfs::core::internal {
                 std::lock_guard lock(owner_->mutex);
                 LfsHipError error{};
                 int32_t ready = 0;
-                check(owner_->api.readback_poll(owner_->context, staging_, nullptr, 0, &ready, &error), error);
+                // Upload polling is a completion query, not an explicit
+                // discard of the native execution snapshot.
+                check(owner_->api.readback_poll(owner_->context, staging_, &ready, 0, &ready, &error), error);
                 return ready != 0;
             }
         };
@@ -1573,7 +1581,9 @@ namespace lfs::core::internal {
                     return true;
                 LfsHipError error{};
                 int32_t ready = 0;
-                check(owner_->api.readback_poll(owner_->context, marker_, nullptr, 0, &ready, &error), error);
+                // Markers have zero bytes; a non-null, zero-sized destination
+                // keeps a failed snapshot latched across readiness queries.
+                check(owner_->api.readback_poll(owner_->context, marker_, &ready, 0, &ready, &error), error);
                 complete_ = ready != 0;
                 return complete_;
             }
