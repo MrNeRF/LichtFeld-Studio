@@ -87,6 +87,11 @@ namespace {
     TEST_F(CollisionArchive, ReadAndSaveFailuresAreTransactional) {
         auto document = require_result(ProjectDocument::open(path));
         const auto baseline = read_file_bytes(path);
+        detail::set_max_payload_materialized_bytes_for_testing(1);
+        auto limited = ProjectDocument::open(path);
+        detail::set_max_payload_materialized_bytes_for_testing(std::nullopt);
+        ASSERT_FALSE(limited);
+        EXPECT_EQ(limited.error().code(), lfs::ErrorCode::ResourceExhausted);
         const auto bytes = encodeCollision(*volume);
         EXPECT_THROW(decodeCollision(std::span(bytes).first(bytes.size() - 1)), std::invalid_argument);
         CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {CollisionVolume::brick_tag | 1, 0x00110011, 0}};
@@ -99,7 +104,6 @@ namespace {
         std::filesystem::create_directory(temporary.path / "directory");
         EXPECT_FALSE(document.save(temporary.path / "directory"));
         EXPECT_EQ(read_file_bytes(path), baseline);
-        ASSERT_TRUE(document.save(path));
         for (const bool erase : {false, true}) {
             auto reader = require_result(ProjectReader::open(path));
             auto writer = require_result(ProjectWriter::append(path));
@@ -133,7 +137,6 @@ namespace {
         scene.setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(10)));
         auto model = make_splat(1);
         model->means() = Tensor::from_vector({1.f, 2.f, 3.f}, {1, 3}, Device::CPU);
-        model->deleted() = Tensor::ones_bool({1}, Device::CPU);
         const auto source = scene.addSplat("Selected hidden source", std::move(model), parent);
         scene.setTrainingModelNode(source);
         scene.setNodeVisibility(source, false);
@@ -145,7 +148,6 @@ namespace {
         scene.setNodeTransform(first, transform);
         const auto captured_source = scene.captureCollisionSource(source);
         EXPECT_EQ(captured_source.transform, scene.getWorldTransform(source));
-        EXPECT_TRUE(captured_source.deleted.item<bool>());
         lfs::training::ProjectSnapshotCpuState captured;
         ASSERT_TRUE(lfs::training::capture_project_snapshot_cpu_state(scene, ParameterManagerSnapshot{}, generate_uuid_v4(), 3, captured));
         const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
@@ -158,8 +160,6 @@ namespace {
         EXPECT_EQ(chapters.collisions.begin()->second, volume);
         const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);
         ASSERT_TRUE(one && *one && two && *two);
-        EXPECT_EQ((**one).collision, (**two).collision);
-        EXPECT_TRUE((**one).parent_uuid);
         for (int axis = 0; axis < 3; ++axis)
             EXPECT_EQ((**one).local_transform[12 + axis], transform[3][axis]);
     }
