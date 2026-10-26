@@ -612,7 +612,7 @@ namespace lfs::media {
             std::vector<PreparedPacket> prepared;
             std::map<std::string, ExtendedGroup> groups;
             std::size_t records = 0, input_bytes = 0;
-            bool bad_header = false, bad_link = false, limited_segment = false, limited_standard = false;
+            bool bad_header = false, bad_link = false, limited_segment = false, incomplete_standard = false;
             const auto property_limit = std::min(std::size_t{1024}, max_facts - summary.facts.size());
             const auto text_limit = std::min(std::size_t{64 * 1024}, max_text_bytes - charged);
             for (const auto& record : catalog.records()) {
@@ -651,9 +651,9 @@ namespace lfs::media {
                 item.source = *handle;
                 item.order = order;
                 item.packet = preparePacket(catalog, *reference, property_limit, text_limit, input_bytes);
-                // A stopped Standard parser may hide a duplicate link, including
-                // one after the property that exhausted the parser's budget.
-                limited_standard |= block->envelope == XmpEnvelope::JpegApp1 && item.packet.state == XmpPacketState::Limited;
+                // Any unparsed Standard remainder may hide a duplicate link,
+                // regardless of why its interpretation stopped.
+                incomplete_standard |= block->envelope == XmpEnvelope::JpegApp1 && item.packet.state != XmpPacketState::Parsed;
                 if (item.packet.state == XmpPacketState::Parsed && item.packet.link_count) {
                     const auto value = trim(item.packet.extended_guid);
                     if (!item.packet.invalid_link && item.packet.link_count == 1 && guid(value)) {
@@ -666,7 +666,7 @@ namespace lfs::media {
                 }
                 prepared.push_back(std::move(item));
             }
-            const bool incomplete = records < catalog.imageXmp().blocks.size() || catalog.imageXmp().status == MetadataStatus::Limited || limited_segment || limited_standard;
+            const bool incomplete = records < catalog.imageXmp().blocks.size() || catalog.imageXmp().status != MetadataStatus::Collected || limited_segment || incomplete_standard;
             summary.limited |= incomplete;
             for (auto& [name, group] : groups) {
                 PreparedPacket item;

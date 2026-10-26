@@ -556,6 +556,16 @@ class IngestCLI(unittest.TestCase):
             self.assertTrue(result["summary"]["xmp_assemblies"][0]["md5_verified"])
             self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
 
+        # The completed markers survive a later truncated, unidentified APP1.
+        blocks = [standard, *fragments]
+        self._xmp_jpeg(path, blocks)
+        prefix_bytes = 2 + sum(4 + len(block) for block in blocks)
+        path.write_bytes(path.read_bytes()[:prefix_bytes] + b"\xff\xe1\x00\xfftruncated")
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "malformed")
+        self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
+        self.assertEqual(next(p for p in result["summary"]["xmp_packets"] if "extended_xmp" in p)["state"], "limited")
+
     def test_source_metadata_jpeg_extended_xmp_group_isolation(self):
         path = self.root / "separate-groups.jpg"
         packet_a = self._rdf_packet('<t:Model>A</t:Model>').encode()

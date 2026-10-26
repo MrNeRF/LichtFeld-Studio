@@ -600,22 +600,35 @@ namespace {
         std::string overflowing_properties;
         for (std::size_t i = 0; i < 1024; ++i)
             overflowing_properties += "<t:Make>x</t:Make>";
-        for (const bool link_first : {false, true}) {
-            auto duplicate = standardPacket(extendedGuid);
-            std::string xml(duplicate.bytes.begin() + duplicate.payload_offset, duplicate.bytes.end());
-            const auto link_attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
-            xml.erase(xml.find(link_attribute), link_attribute.size());
-            xml.resize(xml.find("/></r:RDF>"));
-            const auto link = "<n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP>";
-            xml += ">" + (link_first ? link + overflowing_properties : overflowing_properties + link) + "</r:Description></r:RDF>";
-            duplicate.bytes.resize(duplicate.payload_offset);
-            duplicate.bytes.insert(duplicate.bytes.end(), xml.begin(), xml.end());
-            reject({blocks[0], duplicate, blocks[1], blocks[2]}, XmpPacketState::Limited);
+        const std::string qualified_description = R"(</r:Description><r:Description xml:lang="en">)";
+        for (const auto* stopping_content : std::array<const std::string*, 2>{&overflowing_properties, &qualified_description})
+            for (const bool link_first : {false, true}) {
+                auto duplicate = standardPacket(extendedGuid);
+                std::string xml(duplicate.bytes.begin() + duplicate.payload_offset, duplicate.bytes.end());
+                const auto link_attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
+                xml.erase(xml.find(link_attribute), link_attribute.size());
+                xml.resize(xml.find("/></r:RDF>"));
+                const auto link = "<n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP>";
+                xml += ">" + (link_first ? link + *stopping_content : *stopping_content + link) + "</r:Description></r:RDF>";
+                duplicate.bytes.resize(duplicate.payload_offset);
+                duplicate.bytes.insert(duplicate.bytes.end(), xml.begin(), xml.end());
+                reject({blocks[0], duplicate, blocks[1], blocks[2]}, XmpPacketState::Limited);
+            }
+        for (const auto status : {MetadataStatus::Malformed, MetadataStatus::Unsupported}) {
+            auto unavailable = blocks[0];
+            unavailable.status = status;
+            reject({blocks[0], unavailable, blocks[1], blocks[2]}, XmpPacketState::Limited);
         }
         for (const auto limited : {extendedCatalog(blocks, 2), extendedCatalog(blocks, 4096, MetadataStatus::Limited)}) {
             const auto summary = summarizeImageMetadata(limited);
             require(summary && summary->limited && summary->facts.size() == 1 && !summary->facts[0].ambiguous,
                     "limited collection/index prevents assembly without changing independent facts");
+        }
+        for (const auto status : {MetadataStatus::Malformed, MetadataStatus::IoError}) {
+            const auto stopped_scan = summarizeImageMetadata(extendedCatalog(blocks, 4096, status));
+            require(stopped_scan && stopped_scan->limited && stopped_scan->facts.size() == 1 &&
+                        stopped_scan->xmp_packets.back().state == XmpPacketState::Limited,
+                    "a stopped carrier scan cannot establish association completeness from its retained prefix");
         }
         for (const auto byte_count : {std::size_t{1024 * 1024}, std::size_t{1024 * 1024 + 1}}) {
             const std::string_view padded_guid = "F0BB4D2E44170E3C7E8A702761282D73";
