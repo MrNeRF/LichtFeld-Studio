@@ -1923,12 +1923,15 @@ namespace lfs::core {
             size_t actual_count = count; // Start with Thrust's count
 
             if (device_ == Device::GPU) {
+                // HIP consumes the already computed count; other backends retain
+                // their existing capacity-based selection contract.
+                const size_t selection_count = internal::gpu_backend_tag(*this) == GpuBackend::HIP ? count : numel();
                 if (is_bool_like(dtype_)) {
                     actual_count = internal::backend_ops_for(*this).nonzero_bool(
                         internal::storage_ref(*this), internal::storage_ref(temp),
                         internal::MaskProgram{
                             .count = numel(),
-                            .selected_count = numel(),
+                            .selected_count = selection_count,
                         },
                         internal::ExecContext{stream()});
                 } else {
@@ -1936,7 +1939,7 @@ namespace lfs::core {
                         internal::storage_ref(*this), internal::storage_ref(temp),
                         internal::MaskProgram{
                             .count = numel(),
-                            .selected_count = numel(),
+                            .selected_count = selection_count,
                         },
                         internal::ExecContext{stream()});
                 }

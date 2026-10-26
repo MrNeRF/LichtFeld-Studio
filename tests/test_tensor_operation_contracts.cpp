@@ -96,6 +96,21 @@ namespace {
         ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices), {3, 2}, {5, 6, 1, 2, 5, 6}));
     }
 
+    TEST_P(TensorOperationContracts, NonzeroUsesSelectedCountRatherThanCapacity) {
+        const auto check_indices = [&](const Tensor& input, const std::vector<int64_t>& expected) {
+            const auto indices = input.nonzero();
+            expect_placement(indices);
+            ASSERT_EQ(indices.shape(), TensorShape({expected.size(), 1}));
+            ASSERT_EQ(indices.dtype(), DataType::Int64);
+            EXPECT_EQ(indices.to_vector_int64(), expected);
+        };
+        const auto input = values({0, -2, 0, 3, 0, 0, 4}, {7});
+        ASSERT_NO_FATAL_FAILURE(check_indices(input, {1, 3, 6}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(input > 0.f, {3, 6}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(values({0, 0, 0}, {3}), {}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(values({1, -1, 2}, {3}), {0, 1, 2}));
+    }
+
     TEST_P(TensorOperationContracts, SortReturnsAValidPermutationForDuplicateKeys) {
         const std::vector<float> data{3, -1, 3, 0, -1, 2};
         const auto [sorted, indices] = values(data, {data.size()}).sort();
