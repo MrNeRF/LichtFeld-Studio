@@ -8632,8 +8632,7 @@ namespace lfs::vis {
         const lfs::rendering::ViewportRenderRequest& request,
         const bool force_input_upload,
         const OutputSlot output_slot,
-        const bool synchronize_input_upload,
-        const bool deterministic_export) {
+        const bool synchronize_input_upload) {
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -9208,7 +9207,7 @@ namespace lfs::vis {
         const auto& guides = request.overlay.markers;
         const bool stochastic_active = (requested_mode == 1 || requested_mode == 2) &&
                                        !request.gut && !lod_request_active &&
-                                       !depth_capture_mode_ && !deterministic_export &&
+                                       !depth_capture_mode_ && !request.deterministic_export &&
                                        !request.depth_view && !request.require_exact_depth &&
                                        output_slot != OutputSlot::Preview &&
                                        !guides.show_rings && !guides.show_center_markers &&
@@ -9243,7 +9242,7 @@ namespace lfs::vis {
         // frame rebuilds projection and sort data from current inputs, so an
         // input snapshot change does not make an already warmed macro chain cold.
         const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
-                                       !deterministic_export;
+                                       !request.deterministic_export;
         const bool higs_active = higs_candidate && !higs_warmup_frame;
         if ((higs_active || request.gut) && output_slot == OutputSlot::Preview &&
             request.frame_view.subregion_full_size.y > 0) {
@@ -9596,7 +9595,7 @@ namespace lfs::vis {
                         {
                             LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
                             renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity,
-                                                                          deterministic_export || request.overlay.markers.show_object_outline);
+                                                                          request.deterministic_export || request.overlay.markers.show_object_outline);
                         }
                         {
                             LOG_TIMER("vksplat.render.record.executeMacroCoverage");
@@ -9643,7 +9642,7 @@ namespace lfs::vis {
                 if (depth_wave_sort_bits == 0)
                     depth_wave_sort_bits = 1;
 
-                const bool export_wave_batch = output_slot == OutputSlot::Preview;
+                const bool export_wave_batch = output_slot == OutputSlot::Preview || request.deterministic_export;
                 if (export_wave_batch) {
                     const auto gate = renderer_.synchronizeTileInstanceGate(buffers_);
                     if (gate.count_overflow) {

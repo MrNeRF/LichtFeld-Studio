@@ -254,13 +254,14 @@ TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVul
                 return image ? image->image->cpu().to_vector() : std::vector<float>{};
             }
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = {64, 64};
             request.sh_degree = 0;
             request.scene = {&transforms, indices, mask};
             request.raster_backend = backend == 1 ? lfs::rendering::GaussianRasterBackend::ThreeDgs
                                                   : lfs::rendering::GaussianRasterBackend::ThreeDgut;
             request.gut = backend == 2;
-            auto result = renderer.render(context, *model, request, false, slot, false, true);
+            auto result = renderer.render(context, *model, request, false, slot, false);
             EXPECT_TRUE(result) << (result ? "" : result.error());
             if (!result)
                 return {};
@@ -343,6 +344,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         for (size_t i = 0; i < ids.size(); ++i)
             scene.setNodeVisibility(ids[i], i == marker);
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.rotation = glm::mat3(-1.0f, 0.0f, 0.0f,
                                                 0.0f, 1.0f, 0.0f,
                                                 0.0f, 0.0f, -1.0f);
@@ -354,7 +356,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         request.sh_degree = 0;
         request.scene = {&transforms, indices, scene.getNodeVisibilityMask()};
         auto result = renderer.render(context, *model, request, false,
-                                      lfs::vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+                                      lfs::vis::VksplatViewportRenderer::OutputSlot::Preview, false);
         ASSERT_TRUE(result) << (result ? "" : result.error());
         auto image = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Preview);
         ASSERT_TRUE(image) << (image ? "" : image.error());
@@ -488,6 +490,7 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     lfs::vis::VksplatViewportRenderer renderer;
     const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
     lfs::rendering::ViewportRenderRequest request;
+    request.deterministic_export = true;
     request.frame_view.size = {64, 64};
     request.sh_degree = 0;
     request.scene.model_transforms = &snapshot->model_transforms;
@@ -496,7 +499,7 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     const auto render = [&](const std::vector<bool>& mask, const bool indexed) {
         request.scene.node_visibility_mask = mask;
         request.scene.transform_indices = indexed ? explicit_indices : nullptr;
-        auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false, true);
+        auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false);
         EXPECT_TRUE(rendered) << (rendered ? "" : rendered.error());
         if (!rendered)
             return std::vector<uint8_t>{};
@@ -589,6 +592,7 @@ namespace {
 
         std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = {render_width_, rows};
             request.frame_view.subregion_origin = {0, y};
             if (banded)
@@ -599,7 +603,7 @@ namespace {
             request.equirectangular = std::get<0>(GetParam());
             const auto slot = full_frame ? lfs::vis::VksplatViewportRenderer::OutputSlot::Preview
                                          : lfs::vis::VksplatViewportRenderer::OutputSlot::Main;
-            auto result = renderer_->render(context_, *model_, request, false, slot, false, true);
+            auto result = renderer_->render(context_, *model_, request, false, slot, false);
             EXPECT_TRUE(result) << (result ? "" : result.error());
             if (!result)
                 return {};
@@ -1169,6 +1173,7 @@ namespace {
         // Establish the same context that the viewer passes to the export manager.
         manager.renderVulkanFrame({.viewport = viewport, .settings = settings, .vulkan_context = &context_});
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.size = {width, height};
         request.frame_view.focal_length_mm = 35.0f;
         request.sh_degree = 0;
@@ -1179,7 +1184,7 @@ namespace {
         for (int format = 0; format < 3; ++format) {
             SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
             request.transparent_background = format == 2;
-            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            auto rendered = renderer_->render(context_, *model_, request, false, slot, false);
             ASSERT_TRUE(rendered) << rendered.error();
             auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
                                          : renderer_->readOutputImageRgb8(context_, slot);

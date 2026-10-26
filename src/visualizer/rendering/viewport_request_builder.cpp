@@ -543,6 +543,7 @@ namespace lfs::vis {
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
+            .deterministic_export = ctx.deterministic_export,
             .color_exposure = ctx.settings.color_exposure,
             .color_tonemapping = ctx.settings.color_tonemapping,
             .splat_render_profile = ctx.settings.splat_render_profile,

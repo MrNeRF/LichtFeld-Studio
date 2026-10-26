@@ -474,7 +474,8 @@ namespace lfs::vis {
                                                                             std::optional<glm::vec3> background_color_override,
                                                                             std::optional<bool> orthographic_override,
                                                                             std::optional<float> ortho_scale_override,
-                                                                            const bool equirectangular) {
+                                                                            const bool equirectangular,
+                                                                            const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -499,7 +500,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb, 1.0f, equirectangular);
+                PreviewImageReadback::FloatRgb, 1.0f, equirectangular, deterministic_export);
         }
 
         return renderPreviewImageWithState(
@@ -516,7 +517,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb, 1.0f, equirectangular);
+            PreviewImageReadback::FloatRgb, 1.0f, equirectangular, nullptr, true, deterministic_export);
     }
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
@@ -841,7 +842,8 @@ namespace lfs::vis {
                                                                             std::optional<glm::vec3> background_color_override,
                                                                             std::optional<bool> orthographic_override,
                                                                             std::optional<float> ortho_scale_override,
-                                                                            const bool equirectangular) {
+                                                                            const bool equirectangular,
+                                                                            const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -859,7 +861,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb, 1.0f, equirectangular);
+                PreviewImageReadback::FloatRgb, 1.0f, equirectangular, deterministic_export);
         }
 
         return renderPreviewImageWithState(
@@ -876,7 +878,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb, 1.0f, equirectangular);
+            PreviewImageReadback::FloatRgb, 1.0f, equirectangular, nullptr, true, deterministic_export);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(const lfs::core::SplatData& model,
@@ -1337,12 +1339,13 @@ namespace lfs::vis {
         const float rasterization_scale,
         const bool equirectangular,
         const RenderSettings* settings_override,
-        const bool gaussian_selection_visible) {
+        const bool gaussian_selection_visible,
+        const bool deterministic_export) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
-        // Image exports need stable ties. Float previews (including sequencer
-        // thumbnails) keep the interactive sort and cold-frame warmup.
+        // Output purpose, not pixel format, selects stable ties. Interactive
+        // thumbnails explicitly retain the fast sort and cold-frame warmup.
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
@@ -1361,7 +1364,7 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb, equirectangular,
+            deterministic_export, equirectangular,
             settings_override, gaussian_selection_visible);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
@@ -1380,7 +1383,7 @@ namespace lfs::vis {
                     orthographic_override,
                     ortho_scale_override,
                     readback,
-                    rasterization_scale, equirectangular);
+                    rasterization_scale, equirectangular, deterministic_export);
             }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return {};
@@ -1490,6 +1493,7 @@ namespace lfs::vis {
         if (transparent_background_override) {
             request.transparent_background = *transparent_background_override;
         }
+        request.deterministic_export = deterministic_export;
         request.frame_view.intrinsics_override = std::move(intrinsics_override);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
@@ -1515,8 +1519,7 @@ namespace lfs::vis {
             request,
             false,
             VksplatViewportRenderer::OutputSlot::Preview,
-            false,
-            deterministic_export);
+            false);
         if (!render_result) {
             return std::unexpected(render_result.error());
         }
@@ -1538,7 +1541,8 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override,
         const PreviewImageReadback readback,
         const float rasterization_scale,
-        const bool equirectangular) {
+        const bool equirectangular,
+        const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -1597,7 +1601,7 @@ namespace lfs::vis {
                     background_color_override,
                     readback_config.transparent_background_override,
                     rasterization_scale,
-                    true, equirectangular);
+                    deterministic_export, equirectangular);
                 if (rendered) {
                     break;
                 }

@@ -14,6 +14,10 @@
 #include <utility>
 #include <vector>
 
+namespace lfs::vis {
+    struct HiGSExportTestAccess;
+}
+
 struct VulkanGSOutlineStyle {
     float red = 0.0f;
     float green = 0.604f;
@@ -215,6 +219,8 @@ inline constexpr uint32_t kLodCompactProtectedCap = 98304;
 inline constexpr uint32_t kLodCompactMissCap = 16384;
 
 class VulkanGSRenderer : public VulkanGSPipeline {
+    friend struct lfs::vis::HiGSExportTestAccess;
+
 public:
     struct PrimitiveVisibilityStats {
         size_t visible_count = 0; // clamped to the frame's visible capacity

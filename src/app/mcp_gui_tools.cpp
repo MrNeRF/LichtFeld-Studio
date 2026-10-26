@@ -3022,15 +3022,12 @@ namespace lfs::app {
                 auto result = [&]() -> lfs::Result<std::string> {
                     if (panel_id.empty())
                         return lfs::from_legacy_expected(
-                            capture_after_gui_render(viewer, [viewer, width, height]() {
-                                return capture_full_window_to_base64(viewer, width, height);
-                            }),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Unavailable,
-                                .domain = lfs::ErrorDomain::MCP,
-                                .operation = "Capture composited app window",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                            capture_after_gui_render(viewer, [viewer, width, height]() { return capture_full_window_to_base64(viewer, width, height); }, true), lfs::LegacyErrorContext{
+                                                                                                                                                                    .code = lfs::ErrorCode::Unavailable,
+                                                                                                                                                                    .domain = lfs::ErrorDomain::MCP,
+                                                                                                                                                                    .operation = "Capture composited app window",
+                                                                                                                                                                    .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                                                                                                                });
                     auto promise = std::make_shared<std::promise<lfs::Result<vis::VulkanContext::WindowCapture>>>();
                     auto future = promise->get_future();
                     const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
@@ -6109,9 +6106,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_full_window_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -6125,9 +6120,7 @@ namespace lfs::app {
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_full_window_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 }
                 if (!result)
                     return std::unexpected(result.error());
