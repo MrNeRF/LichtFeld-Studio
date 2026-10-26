@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision_walk.hpp"
+#include "core/collision_error.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -57,7 +58,7 @@ namespace lfs::core {
                 return {start};
             const double required = std::ceil(double(length) / spacing);
             if (required > 4096)
-                throw std::runtime_error("Walk movement exceeds the sweep budget");
+                throw collisionError("collision.walk_budget", "Walk movement exceeds the sweep budget", ErrorCode::ResourceExhausted);
             const int count = std::max(1, static_cast<int>(required));
             float clear = 0;
             auto clear_position = start;
@@ -86,30 +87,30 @@ namespace lfs::core {
     void WalkSettings::validate() const {
         for (float value : {height, radius, speed})
             if (!std::isfinite(value) || value <= 0)
-                throw std::invalid_argument("Walk dimensions and speed must be finite and positive");
+                throw collisionError("preferences.viewport_defaults_invalid", "Walk dimensions and speed must be finite and positive", ErrorCode::InvalidArgument);
         if (!std::isfinite(step) || step < 0 || step > height || height < 2 * radius)
-            throw std::invalid_argument("Invalid Walk capsule or step height");
+            throw collisionError("preferences.viewport_defaults_invalid", "Invalid Walk capsule or step height", ErrorCode::InvalidArgument);
     }
 
     bool collisionCapsuleIntersects(const CollisionVolume& volume, const glm::mat4& transform,
                                     glm::vec3 feet, glm::vec3 up, float height, float radius) {
         if (!finite(feet) || !finite(up) || !std::isfinite(height) || !std::isfinite(radius) ||
             radius <= 0 || height < 2 * radius || glm::length(up) < 1e-6f)
-            throw std::invalid_argument("Invalid collision capsule");
+            throw collisionError("preferences.viewport_defaults_invalid", "Invalid collision capsule", ErrorCode::InvalidArgument);
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
                 if (!std::isfinite(transform[i][j]))
-                    throw std::invalid_argument("Non-finite collision transform");
+                    throw collisionError("collision.source_transform_invalid", "Non-finite collision transform", ErrorCode::InvalidArgument);
         const double determinant = glm::determinant(glm::dmat3(transform));
         if (!std::isfinite(determinant) || determinant == 0 ||
             transform[0][3] != 0 || transform[1][3] != 0 || transform[2][3] != 0 || transform[3][3] != 1)
-            throw std::invalid_argument("Invalid collision transform");
+            throw collisionError("collision.source_transform_invalid", "Invalid collision transform", ErrorCode::InvalidArgument);
         up = glm::normalize(up);
         const auto inverse = glm::inverse(transform);
         for (int i = 0; i < 4; ++i)
             for (int j = 0; j < 4; ++j)
                 if (!std::isfinite(inverse[i][j]))
-                    throw std::invalid_argument("Collision inverse transform is not representable");
+                    throw collisionError("collision.source_transform_invalid", "Collision inverse transform is not representable", ErrorCode::InvalidArgument);
         const auto linear = glm::mat3(inverse);
         float norm1 = 0, norm_inf = 0, max_scale = 0;
         bool orthogonal = true;
@@ -136,7 +137,7 @@ namespace lfs::core {
             if (!value || glm::any(glm::greaterThanEqual(lo, volume.dimensions)))
                 return false;
             if (++visited > 2'000'000)
-                throw std::runtime_error("Walk query exceeds the tree budget");
+                throw collisionError("collision.walk_budget", "Walk query exceeds the tree budget", ErrorCode::ResourceExhausted);
             const auto hi = glm::min(lo + edge, volume.dimensions);
             if (!segmentBox(a, b, volume.origin + glm::vec3(lo) * volume.settings.voxel_size,
                             volume.origin + glm::vec3(hi) * volume.settings.voxel_size, radius))
@@ -167,15 +168,15 @@ namespace lfs::core {
     void settleWalk(WalkState& state, const WalkSettings& settings, glm::vec3 up, const CapsuleQuery& blocked) {
         settings.validate();
         if (!finite(state.eye) || !finite(up) || glm::length(up) < 1e-6f)
-            throw std::invalid_argument("Invalid Walk spawn");
+            throw collisionError("preferences.viewport_defaults_invalid", "Invalid Walk spawn", ErrorCode::InvalidArgument);
         up = glm::normalize(up);
         const auto feet = state.eye - up * settings.height;
         auto hit = [&](glm::vec3 p) { return blocked(p, up, settings.height, settings.radius); };
         if (hit(feet))
-            throw std::runtime_error("Walk capsule does not fit at the camera");
+            throw collisionError("collision.walk_blocked", "Walk capsule does not fit at the camera");
         const auto support = sweep(feet, -up * (2 * settings.height), settings.radius / 3, hit);
         if (!support.hit)
-            throw std::runtime_error("No Walk support below the camera");
+            throw collisionError("collision.walk_no_support", "No Walk support below the camera");
         state.feet = support.position;
         state.eye = state.feet + up * settings.height;
         state.presentation = state.eye;
@@ -187,7 +188,7 @@ namespace lfs::core {
         settings.validate();
         if (!finite(up) || !finite(velocity) || !finite(state.eye) || !finite(state.presentation) || !finite(state.feet) || !state.grounded ||
             !std::isfinite(dt) || dt < 0 || glm::length(up) < 1e-6f)
-            throw std::invalid_argument("Invalid Walk input");
+            throw collisionError("preferences.viewport_defaults_invalid", "Invalid Walk input", ErrorCode::InvalidArgument);
         up = glm::normalize(up);
         dt = std::min(dt, .1f);
         velocity -= up * glm::dot(velocity, up);
@@ -195,7 +196,7 @@ namespace lfs::core {
         const float spacing = settings.radius / 3;
         auto hit = [&](glm::vec3 p) { return blocked(p, up, settings.height, settings.radius); };
         if (hit(feet))
-            throw std::runtime_error("Walk capsule overlaps collision geometry at its current position");
+            throw collisionError("collision.walk_blocked", "Walk capsule overlaps collision geometry at its current position");
         const auto displacement = velocity * dt;
         const auto travel = sweep(feet, displacement, spacing, hit);
         bool stepped = false;
@@ -205,7 +206,7 @@ namespace lfs::core {
             };
             const double required = std::ceil(double(settings.step) / spacing);
             if (required > 4096)
-                throw std::runtime_error("Walk step exceeds the sweep budget");
+                throw collisionError("collision.walk_budget", "Walk step exceeds the sweep budget", ErrorCode::ResourceExhausted);
             const int count = std::max(1, static_cast<int>(required));
             float low = 0;
             for (int i = 1; i <= count && !stepped; ++i) {
@@ -245,7 +246,7 @@ namespace lfs::core {
             // Refuse an unsupported move while retaining Walk and its last safe body.
             // Actual removal of the supporting geometry remains an explicit failure.
             if (!sweep(state.feet, -up * std::max(settings.step, settings.radius * .001f), spacing, hit).hit)
-                throw std::runtime_error("Walk support is no longer present");
+                throw collisionError("collision.walk_no_support", "Walk support is no longer present");
             return;
         }
         state.feet = down.position;

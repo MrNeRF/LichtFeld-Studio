@@ -1,18 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
+#include "core/collision_error.hpp"
 #include "core/splat_data.hpp"
-#include "core/splat_data_transform.hpp"
 #include "cuda/collision_voxelization.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cuda_runtime.h>
 namespace lfs::core {
-    size_t cuda::collisionSortWorkspaceBytes(size_t count) {
-        (void)collisionOutputBytes(count);
-        return queryCollisionSortWorkspaceBytes(count);
-    }
     void CollisionSettings::validate() const {
         if (!std::isfinite(voxel_size) || voxel_size <= 0 || !std::isfinite(opacity) || opacity < 0 || opacity >= 1 ||
             !std::isfinite(max_gaussian_area) || max_gaussian_area < 0)
@@ -20,7 +16,7 @@ namespace lfs::core {
         if (!cleanup && max_gaussian_area > 0)
             throw std::invalid_argument("Maximum Gaussian area requires cleanup filtering");
     }
-    CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform) {
+    CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform, size_t begin, size_t count) {
         struct ReadFence {
             std::vector<cudaStream_t> streams;
             cudaError_t finish() noexcept {
@@ -51,19 +47,35 @@ namespace lfs::core {
             fence.streams.push_back(getCurrentCUDAStream());
         // Clones use the allocation/current stream; activations and deferred inputs
         // may use their home streams. Fence all of them, including partial LOD work.
-        CollisionSource source;
+        if (begin > data.size() || (count != SIZE_MAX && count > data.size() - begin))
+            throw collisionError("collision.source_unavailable", "Collision source range is unavailable");
+        count = std::min(count, data.size() - begin);
+        const auto slice = [&](const Tensor& tensor) { return tensor.slice(0, begin, begin + count); };
+        SplatData view;
+        view.means_raw() = slice(data.means_raw());
+        view.scaling_raw() = slice(data.scaling_raw());
+        view.rotation_raw() = slice(data.rotation_raw());
+        view.opacity_raw() = slice(data.opacity_raw());
+        if (data.deleted().is_valid())
+            view.deleted() = slice(data.deleted()).to(DataType::Bool);
         if (data.lod_tree && data.lod_tree->has_tree()) {
             if (data.size() != data.lod_tree->total_nodes())
-                throw std::runtime_error("Collision requires resident original LOD leaves; load the complete model first");
-            auto leaves = make_lod_leaf_view(data);
-            source = captureCollisionSource(*leaves, transform);
-        } else
-            source = {data.means_raw().to(DataType::Float32), data.get_scaling().to(DataType::Float32),
-                      data.get_rotation().to(DataType::Float32), data.get_opacity().to(DataType::Float32),
-                      data.deleted().is_valid() ? data.deleted().clone() : Tensor{}, transform};
+                throw collisionError("collision.source_unavailable", "Collision requires resident original LOD leaves; load the complete model first");
+            std::vector<bool> interior(count);
+            for (size_t i = 0; i < count; ++i)
+                interior[i] = data.lod_tree->child_count_at(begin + i) != 0;
+            auto hidden = Tensor::from_vector(interior, {count}, view.means_raw().device());
+            view.deleted() = view.deleted().is_valid() ? hidden.logical_or(view.deleted()) : hidden;
+            if (data.lod_tree->lod_opacity_encoded)
+                view.opacity_raw() = view.opacity_raw().logit();
+        }
+        CollisionSource source{view.means_raw().to(DataType::Float32), view.get_scaling().to(DataType::Float32),
+                               view.get_rotation().to(DataType::Float32), view.get_opacity().to(DataType::Float32),
+                               view.deleted(), transform};
         // Materialize lazy activations while the caller still excludes source writers.
-        for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity})
-            (void)tensor->data_ptr();
+        for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
+            if (tensor->is_valid())
+                (void)tensor->data_ptr();
         const auto status = fence.finish();
         if (status != cudaSuccess)
             throw std::runtime_error(std::string("Collision capture failed: ") + cudaGetErrorString(status));
@@ -180,7 +192,7 @@ namespace lfs::core {
         reportProgress(stop, progress, .96f, "Assembling occupancy");
         build(build, 0, v.edge, 0, bricks.size());
         if (!v.occupied_count)
-            throw std::runtime_error("No occupied cells; lower opacity or check the source");
+            throw collisionError("collision.empty", "No occupied cells; lower opacity or check the source");
         v.validate();
         reportProgress(stop, progress, 1, "Collision ready");
         return std::move(v);

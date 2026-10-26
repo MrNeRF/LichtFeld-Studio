@@ -179,16 +179,16 @@ namespace lfs::core::cuda {
             }
         }
         __global__ void prepare(const float* means, const float* scales, const float* rotations, const float* opacity,
-                                const bool* deleted, size_t count, size_t offset, glm::mat4 transform,
+                                const bool* deleted, size_t count, glm::mat4 transform,
                                 CollisionGaussianGpu* output, float* metrics, uint32_t* errors) {
             const auto row = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
             if (row >= count)
                 return;
-            auto& g = output[offset + row];
+            auto& g = output[row];
             if (deleted && deleted[row]) {
                 g = {};
                 for (int a = 0; a < 3; ++a)
-                    metrics[3 * (offset + row) + a] = NAN;
+                    metrics[3 * row + a] = NAN;
                 return;
             }
             const auto q = glm::quat(rotations[4 * row], rotations[4 * row + 1], rotations[4 * row + 2], rotations[4 * row + 3]);
@@ -216,9 +216,9 @@ namespace lfs::core::cuda {
                     atomicExch(errors, 1u);
             }
             g.opacity = valid ? opacity[row] : 0;
-            metrics[3 * (offset + row)] = valid ? float(log(area)) : NAN;
-            metrics[3 * (offset + row) + 1] = valid ? float(log(determinant / area)) : NAN;
-            metrics[3 * (offset + row) + 2] = valid ? float(log(determinant) / 3) : NAN;
+            metrics[3 * row] = valid ? float(log(area)) : NAN;
+            metrics[3 * row + 1] = valid ? float(log(determinant / area)) : NAN;
+            metrics[3 * row + 2] = valid ? float(log(determinant) / 3) : NAN;
         }
         __global__ void filter(CollisionGaussianGpu* gs, float* metrics, float* bounds, uint32_t n,
                                float area_limit, float thickness, float volume, float thin_guard) {
@@ -357,8 +357,8 @@ namespace lfs::core::cuda {
         evaluate_bricks<<<blocks, threads, 0, stream>>>(regions, offset, grid, gs, nodes, output, count);
         LFS_CUDA_LAUNCH_CHECK(stream, "collision.evaluate_bricks");
     }
-    void launch_prepare(dim3 blocks, dim3 threads, cudaStream_t stream, const float* means, const float* scales, const float* rotations, const float* opacity, const bool* deleted, size_t count, size_t offset, glm::mat4 transform, CollisionGaussianGpu* output, float* metrics, uint32_t* errors) {
-        prepare<<<blocks, threads, 0, stream>>>(means, scales, rotations, opacity, deleted, count, offset, transform, output, metrics, errors);
+    void launch_prepare(dim3 blocks, dim3 threads, cudaStream_t stream, const float* means, const float* scales, const float* rotations, const float* opacity, const bool* deleted, size_t count, glm::mat4 transform, CollisionGaussianGpu* output, float* metrics, uint32_t* errors) {
+        prepare<<<blocks, threads, 0, stream>>>(means, scales, rotations, opacity, deleted, count, transform, output, metrics, errors);
         LFS_CUDA_LAUNCH_CHECK(stream, "collision.prepare");
     }
     void launch_filter(dim3 blocks, dim3 threads, cudaStream_t stream, CollisionGaussianGpu* gs, float* metrics, float* bounds, uint32_t n, float area_limit, float thickness, float volume, float thin_guard) {

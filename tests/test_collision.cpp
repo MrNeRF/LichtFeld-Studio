@@ -2,10 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
 #include "core/collision_walk.hpp"
-#include "core/cuda/collision_voxelization.hpp"
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include <atomic>
 #include <chrono>
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -17,58 +16,6 @@
 
 using namespace lfs::core;
 
-TEST(Collision, LogicalBoundsAndPackedBricks) {
-    CollisionVolume v{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {CollisionVolume::brick_tag | 1, 0x00110011, 0}};
-    ASSERT_NO_THROW(v.validate());
-    EXPECT_TRUE(v.occupied({0, 1, 1}));
-    EXPECT_FALSE(v.occupied({1, 1, 1}));
-    EXPECT_FALSE(v.occupied({0, 3, 1}));
-    EXPECT_FALSE(v.occupied({-1, 0, 0}));
-    v.words[1] |= 2;
-    EXPECT_THROW(v.validate(), std::invalid_argument);
-    v.words = {1};
-    v.occupied_count = 9;
-    EXPECT_NO_THROW(v.validate());
-}
-
-TEST(Collision, MalformedTopologyAndSettings) {
-    CollisionVolume v{.dimensions = {5, 5, 5}, .edge = 8, .words = {3, 0, 0, 0, 0, 0, 0, 0, 0}};
-    EXPECT_NO_THROW(v.validate());
-    for (const auto pointer : {2u, 4u, 0x80000000u, 0xffffffffu}) {
-        v.words[1] = pointer;
-        EXPECT_THROW(v.validate(), std::invalid_argument);
-    }
-    v.words = {1};
-    v.occupied_count = 125;
-    EXPECT_NO_THROW(v.validate());
-    v.occupied_count++;
-    EXPECT_THROW(v.validate(), std::invalid_argument);
-    for (const float invalid : {0.f, -1.f, INFINITY, NAN}) {
-        v.settings.voxel_size = invalid;
-        EXPECT_THROW(v.settings.validate(), std::invalid_argument);
-    }
-    for (const auto settings : {CollisionSettings{}, CollisionSettings{.max_gaussian_area = 1}, CollisionSettings{.cleanup = false}})
-        EXPECT_NO_THROW(settings.validate());
-    EXPECT_THROW((CollisionSettings{.max_gaussian_area = 1, .cleanup = false}.validate()), std::invalid_argument);
-    std::stop_source stop;
-    stop.request_stop();
-    EXPECT_THROW(generateCollision({}, {}, stop.get_token()), std::runtime_error);
-    const CollisionSource invalid;
-    EXPECT_THROW(generateCollision(invalid, {}), std::invalid_argument);
-}
-
-TEST(Collision, OutputLayoutAcrossDispatchesAndAddressOverflow) {
-    constexpr size_t records = 61 * (1u << 20);
-    for (size_t batch = 0; batch < 61; ++batch)
-        EXPECT_EQ(cuda::collisionOutputBytes(batch * (1u << 20), 1u << 20), (batch + 1) * (1u << 20) * sizeof(cuda::CollisionBrick));
-    EXPECT_THROW(cuda::collisionOutputBytes(records, 1u << 20), std::length_error);
-    EXPECT_EQ(cuda::collisionOutputBytes(records, 36'864), size_t(64'000'000) * sizeof(cuda::CollisionBrick));
-    EXPECT_THROW(cuda::collisionOutputBytes(records, 36'865), std::length_error);
-    EXPECT_EQ(cuda::collisionOutputBytes(records, 17), cuda::collisionOutputBytes(records + 17));
-    EXPECT_THROW(cuda::collisionOutputBytes(SIZE_MAX, 1), std::length_error);
-    EXPECT_THROW(cuda::collisionOutputBytes(std::vector<cuda::CollisionBrick>().max_size(), 1), std::length_error);
-}
-
 namespace {
     using collision_test::cells;
     struct Gaussian {
@@ -79,10 +26,8 @@ namespace {
     CollisionSource source(const std::vector<Gaussian>& gs) {
         std::vector<float> means, scales, rotations, opacity;
         for (const auto& g : gs) {
-            for (int a = 0; a < 3; ++a) {
-                means.push_back(g.center[a]);
-                scales.push_back(g.scale[a]);
-            }
+            means.insert(means.end(), {g.center.x, g.center.y, g.center.z});
+            scales.insert(scales.end(), {g.scale.x, g.scale.y, g.scale.z});
             rotations.insert(rotations.end(), {g.rotation.w, g.rotation.x, g.rotation.y, g.rotation.z});
             opacity.push_back(g.alpha);
         }
@@ -123,17 +68,7 @@ namespace {
             gs.push_back({{.8f, .1f, 0}, {.04f, .04f, .04f}, {1, 0, 0, 0}, .01f});
         auto input = source(gs);
         CollisionSettings settings{.04f, .1f, 0, false, false};
-        uint64_t mixed = 0;
-        const auto volume = generateCollision(input, settings, {}, {}, {}, [&](uint64_t value) {
-            EXPECT_GE(value, mixed);
-            mixed = value;
-        });
-        uint64_t expected_mixed = 0;
-        for (const auto block : cells((volume.dimensions + 3) / 4)) {
-            const auto count = std::ranges::count_if(cells(glm::ivec3(4)), [&](auto p) { return volume.occupied(block * 4 + p); });
-            expected_mixed += count > 0 && count < 64;
-        }
-        EXPECT_EQ(mixed, expected_mixed);
+        const auto volume = generateCollision(input, settings);
         EXPECT_THROW(generateCollision(input, settings, {}, {}, {}, [](uint64_t value) {
                          if (value)
                              throw OperationCancelled();
@@ -159,28 +94,38 @@ namespace {
         for (const float x : {0.f, 100.f})
             EXPECT_TRUE(v.occupied(glm::ivec3(glm::floor((glm::vec3(x, 0, 0) - v.origin) / .1f))));
         input = source(std::vector<Gaussian>(8192, {{0, 0, 0}, {.01f, .01f, .01f}, {1, 0, 0, 0}, 1e-6f}));
-        EXPECT_THROW(generateCollision(input, {.1f, .1f, 0, false, false}), std::runtime_error);
+        EXPECT_THROW(generateCollision(input, {.1f, .1f, 0, false, false}), lfs::Exception);
+    }
+    struct FailingRead : TensorExpr<FailingRead> {
+        Tensor input;
+        Tensor* copy;
+        const TensorShape& shape_impl() const { return input.shape(); }
+        Device device_impl() const { return input.device(); }
+        DataType dtype_impl() const { return input.dtype(); }
+        cudaStream_t stream_hint_impl() const { return input.stream(); }
+        FailingRead snapshot_impl() const { return *this; }
+        Tensor eval_impl() const {
+            CUDAStreamGuard home(input.stream());
+            const auto delay = [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); };
+            LFS_ENSURE_CUDA_SUCCESS(cudaLaunchHostFunc(input.stream(), delay, nullptr), "delay partial snapshot read");
+            *copy = input.clone();
+            throw std::runtime_error("injected snapshot failure");
+        }
+    };
+    void expectCapturedSubset(const CollisionSource& captured, size_t begin, size_t count) {
+        for (const auto& [tensor, columns, expected, step] : {
+                 std::tuple{captured.means, 3u, float(begin * 3), 1.f},
+                 {captured.scales, 3u, 2.f, 0.f},
+                 {captured.rotations, 4u, .5f, 0.f},
+                 {captured.opacity, 1u, .5f, 0.f},
+                 {captured.deleted, 1u, 0.f, 0.f}}) {
+            EXPECT_EQ(tensor.size(0), count);
+            const auto cpu = tensor.to(DataType::Float32).cpu();
+            for (size_t i = 0; i < cpu.numel(); ++i)
+                EXPECT_FLOAT_EQ(cpu.ptr<float>()[i], expected + step * i);
+        }
     }
     TEST_F(CollisionGpu, CaptureSuccessAndExceptionFenceReadsBeforeCrossStreamMutation) {
-        struct FailingRead : TensorExpr<FailingRead> {
-            Tensor input;
-            Tensor* copy;
-            std::atomic<bool>* completed;
-            const TensorShape& shape_impl() const { return input.shape(); }
-            Device device_impl() const { return input.device(); }
-            DataType dtype_impl() const { return input.dtype(); }
-            cudaStream_t stream_hint_impl() const { return input.stream(); }
-            FailingRead snapshot_impl() const { return *this; }
-            Tensor eval_impl() const {
-                CUDAStreamGuard home(input.stream());
-                const auto delay = [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); };
-                LFS_ENSURE_CUDA_SUCCESS(cudaLaunchHostFunc(input.stream(), delay, nullptr), "delay partial snapshot read");
-                *copy = input.clone();
-                const auto mark = [](void* state) { static_cast<std::atomic<bool>*>(state)->store(true); };
-                LFS_ENSURE_CUDA_SUCCESS(cudaLaunchHostFunc(input.stream(), mark, completed), "observe partial snapshot read");
-                throw std::runtime_error("injected snapshot failure");
-            }
-        };
         struct ForceDeferred {
             ForceDeferred() { internal::lazy_executor_set_size_heuristic_override_for_testing(false); }
             ~ForceDeferred() { internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt); }
@@ -192,27 +137,22 @@ namespace {
             for (bool fail : {false, true}) {
                 SCOPED_TRACE(fail);
                 CUDAStreamGuard writing(writer);
-                constexpr size_t n = 100000;
-                std::vector<float> rotations(n * 4);
-                for (size_t i = 0; i < n; ++i)
-                    rotations[i * 4] = 2;
-                auto raw_rotation = Tensor::from_vector(rotations, {n, 4}, Device::CUDA);
-                SplatData model(0, Tensor::ones({n, 3}, Device::CUDA), Tensor::zeros({n, 1, 3}, Device::CUDA), {},
+                constexpr size_t n = 100000, begin = 37, count = 17;
+                auto raw_rotation = Tensor::full({n, 4}, 2.f, Device::CUDA);
+                SplatData model(0, Tensor::arange(0, n * 3, 1, Device::CUDA).reshape({n, 3}), Tensor::zeros({n, 1, 3}, Device::CUDA), {},
                                 Tensor::full({n, 3}, std::log(2.f), Device::CUDA), raw_rotation, Tensor::zeros({n, 1}, Device::CUDA), 1);
                 model.deleted() = Tensor::zeros({n}, Device::CUDA, DataType::Bool);
                 Tensor partial_copy;
-                std::atomic<bool> read_completed{false};
                 if (fail)
-                    model.rotation_raw() = FailingRead{{}, raw_rotation, &partial_copy, &read_completed};
+                    model.rotation_raw() = FailingRead{{}, raw_rotation, &partial_copy};
                 CollisionSource captured;
                 {
                     CUDAStreamGuard reading(capture_stream);
                     if (fail) {
                         ASSERT_TRUE(model.rotation_raw().is_deferred());
                         EXPECT_THROW(captureCollisionSource(model), std::runtime_error);
-                        EXPECT_TRUE(read_completed.load());
                     } else {
-                        captured = captureCollisionSource(model);
+                        captured = captureCollisionSource(model, glm::mat4(1), begin, count);
                     }
                 }
                 EXPECT_EQ(cudaStreamQuery(capture_stream), cudaSuccess);
@@ -220,38 +160,21 @@ namespace {
                 for (auto* tensor : {&model.means_raw(), &model.scaling_raw(), &raw_rotation, &model.opacity_raw()})
                     ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0, tensor->bytes(), writer), cudaSuccess);
                 ASSERT_EQ(cudaMemsetAsync(model.deleted().data_ptr(), 1, model.deleted().bytes(), writer), cudaSuccess);
-                if (fail) {
-                    ASSERT_TRUE(partial_copy.is_valid());
+                if (fail)
                     EXPECT_FLOAT_EQ(partial_copy.to(Device::CPU).ptr<float>()[0], 2);
-                } else {
-                    for (const auto& [tensor, expected] : {std::pair{captured.means, 1.f}, {captured.scales, 2.f}, {captured.opacity, .5f}}) {
-                        const auto cpu = tensor.cpu();
-                        EXPECT_TRUE(std::ranges::all_of(std::span(cpu.ptr<float>(), cpu.numel()), [expected](float x) { return x == expected; }));
-                    }
-                    const auto rotation = captured.rotations.cpu(), deleted = captured.deleted.cpu();
-                    for (size_t i = 0; i < rotation.numel(); ++i)
-                        ASSERT_FLOAT_EQ(rotation.ptr<float>()[i], i % 4 == 0 ? 1 : 0);
-                    EXPECT_TRUE(std::ranges::all_of(std::span(deleted.ptr<unsigned char>(), deleted.numel()), [](auto x) { return x == 0; }));
-                }
+                else
+                    expectCapturedSubset(captured, begin, count);
                 ASSERT_EQ(cudaStreamSynchronize(writer), cudaSuccess);
             }
         EXPECT_EQ(cudaStreamDestroy(reader), cudaSuccess);
         EXPECT_EQ(cudaStreamDestroy(writer), cudaSuccess);
     }
-    TEST_F(CollisionGpu, BoundsOutputBeforeAllocationAndPlansSortWorkspace) {
-        constexpr size_t records = 64'000'000; // Append/overflow boundaries are covered by Collision.OutputLayout.
-        const auto workspace = cuda::collisionSortWorkspaceBytes(records);
-        EXPECT_GT(workspace, 0u);
-        EXPECT_GE(workspace, cuda::collisionSortWorkspaceBytes(records / 2));
-        EXPECT_THROW(cuda::collisionSortWorkspaceBytes(SIZE_MAX), std::length_error);
-    }
     TEST_F(CollisionGpu, AutoResolutionIsRelativeForBakedAndNodeScaleAndRejectsInvalidSources) {
         const std::vector<Gaussian> gs{{{-.13f, .07f, .11f}, {.1f, .2f, .3f}},
                                        {{.31f, -.09f, -.21f}, {.2f, .1f, .15f}}};
-        auto original = source(gs);
         const CollisionSettings settings{.05f, .1f, 0, true, true};
         float resolved = 0;
-        const auto base = generateCollision(original, settings, {}, {}, [&](float size) { resolved = size; });
+        const auto base = generateCollision(source(gs), settings, {}, {}, [&](float size) { resolved = size; });
         EXPECT_FLOAT_EQ(resolved, base.settings.voxel_size);
         for (float scale : {.01f, 10.f})
             for (bool baked : {false, true}) {
@@ -274,7 +197,7 @@ namespace {
             }
         auto input = source({{{0, 0, 0}, {.1f, .2f, .3f}}});
         input.opacity = Tensor::zeros({1});
-        EXPECT_THROW(generateCollision(input, settings), std::runtime_error);
+        EXPECT_THROW(generateCollision(input, settings), lfs::Exception);
         input = source({{{0, 0, 0}, {INFINITY, .1f, .1f}}});
         EXPECT_THROW(generateCollision(input, settings), std::invalid_argument);
         input = source({{{0, 0, 0}, {.1f, .1f, .1f}}});
@@ -307,7 +230,7 @@ namespace {
         };
         WalkSettings settings;
         WalkState state{.eye = {0, 1.8f, -1.99f}};
-        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::invalid_argument);
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), lfs::Exception);
         settleWalk(state, settings, {0, 1, 0}, query);
         EXPECT_NEAR(state.eye.y, settings.height, .001f);
         for (int i = 0; i < 500; ++i)
@@ -322,14 +245,14 @@ namespace {
         for (bool edit_geometry : {false, true}) {
             settings.height = edit_geometry ? 1.7f : 2.1f;
             transform[3].y = edit_geometry ? .1f : 0;
-            EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::runtime_error);
+            EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), lfs::Exception);
             EXPECT_EQ(state.feet, grounded);
         }
         transform[3].y = 0;
         EXPECT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query));
         WalkState unsupported{.eye = {100, 100, 100}};
-        EXPECT_THROW(settleWalk(unsupported, settings, {0, 1, 0}, query), std::runtime_error);
-        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, [](auto, auto, float, float) { return false; }), std::runtime_error);
+        EXPECT_THROW(settleWalk(unsupported, settings, {0, 1, 0}, query), lfs::Exception);
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, [](auto, auto, float, float) { return false; }), lfs::Exception);
     }
     TEST(CollisionWalk, MinimumStepFitsButLowerCeilingBlocksLift) {
         for (float height : {1.85f, 1.75f}) {

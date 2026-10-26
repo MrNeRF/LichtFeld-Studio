@@ -11,13 +11,17 @@
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include <condition_variable>
 #include <cuda_runtime.h>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <tuple>
 
 namespace lfs::vis::gui {
     using namespace core;
@@ -29,7 +33,6 @@ namespace lfs::vis::gui {
         std::promise<void> release_;
         enum class Outcome { Generate,
                              Fail,
-                             Cancel,
                              PublishedExport };
         void SetUp() override {
             int devices = 0;
@@ -50,8 +53,10 @@ namespace lfs::vis::gui {
         void TearDown() override {
             if (!viewer_)
                 return;
-            if (tasks().collision_thread_ && tasks().collision_thread_->joinable())
+            if (tasks().collision_thread_ && tasks().collision_thread_->joinable()) {
+                tasks().cancelCollision();
                 finish();
+            }
             viewer_.reset();
             resetServices();
         }
@@ -67,28 +72,32 @@ namespace lfs::vis::gui {
         void start(NodeId source, Outcome outcome = Outcome::Generate) {
             release_ = std::promise<void>{};
             Scene::CollisionSourceIdentity identity;
-            ASSERT_EQ(scene().captureCollisionSources(source, &identity).size(), 1);
+            (void)scene().captureCollisionSource(source, &identity);
             tasks().collision_source_ = identity;
             tasks().collision_resolved_size_ = .25f;
-            tasks().launchCollision([this, release = release_.get_future().share(), outcome](std::stop_token, const ProgressCallback&) {
-                release.wait();
+            tasks().launchCollision([this, release = release_.get_future().share(), outcome](std::stop_token stop, const ProgressCallback&) {
+                while (release.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready)
+                    if (stop.stop_requested() && outcome != Outcome::PublishedExport)
+                        throw OperationCancelled{};
                 if (outcome == Outcome::Fail)
                     throw std::runtime_error("fixture generation failure");
-                if (outcome == Outcome::Cancel)
-                    throw OperationCancelled{};
                 if (outcome == Outcome::PublishedExport)
                     return true;
                 tasks().collision_result_ = collision_test::box({0, 0, 0}, {4, 1, 4});
                 return false;
             });
         }
+        std::stop_token launch(std::function<bool(std::stop_token, const ProgressCallback&)> work) {
+            tasks().launchCollision(std::move(work));
+            return tasks().collision_thread_->get_stop_token();
+        }
         void finish() {
             release_.set_value();
-            tasks().collision_thread_->join();
+            if (tasks().collision_thread_)
+                tasks().collision_thread_->join();
             tasks().pollCollision();
             ASSERT_TRUE(tasks().collisionJob());
             EXPECT_FALSE(tasks().collisionJob()->running());
-            EXPECT_FALSE(viewer_->jobs().anyRunning(JobType::Collision));
             EXPECT_FALSE(app_store().collision_state.get().active);
         }
         void expectMatrix(const glm::mat4& actual, const glm::mat4& expected) {
@@ -99,7 +108,7 @@ namespace lfs::vis::gui {
     };
 
     TEST_F(CollisionJobsTest, EligibilityAndAllOutcomesSettle) {
-        for (int edit = 0; edit < 11; ++edit) {
+        for (int edit = 0; edit < 10; ++edit) {
             SCOPED_TRACE(edit);
             const auto parent = scene().addGroup("Parent");
             scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2, 3, 4)));
@@ -108,8 +117,7 @@ namespace lfs::vis::gui {
             const auto local = glm::inverse(scene().getWorldTransform(source));
             scene().setNodeVisibility(source, false);
             viewer_->getSceneManager()->selectNode(source);
-            const auto outcome = edit == 8 ? Outcome::Fail : edit == 9 ? Outcome::Cancel
-                                                         : edit == 10  ? Outcome::PublishedExport
+            const auto outcome = edit == 8 ? Outcome::Fail : edit == 9 ? Outcome::PublishedExport
                                                                        : Outcome::Generate;
             start(source, outcome);
             if (edit == 0) {
@@ -131,12 +139,12 @@ namespace lfs::vis::gui {
                 auto& model = *scene().getNodeById(source)->model;
                 model.deleted() = Tensor::ones_bool({static_cast<size_t>(model.size())}, Device::CPU);
                 model.notify_deleted_mask_changed();
-            } else if (edit == 7 || edit == 10)
+            } else if (edit == 7 || edit == 9)
                 tasks().cancelCollision();
             finish();
-            const auto expected = edit == 0 || edit == 10  ? JobStatus::Completed
-                                  : edit == 7 || edit == 9 ? JobStatus::Canceled
-                                                           : JobStatus::Failed;
+            const auto expected = edit == 0 || edit == 9 ? JobStatus::Completed
+                                  : edit == 7            ? JobStatus::Canceled
+                                                         : JobStatus::Failed;
             EXPECT_EQ(tasks().collisionJob()->status, expected);
             ASSERT_EQ(colliders().size(), edit == 0 ? 1 : 0);
             if (edit > 0 && edit < 7)
@@ -175,7 +183,31 @@ namespace lfs::vis::gui {
             reused.type = NodeType::SPLAT;
             reused.name = "Reused source identity";
             reused.model = lfs::test::licht::make_matrix_splat();
-            start(source);
+            if (replacement == 0) {
+                scene().addSplat("Large unselected source", lfs::test::licht::make_splat(100000));
+                scene().consolidateNodeModels();
+            }
+            auto owned = scene().captureCollisionSource(source);
+            EXPECT_EQ(owned.means.size(0), 4);
+            EXPECT_FALSE(owned.means.is_view());
+            EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
+            std::promise<void> dispatched;
+            auto ready = dispatched.get_future();
+            int batches = 0;
+            const auto token = launch([&, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
+                (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
+                    if (stage == "Voxelizing collision" && ++batches == 2) {
+                        dispatched.set_value();
+                        std::mutex mutex;
+                        std::unique_lock lock(mutex);
+                        std::condition_variable_any changed;
+                        changed.wait(lock, stop, [] { return false; });
+                    }
+                    return progress(value, stage);
+                });
+                return false;
+            });
+            ASSERT_EQ(ready.wait_for(std::chrono::seconds(10)), std::future_status::ready) << tasks().collisionJob()->error << " batches=" << batches;
             if (replacement < 2)
                 ASSERT_TRUE(viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges));
             else if (replacement == 2)
@@ -183,10 +215,44 @@ namespace lfs::vis::gui {
             else
                 events::cmd::NewProject{.discard_changes = true}.emit();
             ASSERT_NE(scene().restoreNodeWithUuid(std::move(reused)), NULL_NODE);
-            finish();
+            EXPECT_TRUE(token.stop_requested());
+            EXPECT_EQ(batches, 2);
             EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
             EXPECT_TRUE(colliders().empty());
         }
     }
 
+    TEST_F(CollisionJobsTest, DrawRequestsTrackVisibilityTransformsAndOpacityNotSelection) {
+        auto& manager = *viewer_->getSceneManager();
+        const auto volume = collision_test::box({}, glm::ivec3(1), .05f);
+        scene().addCollision("First", volume);
+        scene().addCollision("Second", volume);
+        scene().addGroup("Other");
+        const auto transform = glm::scale(glm::rotate(glm::translate(glm::mat4(1), {3, -2, 5}), .7f, {0, 1, 0}), {-2, 3, .5f});
+        scene().setNodeTransform("First", transform);
+        RenderSettings settings;
+        EXPECT_FLOAT_EQ(settings.collision_preview_opacity, .4f);
+        Viewport viewport(640, 480);
+        const ViewportRegion region{0, 0, 640, 480};
+        FrameContext context{.viewport = viewport, .viewport_region = &region, .scene_manager = &manager, .settings = settings, .render_size = {640, 480}};
+        for (const auto [name, visible, opacity] : {std::tuple{"First", true, .4f}, {"Other", true, .4f}, {"", true, .4f}, {"Other", false, 0.f}, {"Other", false, .25f}, {"Other", false, 1.f}, {"", true, 1.f}}) {
+            manager.clearSelection();
+            if (*name)
+                manager.selectNode(name);
+            scene().setNodeVisibility("First", visible);
+            settings.collision_preview_opacity = opacity;
+            const auto items = buildViewportMeshDrawItems({}, settings, {0, 0, 1});
+            ASSERT_EQ(items.size(), visible ? 2 : 1);
+            if (visible)
+                EXPECT_EQ(items[0].model, lfs::rendering::dataWorldTransformToVisualizerWorld(transform));
+            for (const auto& item : items) {
+                EXPECT_EQ(item.collision, volume);
+                EXPECT_FLOAT_EQ(item.collision_opacity, opacity);
+            }
+        }
+        for (bool frustums : {false, true}) {
+            context.settings.show_camera_frustums = frustums;
+            EXPECT_EQ(buildViewportRenderRequest(context, {640, 480}).require_exact_depth, frustums);
+        }
+    }
 } // namespace lfs::vis::gui

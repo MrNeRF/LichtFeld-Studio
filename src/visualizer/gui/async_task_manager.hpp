@@ -60,7 +60,7 @@ namespace lfs::vis {
             void setupEvents();
             void startCollision(core::CollisionSettings settings);
             void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
-            void cancelCollision();
+            void cancelCollision(bool wait = false);
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
             [[nodiscard]] float collisionResolvedSize() const;
             [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }

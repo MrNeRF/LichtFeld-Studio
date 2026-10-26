@@ -7,6 +7,7 @@
 #include "core/native_fs.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
+#include "collision_serialization.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/resource_messages.hpp"
@@ -967,7 +968,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
         decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) {
             try {
-                auto volume = lfs::core::decodeCollision(bytes);
+                auto volume = decodeCollision(bytes);
                 collisions.emplace(uuid, volume);
                 deferred_geometry_keys.erase({FOURCC_COLV, uuid});
                 return volume;
@@ -2101,7 +2102,6 @@ namespace lfs::io::project {
         bool have_editor = false;
         bool have_sequencer = false;
         bool have_metrics = false;
-        auto collision_budget = options.collision_byte_budget;
         double chapter_read_ms = 0.0;
         const auto chapter_scan_started =
             std::chrono::steady_clock::now();
@@ -2209,13 +2209,6 @@ namespace lfs::io::project {
                 row.key.fourcc == FOURCC_SPLT &&
                 (row.stored_bytes > materialized_max ||
                  row.uncompressed_bytes > materialized_max);
-            if (row.key.fourcc == FOURCC_COLV) {
-                if (row.uncompressed_bytes > collision_budget)
-                    return fail<ProjectDocument>(
-                        lfs::ErrorCode::ResourceExhausted, "Collision payloads exceed the project memory budget.",
-                        "COLV declared bytes exceed the remaining collision allocation budget", "COLV.bytes");
-                collision_budget -= static_cast<std::size_t>(row.uncompressed_bytes);
-            }
             if ((options.defer_geometry_payloads && geometry_payload) || oversized_splat) {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
@@ -4427,7 +4420,7 @@ namespace lfs::io::project {
             const ChunkKey key{.fourcc = FOURCC_COLV, .instance_uuid = uuid};
             if (!impl_->dirty_or_new(key))
                 continue;
-            auto bytes = lfs::core::encodeCollision(*volume);
+            auto bytes = encodeCollision(*volume);
             const auto size = bytes.size();
             add_encoded(key, std::move(bytes), tensor_options(size));
         }

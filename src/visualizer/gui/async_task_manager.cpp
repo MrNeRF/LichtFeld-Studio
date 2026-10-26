@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "core/collision_error.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -1547,7 +1548,7 @@ namespace lfs::vis::gui {
                 return;
             ++splat_simplify_scene_epoch_;
             ++gallery_scene_epoch_;
-            cancelCollision();
+            cancelCollision(true);
             if (auto* loader = viewer_->getDataLoader())
                 loader->cancelPendingImports();
             // Dataset application also clears the scene. Cancel splat staging,
@@ -3743,12 +3744,17 @@ namespace lfs::vis::gui {
         LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
     }
 
-    void AsyncTaskManager::cancelCollision() {
+    void AsyncTaskManager::cancelCollision(bool wait) {
         if (const auto state = collisionJob(); state && state->running()) {
             jobs_.requestCancel(collision_job_);
             if (collision_thread_)
                 collision_thread_->request_stop();
             publishCollisionState();
+        }
+        // Workers never await the viewer; drain owned GPU reads before an arena reset.
+        if (wait && collision_thread_) {
+            collision_thread_->join();
+            pollCollision();
         }
     }
 
@@ -3789,15 +3795,15 @@ namespace lfs::vis::gui {
             throw std::runtime_error("No scene manager");
         const auto selected = manager->getSelectedNodeIds();
         if (selected.size() != 1)
-            throw std::runtime_error("Select exactly one splat node to voxelize");
+            throw core::collisionError("collision.source_unavailable", "Select exactly one splat node to voxelize");
         core::Scene::CollisionSourceIdentity identity;
-        auto sources = manager->getScene().captureCollisionSources(selected.front(), &identity);
+        auto source = manager->getScene().captureCollisionSource(selected.front(), &identity);
         collision_source_ = identity;
         collision_settings_ = settings;
         collision_resolved_size_ = 0;
-        launchCollision([this, settings, sources = std::move(sources)](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([this, settings, source = std::move(source)](std::stop_token stop, const core::ProgressCallback& progress) {
             collision_result_ = std::make_shared<const core::CollisionVolume>(core::generateCollision(
-                sources.front(), settings, stop, progress, [this](float size) {
+                source, settings, stop, progress, [this](float size) {
                     collision_resolved_size_ = size;
                     publishCollisionState(true);
                     publish_viewport_toolbar_generation();
@@ -3846,7 +3852,7 @@ namespace lfs::vis::gui {
                 } catch (const core::OperationCancelled&) {
                     canceled = true;
                 } catch (const std::exception& e) {
-                    error = e.what();
+                    error = core::localizedCollisionError(e);
                     LOG_ERROR("Collision operation failed: {}", error);
                 }
                 jobs_.finishWork(job, !published && error.empty() && (canceled || stop.stop_requested() || jobs_.cancelRequested(job)),
@@ -3857,7 +3863,7 @@ namespace lfs::vis::gui {
             });
         } catch (const std::exception& e) {
             LOG_ERROR("Cannot launch collision worker: {}", e.what());
-            jobs_.failed(job, e.what());
+            jobs_.failed(job, core::localizedCollisionError(e));
             publishCollisionState(true);
             throw;
         }
@@ -3883,7 +3889,7 @@ namespace lfs::vis::gui {
                 if (result) {
                     auto* scene_manager = viewer_->getSceneManager();
                     if (!scene_manager || !collision_source_)
-                        throw std::runtime_error(LOC("collision.source_unavailable"));
+                        throw core::collisionError("collision.source_unavailable", "Collision source is no longer available");
                     auto& manager = *scene_manager;
                     auto& scene = manager.getScene();
                     std::optional<std::shared_lock<std::shared_mutex>> lock;
@@ -3892,7 +3898,7 @@ namespace lfs::vis::gui {
                     scene.noteLiveModelLockAcquired();
                     const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
                     if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
-                        throw std::runtime_error(LOC("collision.source_changed"));
+                        throw core::collisionError("collision.source_changed", "Collision source changed during generation; generate it again");
                     const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
                     auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
                     const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
@@ -3914,7 +3920,7 @@ namespace lfs::vis::gui {
                 jobs_.completed(collision_job_);
             } catch (const std::exception& e) {
                 LOG_ERROR("Collision completion failed: {}", e.what());
-                jobs_.failed(collision_job_, e.what());
+                jobs_.failed(collision_job_, core::localizedCollisionError(e));
             }
         }
         publishCollisionState(true);

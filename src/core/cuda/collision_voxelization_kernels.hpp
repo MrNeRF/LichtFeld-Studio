@@ -28,7 +28,7 @@ namespace lfs::core::cuda {
     };
     void launch_split_regions(dim3 blocks, dim3 threads, cudaStream_t stream, const Region* input, uint32_t offset, uint32_t count, int size, Grid grid, const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes, Region* output, uint32_t* output_count, CollisionBrick* solids, uint32_t* solid_count);
     void launch_evaluate_bricks(dim3 blocks, dim3 threads, cudaStream_t stream, const Region* regions, uint32_t offset, Grid grid, const CollisionGaussianGpu* gs, const CollisionBvhNode* nodes, CollisionBrick* output, uint32_t* count);
-    void launch_prepare(dim3 blocks, dim3 threads, cudaStream_t stream, const float* means, const float* scales, const float* rotations, const float* opacity, const bool* deleted, size_t count, size_t offset, glm::mat4 transform, CollisionGaussianGpu* output, float* metrics, uint32_t* errors);
+    void launch_prepare(dim3 blocks, dim3 threads, cudaStream_t stream, const float* means, const float* scales, const float* rotations, const float* opacity, const bool* deleted, size_t count, glm::mat4 transform, CollisionGaussianGpu* output, float* metrics, uint32_t* errors);
     void launch_filter(dim3 blocks, dim3 threads, cudaStream_t stream, CollisionGaussianGpu* gs, float* metrics, float* bounds, uint32_t n, float area_limit, float thickness, float volume, float thin_guard);
     void launch_keys(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* gs, uint64_t* morton, uint32_t* order, uint32_t n, glm::vec3 low, glm::vec3 multiplier);
     void launch_gather(dim3 blocks, dim3 threads, cudaStream_t stream, const CollisionGaussianGpu* source, CollisionGaussianGpu* dest, const uint32_t* order, uint32_t n);

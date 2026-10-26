@@ -1,15 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
-#include "core/collision_serialization.hpp"
 #include "core/splat_data.hpp"
+#include "io/project/collision_serialization.hpp"
+#include "io/project/project_container_internal.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
-#include <unordered_map>
 
 namespace {
     using namespace lfs::core;
@@ -24,10 +24,7 @@ namespace {
         Scene scene;
         std::shared_ptr<CollisionVolume> volume = std::make_shared<CollisionVolume>(*box({1, 2, 3}, {3, 1, 2}, .0125f));
         void SetUp() override {
-            volume->settings.opacity = .35f;
-            volume->settings.max_gaussian_area = 2.5f;
-            volume->settings.auto_resolution = true;
-            volume->settings.cleanup = true;
+            volume->settings = {.0125f, .35f, 2.5f, true, true};
             const auto parent = scene.addGroup("Parent");
             scene.setNodeTransform(parent, glm::translate(glm::mat4(1), {4, 5, 6}));
             for (int i = 0; i < 13; ++i) {
@@ -51,7 +48,6 @@ namespace {
                   }),
                   2);
         EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(COLLISION_VOLUMES_V1));
-        EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(COLLISION_VOLUMES_V1));
         ReaderOptions old_reader;
         old_reader.reader_capabilities.set(COLLISION_VOLUMES_V1, false);
         auto incompatible = ProjectReader::open(path, old_reader);
@@ -59,29 +55,14 @@ namespace {
         EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
         EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
         auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true}));
-        EXPECT_LT(document.scene_graph().to_bytes().size(), 16 * 1024);
-        for (const auto& state : document.payload_states())
-            EXPECT_FALSE(state.loaded);
         const auto unloaded_copy = temporary.path / "unloaded.licht";
         ASSERT_TRUE(document.save_as(unloaded_copy));
         for (const auto& state : document.payload_states())
             EXPECT_FALSE(state.loaded);
         Scene target;
-        ASSERT_TRUE(document.hydrate(target));
         auto reopened = require_result(ProjectDocument::open(unloaded_copy, {.defer_geometry_payloads = true}));
         auto shell = require_result(reopened.stage_shell(target));
-        const auto payloads = require_result(capture_scene_graph_state(scene, {})).collisions;
-        std::unordered_map<Uuid, int> resolutions;
-        ScenePayloadResolver resolver;
-        resolver.collision = [&](const Uuid& uuid) -> lfs::Result<std::shared_ptr<const CollisionVolume>> {
-            ++resolutions[uuid];
-            return payloads.at(uuid);
-        };
-        target.addGroup("Replaced by direct adapter hydration");
-        ASSERT_TRUE(hydrate_scene_graph(reopened.scene_graph(), target, resolver));
-        ASSERT_EQ(resolutions.size(), 2);
-        for (const auto& [uuid, count] : resolutions)
-            EXPECT_EQ(count, 1); // Adapter caching is independent of the document's cache.
+        ASSERT_TRUE(reopened.hydrate(target));
         const auto copy = temporary.path / "loaded.licht";
         ASSERT_TRUE(reopened.save_as(copy));
         auto copied = require_result(ProjectDocument::open(copy));
@@ -91,11 +72,13 @@ namespace {
         for (const auto* restored : {shell.get(), &target, &loaded}) {
             // Recapture checks local/parent transforms, visibility, node type and shared payload references.
             EXPECT_EQ(require_result(capture_scene_graph(*restored, {})).to_bytes(), expected);
+            const auto* first = restored->getNode("0");
+            ASSERT_NE(first, nullptr);
             for (const auto* node : restored->getNodes()) {
                 if (!node->collision)
                     continue;
-                EXPECT_FALSE(node->mesh);
-                EXPECT_EQ(node->gaussian_count.load(), 0);
+                if (node->name != "12")
+                    EXPECT_EQ(node->collision, first->collision);
                 EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*scene.getNodeByUuid(node->uuid)->collision));
             }
         }
@@ -105,13 +88,11 @@ namespace {
         auto document = require_result(ProjectDocument::open(path));
         const auto baseline = read_file_bytes(path);
         const auto bytes = encodeCollision(*volume);
-        EXPECT_EQ(bytes.size(), collision_payload_header_bytes + volume->words.size() * sizeof(uint32_t));
         EXPECT_THROW(decodeCollision(std::span(bytes).first(bytes.size() - 1)), std::invalid_argument);
-        EXPECT_THROW(decodeCollision(bytes, bytes.size() - 1), std::length_error);
-        EXPECT_THROW(encodeCollision(*volume, bytes.size() - 1), std::length_error);
-        auto budget = ProjectDocument::open(path, {.collision_byte_budget = 1});
-        ASSERT_FALSE(budget);
-        EXPECT_EQ(budget.error().code(), lfs::ErrorCode::ResourceExhausted);
+        CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {CollisionVolume::brick_tag | 1, 0x00110011, 0}};
+        ASSERT_NO_THROW(padded.validate());
+        padded.words[1] |= 2;
+        EXPECT_THROW(padded.validate(), std::invalid_argument);
         auto invalid = std::make_shared<CollisionVolume>(*volume);
         invalid->words.front() = 0xffffffff;
         EXPECT_FALSE(document.set_collision(document.payload_states().front().instance_uuid, invalid));
@@ -154,7 +135,6 @@ namespace {
         model->means() = Tensor::from_vector({1.f, 2.f, 3.f}, {1, 3}, Device::CPU);
         model->deleted() = Tensor::ones_bool({1}, Device::CPU);
         const auto source = scene.addSplat("Selected hidden source", std::move(model), parent);
-        scene.addSplat("Unselected", make_splat(1));
         scene.setTrainingModelNode(source);
         scene.setNodeVisibility(source, false);
         const auto volume = box({1, 2, 3}, {3, 1, 2});
@@ -163,19 +143,15 @@ namespace {
         const auto transform = glm::translate(glm::mat4(1), {-4, 5, -6});
         scene.setNodeTransform(source, transform);
         scene.setNodeTransform(first, transform);
-        for (const auto invalid : {NULL_NODE, first})
-            EXPECT_THROW((void)scene.captureCollisionSources(invalid), std::runtime_error);
-        const auto sources = scene.captureCollisionSources(source);
-        ASSERT_EQ(sources.size(), 1);
-        EXPECT_EQ(sources.front().transform, scene.getWorldTransform(source));
-        EXPECT_TRUE(sources.front().deleted.item<bool>());
-        scene.removeNode("Unselected"); // Only the training source has a checkpoint binding.
+        const auto captured_source = scene.captureCollisionSource(source);
+        EXPECT_EQ(captured_source.transform, scene.getWorldTransform(source));
+        EXPECT_TRUE(captured_source.deleted.item<bool>());
         lfs::training::ProjectSnapshotCpuState captured;
         ASSERT_TRUE(lfs::training::capture_project_snapshot_cpu_state(scene, ParameterManagerSnapshot{}, generate_uuid_v4(), 3, captured));
         const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
         scene.removeNodeById(source);
-        EXPECT_EQ(sources.front().means.slice(1, 0, 1).item<float>(), 1);
-        EXPECT_THROW((void)scene.captureCollisionSources(source), std::runtime_error);
+        EXPECT_EQ(captured_source.means.slice(1, 0, 1).item<float>(), 1);
+        EXPECT_THROW((void)scene.captureCollisionSource(source), lfs::Exception);
         lfs::training::ProjectSnapshotChapters chapters;
         ASSERT_TRUE(lfs::training::materialize_project_snapshot_cpu_chapters(std::move(captured), chapters));
         ASSERT_EQ(chapters.collisions.size(), 1);

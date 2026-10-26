@@ -2816,6 +2816,8 @@ namespace lfs::vis::project {
                 "Save the current project or retry with explicit discard authorization",
                 kProjectSwitchDirtyField);
         }
+        if (auto* gui = viewer_.getGuiManager())
+            gui->asyncTasks().cancelCollision(true);
         return {};
     }
 

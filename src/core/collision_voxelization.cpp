@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "cuda/collision_voxelization.hpp"
+#include "core/checked_arithmetic.hpp"
+#include "core/collision_error.hpp"
 #include "core/cuda/morton.cuh"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
@@ -26,6 +28,13 @@ namespace lfs::core::cuda {
             }
         };
     } // namespace
+    size_t collisionOutputBytes(size_t count, size_t additional) {
+        if (count > max_collision_records || additional > max_collision_records - count)
+            throw collisionError("collision.output_limit",
+                                 std::format("Collision output record limit exceeded: {} + {} records, limit {}. Choose a larger cell size or Automatic resolution; no output was coarsened or cropped", count, additional, max_collision_records),
+                                 ErrorCode::ResourceExhausted, std::format("{} + {} > {}", count, additional, max_collision_records));
+        return (count + additional) * sizeof(CollisionBrick);
+    }
     CollisionBricks voxelizeCollision(const CollisionSource& s, CollisionSettings settings, std::stop_token stop, ProgressCallback progress, const std::function<void(float)>& resolution, const std::function<void(uint64_t)>& mixed_blocks) {
         reportProgress(stop, progress, 0, "Preparing collision geometry");
         if (!s.means.is_valid() || s.means.ndim() != 2 || s.means.shape()[1] != 3)
@@ -37,7 +46,7 @@ namespace lfs::core::cuda {
         if (!MemoryPressureCoordinator::instance().preflight({.operation = "Collision geometry",
                                                               .temporary_device_bytes = checked_product(total, 2 * sizeof(CollisionGaussianGpu) + 72, "Collision geometry")})
                  .ok)
-            throw std::runtime_error("Insufficient GPU memory for collision geometry; free memory and retry");
+            throw collisionError("collision.memory", "Insufficient GPU memory for collision geometry; free memory and retry", ErrorCode::ResourceExhausted);
         const auto blocks = [](size_t n) { return unsigned((n + 255) / 256); };
         Buffer<CollisionGaussianGpu> gs;
         gs.reserve(total);
@@ -58,10 +67,10 @@ namespace lfs::core::cuda {
         for (int c = 0; c < 4; ++c)
             for (int r = 0; r < 4; ++r)
                 if (!std::isfinite(s.transform[c][r]))
-                    throw std::invalid_argument("Non-finite collision source transform");
+                    throw collisionError("collision.source_transform_invalid", "Non-finite collision source transform", ErrorCode::InvalidArgument);
         if (s.transform[0][3] != 0 || s.transform[1][3] != 0 || s.transform[2][3] != 0 || s.transform[3][3] != 1 ||
             glm::determinant(glm::dmat3(s.transform)) == 0)
-            throw std::invalid_argument("Collision source transform must be invertible and affine");
+            throw collisionError("collision.source_transform_invalid", "Collision source transform must be invertible and affine", ErrorCode::InvalidArgument);
         {
             auto means = s.means.to(Device::CUDA, stream).contiguous(), scales = s.scales.to(Device::CUDA, stream).contiguous();
             auto rotation = s.rotations.to(Device::CUDA, stream).contiguous(), opacity = s.opacity.to(Device::CUDA, stream).contiguous();
@@ -69,7 +78,7 @@ namespace lfs::core::cuda {
             prepare_inputs_for_stream({&means, &scales, &rotation, &opacity}, stream);
             if (deleted.is_valid())
                 prepare_inputs_for_stream({&deleted}, stream);
-            launch_prepare(blocks(total), 256, stream, means.ptr<float>(), scales.ptr<float>(), rotation.ptr<float>(), opacity.ptr<float>(), deleted.is_valid() ? deleted.ptr<bool>() : nullptr, total, 0, s.transform, gs.data, metrics.ptr<float>(), errors.ptr<uint32_t>());
+            launch_prepare(blocks(total), 256, stream, means.ptr<float>(), scales.ptr<float>(), rotation.ptr<float>(), opacity.ptr<float>(), deleted.is_valid() ? deleted.ptr<bool>() : nullptr, total, s.transform, gs.data, metrics.ptr<float>(), errors.ptr<uint32_t>());
         }
         if (errors.to(Device::CPU).ptr<uint32_t>()[0])
             throw std::invalid_argument("Non-finite Gaussian geometry");
@@ -95,7 +104,7 @@ namespace lfs::core::cuda {
         auto area = metrics.slice(1, 0, 1).contiguous().reshape({int(total)});
         auto retained = area.masked_select(area.isfinite());
         if (!retained.numel())
-            throw std::runtime_error("Source cleanup excluded all splats; disable cleanup or increase maximum area");
+            throw collisionError("collision.cleanup_empty", "Source cleanup excluded all splats; disable cleanup or increase maximum area");
         if (retained.numel() * 10 < total)
             LOG_WARN("Collision source filtering retained {} of {} Gaussians; reduce filtering if coverage is incomplete", retained.numel(), total);
         if (settings.auto_resolution) {
@@ -112,25 +121,23 @@ namespace lfs::core::cuda {
             return glm::vec3(reduced.ptr<float>()[0], reduced.ptr<float>()[1], reduced.ptr<float>()[2]);
         };
         auto low = bound(false), high = bound(true);
-        Buffer<uint64_t> key_in, key_out;
-        Buffer<uint32_t> order_in, order_out;
-        key_in.reserve(total);
-        key_out.reserve(total);
-        order_in.reserve(total);
-        order_out.reserve(total);
-        launch_keys(blocks(total), 256, stream, gs.data, key_in.data, order_in.data, total, low,
-                    {morton_multiplier(high.x - low.x), morton_multiplier(high.y - low.y), morton_multiplier(high.z - low.z)});
+        {
+            Buffer<uint64_t> key_in, key_out;
+            Buffer<uint32_t> order_in, order_out;
+            key_in.reserve(total);
+            key_out.reserve(total);
+            order_in.reserve(total);
+            order_out.reserve(total);
+            launch_keys(blocks(total), 256, stream, gs.data, key_in.data, order_in.data, total, low,
+                        {morton_multiplier(high.x - low.x), morton_multiplier(high.y - low.y), morton_multiplier(high.z - low.z)});
 
-        sortCollisionSources(key_in.data, key_out.data, order_in.data, order_out.data, total, stream);
-        Buffer<CollisionGaussianGpu> sorted;
-        sorted.reserve(total);
-        launch_gather(blocks(total), 256, stream, gs.data, sorted.data, order_out.data, total);
+            sortCollisionSources(key_in.data, key_out.data, order_in.data, order_out.data, total, stream);
+            Buffer<CollisionGaussianGpu> sorted;
+            sorted.reserve(total);
+            launch_gather(blocks(total), 256, stream, gs.data, sorted.data, order_out.data, total);
 
-        gs = std::move(sorted);
-        key_in = {};
-        key_out = {};
-        order_in = {};
-        order_out = {};
+            gs = std::move(sorted);
+        }
         metrics = {};
         area = {};
         retained = {};
@@ -155,14 +162,14 @@ namespace lfs::core::cuda {
         low = bound(false);
         high = bound(true);
         if (!std::isfinite(low.x + low.y + low.z + high.x + high.y + high.z))
-            throw std::runtime_error("No occupied support; lower opacity or check the source");
+            throw collisionError("collision.empty", "No occupied support; lower opacity or check the source");
         CollisionBricks result;
         auto& v = result.volume;
         v.settings = settings;
         v.origin = glm::floor((low - settings.voxel_size * .5f) / settings.voxel_size) * settings.voxel_size - 2 * settings.voxel_size;
         const auto dimensions = glm::ceil((glm::dvec3(high) + settings.voxel_size * .5 - glm::dvec3(v.origin)) / double(settings.voxel_size)) + 3.;
         if (glm::any(glm::lessThan(dimensions, glm::dvec3(1))) || glm::any(glm::greaterThan(dimensions, glm::dvec3(1 << 21))) || !std::isfinite(dimensions.x + dimensions.y + dimensions.z))
-            throw std::runtime_error("Collision bounds exceed coordinate limits; increase cell size or remove remote outliers");
+            throw collisionError("collision.output_limit", "Collision bounds exceed coordinate limits; increase cell size or remove remote outliers", ErrorCode::BoundsViolation, std::format("{} x {} x {} cells", dimensions.x, dimensions.y, dimensions.z));
         v.dimensions = glm::ivec3(dimensions);
         LOG_INFO("Collision grid {} x {} x {} at {} scene units; output limit {} sparse records", v.dimensions.x, v.dimensions.y, v.dimensions.z, settings.voxel_size, max_collision_records);
         v.edge = std::max(4u, std::bit_ceil(unsigned(std::max({v.dimensions.x, v.dimensions.y, v.dimensions.z}))));
@@ -200,7 +207,8 @@ namespace lfs::core::cuda {
         auto preflight = [&](const char* phase, size_t additional, size_t records, size_t peak_bytes) {
             const auto memory = MemoryPressureCoordinator::instance().preflight({.operation = phase, .temporary_device_bytes = additional});
             if (!memory.ok)
-                throw std::runtime_error(std::format("{} needs {} additional bytes ({} available including reusable pools); {} records at cell size {}, output peak {} bytes. Free GPU memory or explicitly choose a larger cell size", phase, additional, memory.effective_free_bytes, records, settings.voxel_size, peak_bytes));
+                throw collisionError("collision.memory", std::format("{} needs {} additional bytes ({} available including reusable pools); {} records at cell size {}, output peak {} bytes. Free GPU memory or explicitly choose a larger cell size", phase, additional, memory.effective_free_bytes, records, settings.voxel_size, peak_bytes),
+                                     ErrorCode::ResourceExhausted, std::format("{} B / {} B", additional, memory.effective_free_bytes));
         };
         auto append = [&](uint32_t n) {
             if (n > output.capacity)
@@ -214,7 +222,8 @@ namespace lfs::core::cuda {
             try {
                 chunks.back().reserve(n);
             } catch (const MemoryAllocationError& error) {
-                throw std::runtime_error(std::format("Collision output growth failed at {} records ({} bytes, limit {}): {}. Free GPU memory or choose a larger cell size", bytes / sizeof(CollisionBrick), bytes, max_collision_records, error.what()));
+                throw collisionError("collision.memory", std::format("Collision output growth failed at {} records ({} bytes, limit {}): {}. Free GPU memory or choose a larger cell size", bytes / sizeof(CollisionBrick), bytes, max_collision_records, error.what()),
+                                     ErrorCode::ResourceExhausted, std::format("{} B", bytes));
             }
             LFS_CUDA_CHECK(cudaMemcpyAsync(chunks.back().data, output.data, size_t(n) * sizeof(CollisionBrick), cudaMemcpyDeviceToDevice, stream));
             result_size = bytes / sizeof(CollisionBrick);
@@ -292,7 +301,8 @@ namespace lfs::core::cuda {
             if (result_size)
                 sortCollisionBricks(compact.data, result_size, stream);
         } catch (const MemoryAllocationError& error) {
-            throw std::runtime_error(std::format("Collision output allocation failed for {} records at cell size {} (compact {} bytes, sort workspace {} bytes). Free GPU memory or explicitly choose a larger cell size: {}", result_size, settings.voxel_size, compact_bytes, sort_bytes, error.what()));
+            throw collisionError("collision.memory", std::format("Collision output allocation failed for {} records at cell size {} (compact {} bytes, sort workspace {} bytes). Free GPU memory or explicitly choose a larger cell size: {}", result_size, settings.voxel_size, compact_bytes, sort_bytes, error.what()),
+                                 ErrorCode::ResourceExhausted, std::format("{} B + {} B", compact_bytes, sort_bytes));
         }
         result.bricks.resize(result_size);
         if (result_size)

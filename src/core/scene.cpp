@@ -5,6 +5,7 @@
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/collision.hpp"
+#include "core/collision_error.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error_bus.hpp"
@@ -4301,7 +4302,7 @@ namespace lfs::core {
             model->deleted_mask_version(), model->param_layout_generation(), getWorldTransform(id)};
     }
 
-    std::vector<CollisionSource> Scene::captureCollisionSources(NodeId id, CollisionSourceIdentity* identity) const {
+    CollisionSource Scene::captureCollisionSource(NodeId id, CollisionSourceIdentity* identity) const {
         std::optional<std::shared_lock<std::shared_mutex>> lock;
         if (auto* mutex = liveModelMutex(); mutex && live_model_lock_depth() == 0)
             lock.emplace(*mutex);
@@ -4312,37 +4313,34 @@ namespace lfs::core {
         } depth_guard{*this};
         const auto* node = getNodeById(id);
         if (!node || node->type != NodeType::SPLAT)
-            throw std::runtime_error("Select one loaded splat node to voxelize");
+            throw collisionError("collision.source_unavailable", "Select one loaded splat node to voxelize");
         const auto* model = consolidated_ ? getCombinedModel() : node->model.get();
         if (!model)
-            throw std::runtime_error("The selected splat payload is not loaded");
+            throw collisionError("collision.source_unavailable", "The selected splat payload is not loaded");
         const auto captured_identity = collisionSourceIdentity(id);
         if (!captured_identity)
-            throw std::runtime_error("The selected splat payload is not loaded");
+            throw collisionError("collision.source_unavailable", "The selected splat payload is not loaded");
         const auto inverse = glm::inverse(captured_identity->world_transform);
         for (int column = 0; column < 4; ++column)
             for (int row = 0; row < 4; ++row)
                 if (!std::isfinite(inverse[column][row]))
-                    throw std::runtime_error("Collision source transform must be invertible");
-        // Capture fences successful and exceptional reads before this writer lock is released.
-        auto source = captureCollisionSource(*model, getWorldTransform(id));
+                    throw collisionError("collision.source_transform_invalid", "Collision source transform must be invertible");
+        size_t begin = 0, count = model->size();
         if (consolidated_) {
-            size_t begin = 0;
             const auto slot = std::find_if(consolidated_node_slots_.begin(), consolidated_node_slots_.end(), [&](const auto& entry) {
                 if (entry.id == id)
                     return true;
                 begin += entry.gaussian_count;
                 return false;
             });
-            if (slot == consolidated_node_slots_.end() || begin + slot->gaussian_count > source.means.shape()[0])
-                throw std::runtime_error("The selected consolidated splat range is unavailable");
-            for (auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
-                if (tensor->is_valid())
-                    *tensor = tensor->slice(0, begin, begin + slot->gaussian_count);
+            if (slot == consolidated_node_slots_.end() || begin > model->size() || slot->gaussian_count > model->size() - begin)
+                throw collisionError("collision.source_unavailable", "The selected consolidated splat range is unavailable");
+            count = slot->gaussian_count;
         }
         if (identity)
             *identity = *captured_identity;
-        return {std::move(source)};
+        // Slice before cloning/activation; fence all reads before releasing writer exclusion.
+        return core::captureCollisionSource(*model, captured_identity->world_transform, begin, count);
     }
 
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {

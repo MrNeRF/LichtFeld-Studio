@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "io/collision_export.hpp"
+#include "core/collision_error.hpp"
 #include "core/logger.hpp"
 #include "io/atomic_output.hpp"
 #include "io/loader.hpp"
@@ -77,6 +78,13 @@ namespace lfs::io {
                                                      std::strerror(errno ? errno : EIO)));
         }
     } // namespace
+    void checkCollisionExportMixedBlocks(uint64_t mixed) {
+        constexpr uint64_t limit = uint64_t(1) << 24;
+        if (mixed > limit || (mixed && mixed + (mixed + 5) / 7 > limit))
+            throw core::collisionError("collision.output_limit",
+                                       "SuperSplat v1.1 cannot represent these mixed blocks in its 24-bit node index range. Increase the export cell size; native generation uses its separate record limit",
+                                       lfs::ErrorCode::ResourceExhausted, std::format("{} / {}", mixed, limit));
+    }
     core::CollisionSource loadCollisionSource(const std::filesystem::path& path, std::stop_token stop,
                                               ExportProgressCallback progress) {
         if (path.filename() != "meta.json" && Loader::isDatasetPath(path))
@@ -107,7 +115,7 @@ namespace lfs::io {
         for (int c = 0; c < 4; ++c)
             for (int r = 0; r < 4; ++r)
                 if (!std::isfinite(transform[c][r]))
-                    throw std::invalid_argument("Collision transform must be finite");
+                    throw core::collisionError("collision.export_transform", "Collision transform must be finite", lfs::ErrorCode::InvalidArgument);
         const float scale = glm::length(glm::vec3(transform[0]));
         std::array<int, 3> axis{}, sign{};
         unsigned used = 0;
@@ -118,16 +126,16 @@ namespace lfs::io {
                     d = k;
             if (!(scale > 0) || !std::isfinite(scale) || (used & (1u << d)) ||
                 std::abs(std::abs(transform[s][d]) - scale) > scale * 1e-5f)
-                throw std::invalid_argument("Voxel export requires uniform scale and signed axis alignment; align the source and regenerate collision");
+                throw core::collisionError("collision.export_transform", "Voxel export requires uniform scale and signed axis alignment; align the source and regenerate collision", lfs::ErrorCode::Unsupported);
             for (int k = 0; k < 3; ++k)
                 if (k != d && std::abs(transform[s][k]) > scale * 1e-5f)
-                    throw std::invalid_argument("Voxel export cannot represent rotation or shear; align the source and regenerate collision");
+                    throw core::collisionError("collision.export_transform", "Voxel export cannot represent rotation or shear; align the source and regenerate collision", lfs::ErrorCode::Unsupported);
             axis[s] = d;
             sign[s] = transform[s][d] > 0 ? 1 : -1;
             used |= 1u << d;
         }
         if (transform[0][3] != 0 || transform[1][3] != 0 || transform[2][3] != 0 || transform[3][3] != 1)
-            throw std::invalid_argument("Voxel export requires an affine grid transform");
+            throw core::collisionError("collision.export_transform", "Voxel export requires an affine grid transform", lfs::ErrorCode::Unsupported);
         const auto padded = ((v.dimensions + 3) / 4) * 4;
         I3 dims{0}, logical_dims{0};
         glm::vec3 lo(transform * glm::vec4(v.origin, 1)), scene_lo = lo;
@@ -145,7 +153,7 @@ namespace lfs::io {
         for (int k = 0; k < 3; ++k)
             if (!std::isfinite(lo[k]) || !std::isfinite(hi[k]) || !(hi[k] > lo[k]) ||
                 !std::isfinite(scene_lo[k]) || !std::isfinite(scene_hi[k]) || !(scene_hi[k] > scene_lo[k]) || !(resolution > 0))
-                throw std::invalid_argument("Transformed grid bounds are not representable; reduce translation or scale and regenerate");
+                throw core::collisionError("collision.export_transform", "Transformed grid bounds are not representable; reduce translation or scale and regenerate", lfs::ErrorCode::BoundsViolation);
         auto source_min = [&](I3 p, int size) {
             I3 q;
             for (int s = 0; s < 3; ++s)
@@ -201,7 +209,8 @@ namespace lfs::io {
                         mask |= uint64_t(1) << b;
                 }
                 if (leaves.size() / 2 >= (1u << 24))
-                    throw std::runtime_error("Voxel leaf limit exceeded; increase cell size and regenerate");
+                    throw core::collisionError("collision.output_limit", "Voxel leaf limit exceeded; increase cell size and regenerate", lfs::ErrorCode::ResourceExhausted,
+                                               std::format("{} / {}", leaves.size() / 2, 1u << 24));
                 nodes[item.index] = uint32_t(leaves.size() / 2);
                 leaves.push_back(uint32_t(mask));
                 leaves.push_back(uint32_t(mask >> 32));
@@ -219,7 +228,8 @@ namespace lfs::io {
                     }
                 }
                 if (nodes.size() > (1u << 24))
-                    throw std::runtime_error("SuperSplat v1.1 export exceeds its 24-bit node index range");
+                    throw core::collisionError("collision.output_limit", "SuperSplat v1.1 export exceeds its 24-bit node index range", lfs::ErrorCode::ResourceExhausted,
+                                               std::format("{} / {}", nodes.size(), 1u << 24));
                 nodes[item.index] = (mask << 24) | base;
                 ++interiors;
             }
