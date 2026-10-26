@@ -838,6 +838,7 @@ set(TEST_FILES
     test_rendering_refactor_services.cpp
     test_crop_polygon.cpp
     test_higs_exact_depth.cpp
+    test_higs_deterministic_export.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
     test_point_cloud_selection_overlay.cpp
@@ -1762,6 +1763,17 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_lod_budget_recovery_runtime.py
     )
     set_tests_properties(lichtfeld.python.lod_budget_recovery PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.higs_deterministic_export
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_higs_deterministic_export_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.higs_deterministic_export PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300

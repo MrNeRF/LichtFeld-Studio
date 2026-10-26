@@ -73,7 +73,8 @@ namespace lfs::vis::gui {
         const glm::mat3 cam_rot = glm::mat3_cast(state.rotation);
 
         const auto image = rm->renderPreviewImage(sm, cam_rot, state.position, state.focal_length_mm,
-                                                  render_width_, render_height_, std::nullopt, orthographic_, ortho_scale_, equirectangular_);
+                                                  render_width_, render_height_, std::nullopt, orthographic_, ortho_scale_,
+                                                  equirectangular_, /*deterministic_export=*/false);
         // Vulkan preview readback is already in the orientation RmlUi samples.
         const bool ok = image &&
                         slots_[slot_idx].texture.upload(*image, render_width_, render_height_, /*flip_y=*/false);
