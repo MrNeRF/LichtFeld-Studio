@@ -54,6 +54,7 @@
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
+#include "core/apriltag_scene_scale.hpp"
 #include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -4027,6 +4028,210 @@ Example:
             return result->dataset;
         },
         nb::arg("path"), "Read training parameters from a checkpoint (None if failed)");
+
+    m.def(
+        "detect_scene_apriltags",
+        [](const std::string& family,
+           const int min_views,
+           const double min_parallax_deg,
+           const double max_reprojection_error_px,
+           const int max_hamming,
+           const float min_decision_margin,
+           const bool active_cameras_only,
+           const int max_image_width) -> nb::dict {
+            auto* const sm = lfs::vis::services().sceneOrNull();
+            if (!sm) {
+                throw std::runtime_error("Scene manager not available");
+            }
+
+            const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
+            if (!parsed_family) {
+                throw std::invalid_argument("Unsupported AprilTag family: " + family);
+            }
+
+            lfs::geometry::apriltag::AprilTagDetectorConfig det_cfg;
+            det_cfg.family = *parsed_family;
+            det_cfg.max_hamming = max_hamming;
+            det_cfg.min_decision_margin = min_decision_margin;
+
+            lfs::geometry::apriltag::TriangulationConfig tri_cfg;
+            tri_cfg.min_views = min_views;
+            tri_cfg.min_parallax_angle_deg = min_parallax_deg;
+            tri_cfg.max_reprojection_error_px = max_reprojection_error_px;
+            tri_cfg.max_hamming = max_hamming;
+            tri_cfg.min_decision_margin = min_decision_margin;
+
+            std::vector<lfs::geometry::apriltag::CameraObservationView> views;
+            lfs::geometry::apriltag::TriangulationSummary summary;
+            {
+                nb::gil_scoped_release release;
+                views = lfs::core::detectAprilTagsInScene(
+                    sm->getScene(),
+                    det_cfg,
+                    active_cameras_only,
+                    max_image_width);
+                summary = lfs::geometry::apriltag::triangulateAprilTags(views, tri_cfg);
+            }
+
+            nb::list tags_list;
+            for (const auto& tag : summary.tags) {
+                const glm::vec3 vis_pos =
+                    lfs::rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
+                nb::dict item;
+                item["tag_id"] = tag.tag_id;
+                item["position"] = nb::make_tuple(tag.position.x, tag.position.y, tag.position.z);
+                item["visualizer_position"] = nb::make_tuple(vis_pos.x, vis_pos.y, vis_pos.z);
+                item["total_observations"] = tag.total_observations;
+                item["inlier_observations"] = tag.inlier_observations;
+                item["mean_reprojection_error_px"] = tag.mean_reprojection_error_px;
+                item["max_reprojection_error_px"] = tag.max_reprojection_error_px;
+                item["max_parallax_angle_deg"] = tag.max_parallax_angle_deg;
+                item["camera_uids"] = tag.camera_uids;
+                item["image_names"] = tag.image_names;
+                tags_list.append(std::move(item));
+            }
+
+            nb::list rejected_list;
+            for (const auto& rej : summary.rejected_tags) {
+                nb::dict item;
+                item["tag_id"] = rej.tag_id;
+                item["total_observations"] = rej.total_observations;
+                item["max_parallax_angle_deg"] = rej.max_parallax_angle_deg;
+                item["reason"] = rej.reason;
+                rejected_list.append(std::move(item));
+            }
+
+            nb::dict out;
+            out["camera_count"] = views.size();
+            out["triangulated_tags"] = std::move(tags_list);
+            out["rejected_tags"] = std::move(rejected_list);
+            return out;
+        },
+        nb::arg("family") = "tag36h11",
+        nb::arg("min_views") = 2,
+        nb::arg("min_parallax_deg") = 1.5,
+        nb::arg("max_reprojection_error_px") = 3.0,
+        nb::arg("max_hamming") = 1,
+        nb::arg("min_decision_margin") = 25.0f,
+        nb::arg("active_cameras_only") = false,
+        nb::arg("max_image_width") = 0,
+        "Detect AprilTags in scene cameras and triangulate their 3D centers");
+
+    m.def(
+        "scale_scene_by_apriltags",
+        [](const std::vector<std::tuple<int, int, double>>& constraints_in,
+           const std::string& family,
+           const double inlier_relative_threshold,
+           const double inlier_absolute_threshold,
+           const int min_inliers,
+           const double min_inlier_ratio,
+           const int min_views,
+           const double min_parallax_deg,
+           const double max_reprojection_error_px,
+           const int max_hamming,
+           const float min_decision_margin,
+           const bool active_cameras_only,
+           const int max_image_width,
+           const std::string& manifest_path,
+           const bool apply_to_scene,
+           const std::vector<std::string>& targets) -> nb::dict {
+            auto* const sm = lfs::vis::services().sceneOrNull();
+            if (!sm) {
+                throw std::runtime_error("Scene manager not available");
+            }
+
+            const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
+            if (!parsed_family) {
+                throw std::invalid_argument("Unsupported AprilTag family: " + family);
+            }
+
+            std::vector<lfs::geometry::apriltag::TagDistanceConstraint> constraints;
+            constraints.reserve(constraints_in.size());
+            for (const auto& [tag_a, tag_b, dist] : constraints_in) {
+                constraints.push_back(lfs::geometry::apriltag::TagDistanceConstraint{
+                    .tag_a = tag_a,
+                    .tag_b = tag_b,
+                    .target_distance = dist,
+                });
+            }
+
+            lfs::core::AprilTagSceneScaleOptions options;
+            options.detector_config.family = *parsed_family;
+            options.detector_config.max_hamming = max_hamming;
+            options.detector_config.min_decision_margin = min_decision_margin;
+
+            options.triangulation_config.min_views = min_views;
+            options.triangulation_config.min_parallax_angle_deg = min_parallax_deg;
+            options.triangulation_config.max_reprojection_error_px = max_reprojection_error_px;
+            options.triangulation_config.max_hamming = max_hamming;
+            options.triangulation_config.min_decision_margin = min_decision_margin;
+
+            options.solver_config.inlier_relative_threshold = inlier_relative_threshold;
+            options.solver_config.inlier_absolute_threshold = inlier_absolute_threshold;
+            options.solver_config.min_inliers = min_inliers;
+            options.solver_config.min_inlier_ratio = min_inlier_ratio;
+
+            options.active_cameras_only = active_cameras_only;
+            options.max_image_width = max_image_width;
+            if (!manifest_path.empty()) {
+                options.manifest_output_path = python_utf8_path(manifest_path);
+            }
+
+            lfs::vis::cap::AprilTagSceneApplyResult res;
+            {
+                nb::gil_scoped_release release;
+                if (apply_to_scene) {
+                    res = lfs::vis::cap::autoScaleSceneWithAprilTags(*sm, constraints, options, targets);
+                    if (res.applied) {
+                        if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                            rm->markDirty(
+                                lfs::vis::DirtyFlag::SPLATS | lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY,
+                                lfs::vis::FrameReason::SceneChange);
+                        }
+                    }
+                } else {
+                    res.scale_report = lfs::core::computeAprilTagSceneScale(sm->getScene(), constraints, options);
+                    res.error_message = res.scale_report.error_message;
+                }
+            }
+
+            const auto& sr = res.scale_report.scale_result;
+            nb::dict out;
+            out["success"] = apply_to_scene ? res.applied : res.scale_report.success;
+            out["applied"] = res.applied;
+            out["error_message"] = res.error_message;
+            out["scale_factor"] = sr.scale_factor;
+            out["pivot"] = nb::make_tuple(sr.pivot.x, sr.pivot.y, sr.pivot.z);
+            out["total_constraints"] = sr.total_constraints;
+            out["valid_constraints"] = sr.valid_constraints;
+            out["inlier_count"] = sr.inlier_count;
+            out["inlier_ratio"] = sr.inlier_ratio;
+            out["rmse"] = sr.rmse;
+            out["mae"] = sr.mae;
+            out["max_error"] = sr.max_error;
+            out["mean_relative_error"] = sr.mean_relative_error;
+            out["transformed_nodes"] = res.transformed_nodes;
+            out["manifest_json"] = res.scale_report.manifest_json;
+            out["manifest_saved_path"] = lfs::core::path_to_utf8(res.scale_report.manifest_saved_path);
+            return out;
+        },
+        nb::arg("constraints"),
+        nb::arg("family") = "tag36h11",
+        nb::arg("inlier_relative_threshold") = 0.02,
+        nb::arg("inlier_absolute_threshold") = 0.0,
+        nb::arg("min_inliers") = 1,
+        nb::arg("min_inlier_ratio") = 0.5,
+        nb::arg("min_views") = 2,
+        nb::arg("min_parallax_deg") = 1.5,
+        nb::arg("max_reprojection_error_px") = 3.0,
+        nb::arg("max_hamming") = 1,
+        nb::arg("min_decision_margin") = 25.0f,
+        nb::arg("active_cameras_only") = false,
+        nb::arg("max_image_width") = 0,
+        nb::arg("manifest_path") = "",
+        nb::arg("apply_to_scene") = true,
+        nb::arg("targets") = std::vector<std::string>{},
+        "Detect AprilTags, triangulate 3D centers, solve global scale from (tag_a, tag_b, distance) constraints, and rescale the scene");
 
     lfs::python::set_invalidate_poll_cache_callback([](uint8_t dependency) {
         const auto dep = static_cast<lfs::vis::op::PollDependency>(dependency);

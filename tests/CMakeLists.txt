@@ -117,6 +117,17 @@ endif()
 add_test(NAME lichtfeld.file_dialog_paths COMMAND lichtfeld_file_dialog_tests)
 set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io" TIMEOUT 30)
 
+add_executable(lichtfeld_apriltag_scaling_tests test_apriltag_scaling.cpp)
+target_compile_features(lichtfeld_apriltag_scaling_tests PRIVATE cxx_std_23)
+target_link_libraries(lichtfeld_apriltag_scaling_tests PRIVATE
+    lfs_geometry
+    GTest::gtest_main
+    glm::glm
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME lichtfeld.apriltag_scaling COMMAND lichtfeld_apriltag_scaling_tests)
+set_tests_properties(lichtfeld.apriltag_scaling PROPERTIES LABELS "fast;cpu;geometry" TIMEOUT 30)
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================

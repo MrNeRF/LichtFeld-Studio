@@ -12,6 +12,7 @@
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
 
+#include "core/apriltag_scene_scale.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -4789,6 +4790,211 @@ namespace lfs::app {
                 .property_overrides = json{{"value", positive_scale_schema("XYZ scale factors")}},
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "transform.detect_apriltags",
+                .description = "Detect AprilTags in scene camera images and triangulate their 3D centers",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"family", json{{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
+                        {"min_views", json{{"type", "integer"}, {"description", "Minimum number of camera views per tag (default: 2)"}}},
+                        {"min_parallax_deg", json{{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
+                        {"max_reprojection_error_px", json{{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
+                        {"max_hamming", json{{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
+                        {"min_decision_margin", json{{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
+                        {"active_cameras_only", json{{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
+                        {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    geometry::apriltag::AprilTagDetectorConfig det_cfg;
+                    if (args.contains("family") && args["family"].is_string()) {
+                        const auto fam = geometry::apriltag::parseAprilTagFamily(args["family"].get<std::string>());
+                        if (!fam)
+                            return json{{"error", "Unsupported AprilTag family: " + args["family"].get<std::string>()}};
+                        det_cfg.family = *fam;
+                    }
+                    det_cfg.max_hamming = args.value("max_hamming", 1);
+                    det_cfg.min_decision_margin = args.value("min_decision_margin", 25.0f);
+
+                    geometry::apriltag::TriangulationConfig tri_cfg;
+                    tri_cfg.min_views = args.value("min_views", 2);
+                    tri_cfg.min_parallax_angle_deg = args.value("min_parallax_deg", 1.5);
+                    tri_cfg.max_reprojection_error_px = args.value("max_reprojection_error_px", 3.0);
+                    tri_cfg.max_hamming = det_cfg.max_hamming;
+                    tri_cfg.min_decision_margin = det_cfg.min_decision_margin;
+
+                    const bool active_only = args.value("active_cameras_only", false);
+                    const int max_width = args.value("max_image_width", 0);
+
+                    const auto views = core::detectAprilTagsInScene(
+                        scene_manager->getScene(),
+                        det_cfg,
+                        active_only,
+                        max_width);
+                    const auto summary = geometry::apriltag::triangulateAprilTags(views, tri_cfg);
+
+                    json tags_json = json::array();
+                    for (const auto& tag : summary.tags) {
+                        const glm::vec3 vis_pos = rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
+                        tags_json.push_back({
+                            {"tag_id", tag.tag_id},
+                            {"position", {tag.position.x, tag.position.y, tag.position.z}},
+                            {"visualizer_position", {vis_pos.x, vis_pos.y, vis_pos.z}},
+                            {"total_observations", tag.total_observations},
+                            {"inlier_observations", tag.inlier_observations},
+                            {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
+                            {"max_reprojection_error_px", tag.max_reprojection_error_px},
+                            {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
+                            {"camera_uids", tag.camera_uids},
+                            {"image_names", tag.image_names},
+                        });
+                    }
+
+                    json rejected_json = json::array();
+                    for (const auto& rej : summary.rejected_tags) {
+                        rejected_json.push_back({
+                            {"tag_id", rej.tag_id},
+                            {"total_observations", rej.total_observations},
+                            {"max_parallax_angle_deg", rej.max_parallax_angle_deg},
+                            {"reason", rej.reason},
+                        });
+                    }
+
+                    return json{
+                        {"success", true},
+                        {"camera_count", views.size()},
+                        {"triangulated_tags", std::move(tags_json)},
+                        {"rejected_tags", std::move(rejected_json)},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "transform.scale_by_apriltags",
+                .description = "Automatically detect AprilTags, triangulate 3D centers, solve global scale from distance constraints via RANSAC/WLS, and rescale the scene",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"constraints", json{{"type", "array"}, {"description", "Array of {tag_a, tag_b, distance} constraints in real-world units"}}},
+                        {"family", json{{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
+                        {"inlier_relative_threshold", json{{"type", "number"}, {"description", "RANSAC relative error threshold (default: 0.02)"}}},
+                        {"inlier_absolute_threshold", json{{"type", "number"}, {"description", "Optional RANSAC absolute error floor (default: 0.0)"}}},
+                        {"min_inliers", json{{"type", "integer"}, {"description", "Minimum required inlier constraints (default: 1)"}}},
+                        {"min_inlier_ratio", json{{"type", "number"}, {"description", "Minimum required inlier ratio (default: 0.5)"}}},
+                        {"min_views", json{{"type", "integer"}, {"description", "Minimum camera views per tag (default: 2)"}}},
+                        {"min_parallax_deg", json{{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
+                        {"max_reprojection_error_px", json{{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
+                        {"max_hamming", json{{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
+                        {"min_decision_margin", json{{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
+                        {"active_cameras_only", json{{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
+                        {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
+                        {"manifest_path", json{{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
+                        {"apply_to_scene", json{{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
+                        {"targets", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional target node names to scale"}}}},
+                    .required = {"constraints"}}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    if (!args.contains("constraints") || !args["constraints"].is_array())
+                        return json{{"error", "'constraints' must be an array of {tag_a, tag_b, distance} objects"}};
+
+                    std::vector<geometry::apriltag::TagDistanceConstraint> constraints;
+                    for (const auto& item : args["constraints"]) {
+                        if (!item.is_object() || !item.contains("tag_a") || !item.contains("tag_b"))
+                            return json{{"error", "Each constraint must contain 'tag_a', 'tag_b', and 'distance'"}};
+                        const double dist = item.contains("distance")
+                                                ? item["distance"].get<double>()
+                                                : item.value("target_distance", 0.0);
+                        constraints.push_back(geometry::apriltag::TagDistanceConstraint{
+                            .tag_a = item["tag_a"].get<int>(),
+                            .tag_b = item["tag_b"].get<int>(),
+                            .target_distance = dist,
+                        });
+                    }
+
+                    core::AprilTagSceneScaleOptions options;
+                    if (args.contains("family") && args["family"].is_string()) {
+                        const auto fam = geometry::apriltag::parseAprilTagFamily(args["family"].get<std::string>());
+                        if (!fam)
+                            return json{{"error", "Unsupported AprilTag family: " + args["family"].get<std::string>()}};
+                        options.detector_config.family = *fam;
+                    }
+                    options.detector_config.max_hamming = args.value("max_hamming", 1);
+                    options.detector_config.min_decision_margin = args.value("min_decision_margin", 25.0f);
+
+                    options.triangulation_config.min_views = args.value("min_views", 2);
+                    options.triangulation_config.min_parallax_angle_deg = args.value("min_parallax_deg", 1.5);
+                    options.triangulation_config.max_reprojection_error_px = args.value("max_reprojection_error_px", 3.0);
+                    options.triangulation_config.max_hamming = options.detector_config.max_hamming;
+                    options.triangulation_config.min_decision_margin = options.detector_config.min_decision_margin;
+
+                    options.solver_config.inlier_relative_threshold = args.value("inlier_relative_threshold", 0.02);
+                    options.solver_config.inlier_absolute_threshold = args.value("inlier_absolute_threshold", 0.0);
+                    options.solver_config.min_inliers = args.value("min_inliers", 1);
+                    options.solver_config.min_inlier_ratio = args.value("min_inlier_ratio", 0.5);
+
+                    options.active_cameras_only = args.value("active_cameras_only", false);
+                    options.max_image_width = args.value("max_image_width", 0);
+                    if (args.contains("manifest_path") && args["manifest_path"].is_string()) {
+                        const auto path_str = args["manifest_path"].get<std::string>();
+                        if (!path_str.empty())
+                            options.manifest_output_path = core::utf8_to_path(path_str);
+                    }
+
+                    std::vector<std::string> targets;
+                    if (args.contains("targets") && args["targets"].is_array()) {
+                        for (const auto& t : args["targets"]) {
+                            if (t.is_string())
+                                targets.push_back(t.get<std::string>());
+                        }
+                    }
+
+                    const bool apply_to_scene = args.value("apply_to_scene", true);
+                    vis::cap::AprilTagSceneApplyResult res;
+                    if (apply_to_scene) {
+                        res = vis::cap::autoScaleSceneWithAprilTags(
+                            *scene_manager,
+                            constraints,
+                            options,
+                            targets);
+                        if (res.applied) {
+                            if (auto* const rm = viewer_impl->getRenderingManager()) {
+                                rm->markDirty(
+                                    vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY,
+                                    vis::FrameReason::SceneChange);
+                            }
+                        }
+                    } else {
+                        res.scale_report = core::computeAprilTagSceneScale(
+                            scene_manager->getScene(),
+                            constraints,
+                            options);
+                        res.error_message = res.scale_report.error_message;
+                    }
+
+                    json out = json::parse(res.scale_report.manifest_json, nullptr, false);
+                    if (out.is_discarded())
+                        out = json::object();
+                    out["success"] = apply_to_scene ? res.applied : res.scale_report.success;
+                    out["applied"] = res.applied;
+                    out["transformed_nodes"] = res.transformed_nodes;
+                    out["manifest_saved_path"] = core::path_to_utf8(res.scale_report.manifest_saved_path);
+                    if (!res.error_message.empty())
+                        out["error"] = res.error_message;
+                    return out;
+                });
             });
 
         registry.register_tool(

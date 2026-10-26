@@ -4,6 +4,8 @@
 # geometry module - LibTorch-free geometry library
 
 set(GEOMETRY_SOURCES
+    apriltag_detector.cpp
+    apriltag_scaling.cpp
     euclidean_transform.cpp
     bounding_box.cpp
     geometry_misc.cpp
@@ -20,6 +22,9 @@ target_include_directories(lfs_geometry
 target_link_libraries(lfs_geometry
     PUBLIC
         glm::glm
+    PRIVATE
+        lfs::apriltag
+        nlohmann_json::nlohmann_json
 )
 
 set_target_properties(lfs_geometry PROPERTIES

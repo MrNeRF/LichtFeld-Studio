@@ -77,6 +77,7 @@ set(CORE_SOURCES
         memory_domain.cpp
         operator_callbacks.cpp
         animatable_property.cpp
+        apriltag_scene_scale.cpp
         argument_parser.cpp
         camera.cpp
         checkpoint_format.cpp
