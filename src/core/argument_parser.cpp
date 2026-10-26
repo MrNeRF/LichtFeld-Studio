@@ -707,7 +707,8 @@ namespace {
         const std::vector<std::string>& args,
         lfs::core::param::TrainingParameters& params,
         const bool create_output_directory = true,
-        const bool validate_only = false) {
+        const bool validate_only = false,
+        const std::function<void(::args::ArgumentParser&)>& inspect = {}) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -1020,6 +1021,11 @@ namespace {
             ::args::Group extensions_sep(parser, " ");
             ::args::Group extensions_group(parser, "EXTENSIONS:");
             ::args::ValueFlagList<std::string> python_scripts(extensions_group, "path", "Python script(s) for custom training callbacks", {"python-script"});
+
+            if (inspect) {
+                inspect(parser);
+                return std::make_tuple(ParseResult::Help, std::function<void()>{});
+            }
 
             // Parse arguments
             try {
@@ -2857,42 +2863,18 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
     }
 
-    bool is_known_training_bool_flag(const std::string_view flag) {
-        if (flag == "--export")
-            return false;
-        for (const auto& binding : lfs::core::args::optimization_cli_bindings()) {
-            if (binding.flag == flag) {
-                return binding.parse_type == lfs::core::args::OptimizationCliParseType::Bool;
-            }
-        }
-        static constexpr std::string_view EXTRA_BOOL_FLAGS[] = {
-            "--no-download",
-            "--exclude-export",
-            "--no-provenance",
-            "--no-cpu-cache",
-            "--use-16bit",
-            "--no-save-eval-images",
-            "--headless",
-            "--train",
-            "--safe-mode",
-            "--reset-preferences",
-            "--reset-layout",
-            "--reset-all-settings",
-            "--no-splash",
-            "--debug-python",
-            "--perf-bench",
-            "--verbose",
-            "-q",
-            "--quiet",
-            "--tcp-connection",
-            "--undistort",
-            "--freeze"
-        };
-        for (const auto& f : EXTRA_BOOL_FLAGS) {
-            if (f == flag)
-                return true;
-        }
-        return false;
+    // Asks the training parser, so batch-train keeps no list of its flags. Unknown flags
+    // take a value; validate_job_arguments reports them before any job starts.
+    bool training_flag_takes_value(const std::string_view flag) {
+        bool takes_value = true;
+        lfs::core::param::TrainingParameters params;
+        (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
+            const auto name = flag.starts_with("--") ? ::args::EitherFlag(std::string(flag.substr(2)))
+                                                     : ::args::EitherFlag(flag.size() == 2 ? flag[1] : '\0');
+            if (const auto* const match = parser.Group::Match(name))
+                takes_value = match->NumberOfArguments().max > 0;
+        });
+        return takes_value;
     }
 
     std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
@@ -2982,7 +2964,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             // Unrecognized by batch parser: forward to child training runs
             shared_training_args.push_back(std::string(arg));
             if (!arg.contains('=')) {
-                if (!is_known_training_bool_flag(arg)) {
+                if (training_flag_takes_value(arg)) {
                     if (i + 1 < argc && argv[i + 1][0] != '-') {
                         shared_training_args.push_back(argv[++i]);
                     }
@@ -3016,7 +2998,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             }
             auto loaded = param::read_batch_training_parameters_from_json(params.config_file, params);
             if (!loaded) {
-                error = std::format("Error reading batch config: {}", loaded.error().user_message());
+                error = std::format("Error reading batch config: {} {}", loaded.error().user_message(), loaded.error().detail());
                 return std::nullopt;
             }
             params = std::move(*loaded);

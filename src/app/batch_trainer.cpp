@@ -180,12 +180,15 @@ namespace lfs::app {
 
                 // If input is a JSON file, load it as a batch manifest
                 if (lfs::core::native_fs::is_regular_file(input) && input.extension() == ".json") {
-                    auto config_res = lfs::core::param::read_batch_training_parameters_from_json(input, params);
+                    auto config_res = lfs::core::param::read_batch_training_parameters_from_json(input);
                     if (config_res) {
-                        jobs.insert(jobs.end(), config_res->jobs.begin(), config_res->jobs.end());
+                        for (auto& job : config_res->jobs) {
+                            job.extra_args.insert(job.extra_args.begin(), config_res->shared_args.begin(), config_res->shared_args.end());
+                            jobs.push_back(std::move(job));
+                        }
                     } else {
-                        LOG_ERROR("Failed to load batch manifest {}: {}",
-                                  lfs::core::path_to_utf8(input), config_res.error().user_message());
+                        LOG_ERROR("Failed to load batch manifest {}: {} {}",
+                                  lfs::core::path_to_utf8(input), config_res.error().user_message(), config_res.error().detail());
                     }
                     continue;
                 }

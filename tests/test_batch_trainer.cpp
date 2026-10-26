@@ -47,8 +47,8 @@ namespace {
             {"recursive", true},
             {"dry_run", true},
             {"timeout_minutes", 45},
-            {"defaults", {{"strategy", "mrnf"}, {"iterations", 30000}, {"export", "ply,spz"}, {"use_depth_loss", true}}},
-            {"jobs", {{{"dataset", (temp.path() / "scene_a").string()}, {"name", "custom_scene_a"}}, {{"dataset", (temp.path() / "scene_b").string()}, {"strategy", "mcmc"}, {"iter", 45000}, {"output", (temp.path() / "custom_out_b").string()}}}}};
+            {"args", nlohmann::json::array({"--strategy", "mrnf", "--iter", "30000", "--export", "ply,spz", "--use-depth-loss"})},
+            {"jobs", {{{"dataset", (temp.path() / "scene_a").string()}, {"name", "custom_scene_a"}}, {{"dataset", (temp.path() / "scene_b").string()}, {"args", nlohmann::json::array({"--strategy", "mcmc", "--iter", "45000"})}, {"output", (temp.path() / "custom_out_b").string()}}}}};
 
         {
             std::ofstream out(config_path);
@@ -56,7 +56,7 @@ namespace {
         }
 
         auto res = lfs::core::param::read_batch_training_parameters_from_json(config_path);
-        ASSERT_TRUE(res.has_value()) << res.error().user_message();
+        ASSERT_TRUE(res.has_value()) << res.error().detail();
 
         const auto& params = *res;
         EXPECT_EQ(params.output_dir, temp.path() / "outputs");
@@ -64,27 +64,53 @@ namespace {
         EXPECT_TRUE(params.recursive);
         EXPECT_TRUE(params.dry_run);
         EXPECT_EQ(params.timeout_minutes, 45);
+        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--strategy", "mrnf", "--iter", "30000", "--export", "ply,spz", "--use-depth-loss"}));
 
-        // Check defaults mapped to shared_args
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "--strategy"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "mrnf"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "--iter"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "30000"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "--export"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "ply,spz"), params.shared_args.end());
-        EXPECT_NE(std::find(params.shared_args.begin(), params.shared_args.end(), "--use-depth-loss"), params.shared_args.end());
-
-        // Check jobs
         ASSERT_EQ(params.jobs.size(), 2u);
         EXPECT_EQ(params.jobs[0].dataset_path, temp.path() / "scene_a");
         EXPECT_EQ(params.jobs[0].name, "custom_scene_a");
+        EXPECT_TRUE(params.jobs[0].extra_args.empty());
 
         EXPECT_EQ(params.jobs[1].dataset_path, temp.path() / "scene_b");
         EXPECT_EQ(params.jobs[1].output_path, temp.path() / "custom_out_b");
-        EXPECT_NE(std::find(params.jobs[1].extra_args.begin(), params.jobs[1].extra_args.end(), "--strategy"), params.jobs[1].extra_args.end());
-        EXPECT_NE(std::find(params.jobs[1].extra_args.begin(), params.jobs[1].extra_args.end(), "mcmc"), params.jobs[1].extra_args.end());
-        EXPECT_NE(std::find(params.jobs[1].extra_args.begin(), params.jobs[1].extra_args.end(), "--iter"), params.jobs[1].extra_args.end());
-        EXPECT_NE(std::find(params.jobs[1].extra_args.begin(), params.jobs[1].extra_args.end(), "45000"), params.jobs[1].extra_args.end());
+        EXPECT_EQ(params.jobs[1].extra_args, (std::vector<std::string>{"--strategy", "mcmc", "--iter", "45000"}));
+    }
+
+    TEST(BatchTrainerTest, ReadBatchConfigRejectsUnknownKeysAndWrongTypes) {
+        TempDirectoryGuard temp;
+        const auto config_path = temp.path() / "batch.json";
+        const auto detail_for = [&](const nlohmann::json& j) {
+            std::ofstream(config_path) << j.dump();
+            auto res = lfs::core::param::read_batch_training_parameters_from_json(config_path);
+            return res ? std::string("accepted") : std::string(res.error().detail());
+        };
+
+        EXPECT_NE(detail_for({{"jobs", {{{"dataset", "scene"}, {"strategy", "mcmc"}}}}}).find("\"strategy\""), std::string::npos);
+        EXPECT_NE(detail_for({{"defaults", {{"iterations", 30000}}}}).find("\"defaults\""), std::string::npos);
+        EXPECT_NE(detail_for({{"jobs", {{{"dataset", 5}}}}}).find("\"dataset\""), std::string::npos);
+        EXPECT_NE(detail_for({{"jobs", {{{"dataset", "scene"}, {"args", nlohmann::json::array({"--iter", 30000})}}}}}).find("\"args\""), std::string::npos);
+        EXPECT_NE(detail_for({{"timeout_minutes", -1}}).find("\"timeout_minutes\""), std::string::npos);
+        EXPECT_NE(detail_for({{"jobs", {{{"name", "no_dataset"}}}}}).find("\"dataset\""), std::string::npos);
+    }
+
+    TEST(BatchTrainerTest, PositionalManifestArgsApplyToItsJobs) {
+        TempDirectoryGuard temp;
+        const auto scene = temp.path() / "scene";
+        fs::create_directories(scene);
+        std::ofstream(scene / "transforms.json") << "{}";
+        const auto manifest = temp.path() / "batch.json";
+        std::ofstream(manifest) << nlohmann::json{
+            {"args", nlohmann::json::array({"--iter", "7000"})},
+            {"jobs", {{{"dataset", scene.string()}, {"args", nlohmann::json::array({"--strategy", "mcmc"})}}}}}
+                                       .dump();
+
+        lfs::core::param::BatchTrainingParameters params;
+        params.input_paths = {manifest};
+        params.output_dir = temp.path() / "outputs";
+        const auto jobs = lfs::app::resolve_batch_jobs(params);
+
+        ASSERT_EQ(jobs.size(), 1u);
+        EXPECT_EQ(jobs[0].extra_args, (std::vector<std::string>{"--iter", "7000", "--strategy", "mcmc"}));
     }
 
     TEST(BatchTrainerTest, ReadBatchConfigArray) {
@@ -93,7 +119,7 @@ namespace {
 
         nlohmann::json j = nlohmann::json::array({{{"dataset", (temp.path() / "scene_1").string()},
                                                    {"output", (temp.path() / "out_1").string()}},
-                                                  {{"path", (temp.path() / "scene_2").string()}}});
+                                                  {{"dataset", (temp.path() / "scene_2").string()}}});
 
         {
             std::ofstream out(config_path);
@@ -101,7 +127,7 @@ namespace {
         }
 
         auto res = lfs::core::param::read_batch_training_parameters_from_json(config_path);
-        ASSERT_TRUE(res.has_value()) << res.error().user_message();
+        ASSERT_TRUE(res.has_value()) << res.error().detail();
 
         const auto& params = *res;
         ASSERT_EQ(params.jobs.size(), 2u);
@@ -192,6 +218,23 @@ namespace {
         EXPECT_EQ(batch_mode.params.input_paths[0], fs::path("./my_datasets"));
         EXPECT_NE(std::find(batch_mode.params.shared_args.begin(), batch_mode.params.shared_args.end(), "--no-download"),
                   batch_mode.params.shared_args.end());
+    }
+
+    TEST(BatchTrainerTest, ParseBatchTrainTakesFlagArityFromTrainingParser) {
+        std::vector<const char*> argv = {
+            "lichtfeld-studio",
+            "batch-train",
+            "--no-cpu-cache",
+            "./first",
+            "--images",
+            "images_4",
+            "./second"};
+
+        auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+        ASSERT_TRUE(res.has_value()) << res.error();
+        const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*res).params;
+        EXPECT_EQ(params.input_paths, (std::vector<fs::path>{"./first", "./second"}));
+        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--no-cpu-cache", "--images", "images_4"}));
     }
 
     TEST(BatchTrainerTest, ParseBatchTrainFreezeFlag) {

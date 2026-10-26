@@ -1745,184 +1745,100 @@ namespace lfs::core {
             BatchTrainingParameters params = defaults;
             params.config_file = path;
 
-            auto parse_job_item = [&](const nlohmann::json& job_json) -> std::expected<BatchJobItem, lfs::Error> {
-                if (!job_json.is_object()) {
-                    return std::unexpected(config_import_error("Batch job entry must be a JSON object", path));
+            const auto fail = [&](std::string detail) {
+                return std::unexpected(config_import_error(std::move(detail), path));
+            };
+            // Training options only come through "args", parsed like the command line.
+            const auto read_args = [](const nlohmann::json& value, std::vector<std::string>& out) {
+                if (!value.is_array())
+                    return false;
+                for (const auto& arg : value) {
+                    if (!arg.is_string())
+                        return false;
+                    out.push_back(arg.get<std::string>());
                 }
+                return true;
+            };
+            const auto near_manifest = [&](const nlohmann::json& value) {
+                auto resolved = utf8_to_path(value.get<std::string>());
+                if (resolved.is_relative() && path.has_parent_path() &&
+                    lfs::core::native_fs::exists(path.parent_path() / resolved))
+                    resolved = path.parent_path() / resolved;
+                return resolved;
+            };
 
+            const auto parse_job_item = [&](const nlohmann::json& job_json) -> std::expected<BatchJobItem, lfs::Error> {
+                if (!job_json.is_object())
+                    return fail("Batch job entry must be a JSON object");
+                static constexpr std::string_view job_keys[] = {"dataset", "name", "output", "config", "args"};
                 BatchJobItem item;
-                // Accept dataset, dataset_path, or path
-                if (job_json.contains("dataset")) {
-                    item.dataset_path = utf8_to_path(job_json["dataset"].get<std::string>());
-                } else if (job_json.contains("dataset_path")) {
-                    item.dataset_path = utf8_to_path(job_json["dataset_path"].get<std::string>());
-                } else if (job_json.contains("path")) {
-                    item.dataset_path = utf8_to_path(job_json["path"].get<std::string>());
-                } else {
-                    return std::unexpected(config_import_error("Batch job missing 'dataset' or 'path' field", path));
+                for (const auto& [key, value] : job_json.items()) {
+                    if (std::ranges::find(job_keys, key) == std::end(job_keys))
+                        return fail(std::format("Unknown batch job key \"{}\". Pass training options in \"args\"", key));
+                    if (key == "args" ? !read_args(value, item.extra_args) : !value.is_string())
+                        return fail(std::format("Batch job \"{}\" has the wrong type", key));
                 }
-
-                if (item.dataset_path.is_relative() && path.has_parent_path()) {
-                    auto candidate = path.parent_path() / item.dataset_path;
-                    if (lfs::core::native_fs::exists(candidate)) {
-                        item.dataset_path = candidate;
-                    }
-                }
-
-                if (job_json.contains("name") && job_json["name"].is_string()) {
+                if (!job_json.contains("dataset"))
+                    return fail("Batch job is missing \"dataset\"");
+                item.dataset_path = near_manifest(job_json["dataset"]);
+                if (job_json.contains("name"))
                     item.name = job_json["name"].get<std::string>();
-                }
-                if (job_json.contains("output") && job_json["output"].is_string()) {
+                if (job_json.contains("output"))
                     item.output_path = utf8_to_path(job_json["output"].get<std::string>());
-                } else if (job_json.contains("output_path") && job_json["output_path"].is_string()) {
-                    item.output_path = utf8_to_path(job_json["output_path"].get<std::string>());
-                }
-
-                if (job_json.contains("config") && job_json["config"].is_string()) {
-                    item.config_file = utf8_to_path(job_json["config"].get<std::string>());
-                    if (item.config_file->is_relative() && path.has_parent_path()) {
-                        auto candidate = path.parent_path() / *item.config_file;
-                        if (lfs::core::native_fs::exists(candidate)) {
-                            item.config_file = candidate;
-                        }
-                    }
-                }
-
-                if (job_json.contains("extra_args") && job_json["extra_args"].is_array()) {
-                    for (const auto& arg : job_json["extra_args"]) {
-                        if (arg.is_string()) {
-                            item.extra_args.push_back(arg.get<std::string>());
-                        }
-                    }
-                } else if (job_json.contains("args") && job_json["args"].is_array()) {
-                    for (const auto& arg : job_json["args"]) {
-                        if (arg.is_string()) {
-                            item.extra_args.push_back(arg.get<std::string>());
-                        }
-                    }
-                }
-
-                if (job_json.contains("strategy") && job_json["strategy"].is_string()) {
-                    item.extra_args.push_back("--strategy");
-                    item.extra_args.push_back(job_json["strategy"].get<std::string>());
-                }
-                if (job_json.contains("iterations") && job_json["iterations"].is_number_integer()) {
-                    item.extra_args.push_back("--iter");
-                    item.extra_args.push_back(std::to_string(job_json["iterations"].get<int64_t>()));
-                } else if (job_json.contains("iter") && job_json["iter"].is_number_integer()) {
-                    item.extra_args.push_back("--iter");
-                    item.extra_args.push_back(std::to_string(job_json["iter"].get<int64_t>()));
-                }
-                if (job_json.contains("export") && job_json["export"].is_string()) {
-                    item.extra_args.push_back("--export");
-                    item.extra_args.push_back(job_json["export"].get<std::string>());
-                }
-                if (job_json.contains("use_depth_loss") && job_json["use_depth_loss"].is_boolean() && job_json["use_depth_loss"].get<bool>()) {
-                    item.extra_args.push_back("--use-depth-loss");
-                }
-                if (job_json.contains("use_normal_loss") && job_json["use_normal_loss"].is_boolean() && job_json["use_normal_loss"].get<bool>()) {
-                    item.extra_args.push_back("--use-normal-loss");
-                }
-                if (job_json.contains("bilateral_grid") && job_json["bilateral_grid"].is_boolean() && job_json["bilateral_grid"].get<bool>()) {
-                    item.extra_args.push_back("--bilateral-grid");
-                }
-                if (job_json.contains("undistort") && job_json["undistort"].is_boolean() && job_json["undistort"].get<bool>()) {
-                    item.extra_args.push_back("--undistort");
-                }
-
+                if (job_json.contains("config"))
+                    item.config_file = near_manifest(job_json["config"]);
                 return item;
+            };
+            const auto read_jobs = [&](const nlohmann::json& jobs) -> std::expected<void, lfs::Error> {
+                for (const auto& item_json : jobs) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+                return {};
             };
 
             if (j.is_array()) {
-                for (const auto& item_json : j) {
-                    auto job = parse_job_item(item_json);
-                    if (!job)
-                        return std::unexpected(job.error());
-                    params.jobs.push_back(std::move(*job));
-                }
+                if (auto read = read_jobs(j); !read)
+                    return std::unexpected(read.error());
                 return params;
             }
+            if (!j.is_object())
+                return fail("Batch configuration must be a JSON object or array");
 
-            if (!j.is_object()) {
-                return std::unexpected(config_import_error("Batch configuration must be a JSON object or array", path));
+            static constexpr std::string_view keys[] = {"args", "jobs", "output_dir", "summary_file", "report_file",
+                                                        "continue_on_failure", "recursive", "dry_run", "timeout_minutes"};
+            for (const auto& [key, value] : j.items()) {
+                if (std::ranges::find(keys, key) == std::end(keys))
+                    return fail(std::format("Unknown batch configuration key \"{}\". Pass training options in \"args\"", key));
+                const bool valid = key == "args"              ? read_args(value, params.shared_args)
+                                   : key == "jobs"            ? value.is_array()
+                                   : key == "timeout_minutes" ? value.is_number_integer() && value.get<int64_t>() >= 0 &&
+                                                                    value.get<int64_t>() <= std::numeric_limits<int>::max()
+                                   : key.ends_with("_dir") || key.ends_with("_file") ? value.is_string()
+                                                                                     : value.is_boolean();
+                if (!valid)
+                    return fail(std::format("Batch configuration \"{}\" has the wrong type", key));
             }
-
-            if (j.contains("output_dir") && j["output_dir"].is_string()) {
+            if (j.contains("output_dir"))
                 params.output_dir = utf8_to_path(j["output_dir"].get<std::string>());
-            }
-            if (j.contains("continue_on_failure") && j["continue_on_failure"].is_boolean()) {
+            if (j.contains("continue_on_failure"))
                 params.continue_on_failure = j["continue_on_failure"].get<bool>();
-            }
-            if (j.contains("recursive") && j["recursive"].is_boolean()) {
+            if (j.contains("recursive"))
                 params.recursive = j["recursive"].get<bool>();
-            }
-            if (j.contains("dry_run") && j["dry_run"].is_boolean()) {
+            if (j.contains("dry_run"))
                 params.dry_run = j["dry_run"].get<bool>();
-            }
-            if (j.contains("timeout_minutes") && j["timeout_minutes"].is_number_integer()) {
+            if (j.contains("timeout_minutes"))
                 params.timeout_minutes = static_cast<int>(j["timeout_minutes"].get<int64_t>());
-            }
-            if (j.contains("summary_file") && j["summary_file"].is_string()) {
+            if (j.contains("summary_file"))
                 params.summary_file = utf8_to_path(j["summary_file"].get<std::string>());
-            }
-            if (j.contains("report_file") && j["report_file"].is_string()) {
+            if (j.contains("report_file"))
                 params.report_file = utf8_to_path(j["report_file"].get<std::string>());
+            if (j.contains("jobs")) {
+                if (auto read = read_jobs(j["jobs"]); !read)
+                    return std::unexpected(read.error());
             }
-
-            if (j.contains("defaults") && j["defaults"].is_object()) {
-                const auto& def = j["defaults"];
-                if (def.contains("strategy") && def["strategy"].is_string()) {
-                    params.shared_args.push_back("--strategy");
-                    params.shared_args.push_back(def["strategy"].get<std::string>());
-                }
-                if (def.contains("iterations") && def["iterations"].is_number_integer()) {
-                    params.shared_args.push_back("--iter");
-                    params.shared_args.push_back(std::to_string(def["iterations"].get<int64_t>()));
-                } else if (def.contains("iter") && def["iter"].is_number_integer()) {
-                    params.shared_args.push_back("--iter");
-                    params.shared_args.push_back(std::to_string(def["iter"].get<int64_t>()));
-                }
-                if (def.contains("export") && def["export"].is_string()) {
-                    params.shared_args.push_back("--export");
-                    params.shared_args.push_back(def["export"].get<std::string>());
-                }
-                if (def.contains("use_depth_loss") && def["use_depth_loss"].is_boolean() && def["use_depth_loss"].get<bool>()) {
-                    params.shared_args.push_back("--use-depth-loss");
-                }
-                if (def.contains("use_normal_loss") && def["use_normal_loss"].is_boolean() && def["use_normal_loss"].get<bool>()) {
-                    params.shared_args.push_back("--use-normal-loss");
-                }
-                if (def.contains("bilateral_grid") && def["bilateral_grid"].is_boolean() && def["bilateral_grid"].get<bool>()) {
-                    params.shared_args.push_back("--bilateral-grid");
-                }
-                if (def.contains("undistort") && def["undistort"].is_boolean() && def["undistort"].get<bool>()) {
-                    params.shared_args.push_back("--undistort");
-                }
-                if (def.contains("args") && def["args"].is_array()) {
-                    for (const auto& a : def["args"]) {
-                        if (a.is_string()) {
-                            params.shared_args.push_back(a.get<std::string>());
-                        }
-                    }
-                }
-            }
-
-            if (j.contains("jobs") && j["jobs"].is_array()) {
-                for (const auto& item_json : j["jobs"]) {
-                    auto job = parse_job_item(item_json);
-                    if (!job)
-                        return std::unexpected(job.error());
-                    params.jobs.push_back(std::move(*job));
-                }
-            } else if (j.contains("datasets") && j["datasets"].is_array()) {
-                for (const auto& item_json : j["datasets"]) {
-                    auto job = parse_job_item(item_json);
-                    if (!job)
-                        return std::unexpected(job.error());
-                    params.jobs.push_back(std::move(*job));
-                }
-            }
-
             return params;
         }
 
