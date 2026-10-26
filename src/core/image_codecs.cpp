@@ -2078,17 +2078,9 @@ namespace lfs::core::image_codecs {
                 } else if (envelope == XmpEnvelope::JpegExtendedApp1) {
                     constexpr size_t header = sizeof(kJpegExtendedXmp) + 40;
                     block.payload_offset = std::min(header, block.bytes.size());
-                    if (block.bytes.size() < header) {
-                        malformed("Truncated extended XMP header");
-                    } else {
-                        const auto* guid = block.bytes.data() + sizeof(kJpegExtendedXmp);
-                        if (!std::all_of(guid, guid + 32, [](uint8_t c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }))
-                            malformed("Invalid extended XMP GUID");
-                        const auto u32 = [](const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]); };
-                        const auto extent = u32(guid + 32), offset = u32(guid + 36);
-                        if (!extent || offset > extent || block.bytes.size() - header > extent - offset)
-                            malformed("Invalid extended XMP segment range");
-                    }
+                    const char* diagnostic = nullptr;
+                    if (!source_extended_xmp_segment(block, &diagnostic))
+                        malformed(diagnostic);
                 } else {
                     if (crc && !*crc)
                         malformed("XMP iTXt CRC mismatch");
@@ -3038,6 +3030,36 @@ namespace lfs::core::image_codecs {
                 result.status = MetadataStatus::Collected;
         }
         return result;
+    }
+
+    std::optional<JpegExtendedXmpSegment> source_extended_xmp_segment(const XmpBlock& block, const char** diagnostic) noexcept {
+        const auto invalid = [&](const char* message) -> std::optional<JpegExtendedXmpSegment> {
+            if (diagnostic)
+                *diagnostic = message;
+            return std::nullopt;
+        };
+        if (diagnostic)
+            *diagnostic = nullptr;
+        if (block.envelope != XmpEnvelope::JpegExtendedApp1)
+            return invalid("Extended XMP segment has a different carrier");
+        if (block.inflated || block.compressed || block.crc_valid || block.tiff_tag || block.heif_item || block.jxl_box)
+            return invalid("Extended XMP segment has incompatible carrier provenance");
+        constexpr size_t header = sizeof(kJpegExtendedXmp) + 40;
+        if (block.bytes.size() < header)
+            return invalid("Truncated extended XMP header");
+        if (block.bytes.size() > 65533)
+            return invalid("Extended XMP APP1 payload exceeds the JPEG marker limit");
+        if (std::memcmp(block.bytes.data(), kJpegExtendedXmp, sizeof(kJpegExtendedXmp)))
+            return invalid("Invalid extended XMP signature");
+        const auto* guid = block.bytes.data() + sizeof(kJpegExtendedXmp);
+        const auto u32 = [](const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]); };
+        const auto extent = u32(guid + 32), offset = u32(guid + 36);
+        if (!extent || offset > extent || block.bytes.size() - header > extent - offset)
+            return invalid("Invalid extended XMP segment range");
+        if (!std::all_of(guid, guid + 32, [](uint8_t c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); }))
+            return invalid("Invalid extended XMP GUID");
+        return JpegExtendedXmpSegment{std::string_view(reinterpret_cast<const char*>(guid), 32), extent, offset,
+                                      std::span<const uint8_t>(block.bytes).subspan(header)};
     }
 
     std::optional<std::span<const uint8_t>> source_xmp_bytes(const SourceExif& exif, const XmpBlock& block) noexcept {

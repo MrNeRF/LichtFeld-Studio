@@ -5,10 +5,12 @@
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
+#include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <type_traits>
+#include <vector>
 namespace lfs::media::json_detail {
     using nlohmann::json;
     inline std::string dump(const json& value) {
@@ -223,6 +225,20 @@ namespace lfs::media::json_detail {
         const auto scope = summary.scope == MetadataSummaryScope::StreamProperties ? "static_stream_properties" : summary.scope == MetadataSummaryScope::ImageProperties ? "static_image_properties"
                                                                                                                                                                          : "unknown";
         json result{{"scope", scope}, {"limited", summary.limited}, {"facts", json::array()}};
+        std::vector<const XmpPacketAssembly*> assemblies;
+        const auto add_assembly = [&](const std::shared_ptr<const XmpPacketAssembly>& value) {
+            if (!value || std::find(assemblies.begin(), assemblies.end(), value.get()) != assemblies.end())
+                return;
+            assemblies.push_back(value.get());
+            if (!result.contains("xmp_assemblies"))
+                result["xmp_assemblies"] = json::array();
+            json item{{"guid", value->guid}, {"declared_bytes", value->declared_bytes}, {"md5_verified", value->md5_verified}, {"standard_source", value->standard_source ? metadataReference(value->standard_source->reference) : json(nullptr)}, {"fragments", json::array()}};
+            for (const auto& fragment : value->fragments)
+                item["fragments"].push_back({{"source", metadataReference(fragment.source.reference)},
+                                             {"offset", fragment.offset},
+                                             {"bytes", fragment.bytes}});
+            result["xmp_assemblies"].push_back(std::move(item));
+        };
         for (const auto& fact : summary.facts) {
             json value;
             std::visit([&](const auto& scalar) {
@@ -264,8 +280,23 @@ namespace lfs::media::json_detail {
                 if (fact.xmp) {
                     item["xmp_property"] = location(fact.xmp->property);
                     item["xmp_inputs"] = json::array();
-                    for (const auto& input : fact.xmp->inputs)
-                        item["xmp_inputs"].push_back(location(input));
+                    for (std::size_t i = 0; i < fact.xmp->inputs.size(); ++i) {
+                        auto input_location = location(fact.xmp->inputs[i]);
+                        if (i < fact.inputs.size()) {
+                            const auto* own = std::get_if<XmpBlockReference>(&fact.source.reference);
+                            const auto* input = std::get_if<XmpBlockReference>(&fact.inputs[i].reference);
+                            if (!own || !input || own->block != input->block || fact.source.observation != fact.inputs[i].observation)
+                                input_location["source"] = metadataReference(fact.inputs[i].reference);
+                        }
+                        item["xmp_inputs"].push_back(std::move(input_location));
+                    }
+                    if (fact.xmp->assembly) {
+                        const auto& assembly = *fact.xmp->assembly;
+                        add_assembly(fact.xmp->assembly);
+                        item["xmp_packet_kind"] = fact.xmp->extended_packet ? "jpeg_extended_assembly" : "retained_packet";
+                        item["xmp_assembly"] = {{"guid", assembly.guid},
+                                                {"source", assembly.fragments.empty() ? json(nullptr) : metadataReference(assembly.fragments.front().source.reference)}};
+                    }
                 }
             }
         }
@@ -279,6 +310,10 @@ namespace lfs::media::json_detail {
                 result["xmp_packets"].push_back({{"source", metadataReference(packet.source.reference)},
                                                  {"state", state},
                                                  {"diagnostic", packet.diagnostic}});
+                if (packet.assembly) {
+                    add_assembly(packet.assembly);
+                    result["xmp_packets"].back()["extended_xmp"] = packet.assembly->guid;
+                }
             }
         }
         return result;

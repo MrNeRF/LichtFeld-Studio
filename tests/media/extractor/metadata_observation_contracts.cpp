@@ -7,6 +7,7 @@
 #include "media/metadata_summary_common.hpp"
 #include <algorithm>
 #include <array>
+#include <barrier>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -460,11 +461,257 @@ namespace {
         require(std::get<std::string>(fact(saved, "camera.make").value) == "Test Camera" && fact(saved, "camera.make").source.observation,
                 "facts own values and keep observation alive after catalog destruction");
         auto parallel = std::async(std::launch::async, [&] { return summarizeImageMetadata(*original); });
-        require(parallel.get().has_value(), "immutable image summary can run concurrently");
+        require(parallel.get().has_value(), "immutable image summary can run on a worker thread");
     }
 } // namespace
 
 namespace {
+    constexpr std::string_view extendedXml = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Model="extended"/></r:RDF>)";
+    constexpr std::string_view extendedGuid = "FB26FF4D7CC9F4983CB09D5D816F46C0";
+    lfs::core::image_codecs::XmpBlock standardPacket(std::string_view guid) {
+        using namespace lfs::core::image_codecs;
+        constexpr char prefix[] = "http://ns.adobe.com/xap/1.0/";
+        XmpBlock block;
+        block.envelope = XmpEnvelope::JpegApp1;
+        block.payload_offset = sizeof(prefix);
+        block.bytes.assign(std::begin(prefix), std::end(prefix));
+        const auto xml = std::string(R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:n="http://ns.adobe.com/xmp/note/" t:Make="standard" n:HasExtendedXMP=")") + std::string(guid) + R"("/></r:RDF>)";
+        block.bytes.insert(block.bytes.end(), xml.begin(), xml.end());
+        return block;
+    }
+    lfs::core::image_codecs::XmpBlock extendedSegment(std::string_view guid, std::uint32_t full_length,
+                                                      std::uint32_t offset, std::string_view bytes) {
+        using namespace lfs::core::image_codecs;
+        constexpr char prefix[] = "http://ns.adobe.com/xmp/extension/";
+        XmpBlock block;
+        block.envelope = XmpEnvelope::JpegExtendedApp1;
+        block.payload_offset = sizeof(prefix) + 40;
+        block.bytes.assign(std::begin(prefix), std::end(prefix));
+        block.bytes.insert(block.bytes.end(), guid.begin(), guid.end());
+        for (auto value : {full_length, offset})
+            for (int shift = 24; shift >= 0; shift -= 8)
+                block.bytes.push_back(static_cast<std::uint8_t>(value >> shift));
+        block.bytes.insert(block.bytes.end(), bytes.begin(), bytes.end());
+        return block;
+    }
+    SourceMetadataCatalog extendedCatalog(std::vector<lfs::core::image_codecs::XmpBlock> blocks,
+                                          std::size_t records = 4096,
+                                          lfs::core::image_codecs::MetadataStatus status = lfs::core::image_codecs::MetadataStatus::Collected) {
+        lfs::core::image_codecs::SourceXmp xmp;
+        xmp.status = status;
+        xmp.blocks = std::move(blocks);
+        auto result = catalogSourceMetadata({}, {.records = records}, {}, std::move(xmp));
+        require(bool(result), "create extended XMP source catalog");
+        return std::move(*result);
+    }
+    void extendedXmpContracts() {
+        using namespace lfs::core::image_codecs;
+        const auto length = static_cast<std::uint32_t>(extendedXml.size());
+        const auto middle = length / 2;
+        const std::vector<XmpBlock> blocks{standardPacket(extendedGuid),
+                                           extendedSegment(extendedGuid, length, middle, extendedXml.substr(middle)),
+                                           extendedSegment(extendedGuid, length, 0, extendedXml.substr(0, middle))};
+        const auto catalog = extendedCatalog(blocks);
+        const auto result = summarizeImageMetadata(catalog);
+        require(result && !result->limited && result->facts.size() == 2 && result->xmp_packets.size() == 2,
+                "reordered extended segments produce one packet and both standard/extended facts");
+        const auto& fact = result->facts[1];
+        require(fact.semantic == "camera.model" && std::get<std::string>(fact.value) == "extended" && fact.xmp && fact.xmp->assembly && fact.xmp->extended_packet,
+                "extended fact retains assembly provenance");
+        const auto& assembly = *fact.xmp->assembly;
+        require(assembly.guid == extendedGuid && assembly.md5_verified && assembly.declared_bytes == length && assembly.standard_source && assembly.fragments.size() == 2,
+                "known MD5 fixture is associated with its standard packet");
+        require(std::get<XmpBlockReference>(assembly.fragments[0].source.reference).block == 2 && assembly.fragments[0].offset == 0 &&
+                    std::get<XmpBlockReference>(assembly.fragments[1].source.reference).block == 1 && assembly.fragments[1].offset == middle,
+                "fragment provenance follows payload byte order rather than marker order");
+        require(catalog.resolve(*assembly.standard_source) && catalog.resolve(assembly.fragments[0].source) && catalog.resolve(assembly.fragments[1].source),
+                "all assembly inputs resolve in the owning observation");
+        const auto unrelated = extendedCatalog(blocks);
+        require(!unrelated.resolve(assembly.fragments[0].source), "assembled references cannot cross observations");
+        const auto json = json_detail::metadataSummary(*result);
+        require(json["facts"][1]["xmp_packet_kind"] == "jpeg_extended_assembly" && json["xmp_assemblies"][0]["md5_verified"] == true,
+                "JSON distinguishes assembled interpretation from original packets");
+        for (std::size_t i = 0; i < blocks.size(); ++i) {
+            const auto bytes = catalog.xmpBytes({i});
+            require(bytes && std::equal(bytes->begin(), bytes->end(), blocks[i].bytes.begin(), blocks[i].bytes.end()), "interpretation preserves original segments");
+        }
+        const auto reject = [&](std::vector<XmpBlock> input, XmpPacketState state) {
+            const auto summary = summarizeImageMetadata(extendedCatalog(std::move(input)));
+            require(summary && summary->facts.size() == 1 && std::get<std::string>(summary->facts[0].value) == "standard",
+                    "rejected extension does not discard standard fields or publish partial extension fields");
+            const auto packet = std::find_if(summary->xmp_packets.begin(), summary->xmp_packets.end(), [](const auto& value) { return bool(value.assembly); });
+            require(packet != summary->xmp_packets.end() && packet->state == state, "extension failure state is explicit");
+        };
+        const auto third = length / 3;
+        const std::array<XmpBlock, 4> permutation_blocks{standardPacket(extendedGuid),
+                                                         extendedSegment(extendedGuid, length, 0, extendedXml.substr(0, third)),
+                                                         extendedSegment(extendedGuid, length, third, extendedXml.substr(third, third)),
+                                                         extendedSegment(extendedGuid, length, third * 2, extendedXml.substr(third * 2))};
+        std::array<std::size_t, 4> permutation{0, 1, 2, 3};
+        do {
+            std::vector<XmpBlock> input;
+            for (const auto index : permutation)
+                input.push_back(permutation_blocks[index]);
+            const auto ordered_catalog = extendedCatalog(std::move(input));
+            const auto ordered_summary = summarizeImageMetadata(ordered_catalog);
+            require(ordered_summary && !ordered_summary->limited && ordered_summary->facts.size() == 2,
+                    "every marker permutation reassembles the same two observations");
+            for (const auto& item : ordered_summary->facts) {
+                require(item.state == MetadataValueState::Present && !item.ambiguous, "marker order does not alter the values' validity");
+                if (!item.xmp->extended_packet)
+                    continue;
+                require(std::get<std::string>(item.value) == "extended", "all marker permutations preserve the exact model");
+                const auto& inputs = item.xmp->assembly->fragments;
+                require(inputs.size() == 3 && inputs[0].offset == 0 && inputs[1].offset == third && inputs[2].offset == third * 2,
+                        "assembly provenance is always in payload order");
+                for (const auto& fragment : inputs)
+                    require(ordered_catalog.resolve(fragment.source).has_value(), "permuted fragment provenance resolves in its original catalog");
+            }
+        } while (std::next_permutation(permutation.begin(), permutation.end()));
+        auto damaged = blocks;
+        damaged.pop_back();
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = blocks;
+        damaged.push_back(blocks[1]);
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = blocks;
+        damaged[1] = extendedSegment(extendedGuid, length, middle - 1, extendedXml.substr(middle));
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = blocks;
+        damaged[1] = extendedSegment(extendedGuid, length + 1, middle, extendedXml.substr(middle));
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = blocks;
+        damaged[1].bytes.back() ^= 1;
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = {blocks[0]};
+        reject(damaged, XmpPacketState::Malformed);
+        reject({blocks[0], extendedSegment(extendedGuid, length, 0, "")}, XmpPacketState::Malformed);
+        damaged = {blocks[1], blocks[2]};
+        const auto orphan = summarizeImageMetadata(extendedCatalog(damaged));
+        require(orphan && orphan->facts.empty() && orphan->xmp_packets.size() == 1 && orphan->xmp_packets[0].state == XmpPacketState::Unsupported,
+                "unreferenced GUIDs are retained without interpretation");
+        damaged = blocks;
+        damaged.push_back(blocks[0]);
+        const auto duplicate = summarizeImageMetadata(extendedCatalog(damaged));
+        require(duplicate && duplicate->facts.size() == 2 && !duplicate->facts[0].ambiguous && !duplicate->facts[1].ambiguous &&
+                    std::any_of(duplicate->xmp_packets.begin(), duplicate->xmp_packets.end(), [](const auto& packet) { return packet.state == XmpPacketState::Unsupported; }) &&
+                    std::all_of(duplicate->facts.begin(), duplicate->facts.end(), [](const auto& value) { return value.semantic == "camera.make"; }),
+                "duplicate standard references do not silently choose an association");
+        std::string overflowing_properties;
+        for (std::size_t i = 0; i < 1024; ++i)
+            overflowing_properties += "<t:Make>x</t:Make>";
+        const std::string qualified_description = R"(</r:Description><r:Description xmlns:n="http://ns.adobe.com/xmp/note/" xml:lang="en">)";
+        for (const auto* stopping_content : std::array<const std::string*, 2>{&overflowing_properties, &qualified_description})
+            for (const bool link_first : {false, true}) {
+                auto duplicate = standardPacket(extendedGuid);
+                std::string xml(duplicate.bytes.begin() + duplicate.payload_offset, duplicate.bytes.end());
+                const auto link_attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
+                xml.erase(xml.find(link_attribute), link_attribute.size());
+                xml.resize(xml.find("/></r:RDF>"));
+                const auto link = "<n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP>";
+                xml += ">" + (link_first ? link + *stopping_content : *stopping_content + link) + "</r:Description></r:RDF>";
+                duplicate.bytes.resize(duplicate.payload_offset);
+                duplicate.bytes.insert(duplicate.bytes.end(), xml.begin(), xml.end());
+                reject({blocks[0], duplicate, blocks[1], blocks[2]}, XmpPacketState::Limited);
+            }
+        for (const auto status : {MetadataStatus::Malformed, MetadataStatus::Unsupported}) {
+            auto unavailable = blocks[0];
+            unavailable.status = status;
+            reject({blocks[0], unavailable, blocks[1], blocks[2]}, XmpPacketState::Limited);
+        }
+        for (const auto limited : {extendedCatalog(blocks, 2), extendedCatalog(blocks, 4096, MetadataStatus::Limited)}) {
+            const auto summary = summarizeImageMetadata(limited);
+            require(summary && summary->limited && summary->facts.size() == 1 && !summary->facts[0].ambiguous,
+                    "limited collection/index prevents assembly without changing independent facts");
+        }
+        for (const auto status : {MetadataStatus::Malformed, MetadataStatus::IoError}) {
+            const auto stopped_scan = summarizeImageMetadata(extendedCatalog(blocks, 4096, status));
+            require(stopped_scan && stopped_scan->limited && stopped_scan->facts.size() == 1 &&
+                        stopped_scan->xmp_packets.back().state == XmpPacketState::Limited,
+                    "a stopped carrier scan cannot establish association completeness from its retained prefix");
+        }
+        for (const auto byte_count : {std::size_t{1024 * 1024}, std::size_t{1024 * 1024 + 1}}) {
+            const std::string_view padded_guid = "F0BB4D2E44170E3C7E8A702761282D73";
+            std::string padded(extendedXml);
+            padded.resize(byte_count, ' ');
+            std::vector<XmpBlock> input{standardPacket(padded_guid)};
+            for (std::size_t offset = 0; offset < padded.size(); offset += 60000)
+                input.push_back(extendedSegment(padded_guid, static_cast<std::uint32_t>(padded.size()), static_cast<std::uint32_t>(offset),
+                                                std::string_view(padded).substr(offset, std::min(std::size_t{60000}, padded.size() - offset))));
+            const auto summary = summarizeImageMetadata(extendedCatalog(std::move(input)));
+            require(summary && summary->facts.size() == (byte_count == 1024 * 1024 ? 2 : 1) && summary->limited == (byte_count != 1024 * 1024),
+                    "assembled byte limit accepts exact complete packet and rejects overflow before allocation");
+        }
+        const auto huge = extendedSegment(extendedGuid, UINT32_MAX, UINT32_MAX - 1, "x");
+        reject({blocks[0], huge}, XmpPacketState::Limited);
+        for (const auto [size, digest] : {std::pair{std::size_t{65536}, "D5DD5A3AB1A78BE592B5AA9DBD471DA9"},
+                                          std::pair{std::size_t{65537}, "7A67BC25362520DF91BBAB12FB6BC1CC"}}) {
+            std::string xml(extendedXml);
+            xml.replace(xml.find("extended"), 8, size, 'x');
+            std::vector<XmpBlock> input{standardPacket(digest)};
+            for (std::size_t offset = 0; offset < xml.size(); offset += 60000)
+                input.push_back(extendedSegment(digest, static_cast<std::uint32_t>(xml.size()), static_cast<std::uint32_t>(offset),
+                                                std::string_view(xml).substr(offset, std::min(std::size_t{60000}, xml.size() - offset))));
+            const auto summary = summarizeImageMetadata(extendedCatalog(std::move(input)), 4096, 1024 * 1024);
+            require(summary && summary->facts.size() == (size == 65536 ? 2 : 1) && summary->limited == (size != 65536),
+                    "extended decoded-property text accepts exact parser budget and rejects overflow atomically");
+        }
+        for (std::size_t prefix = 0; prefix < blocks[1].payload_offset; ++prefix) {
+            auto truncated = blocks[1];
+            truncated.bytes.resize(prefix);
+            const char* diagnostic = nullptr;
+            require(!source_extended_xmp_segment(truncated, &diagnostic) && diagnostic, "every truncated Extended APP1 header is checked without exposing a view");
+        }
+        damaged = blocks;
+        damaged[1].bytes.resize(65534);
+        require(!source_extended_xmp_segment(damaged[1]), "borrowed APP1 view enforces the JPEG marker extent");
+        damaged = blocks;
+        damaged[1].bytes[0] ^= 1;
+        require(!source_extended_xmp_segment(damaged[1]), "borrowed view requires the exact carrier signature");
+        reject(damaged, XmpPacketState::Malformed);
+        damaged = blocks;
+        damaged[1].payload_offset = 0;
+        reject(damaged, XmpPacketState::Malformed);
+        for (const auto count : {63u, 64u}) {
+            std::vector<XmpBlock> input{blocks[0]};
+            for (std::uint32_t i = 0; i < count; ++i) {
+                const auto offset = i * length / count, end = (i + 1) * length / count;
+                input.push_back(extendedSegment(extendedGuid, length, offset, extendedXml.substr(offset, end - offset)));
+            }
+            const auto summary = summarizeImageMetadata(extendedCatalog(std::move(input)));
+            require(summary && summary->facts.size() == (count == 63 ? 2 : 1) && summary->limited == (count != 63),
+                    "64 indexed input blocks are accepted; incomplete capped input never yields assembled facts");
+        }
+        for (const auto limits : {std::pair{std::size_t{0}, std::size_t{65536}}, std::pair{std::size_t{4096}, std::size_t{0}}, std::pair{std::size_t{1}, std::size_t{65536}}}) {
+            const auto summary = summarizeImageMetadata(catalog, limits.first, limits.second);
+            require(summary && summary->limited && summary->facts.size() <= limits.first && summary->xmp_packets.size() <= limits.first,
+                    "zero/small output quotas remain bounded for assemblies");
+        }
+        std::weak_ptr<const MetadataObservationIdentity> identity;
+        MetadataSummary retained;
+        {
+            auto owner = extendedCatalog(blocks);
+            auto summary = summarizeImageMetadata(owner);
+            require(bool(summary), "create owned assembly summary");
+            identity = summary->facts[1].source.observation;
+            retained = std::move(*summary);
+        }
+        require(!identity.expired() && retained.facts[1].xmp->assembly->fragments.size() == 2, "assembly/facts outlive the catalog handle");
+        retained = {};
+        require(identity.expired(), "assembly ownership is acyclic and releases its observation");
+        std::barrier start{2};
+        auto parallel = std::async(std::launch::async, [&] {
+            start.arrive_and_wait();
+            return summarizeImageMetadata(catalog);
+        });
+        start.arrive_and_wait();
+        const auto local = summarizeImageMetadata(catalog);
+        const auto remote = parallel.get();
+        require(local && remote && local->facts.size() == 2 && remote->facts.size() == 2,
+                "concurrent readers independently summarize the same immutable catalog");
+        require(json_detail::metadataSummary(*local) == json_detail::metadataSummary(*remote),
+                "concurrent readers produce identical values and provenance");
+    }
     SourceMetadataCatalog xmpFixture(std::string_view xml, ImageExifDescription image = {}) {
         using namespace lfs::core::image_codecs;
         SourceXmp xmp;
@@ -688,6 +935,7 @@ namespace {
 } // namespace
 
 int runMetadataObservationContracts() {
+    extendedXmpContracts();
     xmpContracts();
     cameraContracts();
     require(!MediaIngest::sourceMetadata({}), "empty source path rejected before collection");

@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core::image_codecs {
@@ -139,6 +140,17 @@ namespace lfs::core::image_codecs {
         std::optional<HeifXmpItem> heif_item;
         std::optional<JxlXmpBox> jxl_box;
     };
+    struct JpegExtendedXmpSegment {
+        std::string_view guid;
+        std::uint32_t full_length = 0;
+        std::uint32_t offset = 0;
+        std::span<const std::uint8_t> bytes;
+    };
+    // Validates existing APP1 framing and borrows its GUID and payload. The
+    // returned views live only as long as the block's unchanged owning bytes.
+    // Collection and reassembly share this check; it does not parse XML.
+    [[nodiscard]] LFS_IMAGE_CODECS_API std::optional<JpegExtendedXmpSegment> source_extended_xmp_segment(
+        const XmpBlock&, const char** diagnostic = nullptr) noexcept;
     // Resolves retained bytes; an empty span is a valid empty packet.
     // TIFF references borrow its library-decoded tag bytes; source ranges retain
     // on-disk representations. HEIF/JXL own provider-decoded bytes; JPEG/PNG own originals.
