@@ -597,6 +597,21 @@ namespace {
                     std::any_of(duplicate->xmp_packets.begin(), duplicate->xmp_packets.end(), [](const auto& packet) { return packet.state == XmpPacketState::Unsupported; }) &&
                     std::all_of(duplicate->facts.begin(), duplicate->facts.end(), [](const auto& value) { return value.semantic == "camera.make"; }),
                 "duplicate standard references do not silently choose an association");
+        std::string overflowing_properties;
+        for (std::size_t i = 0; i < 1024; ++i)
+            overflowing_properties += "<t:Make>x</t:Make>";
+        for (const bool link_first : {false, true}) {
+            auto duplicate = standardPacket(extendedGuid);
+            std::string xml(duplicate.bytes.begin() + duplicate.payload_offset, duplicate.bytes.end());
+            const auto link_attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
+            xml.erase(xml.find(link_attribute), link_attribute.size());
+            xml.resize(xml.find("/></r:RDF>"));
+            const auto link = "<n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP>";
+            xml += ">" + (link_first ? link + overflowing_properties : overflowing_properties + link) + "</r:Description></r:RDF>";
+            duplicate.bytes.resize(duplicate.payload_offset);
+            duplicate.bytes.insert(duplicate.bytes.end(), xml.begin(), xml.end());
+            reject({blocks[0], duplicate, blocks[1], blocks[2]}, XmpPacketState::Limited);
+        }
         for (const auto limited : {extendedCatalog(blocks, 2), extendedCatalog(blocks, 4096, MetadataStatus::Limited)}) {
             const auto summary = summarizeImageMetadata(limited);
             require(summary && summary->limited && summary->facts.size() == 1 && !summary->facts[0].ambiguous,

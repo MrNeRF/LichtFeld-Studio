@@ -277,6 +277,29 @@ namespace lfs::media {
             packet.parser = nullptr;
             return packet;
         }
+        Packet preparePacket(const SourceMetadataCatalog& catalog, const XmpBlockReference& reference,
+                             std::size_t max_properties, std::size_t max_text, std::size_t& input_bytes) {
+            using core::image_codecs::MetadataStatus;
+            Packet packet{.max_properties = max_properties, .max_text = max_text};
+            const auto* block = catalog.xmpBlock(reference);
+            const auto bytes = catalog.xmpPayloadBytes(reference);
+            if (!bytes) {
+                packet.state = block->status == MetadataStatus::Limited     ? XmpPacketState::Limited
+                               : block->status == MetadataStatus::Malformed ? XmpPacketState::Malformed
+                                                                            : XmpPacketState::Unsupported;
+                packet.diagnostic = "XMP packet payload is unavailable for interpretation";
+            } else if (block->tiff_tag && block->tiff_tag->directory != 0) {
+                packet.state = XmpPacketState::Unsupported;
+                packet.diagnostic = "XMP belongs to a non-primary TIFF directory";
+            } else if (bytes->size() > 1024 * 1024 || bytes->size() > 4 * 1024 * 1024 - input_bytes) {
+                packet.state = XmpPacketState::Limited;
+                packet.diagnostic = "XMP interpretation input budget exhausted";
+            } else {
+                input_bytes += bytes->size();
+                return parse(*bytes, max_properties, max_text, block->envelope == core::image_codecs::XmpEnvelope::JpegApp1);
+            }
+            return packet;
+        }
         bool integer(std::string_view value, int64_t& result) {
             if (value.starts_with('+'))
                 value.remove_prefix(1);
@@ -589,7 +612,7 @@ namespace lfs::media {
             std::vector<PreparedPacket> prepared;
             std::map<std::string, ExtendedGroup> groups;
             std::size_t records = 0, input_bytes = 0;
-            bool bad_header = false, bad_link = false, limited_segment = false;
+            bool bad_header = false, bad_link = false, limited_segment = false, limited_standard = false;
             const auto property_limit = std::min(std::size_t{1024}, max_facts - summary.facts.size());
             const auto text_limit = std::min(std::size_t{64 * 1024}, max_text_bytes - charged);
             for (const auto& record : catalog.records()) {
@@ -627,24 +650,10 @@ namespace lfs::media {
                 PreparedPacket item;
                 item.source = *handle;
                 item.order = order;
-                item.packet.max_properties = property_limit;
-                item.packet.max_text = text_limit;
-                const auto bytes = catalog.xmpPayloadBytes(*reference);
-                if (!bytes) {
-                    item.packet.state = block->status == MetadataStatus::Limited     ? XmpPacketState::Limited
-                                        : block->status == MetadataStatus::Malformed ? XmpPacketState::Malformed
-                                                                                     : XmpPacketState::Unsupported;
-                    item.packet.diagnostic = "XMP packet payload is unavailable for interpretation";
-                } else if (block->tiff_tag && block->tiff_tag->directory != 0) {
-                    item.packet.state = XmpPacketState::Unsupported;
-                    item.packet.diagnostic = "XMP belongs to a non-primary TIFF directory";
-                } else if (bytes->size() > 1024 * 1024 || bytes->size() > 4 * 1024 * 1024 - input_bytes) {
-                    item.packet.state = XmpPacketState::Limited;
-                    item.packet.diagnostic = "XMP interpretation input budget exhausted";
-                } else {
-                    input_bytes += bytes->size();
-                    item.packet = parse(*bytes, property_limit, text_limit, block->envelope == XmpEnvelope::JpegApp1);
-                }
+                item.packet = preparePacket(catalog, *reference, property_limit, text_limit, input_bytes);
+                // A stopped Standard parser may hide a duplicate link, including
+                // one after the property that exhausted the parser's budget.
+                limited_standard |= block->envelope == XmpEnvelope::JpegApp1 && item.packet.state == XmpPacketState::Limited;
                 if (item.packet.state == XmpPacketState::Parsed && item.packet.link_count) {
                     const auto value = trim(item.packet.extended_guid);
                     if (!item.packet.invalid_link && item.packet.link_count == 1 && guid(value)) {
@@ -657,7 +666,7 @@ namespace lfs::media {
                 }
                 prepared.push_back(std::move(item));
             }
-            const bool incomplete = records < catalog.imageXmp().blocks.size() || catalog.imageXmp().status == MetadataStatus::Limited || limited_segment;
+            const bool incomplete = records < catalog.imageXmp().blocks.size() || catalog.imageXmp().status == MetadataStatus::Limited || limited_segment || limited_standard;
             summary.limited |= incomplete;
             for (auto& [name, group] : groups) {
                 PreparedPacket item;
@@ -684,7 +693,7 @@ namespace lfs::media {
                 if (!group.segments.empty())
                     assembly->declared_bytes = group.segments.front().view.full_length;
                 if (incomplete) {
-                    fail(XmpPacketState::Limited, "Extended XMP cannot be completed from a limited collection or reference index");
+                    fail(XmpPacketState::Limited, "Extended XMP association scan is incomplete");
                 } else if (bad_header) {
                     fail(XmpPacketState::Malformed, "Extended XMP has an unidentified malformed segment");
                 } else if (bad_link || group.anchors.size() != 1) {
@@ -804,7 +813,6 @@ namespace lfs::media {
             const auto* reference = std::get_if<XmpBlockReference>(&record);
             if (!reference)
                 continue;
-            const auto bytes = catalog.xmpPayloadBytes(*reference);
             const auto handle = catalog.bind(record);
             if (!handle)
                 continue;
@@ -812,36 +820,19 @@ namespace lfs::media {
                 summary.limited = true;
                 break;
             }
-            Packet packet{.max_properties = std::min(std::size_t{1024}, max_facts - summary.facts.size()),
-                          .max_text = std::min(std::size_t{64 * 1024}, max_text_bytes - charged)};
-            const auto* block = catalog.xmpBlock(*reference);
-            if (!bytes) {
-                packet.state = block->status == MetadataStatus::Limited     ? XmpPacketState::Limited
-                               : block->status == MetadataStatus::Malformed ? XmpPacketState::Malformed
-                                                                            : XmpPacketState::Unsupported;
-                packet.diagnostic = "XMP packet payload is unavailable for interpretation";
-            } else if (block->tiff_tag && block->tiff_tag->directory != 0) {
-                packet.state = XmpPacketState::Unsupported;
-                packet.diagnostic = "XMP belongs to a non-primary TIFF directory";
-            } else if (bytes->size() > 1024 * 1024 || bytes->size() > 4 * 1024 * 1024 - input_bytes) {
-                packet.state = XmpPacketState::Limited;
-                packet.diagnostic = "XMP interpretation input budget exhausted";
-            } else {
-                input_bytes += bytes->size();
-                packet = parse(*bytes, packet.max_properties, packet.max_text,
-                               block->envelope == core::image_codecs::XmpEnvelope::JpegApp1);
-                if (packet.state == XmpPacketState::Parsed && packet.link_count) {
-                    // A reference without any retained fragments still needs a
-                    // missing/limited assembly result. Roll back only this
-                    // projection, retaining the original catalog and EXIF.
-                    summary.facts.resize(first_xmp_fact);
-                    summary.xmp_packets.resize(first_xmp_packet);
-                    charged = first_charged;
-                    summary.limited = initial_limited;
-                    appendExtended(catalog, summary, max_facts, max_text_bytes, charged);
-                    mark_ambiguous();
-                    return;
-                }
+            auto packet = preparePacket(catalog, *reference, std::min(std::size_t{1024}, max_facts - summary.facts.size()),
+                                        std::min(std::size_t{64 * 1024}, max_text_bytes - charged), input_bytes);
+            if (packet.state == XmpPacketState::Parsed && packet.link_count) {
+                // A reference without any retained fragments still needs a
+                // missing/limited assembly result. Roll back only this
+                // projection, retaining the original catalog and EXIF.
+                summary.facts.resize(first_xmp_fact);
+                summary.xmp_packets.resize(first_xmp_packet);
+                charged = first_charged;
+                summary.limited = initial_limited;
+                appendExtended(catalog, summary, max_facts, max_text_bytes, charged);
+                mark_ambiguous();
+                return;
             }
             if (!project(packet, *handle, summary, max_facts, max_text_bytes, charged))
                 break;
