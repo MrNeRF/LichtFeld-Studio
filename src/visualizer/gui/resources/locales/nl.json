@@ -672,7 +672,6 @@
     "button.clear": "Wissen",
     "button.switch_edit_mode": "Bewerkingsmodus",
     "tooltip": {
-    "seq_camera_aspect": "Cameraverhouding",
       "btn_switch_edit": "Schakel naar bewerkmodus voor de getrainde scène",
       "ppisp_exposure_from_exif": "Initialiseert PPISP-belichting uit camerametadata. Gebruik dit wanneer EXIF-belichtingswaarden aanwezig en betrouwbaar zijn.",
       "ppisp_freeze_from_sidecar": "Laadt bestaande PPISP-correctiedata in plaats van die vanaf nul te leren. Gebruik dit om kalibratie uit een eerdere run of geimporteerde sidecar te hergebruiken.",
@@ -1358,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Cameraverhouding",
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Modus",
@@ -2434,6 +2434,9 @@
     "camera_aspect": "Cameraverhouding",
     "export_settings": "Video exporteren",
     "export_preset": "Resolutievoorinstelling",
+    "preset_landscape": "Liggend",
+    "preset_portrait": "Staand",
+    "preset_square": "Vierkant",
     "export_framerate": "Videobeeldsnelheid (FPS)",
     "export_quality": "Kwaliteit",
     "export_quality_hint": "Naar rechts: hogere kwaliteit en grotere bestanden. Een lagere CRF betekent hogere kwaliteit. CRF: 0–51.",

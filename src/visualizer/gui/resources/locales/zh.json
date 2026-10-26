@@ -672,7 +672,6 @@
     "button.clear": "清除",
     "button.switch_edit_mode": "编辑模式",
     "tooltip": {
-    "seq_camera_aspect": "相机宽高比",
       "btn_switch_edit": "切换到已训练场景的编辑模式",
       "ppisp_exposure_from_exif": "从相机 metadata 初始化 PPISP 曝光。EXIF 曝光值存在且可信时使用。",
       "ppisp_freeze_from_sidecar": "加载已有 PPISP 校正数据，而不是从零学习。用于复用之前运行或导入 sidecar 的 calibration。",
@@ -1358,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "相机宽高比",
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -2434,6 +2434,9 @@
     "camera_aspect": "相机宽高比",
     "export_settings": "视频导出",
     "export_preset": "分辨率预设",
+    "preset_landscape": "横向",
+    "preset_portrait": "纵向",
+    "preset_square": "正方形",
     "export_framerate": "视频帧率 (FPS)",
     "export_quality": "画质",
     "export_quality_hint": "向右移动可提高画质，但文件会更大。CRF 越低，画质越高。 CRF: 0–51.",

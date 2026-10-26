@@ -4,6 +4,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "project/session_state.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "visualizer_impl.hpp"
 #include <RmlUi/Core.h>
@@ -723,6 +724,10 @@ namespace lfs::vis::gui {
         installSessionTestInputController(viewer);
         auto captured = project::captureGuiSession(viewer, {}, {});
         ASSERT_TRUE(captured) << captured.error().user_message();
+        const auto serialized = io::JsonChapterDom::Json::parse(captured->sequencer.dom().dump());
+        EXPECT_EQ(serialized["preferences"]["framerate"], 30);
+        EXPECT_EQ(serialized["preferences"]["framerate_numerator"], 30000);
+        EXPECT_EQ(serialized["preferences"]["framerate_denominator"], 1001);
         auto prepared = project::prepareGuiSessionRestore(*captured);
         ASSERT_TRUE(prepared);
         ui.camera_width = 1;
@@ -738,7 +743,7 @@ namespace lfs::vis::gui {
         EXPECT_EQ(ui.framerate_denominator, 1001);
         EXPECT_EQ(ui.export_fit, 1);
         auto legacy = io::JsonChapterDom::Json::parse(captured->sequencer.dom().dump());
-        for (const auto* key : {"camera_width", "camera_height", "framerate_denominator", "export_fit"})
+        for (const auto* key : {"camera_width", "camera_height", "framerate_numerator", "framerate_denominator", "export_fit"})
             legacy["preferences"].erase(key);
         legacy["preferences"]["preset"] = "tiktok";
         legacy["preferences"]["framerate"] = 25;
@@ -756,5 +761,46 @@ namespace lfs::vis::gui {
     }
 
     TEST_F(SequencerExportWorkflowTest, CameraAspectChangesPreviewWithoutChangingExportOrViewport) { checkCameraAspectMenu(); }
+
+    TEST_F(SequencerExportWorkflowTest, NtscProjectsKeepLegacyFrameRatesUsableAndExactRatesRoundTrip) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        for (const auto [numerator, rounded] : {std::pair{24000, 24}, {30000, 30}, {60000, 60}}) {
+            ui.framerate = numerator;
+            ui.framerate_denominator = 1001;
+            auto captured = project::captureGuiSession(viewer, {}, {});
+            ASSERT_TRUE(captured);
+            const auto json = io::JsonChapterDom::Json::parse(captured->sequencer.dom().dump());
+            EXPECT_EQ(json["preferences"]["framerate"], rounded);
+            EXPECT_EQ(json["preferences"]["framerate_numerator"], numerator);
+            auto prepared = project::prepareGuiSessionRestore(*captured);
+            ASSERT_TRUE(prepared);
+            ui.framerate = 25;
+            ui.framerate_denominator = 1;
+            std::vector<project::CameraBookmarkProjectState> bookmarks;
+            project::applyGuiSession(viewer, *prepared, bookmarks);
+            EXPECT_EQ(ui.framerate, numerator);
+            EXPECT_EQ(ui.framerate_denominator, 1001);
+        }
+    }
+
+    TEST_F(SequencerExportWorkflowTest, ResolutionMenuIsGenericAndHasNoDuplicateSizes) {
+        checkExportForm([&](VisualizerImpl&, RmlModalOverlay&, Rml::ElementDocument& doc) {
+            auto* presets = dynamic_cast<Rml::ElementFormControlSelect*>(doc.QuerySelector("select[name=preset]"));
+            ASSERT_NE(presets, nullptr);
+            EXPECT_EQ(presets->GetNumOptions(), io::video::getPresetCount() - 1);
+            for (int i = 0; i < presets->GetNumOptions(); ++i) {
+                const auto* option = presets->GetOption(i);
+                const auto text = option->GetInnerRML();
+                EXPECT_EQ(text.find("YouTube"), std::string::npos);
+                EXPECT_EQ(text.find("TikTok"), std::string::npos);
+                EXPECT_EQ(text.find("Instagram"), std::string::npos);
+                EXPECT_NE(option->GetAttribute<Rml::String>("value", ""), std::to_string(static_cast<int>(io::video::VideoPreset::TIKTOK_HD)));
+            }
+        });
+    }
     TEST_F(SequencerExportWorkflowTest, CameraAspectClickOpensMenu) { checkTransportClick("btn-camera-aspect", TransportContextMenuRequest::Target::CAMERA_ASPECT); }
 } // namespace lfs::vis::gui

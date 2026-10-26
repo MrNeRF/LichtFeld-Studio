@@ -1605,12 +1605,22 @@ namespace lfs::vis::gui {
             html += R"(</span><select name="preset">)";
             for (int p = 0; p < io::video::getPresetCount(); ++p) {
                 const auto preset = static_cast<io::video::VideoPreset>(p);
+                if (preset == io::video::VideoPreset::TIKTOK_HD)
+                    continue; // Same resolution as TIKTOK; FPS is an independent setting.
                 const auto info = io::video::getPresetInfo(preset);
+                const int divisor = std::gcd(info.width, info.height);
+                const char* orientation = info.width == info.height  ? "sequencer.preset_square"
+                                          : info.width > info.height ? "sequencer.preset_landscape"
+                                                                     : "sequencer.preset_portrait";
                 const std::string label = preset == io::video::VideoPreset::CUSTOM
                                               ? LOC("ui.custom")
-                                              : std::format("{} ({}x{})", info.name, info.width, info.height);
+                                              : std::format("{} ({}x{}, {}:{})", LOC(orientation), info.width, info.height,
+                                                            info.width / divisor, info.height / divisor);
                 html += std::format(R"(<option value="{}"{}>{}</option>)", p,
-                                    preset == draft->preset ? " selected=\"selected\"" : "", escape(label));
+                                    (preset == draft->preset || (preset == io::video::VideoPreset::TIKTOK && draft->preset == io::video::VideoPreset::TIKTOK_HD))
+                                        ? " selected=\"selected\""
+                                        : "",
+                                    escape(label));
             }
             html += "</select></label>";
             html += field("width", "sequencer.export_width", draft->width);

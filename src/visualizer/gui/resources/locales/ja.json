@@ -672,7 +672,6 @@
     "button.clear": "クリア",
     "button.switch_edit_mode": "編集モード",
     "tooltip": {
-    "seq_camera_aspect": "カメラのアスペクト比",
       "btn_switch_edit": "トレーニング済みシーンの編集モードに切り替え",
       "ppisp_exposure_from_exif": "カメラ metadata から PPISP 露出を初期化します。EXIF の露出値が存在し信頼できる場合に使います。",
       "ppisp_freeze_from_sidecar": "PPISP 補正データをゼロから学習せず、既存データを読み込みます。過去の run や imported sidecar の calibration を再利用する場合に使います。",
@@ -1358,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "カメラのアスペクト比",
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -2434,6 +2434,9 @@
     "camera_aspect": "カメラのアスペクト比",
     "export_settings": "動画の書き出し",
     "export_preset": "解像度プリセット",
+    "preset_landscape": "横長",
+    "preset_portrait": "縦長",
+    "preset_square": "正方形",
     "export_framerate": "動画フレームレート (FPS)",
     "export_quality": "画質",
     "export_quality_hint": "右に動かすほど高画質になり、ファイルが大きくなります。CRFが低いほど高画質です。 CRF: 0–51.",

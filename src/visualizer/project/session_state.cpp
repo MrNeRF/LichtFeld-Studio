@@ -1855,7 +1855,19 @@ namespace lfs::vis::project {
                 optional_field("custom_height", &Preferences::custom_height),
                 optional_field("camera_width", &Preferences::camera_width),
                 optional_field("camera_height", &Preferences::camera_height),
-                optional_field("framerate", &Preferences::framerate),
+                // Older readers only know the integer key; keep it usable.
+                custom_field<Preferences>(
+                    "framerate",
+                    [](const Preferences& prefs) {
+                        const int denominator = std::max(prefs.framerate_denominator, 1);
+                        return Json(std::clamp<int64_t>((int64_t{prefs.framerate} + denominator / 2) / denominator, 1, 1000));
+                    },
+                    [](const Json& json, Preferences& prefs, std::string_view, const std::string_view field) {
+                        if (const auto value = scalar<int>(json, field))
+                            prefs.framerate = *value;
+                        return lfs::Result<void>{};
+                    }),
+                optional_field("framerate_numerator", &Preferences::framerate),
                 optional_field("framerate_denominator", &Preferences::framerate_denominator),
                 optional_field("export_fit", &Preferences::export_fit),
                 optional_field("quality", &Preferences::quality),
@@ -4231,8 +4243,12 @@ namespace lfs::vis::project {
                     ui.camera_width = width / divisor;
                     ui.camera_height = height / divisor;
                 }
-                if (!preferences->contains("framerate_denominator") || ui.framerate_denominator <= 0)
+                if (!preferences->contains("framerate_numerator") || !preferences->contains("framerate_denominator") ||
+                    ui.framerate_denominator <= 0 || ui.framerate < ui.framerate_denominator ||
+                    int64_t{ui.framerate} > 1000LL * ui.framerate_denominator) {
+                    ui.framerate = std::clamp(scalar<int>(*preferences, "framerate").value_or(30), 1, 1000);
                     ui.framerate_denominator = 1;
+                }
                 if (!preferences->contains("export_fit") || ui.export_fit < 0 || ui.export_fit > 2)
                     ui.export_fit = 0;
             }

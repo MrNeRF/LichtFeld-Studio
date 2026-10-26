@@ -25,6 +25,7 @@ def camera_runtime(tmp_path, monkeypatch):
     home.mkdir()
     for name, value in {
         "HOME": str(home),
+        "LFS_HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_DATA_HOME": str(home / ".local/share"),

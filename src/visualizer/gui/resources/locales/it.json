@@ -685,7 +685,6 @@
     "button.clear": "Cancella",
     "button.switch_edit_mode": "Modalità Modifica",
     "tooltip": {
-    "seq_camera_aspect": "Proporzione della camera",
       "btn_switch_edit": "Passa alla modalità modifica per la scena addestrata",
       "ppisp_exposure_from_exif": "Inizializza l'esposizione PPISP dai metadati camera. Usalo quando i valori EXIF sono presenti e affidabili.",
       "ppisp_freeze_from_sidecar": "Carica dati PPISP esistenti invece di apprenderli da zero. Usalo per riutilizzare calibrazione da un run precedente o da un sidecar importato.",
@@ -1371,6 +1370,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "Proporzione della camera",
     "mip_filter": "Riduci aliasing per Gaussiani sub-pixel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -2447,6 +2447,9 @@
     "camera_aspect": "Proporzione della camera",
     "export_settings": "Esportazione video",
     "export_preset": "Preset di risoluzione",
+    "preset_landscape": "Orizzontale",
+    "preset_portrait": "Verticale",
+    "preset_square": "Quadrato",
     "export_framerate": "Fotogrammi video (FPS)",
     "export_quality": "Qualità",
     "export_quality_hint": "Verso destra: qualità maggiore e file più grandi. Un CRF più basso indica qualità maggiore. CRF: 0–51.",

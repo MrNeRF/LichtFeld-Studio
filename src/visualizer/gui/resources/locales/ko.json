@@ -672,7 +672,6 @@
     "button.clear": "지우기",
     "button.switch_edit_mode": "편집 모드",
     "tooltip": {
-    "seq_camera_aspect": "카메라 화면 비율",
       "btn_switch_edit": "훈련된 장면의 편집 모드로 전환",
       "ppisp_exposure_from_exif": "camera metadata 에서 PPISP exposure 를 초기화합니다. EXIF exposure values 가 있고 신뢰할 수 있을 때 사용합니다.",
       "ppisp_freeze_from_sidecar": "처음부터 학습하지 않고 기존 PPISP correction data 를 불러옵니다. 이전 run 또는 imported sidecar 의 calibration 을 재사용할 때 사용합니다.",
@@ -1358,6 +1357,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "seq_camera_aspect": "카메라 화면 비율",
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -2434,6 +2434,9 @@
     "camera_aspect": "카메라 화면 비율",
     "export_settings": "동영상 내보내기",
     "export_preset": "해상도 프리셋",
+    "preset_landscape": "가로",
+    "preset_portrait": "세로",
+    "preset_square": "정사각형",
     "export_framerate": "동영상 프레임 속도 (FPS)",
     "export_quality": "화질",
     "export_quality_hint": "오른쪽으로 이동하면 화질과 파일 크기가 증가합니다. CRF가 낮을수록 화질이 높습니다. CRF: 0–51.",
