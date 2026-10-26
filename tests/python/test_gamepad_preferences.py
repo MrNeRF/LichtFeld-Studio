@@ -108,10 +108,26 @@ def test_short_press_expires_and_missing_axis_is_not_reported_as_zero(section, m
     state["pressed"] = []
     subject.sync()
     assert subject.buttons() == "south"
+    assert records["gamepad_test_button_rows"] == [{"label": "south"}]
     assert "LY —" in subject.axes()
     now[0] += 0.3
     subject.sync()
     assert subject.buttons() == "—"
+    assert records["gamepad_test_button_rows"] == []
+
+
+def test_disabled_navigation_is_quiet_but_errors_remain_visible(section):
+    subject, state, _selected, _records, _dirty = section
+    subject.sync()
+    assert not subject.show_navigation_status()
+    subject.navigation_error = "configuration failed"
+    assert subject.show_navigation_status()
+    assert subject.navigation_status() == "configuration failed"
+    subject.navigation_error = ""
+    state.update(available=False, error="backend failed")
+    subject.sync()
+    assert subject.show_navigation_status()
+    assert subject.navigation_status() == "backend failed"
 
 
 def test_diagnostic_rows_keep_each_axis_separate_and_mark_missing_controls(section):

@@ -12,6 +12,7 @@ class GamepadTestSection:
         self.handle = None
         self._records = None
         self._axis_records = None
+        self._button_records = None
         self._pressed = []
         self._pressed_until = 0.0
         self.navigation = {}
@@ -21,6 +22,8 @@ class GamepadTestSection:
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
         model.bind_record_list("gamepad_test_axis_rows")
+        model.bind_record_list("gamepad_test_button_rows")
+        model.bind_func("gamepad_test_buttons_empty", lambda: not self.button_names())
         model.bind("gamepad_test_id", lambda: str(self.state.get("selected", 0)),
                    lambda value: self._select_from_input("test", value))
         model.bind_func("gamepad_test_status", self.status)
@@ -34,6 +37,8 @@ class GamepadTestSection:
             model.bind("gamepad_" + name, lambda n=name, d=default: self.navigation.get(n, d),
                        lambda value, n=name: self.configure(**{n: float(value)}))
         model.bind_func("gamepad_navigation_status", self.navigation_status)
+        model.bind_func("gamepad_navigation_show_status", self.show_navigation_status)
+        model.bind_func("gamepad_navigation_mode", lambda: lf.ui.tr("preferences.navigation_" + self.navigation.get("mode", "orbit")))
         model.bind_func("gamepad_navigation_preset", lambda: lf.ui.tr("gamepad.preset." + self.navigation.get("mode", "orbit")))
         self.handle = model.get_handle()
         self.sync()
@@ -73,6 +78,7 @@ class GamepadTestSection:
         self.handle = None
         self._records = None
         self._axis_records = None
+        self._button_records = None
         self._pressed = []
 
     def deactivate(self):
@@ -112,9 +118,18 @@ class GamepadTestSection:
         self.sync()
         if self.handle is not None:
             self.handle.dirty("gamepad_navigation_status")
+            self.handle.dirty("gamepad_navigation_show_status")
 
     def navigation_status(self):
-        return self.navigation_error or lf.ui.tr("gamepad.navigation." + self.navigation.get("status", "disabled"))
+        if self.navigation_error or self.state.get("error"):
+            return self.navigation_error or self.state["error"]
+        if self.state and not self.state.get("available"):
+            return lf.ui.tr("gamepad.unavailable")
+        return lf.ui.tr("gamepad.navigation." + self.navigation.get("status", "disabled"))
+
+    def show_navigation_status(self):
+        return bool(self.navigation_error or self.state.get("error") or self.navigation.get("enabled") or
+                    (self.state and not self.state.get("available")))
 
     def sync(self):
         if self.handle is None:
@@ -155,10 +170,15 @@ class GamepadTestSection:
         if axis_rows != self._axis_records:
             self._axis_records = axis_rows
             self.handle.update_record_list("gamepad_test_axis_rows", axis_rows)
+        button_rows = [{"label": name} for name in self.button_names()]
+        if button_rows != self._button_records:
+            self._button_records = button_rows
+            self.handle.update_record_list("gamepad_test_button_rows", button_rows)
+            self.handle.dirty("gamepad_test_buttons_empty")
         if changed:
             for name in ("gamepad_test_id", "gamepad_test_status", "gamepad_test_axes", "gamepad_test_buttons"):
                 self.handle.dirty(name)
-            for name in ("navigation_enabled", "navigation_id", "navigation_status", "navigation_preset", "dead_zone", "look_speed", "move_speed"):
+            for name in ("navigation_enabled", "navigation_id", "navigation_status", "navigation_show_status", "navigation_mode", "navigation_preset", "dead_zone", "look_speed", "move_speed"):
                 self.handle.dirty("gamepad_" + name)
 
     def status(self):
@@ -192,4 +212,7 @@ class GamepadTestSection:
         return rows
 
     def buttons(self):
-        return ", ".join(dict.fromkeys([*self.state.get("buttons", ()), *self._pressed])) or "—"
+        return ", ".join(self.button_names()) or "—"
+
+    def button_names(self):
+        return list(dict.fromkeys([*self.state.get("buttons", ()), *self._pressed]))

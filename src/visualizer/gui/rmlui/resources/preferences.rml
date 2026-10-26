@@ -10,9 +10,9 @@
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
       <button class="btn preferences-nav-item preferences-nav-group" data-class-active="show_input" data-event-click="show_input">
+        <span class="preferences-nav-group-label">@tr:preferences.input</span>
         <span class="preferences-nav-disclosure" data-if="!input_expanded">&#x25B6;</span>
         <span class="preferences-nav-disclosure" data-if="input_expanded">&#x25BC;</span>
-        <span>@tr:preferences.input</span>
       </button>
       <div class="preferences-nav-children" data-if="input_expanded">
         <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
@@ -391,7 +391,7 @@
       <div class="preferences-section" data-if="show_gamepad_controls">
         <div class="section-header text-accent">@tr:gamepad.navigation_title</div>
         <div class="section-content">
-          <div class="preferences-row preferences-checkbox-row">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="gamepad.navigation_help">
             <span class="preferences-label">@tr:gamepad.navigation_enabled</span>
             <input type="checkbox" data-checked="gamepad_navigation_enabled" />
           </div>
@@ -401,31 +401,40 @@
               <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
             </select>
           </div>
-          <span class="preferences-description">@tr:gamepad.navigation_help</span>
-          <span class="preferences-description">{{ gamepad_navigation_status }}</span>
-          <span class="preferences-description">{{ gamepad_navigation_preset }}</span>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.dead_zone</span>
-            <input type="range" data-value="gamepad_dead_zone" min="0.05" max="0.5" step="0.01" />
-            <span>{{ gamepad_dead_zone }}</span>
+          <span class="preferences-description" data-if="gamepad_navigation_show_status">{{ gamepad_navigation_status }}</span>
+          <div class="preferences-row" data-attr-title="gamepad_navigation_preset">
+            <span class="preferences-label">@tr:preferences.navigation_mode</span>
+            <span>{{ gamepad_navigation_mode }}</span>
           </div>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.look_speed</span>
-            <input type="range" data-value="gamepad_look_speed" min="0.1" max="5" step="0.1" />
-            <span>{{ gamepad_look_speed }}</span>
-          </div>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.move_speed</span>
-            <input type="range" data-value="gamepad_move_speed" min="0.1" max="5" step="0.1" />
-            <span>{{ gamepad_move_speed }}</span>
+          <div class="preferences-settings-group">
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.dead_zone</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_dead_zone" min="0.05" max="0.5" step="0.01" />
+                <span class="slider-value">{{ gamepad_dead_zone }}</span>
+              </div>
+            </div>
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.look_speed</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_look_speed" min="0.1" max="5" step="0.1" />
+                <span class="slider-value">{{ gamepad_look_speed }}</span>
+              </div>
+            </div>
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.move_speed</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_move_speed" min="0.1" max="5" step="0.1" />
+                <span class="slider-value">{{ gamepad_move_speed }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
       <div class="preferences-section" data-if="show_gamepad_test">
         <div class="section-header text-accent">@tr:gamepad.title</div>
         <div class="section-content">
-          <span class="preferences-description">@tr:gamepad.help</span>
-          <select id="gamepad-test-device" class="preferences-select" data-value="gamepad_test_id">
+          <select id="gamepad-test-device" class="preferences-select" data-value="gamepad_test_id" data-tooltip="gamepad.help">
             <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
           </select>
           <span class="preferences-description">{{ gamepad_test_status }}</span>
@@ -437,9 +446,10 @@
               <span class="preferences-metric-value">{{ axis.value }}</span>
             </div>
           </div>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.buttons</span>
-            <span class="preferences-metric-values">{{ gamepad_test_buttons }}</span>
+          <span class="preferences-metric-heading text-accent">@tr:gamepad.buttons</span>
+          <div class="preferences-metric-tokens">
+            <span class="preferences-description" data-if="gamepad_test_buttons_empty">—</span>
+            <span class="preferences-metric-token" data-for="button : gamepad_test_button_rows">{{ button.label }}</span>
           </div>
         </div>
       </div>

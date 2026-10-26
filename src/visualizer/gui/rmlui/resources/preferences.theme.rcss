@@ -45,6 +45,12 @@
     border-color: transparent;
 }
 
+.preferences-metric-token {
+    color: @{primary};
+    background-color: @{surface};
+    border-color: @{border};
+}
+
 .preferences-nav-child:hover,
 .preferences-nav-child:focus-visible {
     color: @{text};
