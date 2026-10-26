@@ -7,6 +7,7 @@
 #include "media/metadata_summary_common.hpp"
 #include <algorithm>
 #include <array>
+#include <barrier>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -460,7 +461,7 @@ namespace {
         require(std::get<std::string>(fact(saved, "camera.make").value) == "Test Camera" && fact(saved, "camera.make").source.observation,
                 "facts own values and keep observation alive after catalog destruction");
         auto parallel = std::async(std::launch::async, [&] { return summarizeImageMetadata(*original); });
-        require(parallel.get().has_value(), "immutable image summary can run concurrently");
+        require(parallel.get().has_value(), "immutable image summary can run on a worker thread");
     }
 } // namespace
 
@@ -670,8 +671,18 @@ namespace {
         require(!identity.expired() && retained.facts[1].xmp->assembly->fragments.size() == 2, "assembly/facts outlive the catalog handle");
         retained = {};
         require(identity.expired(), "assembly ownership is acyclic and releases its observation");
-        auto parallel = std::async(std::launch::async, [&] { return summarizeImageMetadata(catalog); });
-        require(parallel.get()->facts.size() == 2, "independent assembly calls support concurrent readers");
+        std::barrier start{2};
+        auto parallel = std::async(std::launch::async, [&] {
+            start.arrive_and_wait();
+            return summarizeImageMetadata(catalog);
+        });
+        start.arrive_and_wait();
+        const auto local = summarizeImageMetadata(catalog);
+        const auto remote = parallel.get();
+        require(local && remote && local->facts.size() == 2 && remote->facts.size() == 2,
+                "concurrent readers independently summarize the same immutable catalog");
+        require(json_detail::metadataSummary(*local) == json_detail::metadataSummary(*remote),
+                "concurrent readers produce identical values and provenance");
     }
     SourceMetadataCatalog xmpFixture(std::string_view xml, ImageExifDescription image = {}) {
         using namespace lfs::core::image_codecs;

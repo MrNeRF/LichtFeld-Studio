@@ -515,6 +515,15 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(fact["state"], "unsupported")
         self.assertTrue(fact["ambiguous"])
 
+        packet = self._rdf_packet('<e:GPSAltitudeRef>2</e:GPSAltitudeRef>').encode()
+        guid, fragments = self._extended_xmp(packet)
+        self._xmp_jpeg(path, [self._extended_standard(guid, altitude), *fragments])
+        result, _ = self.invoke("source-metadata", path)
+        fact = next(f for f in result["summary"]["facts"] if f["semantic"] == "gps.altitude_sea_level")
+        self.assertEqual((fact["state"], fact["value"], fact["origin"]),
+                         ("unsupported", "25/2", "interpreted_source"))
+        self.assertEqual(fact["inputs"], [])
+
     def test_source_metadata_jpeg_extended_xmp_association_and_xml(self):
         path = self.root / "association.jpg"
         packet = self._rdf_packet('<t:Model>extended</t:Model>').encode()
