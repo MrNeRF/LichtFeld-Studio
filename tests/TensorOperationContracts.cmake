@@ -34,9 +34,13 @@ if(LFS_TENSOR_HIP)
     list(APPEND _tensor_contract_backends HIP)
 endif()
 foreach(_backend IN LISTS _tensor_contract_backends)
+    set(_tensor_backend_filter "Backends/TensorOperationContracts.*/${_backend}:Backends/TensorBackendSemantics.*/${_backend}")
+    if(_backend STREQUAL "HIP")
+        string(APPEND _tensor_backend_filter ":Backends/HipReadbackSnapshots.*/HIP")
+    endif()
     add_test(NAME TensorOperationContracts.${_backend}
         COMMAND tensor_operation_contracts "--require-tensor-backend=${_backend}"
-        "--gtest_filter=Backends/TensorOperationContracts.*/${_backend}:Backends/TensorBackendSemantics.*/${_backend}")
+        "--gtest_filter=${_tensor_backend_filter}")
     set_tests_properties(TensorOperationContracts.${_backend} PROPERTIES
         LABELS "gpu;tensor" TIMEOUT 180)
     list(APPEND _tensor_contract_tests TensorOperationContracts.${_backend})

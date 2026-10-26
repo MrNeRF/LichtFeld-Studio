@@ -220,6 +220,46 @@ namespace {
         }
     }
 
+    TEST_P(TensorOperationContracts, InvalidIndicesNeverPublishStagedReadbackBytes) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Staged GPU readback requires GPU storage";
+        const auto input = values({1, 2, 3}, {3});
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        std::array<float, 2> destination{-7, -8};
+        EXPECT_ANY_THROW({
+            const auto invalid = input.index_select(0, indices);
+            TensorReadback download;
+            download.enqueue(invalid);
+            download.wait(std::as_writable_bytes(std::span(destination)));
+        });
+        EXPECT_EQ(destination, (std::array<float, 2>{-7, -8}));
+    }
+
+#ifdef LFS_TENSOR_HIP
+    class HipReadbackSnapshots : public lfs::test::TensorBackendContract {};
+
+    TEST_P(HipReadbackSnapshots, PackedFaultSurvivesContextConsumption) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        const auto invalid = input.index_select(0, indices);
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        TensorReadbackRing ring(*GetParam().backend, 1, 2 * sizeof(float), queue);
+        ring.enqueue(invalid, 0, 2 * sizeof(float), 0, 0);
+        EXPECT_ANY_THROW(queue.wait());
+        // The marker is recorded after the context fault has been consumed;
+        // only the packed slot still owns the failed snapshot.
+        EXPECT_NO_THROW(ring.seal(0).wait());
+        EXPECT_ANY_THROW((void)ring.poll(0));
+        EXPECT_ANY_THROW(ring.wait(0));
+        EXPECT_ANY_THROW((void)ring.slot_bytes(0));
+        EXPECT_ANY_THROW(ring.release(0));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, HipReadbackSnapshots,
+                             testing::Values(lfs::test::TensorBackendTarget{"HIP", GpuBackend::HIP}),
+                             lfs::test::tensor_backend_parameter_name);
+#endif
+
     TEST_P(TensorOperationContracts, CompiledExpressionsUseHostParametersAndTerminalFolds) {
         if (!GetParam().backend)
             GTEST_SKIP() << "Compiled expression kernels target GPU backends";

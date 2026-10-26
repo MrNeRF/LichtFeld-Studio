@@ -1522,13 +1522,23 @@ namespace lfs::core {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before polling");
-        return slot.fence->ready();
+        if (!slot.fence->ready())
+            return false;
+#ifdef LFS_TENSOR_HIP
+        if (slot.hip)
+            return slot.hip->ready();
+#endif
+        return true;
     }
     void TensorReadbackRing::wait(size_t index) const {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before waiting");
         slot.fence->wait();
+#ifdef LFS_TENSOR_HIP
+        if (slot.hip)
+            slot.hip->wait();
+#endif
     }
     void TensorReadbackRing::release(size_t index) {
         auto& slot = impl_->slots.at(index);
@@ -1543,6 +1553,11 @@ namespace lfs::core {
         slot.sealed = false;
     }
     std::span<std::byte> TensorReadbackRing::slot_bytes(size_t index) {
-        return {static_cast<std::byte*>(impl_->slots.at(index).host), impl_->bytes};
+        auto& slot = impl_->slots.at(index);
+#ifdef LFS_TENSOR_HIP
+        if (slot.hip && !slot.hip->ready())
+            throw std::logic_error("HIP packed readback bytes are not complete");
+#endif
+        return {static_cast<std::byte*>(slot.host), impl_->bytes};
     }
 } // namespace lfs::core

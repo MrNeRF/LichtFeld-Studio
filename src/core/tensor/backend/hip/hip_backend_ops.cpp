@@ -1249,10 +1249,24 @@ namespace lfs::core::internal {
             LfsHipReadback* staging_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
             void* host_ = nullptr;
+            size_t capacity_ = 0;
             bool pending_ = false;
 
+            bool ready_locked() {
+                if (!pending_)
+                    return true;
+                LfsHipError error{};
+                int32_t ready = 0;
+                // Use the owned destination so a failed poll stays latched;
+                // nullptr would explicitly discard the failed snapshot.
+                check(owner_->api.readback_poll(owner_->context, staging_, host_, capacity_, &ready, &error), error);
+                if (ready)
+                    pending_ = false;
+                return ready != 0;
+            }
+
         public:
-            Slot(std::shared_ptr<Impl> owner, size_t bytes) : owner_(std::move(owner)) {
+            Slot(std::shared_ptr<Impl> owner, size_t bytes) : owner_(std::move(owner)), capacity_(bytes) {
                 std::lock_guard lock(owner_->mutex);
                 LfsHipError error{};
                 check(owner_->api.readback_create(owner_->context, &staging_, &error), error);
@@ -1274,18 +1288,24 @@ namespace lfs::core::internal {
                 std::lock_guard lock(owner_->mutex);
                 const auto input = owner_->view(source, bytes);
                 LfsHipError error{};
-                check(owner_->api.readback_append(owner_->context, staging_, input.buffer, input.offset, bytes, destination_offset, &error), error);
                 pending_ = true;
+                check(owner_->api.readback_append(owner_->context, staging_, input.buffer, input.offset, bytes, destination_offset, &error), error);
             }
             void release() override {
+                std::lock_guard lock(owner_->mutex);
+                require(ready_locked(), "Cannot release incomplete HIP packed readback slot");
+            }
+            bool ready() override {
+                std::lock_guard lock(owner_->mutex);
+                return ready_locked();
+            }
+            void wait() override {
+                std::lock_guard lock(owner_->mutex);
                 if (!pending_)
                     return;
-                std::lock_guard lock(owner_->mutex);
                 LfsHipError error{};
-                int32_t ready = 0;
-                check(owner_->api.readback_poll(owner_->context, staging_, nullptr, 0, &ready, &error), error);
-                require(ready != 0, "Cannot release incomplete HIP packed readback slot");
-                pending_ = false;
+                check(owner_->api.readback_wait(owner_->context, staging_, &error), error);
+                require(ready_locked(), "HIP packed readback is not ready after waiting");
             }
         };
         return std::make_unique<Slot>(impl_, bytes);

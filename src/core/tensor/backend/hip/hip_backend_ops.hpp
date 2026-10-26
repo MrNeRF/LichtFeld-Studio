@@ -46,6 +46,8 @@ namespace lfs::core::internal {
         virtual ~HipReadbackSlot() = default;
         virtual void* data() const = 0;
         virtual void append(StorageRef, size_t bytes, size_t destination_offset) = 0;
+        virtual bool ready() = 0;
+        virtual void wait() = 0;
         virtual void release() = 0;
     };
     class HipUploadBuffer {
