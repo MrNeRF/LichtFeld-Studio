@@ -389,6 +389,7 @@ class PreferencesPanel(Panel):
         self._last_state = self._state()
         self._refresh_selection()
         self._keymap.on_mount(doc)
+        self._gamepad_test.mount(doc)
         self._ensure_keymap_rows_if_visible()
         if callable(getattr(doc, "query_selector_all", None)) and callable(
             getattr(doc, "add_event_listener", None)

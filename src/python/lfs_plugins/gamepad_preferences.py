@@ -15,17 +15,19 @@ class GamepadTestSection:
         self._pressed_until = 0.0
         self.navigation = {}
         self.navigation_error = ""
+        self._selection_intent = set()
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
-        model.bind("gamepad_test_id", lambda: str(self.state.get("selected", 0)), self.select)
+        model.bind("gamepad_test_id", lambda: str(self.state.get("selected", 0)),
+                   lambda value: self._select_from_input("test", value))
         model.bind_func("gamepad_test_status", self.status)
         model.bind_func("gamepad_test_axes", self.axes)
         model.bind_func("gamepad_test_buttons", self.buttons)
         model.bind("gamepad_navigation_enabled", lambda: self.navigation.get("enabled", False),
                    lambda value: self.configure(enabled=bool(value)))
         model.bind("gamepad_navigation_id", lambda: str(self.navigation.get("selected", 0)),
-                   lambda value: self.configure(selected=int(value)))
+                   lambda value: self._select_from_input("navigation", value))
         for name, default in (("dead_zone", 0.15), ("look_speed", 1.5), ("move_speed", 1.0)):
             model.bind("gamepad_" + name, lambda n=name, d=default: self.navigation.get(n, d),
                        lambda value, n=name: self.configure(**{n: float(value)}))
@@ -34,7 +36,37 @@ class GamepadTestSection:
         self.handle = model.get_handle()
         self.sync()
 
+    def mount(self, document):
+        self._selection_intent.clear()
+        if not callable(getattr(document, "get_element_by_id", None)):
+            return
+        for channel in ("test", "navigation"):
+            element = document.get_element_by_id("gamepad-" + channel + "-device")
+            if element is not None:
+                for event in ("mousedown", "keydown"):
+                    element.add_event_listener(event, lambda _event, c=channel: self._selection_intent.add(c))
+                element.add_event_listener("blur", lambda _event, c=channel: self._selection_intent.discard(c))
+
+    def _select_from_input(self, channel, value):
+        # RmlUI also writes select values while constructing/rebuilding options.
+        # Only pointer/keyboard interaction may change the native device choice.
+        if channel not in self._selection_intent:
+            if self.handle is not None:
+                self.handle.dirty("gamepad_test_id" if channel == "test" else "gamepad_navigation_id")
+            return
+        self._selection_intent.discard(channel)
+        if channel == "test":
+            self.select(value)
+        else:
+            try:
+                identifier = int(value)
+            except (TypeError, ValueError):
+                return
+            if 0 <= identifier <= 0xFFFFFFFF:
+                self.configure(selected=identifier)
+
     def close(self):
+        self._selection_intent.clear()
         self.deactivate()
         self.handle = None
         self._records = None

@@ -382,7 +382,7 @@
           </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:gamepad.navigation_device</span>
-            <select class="preferences-select" data-value="gamepad_navigation_id">
+            <select id="gamepad-navigation-device" class="preferences-select" data-value="gamepad_navigation_id">
               <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
             </select>
           </div>
@@ -408,7 +408,7 @@
         <div class="section-header text-accent">@tr:gamepad.title</div>
         <div class="section-content">
           <span class="preferences-description">@tr:gamepad.help</span>
-          <select class="preferences-select" data-value="gamepad_test_id">
+          <select id="gamepad-test-device" class="preferences-select" data-value="gamepad_test_id">
             <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
           </select>
           <span class="preferences-description">{{ gamepad_test_status }}</span>

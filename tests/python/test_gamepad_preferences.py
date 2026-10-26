@@ -150,3 +150,34 @@ def test_navigation_status_and_presets_exist_in_every_locale():
     for path in root.glob("*.json"):
         values = json.loads(path.read_text(encoding="utf-8"))
         assert all(values.get(key) for key in keys), path.name
+
+
+def test_option_rebuild_does_not_replace_native_navigation_selection(section, monkeypatch):
+    subject, state, selected, records, dirty = section
+    ui = subject.sync.__globals__["lf"].ui
+    navigation = dict(enabled=True, selected=22, dead_zone=0.2, look_speed=2.0, move_speed=1.2)
+    changes = []
+    monkeypatch.setattr(ui, "get_gamepad_navigation_state", lambda: dict(navigation), raising=False)
+    monkeypatch.setattr(ui, "set_gamepad_navigation", lambda *args: changes.append(args) or True, raising=False)
+    listeners = {channel: {} for channel in ("test", "navigation")}
+    elements = {"gamepad-" + channel + "-device": SimpleNamespace(
+        add_event_listener=lambda event, callback, c=channel: listeners[c].update({event: callback})
+    ) for channel in listeners}
+    subject.mount(SimpleNamespace(get_element_by_id=elements.get))
+    subject.sync()
+    subject._select_from_input("navigation", "0")
+    subject._select_from_input("test", "0")
+    assert not changes and not selected
+    assert subject.navigation["selected"] == 22
+    listeners["navigation"]["mousedown"](None)
+    subject._select_from_input("navigation", "11")
+    assert changes == [(True, 11, 0.2, 2.0, 1.2)]
+    subject._select_from_input("navigation", "0")
+    assert len(changes) == 1
+    listeners["test"]["keydown"](None)
+    subject._select_from_input("test", "22")
+    assert selected == [22]
+    listeners["navigation"]["keydown"](None)
+    listeners["navigation"]["blur"](None)
+    subject._select_from_input("navigation", "0")
+    assert len(changes) == 1
