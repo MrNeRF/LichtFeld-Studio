@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "Las posiciones, escalas, rotaciones u opacidad de las gaussianas contienen geometría no finita o no representable. Comprueba la fuente y su transformación.",
   "collision.export_suffix": "El archivo de metadatos de vóxeles debe terminar en .voxel.json. Ruta de salida:",
   "collision.export_write": "No se pudo escribir la salida de vóxeles. Comprueba el espacio en disco, los permisos y esta ruta:",
-  "collision.export_publish": "No se pudo publicar el par de archivos de vóxeles. Comprueba las rutas y los permisos. Conserva los archivos de recuperación indicados (salida <- recuperación, código de error):",
+  "collision.export_publish": "No se pudo publicar el par de archivos de vóxeles. Comprueba las rutas y los permisos. Conserva los archivos de recuperación indicados (salida ← recuperación, código de error):",
   "collision.walk_budget": "Se superó el límite de consultas al caminar. Reduce la velocidad o aumenta el radio del cuerpo.",
   "collision.output_limit": "La salida de colisión supera un límite de tamaño. Aumenta el tamaño de celda y vuelve a generarla.",
   "collision.memory": "No hay suficiente memoria de GPU para la colisión. Libera memoria de GPU o aumenta el tamaño de celda.",

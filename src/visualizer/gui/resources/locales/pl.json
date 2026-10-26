@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "Pozycje, skale, obroty lub nieprzezroczystość gaussowskich splatów zawierają nieskończoną lub niereprezentowalną geometrię. Sprawdź źródło i jego przekształcenie.",
   "collision.export_suffix": "Plik metadanych wokseli musi kończyć się na .voxel.json. Ścieżka wyjściowa:",
   "collision.export_write": "Nie można zapisać danych wokseli. Sprawdź miejsce na dysku, uprawnienia i tę ścieżkę:",
-  "collision.export_publish": "Nie można opublikować pary plików wokseli. Sprawdź ścieżki i uprawnienia. Zachowaj wskazane pliki odzyskiwania (wyjście <- odzyskiwanie, kod błędu):",
+  "collision.export_publish": "Nie można opublikować pary plików wokseli. Sprawdź ścieżki i uprawnienia. Zachowaj wskazane pliki odzyskiwania (wyjście ← odzyskiwanie, kod błędu):",
   "collision.walk_budget": "Przekroczono limit zapytań chodzenia. Zmniejsz prędkość lub zwiększ promień ciała.",
   "collision.output_limit": "Dane kolizji przekraczają limit rozmiaru. Zwiększ rozmiar komórek i wygeneruj ponownie.",
   "collision.memory": "Za mało pamięci GPU dla kolizji. Zwolnij pamięć GPU lub zwiększ rozmiar komórki.",

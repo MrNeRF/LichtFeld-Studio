@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "가우시안 위치, 배율, 회전 또는 불투명도에 유한하지 않거나 표현할 수 없는 형상이 있습니다. 소스와 변환을 확인하세요.",
   "collision.export_suffix": "복셀 메타데이터 출력은 .voxel.json으로 끝나야 합니다. 출력 경로:",
   "collision.export_write": "복셀 출력을 쓸 수 없습니다. 디스크 공간, 권한과 다음 경로를 확인하세요:",
-  "collision.export_publish": "복셀 파일 쌍을 게시할 수 없습니다. 경로와 권한을 확인하고 표시된 복구 파일을 보관하세요 (출력 <- 복구, 오류 코드):",
+  "collision.export_publish": "복셀 파일 쌍을 게시할 수 없습니다. 경로와 권한을 확인하고 표시된 복구 파일을 보관하세요 (출력 ← 복구, 오류 코드):",
   "collision.walk_budget": "걷기 쿼리 한도를 초과했습니다. 속도를 줄이거나 몸체 반경을 늘리세요.",
   "collision.output_limit": "충돌 출력이 크기 제한을 초과합니다. 셀 크기를 늘리고 다시 생성하세요.",
   "collision.memory": "충돌에 필요한 GPU 메모리가 부족합니다. GPU 메모리를 확보하거나 셀 크기를 늘리세요.",

@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "Les positions, échelles, rotations ou opacités des gaussiennes contiennent une géométrie non finie ou non représentable. Vérifiez la source et sa transformation.",
   "collision.export_suffix": "Le fichier de métadonnées des voxels doit se terminer par .voxel.json. Chemin de sortie :",
   "collision.export_write": "Impossible d'écrire la sortie voxel. Vérifiez l'espace disque, les permissions et ce chemin :",
-  "collision.export_publish": "Impossible de publier la paire de fichiers voxels. Vérifiez les chemins et les permissions. Conservez les fichiers de récupération indiqués (sortie <- récupération, code d'erreur) :",
+  "collision.export_publish": "Impossible de publier la paire de fichiers voxels. Vérifiez les chemins et les permissions. Conservez les fichiers de récupération indiqués (sortie ← récupération, code d'erreur) :",
   "collision.walk_budget": "La limite de requêtes de marche a été dépassée. Réduisez la vitesse ou augmentez le rayon du corps.",
   "collision.output_limit": "La sortie de collision dépasse une limite de taille. Augmentez la taille des cellules et régénérez-la.",
   "collision.memory": "La mémoire GPU est insuffisante pour la collision. Libérez de la mémoire GPU ou augmentez la taille des cellules.",

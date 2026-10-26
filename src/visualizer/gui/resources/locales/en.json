@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "Gaussian positions, scales, rotations or opacity contain non-finite or unrepresentable geometry. Check the source and its transform.",
   "collision.export_suffix": "Voxel metadata output must end in .voxel.json. Output path:",
   "collision.export_write": "Could not write voxel output. Check disk space, permissions and this path:",
-  "collision.export_publish": "Could not publish the voxel pair. Check the paths and permissions. Keep any listed recovery files (output <- recovery, error code):",
+  "collision.export_publish": "Could not publish the voxel pair. Check the paths and permissions. Keep any listed recovery files (output ← recovery, error code):",
   "collision.walk_budget": "Walk exceeded its query limit. Reduce speed or increase the body radius.",
   "collision.output_limit": "Collision output exceeds a size limit. Increase cell size and regenerate.",
   "collision.memory": "Not enough GPU memory for collision. Free GPU memory or increase cell size.",

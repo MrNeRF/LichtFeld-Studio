@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "高斯的位置、缩放、旋转或不透明度包含非有限或无法表示的几何数据。请检查源及其变换。",
   "collision.export_suffix": "体素元数据输出必须以 .voxel.json 结尾。输出路径：",
   "collision.export_write": "无法写入体素输出。请检查磁盘空间、权限及以下路径：",
-  "collision.export_publish": "无法发布体素文件对。请检查路径和权限，并保留列出的恢复文件（输出 <- 恢复文件，错误代码）：",
+  "collision.export_publish": "无法发布体素文件对。请检查路径和权限，并保留列出的恢复文件（输出 ← 恢复文件，错误代码）：",
   "collision.walk_budget": "行走查询超出上限。请降低速度或增大身体半径。",
   "collision.output_limit": "碰撞输出超过大小限制。请增大单元格尺寸后重新生成。",
   "collision.memory": "用于碰撞的GPU内存不足。请释放GPU内存或增大单元格尺寸。",

@@ -3375,7 +3375,7 @@
   "collision.geometry_nonfinite": "Posities, schalen, rotaties of dekking van Gaussianen bevatten niet-eindige of niet-representeerbare geometrie. Controleer de bron en transformatie.",
   "collision.export_suffix": "Het voxel-metadatabestand moet eindigen op .voxel.json. Uitvoerpad:",
   "collision.export_write": "Voxel-uitvoer kon niet worden geschreven. Controleer schijfruimte, rechten en dit pad:",
-  "collision.export_publish": "Het voxel-bestandspaar kon niet worden gepubliceerd. Controleer paden en rechten. Bewaar vermelde herstelbestanden (uitvoer <- herstel, foutcode):",
+  "collision.export_publish": "Het voxel-bestandspaar kon niet worden gepubliceerd. Controleer paden en rechten. Bewaar vermelde herstelbestanden (uitvoer ← herstel, foutcode):",
   "collision.walk_budget": "De zoeklimiet voor lopen is overschreden. Verlaag de snelheid of vergroot de lichaamsstraal.",
   "collision.output_limit": "De botsingsuitvoer overschrijdt een groottelimiet. Vergroot de celgrootte en genereer opnieuw.",
   "collision.memory": "Onvoldoende GPU-geheugen voor botsingen. Maak GPU-geheugen vrij of vergroot de celgrootte.",
