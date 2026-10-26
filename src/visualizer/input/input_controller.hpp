@@ -145,6 +145,7 @@ namespace lfs::vis {
         // Update function for continuous input (WASD movement and inertia)
         void update(float delta_time);
         bool configureGamepadNavigation(input::GamepadNavigationSettings settings, SDL_JoystickID device);
+        [[nodiscard]] const std::string& gamepadConfigurationError() const { return gamepad_configuration_error_; }
         void suspendGamepadNavigation();
         [[nodiscard]] const input::GamepadNavigationSettings& gamepadNavigationSettings() const { return gamepad_settings_; }
         [[nodiscard]] const char* gamepadNavigationStatus() const { return gamepad_settings_.enabled ? gamepad_session_.status() : "disabled"; }
@@ -217,6 +218,7 @@ namespace lfs::vis {
         bool updateGamepadNavigation(float delta_time);
         void stopGamepadMotion();
         input::GamepadNavigationSettings gamepad_settings_;
+        std::string gamepad_configuration_error_;
         input::GamepadNavigationSession gamepad_session_;
         uint64_t gamepad_click_epoch_ = 0;
         bool gamepad_owned_ = false;

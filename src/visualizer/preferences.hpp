@@ -38,6 +38,8 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::Status setRenderingDefaults(std::string_view serialized);
         [[nodiscard]] std::string renderingDefaults();
+        [[nodiscard]] lfs::Status setGamepadNavigation(std::string_view serialized);
+        [[nodiscard]] std::string gamepadNavigation();
         [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
         [[nodiscard]] std::string viewportVignette();
         void setSidebarDefaults(float width, float scene_ratio, const std::string& active_tab);

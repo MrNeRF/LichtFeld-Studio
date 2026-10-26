@@ -2178,18 +2178,7 @@ namespace lfs::vis::gui {
         if (action == "set_render_mode") {
             if (!rm)
                 return;
-            auto settings = rm->getSettings();
-            const bool enable_point_cloud = value == "points";
-            const bool point_cloud_changed = settings.point_cloud_mode != enable_point_cloud;
-            settings.point_cloud_mode = enable_point_cloud;
-            settings.show_rings = value == "rings";
-            settings.show_center_markers = value == "centers";
-            rm->updateSettings(settings,
-                               point_cloud_changed && enable_point_cloud
-                                   ? lfs::vis::DirtyFlag::ALL
-                                   : lfs::vis::DirtyFlag::SELECTION);
-            if (auto* const viewer = lfs::python::get_visualizer())
-                viewer->projectMarkSessionChapterCommitted("VIEW");
+            rm->setViewportRenderMode(value);
         } else if (action == "set_camera_navigation_mode") {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)

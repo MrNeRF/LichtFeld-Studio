@@ -1302,7 +1302,7 @@ def test_input_page_reset_does_not_reset_other_pages(preferences_panel_module, p
     panel._set_navigation_speed(73)
     resets = []
     panel._keymap.reset_to_default = lambda: resets.append("shortcuts")
-    panel._gamepad_test.configure = lambda **_kwargs: resets.append("gamepad")
+    panel._gamepad_test.reset = lambda: resets.append("gamepad")
     module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(buttons[1])
     module.lf.ui.message_dialog = lambda *_args: None
     panel._on_reset_current_section(None, None, None)

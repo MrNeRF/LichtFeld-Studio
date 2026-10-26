@@ -200,3 +200,91 @@ TEST_F(NavigationTest, NeutralDurationUsesTimeRatherThanFrameCount) {
         EXPECT_LE(seconds, 0.12f + 1.0f / fps);
     }
 }
+
+TEST_F(NavigationTest, ProfileRoundTripExcludesSessionOwnership) {
+    settings.bindings.common[8] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
+    const auto serialized = settings.json();
+    EXPECT_FALSE(serialized.contains("enabled"));
+    EXPECT_FALSE(serialized.contains("selected"));
+    const auto restored = GamepadNavigationSettings::fromJson(serialized);
+    EXPECT_FALSE(restored.enabled);
+    EXPECT_EQ(restored.bindings.common[8], settings.bindings.common[8]);
+    EXPECT_EQ(restored.json(), serialized);
+}
+
+TEST_F(NavigationTest, InvalidProfilesAndConflictsAreRejected) {
+    auto profile = settings.json();
+    profile["schema_version"] = 1.5;
+    EXPECT_THROW(GamepadNavigationSettings::fromJson(profile), std::invalid_argument);
+    profile = settings.json();
+    profile["device"] = 42;
+    EXPECT_THROW(GamepadNavigationSettings::fromJson(profile), std::invalid_argument);
+    settings.bindings.common[8] = settings.bindings.common[5];
+    EXPECT_THROW(settings.validate(), std::invalid_argument);
+    settings = GamepadNavigationSettings{true};
+    settings.bindings.modes[4][6] = GamepadBinding{SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
+    EXPECT_THROW(settings.validate(), std::invalid_argument);
+    EXPECT_THROW(controlFromName("button.a"), std::invalid_argument);
+}
+
+TEST_F(NavigationTest, ModeOverrideCanExplicitlyClearOrInherit) {
+    settings.bindings.modes[0][0] = GamepadBinding{};
+    auto restored = GamepadNavigationSettings::fromJson(settings.json());
+    EXPECT_EQ(restored.bindings.resolve(0, 0).positive, -1);
+    EXPECT_EQ(restored.bindings.resolve(1, 0).positive, SDL_GAMEPAD_AXIS_LEFTX);
+    restored.bindings.modes[0][0].reset();
+    restored.bindings.modes[4][7].reset();
+    const auto again = GamepadNavigationSettings::fromJson(restored.json());
+    EXPECT_EQ(again.bindings.resolve(0, 0).positive, SDL_GAMEPAD_AXIS_LEFTX);
+    EXPECT_EQ(again.bindings.resolve(4, 7).positive, -1);
+}
+
+TEST_F(NavigationTest, ButtonsCanDriveSignedMovementAndInversion) {
+    settings.bindings.common[0] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH,
+                                  SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_WEST, true};
+    settings.validate();
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_FLOAT_EQ(tick().move.x, -1);
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = false;
+    sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_FLOAT_EQ(tick().move.x, 1);
+}
+
+TEST_F(NavigationTest, ConfigRevisionRequiresReleaseAndNewViewportClick) {
+    arm();
+    ++settings.revision;
+    EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "viewport");
+    arm();
+    EXPECT_STREQ(session.status(), "ready");
+}
+
+TEST_F(NavigationTest, DiscreteTriggerActionFiresOncePerPress) {
+    settings.bindings.common[4] = {};
+    settings.bindings.common[8] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER};
+    settings.validate();
+    arm();
+    sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
+    EXPECT_EQ(tick().navigation_step, 1);
+    EXPECT_EQ(tick().navigation_step, 0);
+    sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 0;
+    tick();
+    sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
+    EXPECT_EQ(tick().navigation_step, 1);
+}
+
+TEST_F(NavigationTest, SemanticCommandsAreIndependentOfVendorButtonLetters) {
+    settings.bindings.common[10] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
+    settings.validate();
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_EQ(tick().rendering_step, 1);
+    EXPECT_EQ(tick().rendering_step, 0);
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = false;
+    tick();
+    sample.pressed[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_EQ(tick().rendering_step, 1);
+    sample.has_button[SDL_GAMEPAD_BUTTON_NORTH] = false;
+    EXPECT_EQ(tick().rendering_step, 0);
+}

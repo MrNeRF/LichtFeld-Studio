@@ -18,6 +18,7 @@ class GamepadTestSection:
         self.navigation = {}
         self.navigation_error = ""
         self._selection_intent = set()
+        self.bindings = None
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
@@ -38,8 +39,11 @@ class GamepadTestSection:
                        lambda value, n=name: self.configure(**{n: float(value)}))
         model.bind_func("gamepad_navigation_status", self.navigation_status)
         model.bind_func("gamepad_navigation_show_status", self.show_navigation_status)
-        model.bind_func("gamepad_navigation_preset", lambda: lf.ui.tr("gamepad.preset." + self.navigation.get("mode", "orbit")))
+        model.bind_func("gamepad_navigation_preset", lambda: lf.ui.tr("gamepad.binding.open_hint"))
         self.handle = model.get_handle()
+        if hasattr(lf.ui, "get_gamepad_binding_catalog_json"):
+            from .gamepad_bindings import GamepadBindingsSection
+            self.bindings = GamepadBindingsSection(self, model)
         self.sync()
 
     def mount(self, document):
@@ -81,6 +85,8 @@ class GamepadTestSection:
         self._pressed = []
 
     def deactivate(self):
+        if self.bindings:
+            self.bindings.cancel()
         self._selection_intent.clear()
         if self.state.get("selected"):
             select = getattr(lf.ui, "set_gamepad_test_device", None)
@@ -119,7 +125,22 @@ class GamepadTestSection:
             self.handle.dirty("gamepad_navigation_status")
             self.handle.dirty("gamepad_navigation_show_status")
 
+    def reset(self):
+        if not callable(getattr(lf.ui, "set_gamepad_navigation", None)):
+            return None
+        setter = getattr(lf.ui, "set_gamepad_profile_json", None)
+        if setter:
+            try:
+                if not setter(lf.ui.get_gamepad_default_profile_json()):
+                    return lf.ui.tr("gamepad.binding.save_error")
+            except (ValueError, RuntimeError):
+                return lf.ui.tr("gamepad.binding.save_error")
+        self.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
+        return self.navigation_error or None
+
     def navigation_status(self):
+        if self.navigation.get("configuration_error"):
+            return lf.ui.tr("gamepad.binding.profile_error")
         if self.navigation_error or self.state.get("error"):
             return self.navigation_error or self.state["error"]
         if self.state and not self.state.get("available"):
@@ -127,7 +148,7 @@ class GamepadTestSection:
         return lf.ui.tr("gamepad.navigation." + self.navigation.get("status", "disabled"))
 
     def show_navigation_status(self):
-        return bool(self.navigation_error or self.state.get("error") or self.navigation.get("enabled") or
+        return bool(self.navigation_error or self.navigation.get("configuration_error") or self.state.get("error") or self.navigation.get("enabled") or
                     (self.state and not self.state.get("available")))
 
     def sync(self):
@@ -153,6 +174,8 @@ class GamepadTestSection:
             if redraw:
                 redraw(delay=max(0.0, self._pressed_until - time.monotonic()))
         self.state = state
+        if self.bindings:
+            self.bindings.sync()
         records = [{"id": "0", "label": lf.ui.tr("gamepad.none")}]
         for device in state.get("devices", ()):
             label = f"{device['name']} · #{device['id']}"

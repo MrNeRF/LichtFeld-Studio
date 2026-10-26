@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "input/gamepad_navigation.hpp"
 #include "core/native_fs.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
@@ -716,6 +717,39 @@ namespace lfs::vis {
 
         settings = std::move(candidate);
         return {};
+    }
+
+    std::string UserPreferences::gamepadNavigation() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto found = impl_->values.find("gamepad_navigation");
+        return found == impl_->values.end() ? "{}" : found->dump();
+    }
+
+    lfs::Status UserPreferences::setGamepadNavigation(const std::string_view serialized) {
+        try {
+            const auto validated = input::GamepadNavigationSettings::fromJson(json::parse(serialized)).json();
+            std::lock_guard lock(impl_->mutex);
+            impl_->loadLocked();
+            if (!impl_->paths || !impl_->writable)
+                return invalidRenderingPreference("Gamepad preferences are not writable");
+            if (const auto old = impl_->values.find("gamepad_navigation"); old != impl_->values.end() && old->is_object() &&
+                old->contains("schema_version") && (*old)["schema_version"] != 1)
+                return invalidRenderingPreference("Existing gamepad profile uses an unsupported schema");
+            auto candidate = impl_->values;
+            candidate["gamepad_navigation"] = validated;
+            auto merged = core::persisted_settings::mergeForWrite(impl_->paths->preferencesFile(), candidate,
+                                                                 "schema_version", 1, nullptr, {}, impl_->paths->backupDir());
+            // Overrides removed by reset/inherit must not be resurrected by a deep merge.
+            merged["gamepad_navigation"] = validated;
+            if (auto result = impl_->paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
+                return result;
+            impl_->values = merged;
+            impl_->persisted_values = std::move(merged);
+            return {};
+        } catch (const std::exception& error) {
+            return invalidRenderingPreference(error.what());
+        }
     }
 
     lfs::Status UserPreferences::setRenderingDefaults(const std::string_view serialized) {

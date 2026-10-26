@@ -303,6 +303,7 @@ namespace lfs::vis {
         // Settings management (also used for restoring saved state).
         void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
+        bool setViewportRenderMode(std::string_view mode);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
         struct CameraProjectionSettings {

@@ -183,6 +183,7 @@ class PreferencesPanel(Panel):
         model.bind_func("show_input_shortcuts", lambda: self._section == "input" and self._input_page == "shortcuts")
         model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
         model.bind_func("show_gamepad_controls", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "controls")
+        model.bind_func("show_gamepad_bindings", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "bindings")
         model.bind_func("show_gamepad_test", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
@@ -1583,7 +1584,7 @@ class PreferencesPanel(Panel):
     def _dirty_input_pages(self):
         if self._handle:
             for name in ("input_expanded", "input_page_title", "show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
-                         "show_gamepad_controls", "show_gamepad_test", "show_section_reset", "reset_section_label"):
+                         "show_gamepad_controls", "show_gamepad_test", "show_gamepad_bindings", "show_section_reset", "reset_section_label"):
                 self._handle.dirty(name)
 
     def _set_input_page(self, page):
@@ -1610,10 +1611,12 @@ class PreferencesPanel(Panel):
         key = "preferences.input_" + self._input_page
         if self._input_page == "gamepad" and self._gamepad_page == "test":
             key = "preferences.gamepad_diagnostics"
+        if self._input_page == "gamepad" and self._gamepad_page == "bindings":
+            key = "gamepad.binding.title"
         return lf.ui.tr(key)
 
     def _set_gamepad_page(self, page):
-        if page not in ("controls", "test") or self._gamepad_page == page:
+        if page not in ("controls", "test", "bindings") or self._gamepad_page == page:
             return
         self._gamepad_test.deactivate()
         self._gamepad_page = page
@@ -1637,7 +1640,7 @@ class PreferencesPanel(Panel):
     def _show_section_reset(self):
         return self._section not in ("portal", "file_associations") and not (
             self._section == "mcp" and self._mcp_safe_mode) and not (
-            self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
+            self._section == "input" and self._input_page == "gamepad" and self._gamepad_page != "controls")
 
     def _portal_connection_status(self):
         account = self._portal_connection_snapshot()
@@ -1821,7 +1824,9 @@ class PreferencesPanel(Panel):
                 self._keymap.reset_to_default()
             if section in ("input", "input_gamepad"):
                 self._gamepad_test.deactivate()
-                self._gamepad_test.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
+                error = self._gamepad_test.reset()
+                if error:
+                    return error
             if section != "input" and section != "input_navigation":
                 self._refresh_selection()
                 return None

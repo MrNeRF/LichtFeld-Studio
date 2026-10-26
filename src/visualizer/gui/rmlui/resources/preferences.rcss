@@ -553,3 +553,10 @@ body.floating-panel {
     height: 18dp;
     text-align: center;
 }
+
+/* Flexible setting records keep labels and actions readable in narrow dialogs. */
+.preferences-assignment-row { display: flex; flex-wrap: wrap; align-items: center; padding: 10dp 0; border-bottom-width: 1dp; }
+.preferences-assignment-label { flex: 1 1 160dp; display: flex; flex-direction: column; }
+.preferences-assignment-value { flex: 1 1 150dp; display: flex; flex-direction: column; margin: 4dp 8dp; }
+.preferences-assignment-actions { display: flex; flex-wrap: wrap; margin: 4dp 0; }
+.preferences-assignment-actions button { margin: 3dp; }

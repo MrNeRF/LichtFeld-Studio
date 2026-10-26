@@ -587,6 +587,12 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+        try {
+            gamepad_settings_ = input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(UserPreferences::instance().gamepadNavigation()));
+        } catch (const std::exception& error) {
+            gamepad_configuration_error_ = error.what();
+            LOG_WARN("Gamepad configuration was not loaded: {}", error.what());
+        }
         applyNewProjectNavigationDefaults();
 
         // The GUI is initialized before this controller exists.
@@ -2635,12 +2641,21 @@ namespace lfs::vis {
             stopGamepadMotion();
             return false;
         }
+        const auto previous_device = window->gamepads().navigationSample().id;
         if (!window->gamepads().selectNavigation(device)) {
             if (settings.enabled)
                 return false;
             (void)window->gamepads().selectNavigation(0);
         }
         suspendGamepadNavigation();
+        if (settings.json() != gamepad_settings_.json() || !gamepad_configuration_error_.empty()) {
+            if (const auto result = UserPreferences::instance().setGamepadNavigation(settings.json().dump()); !result) {
+                (void)window->gamepads().selectNavigation(previous_device);
+                throw std::runtime_error(lfs::format_for_developer(result.error()));
+            }
+            gamepad_configuration_error_.clear();
+        }
+        settings.revision = gamepad_settings_.revision + 1;
         gamepad_settings_ = settings;
         python::request_redraw();
         return true;
@@ -2726,6 +2741,24 @@ namespace lfs::vis {
         }
         if (intent.exit_walk) {
             setCameraNavigationMode(CameraNavigationMode::Orbit);
+            return true;
+        }
+        if (intent.navigation_step) {
+            // Navigation enum order is not a serialization contract; use the public names.
+            const auto name = cameraNavigationModeName(camera_navigation_mode_);
+            const auto found = std::find(input::gamepad_modes.begin(), input::gamepad_modes.end(), name);
+            if (found != input::gamepad_modes.end()) {
+                const auto index = (std::distance(input::gamepad_modes.begin(), found) + intent.navigation_step + 5) % 5;
+                if (const auto mode = cameraNavigationModeFromName(std::string(input::gamepad_modes[index])))
+                    setCameraNavigationMode(*mode);
+            }
+            return true;
+        }
+        if (intent.rendering_step && rendering) {
+            const auto& settings = rendering->getSettings();
+            const int current = settings.point_cloud_mode ? 1 : settings.show_rings ? 2 : settings.show_center_markers ? 3 : 0;
+            constexpr std::array<std::string_view, 4> modes{"splats", "points", "rings", "centers"};
+            rendering->setViewportRenderMode(modes[(current + intent.rendering_step + 4) % 4]);
             return true;
         }
         const bool settling = gamepad_owned_ &&

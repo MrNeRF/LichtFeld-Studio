@@ -30,6 +30,7 @@
       <div class="preferences-page-header" data-if="show_input">
         <span class="preferences-page-title">{{ input_page_title }}</span>
         <button class="btn btn--secondary" data-if="show_gamepad_controls" data-event-click="gamepad_page('test')">@tr:preferences.open_gamepad_test</button>
+        <button class="btn btn--secondary" data-if="show_gamepad_bindings" data-event-click="gamepad_page('controls')">@tr:preferences.back_to_gamepad</button>
         <button class="btn btn--secondary" data-if="show_gamepad_test" data-event-click="gamepad_page('controls')">@tr:preferences.back_to_gamepad</button>
       </div>
     <div class="preferences-content">
@@ -390,6 +391,7 @@
 
       <div class="preferences-section" data-if="show_gamepad_controls">
         <div class="section-header text-accent">@tr:gamepad.navigation_title</div>
+        <button class="btn btn--secondary" data-event-click="gamepad_page('bindings')">@tr:gamepad.binding.title</button>
         <div class="section-content">
           <div class="preferences-row preferences-checkbox-row" data-tooltip="gamepad.navigation_help">
             <span class="preferences-label">@tr:gamepad.navigation_enabled</span>
@@ -427,6 +429,37 @@
           </div>
         </div>
       </div>
+      <div class="preferences-section" data-if="show_gamepad_bindings">
+        <div class="preferences-row">
+          <span class="preferences-label">@tr:gamepad.binding.context</span>
+          <select class="preferences-select" data-value="gamepad_binding_scope">
+            <option data-for="scope : gamepad_binding_scopes" data-attr-value="scope.id">{{ scope.label }}</option>
+          </select>
+        </div>
+        <p class="preferences-description">{{ gamepad_binding_message }}</p>
+        <div class="preferences-assignment-actions" data-if="gamepad_binding_capturing">
+          <button class="btn btn--secondary" data-event-click="gamepad_binding_cancel()">@tr:common.cancel</button>
+          <button class="btn btn--secondary" data-if="gamepad_binding_can_skip" data-event-click="gamepad_binding_skip()">@tr:gamepad.binding.skip</button>
+        </div>
+        <div class="preferences-assignment-row" data-for="binding : gamepad_binding_rows">
+          <div class="preferences-assignment-label">
+            <span>{{ binding.label }}</span>
+            <span class="preferences-description" data-if="binding.inherited">@tr:gamepad.binding.inherited</span>
+          </div>
+          <div class="preferences-assignment-value">
+            <span>{{ binding.value }}</span>
+            <span data-if="binding.inverted">@tr:gamepad.binding.inverted</span>
+          </div>
+          <div class="preferences-assignment-actions">
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_edit(binding.id, 'assign')">@tr:gamepad.binding.assign</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_edit(binding.id, 'clear')">@tr:gamepad.binding.clear</button>
+            <button class="btn btn--secondary" data-if="binding.continuous" data-event-click="gamepad_binding_edit(binding.id, 'invert')">@tr:gamepad.binding.invert</button>
+            <button class="btn btn--secondary" data-if="binding.mode" data-event-click="gamepad_binding_edit(binding.id, 'inherit')">@tr:gamepad.binding.inherit</button>
+          </div>
+        </div>
+        <button class="btn btn--secondary" data-event-click="gamepad_binding_reset()">@tr:gamepad.binding.reset</button>
+      </div>
+
       <div class="preferences-section" data-if="show_gamepad_test">
         <div class="section-header text-accent">@tr:gamepad.title</div>
         <div class="section-content">

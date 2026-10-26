@@ -5427,6 +5427,15 @@ namespace lfs::python {
             result["buttons"] = buttons;
             result["pressed"] = pressed;
             result["labels"] = labels;
+            nb::list raw_buttons, raw_pressed, has_buttons;
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                raw_buttons.append(state.sample.buttons[i]);
+                raw_pressed.append(state.sample.pressed[i]);
+                has_buttons.append(state.sample.has_button[i]);
+            }
+            result["raw_buttons"] = raw_buttons;
+            result["raw_pressed"] = raw_pressed;
+            result["has_buttons"] = has_buttons;
             return result; }, "Read connected controllers and the selected diagnostic sample; never moves the camera.");
 
         m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
@@ -5438,18 +5447,18 @@ namespace lfs::python {
                                                                                    false); }, nb::arg("device_id"), "Select a connected controller for input testing, or zero for none.");
 
         m.def("get_gamepad_navigation_state", [] {
-            using State = std::tuple<bool, uint32_t, float, float, float, std::string, std::string>;
+            using State = std::tuple<bool, uint32_t, float, float, float, std::string, std::string, std::string>;
             const auto state = invoke_on_viewer([]() -> State {
                 auto* controller = vis::InputController::instance();
                 auto* window = vis::services().windowOrNull();
                 if (!controller || !window)
-                    return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit"};
+                    return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", ""};
                 const auto& settings = controller->gamepadNavigationSettings();
                 return {settings.enabled, window->gamepads().navigationSample().id,
                         settings.dead_zone, settings.look_speed, settings.move_speed,
                         controller->gamepadNavigationStatus(),
-                        vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode())};
-            }, State{false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit"});
+                        vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode()), controller->gamepadConfigurationError()};
+            }, State{false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", ""});
             nb::dict result;
             result["enabled"] = std::get<0>(state);
             result["selected"] = std::get<1>(state);
@@ -5458,18 +5467,56 @@ namespace lfs::python {
             result["move_speed"] = std::get<4>(state);
             result["status"] = std::get<5>(state);
             result["mode"] = std::get<6>(state);
+            result["configuration_error"] = std::get<7>(state);
             return result;
         }, "Read this session's gamepad navigation settings and routing status.");
 
         m.def("set_gamepad_navigation", [](bool enabled, uint32_t device, float dead_zone, float look_speed, float move_speed) {
             return invoke_on_viewer([=] {
-                if (auto* controller = vis::InputController::instance())
-                    return controller->configureGamepadNavigation({enabled, dead_zone, look_speed, move_speed}, device);
+                if (auto* controller = vis::InputController::instance()) {
+                    auto settings = controller->gamepadNavigationSettings();
+                    settings.enabled = enabled;
+                    settings.dead_zone = dead_zone;
+                    settings.look_speed = look_speed;
+                    settings.move_speed = move_speed;
+                    return controller->configureGamepadNavigation(settings, device);
+                }
                 return false;
             }, false);
         }, nb::arg("enabled"), nb::arg("device_id"), nb::arg("dead_zone") = 0.15f,
            nb::arg("look_speed") = 1.5f, nb::arg("move_speed") = 1.0f,
-           "Configure this session's navigation controller; requires viewport click and neutral before motion.");
+           "Configure navigation and persist tuning; device and enablement remain session-only.");
+
+        m.def("get_gamepad_profile_json", [] {
+            return invoke_on_viewer([] {
+                const auto* controller = vis::InputController::instance();
+                return controller ? controller->gamepadNavigationSettings().json().dump() : vis::input::GamepadNavigationSettings{}.json().dump();
+            }, std::string("{}"));
+        });
+        m.def("get_gamepad_default_profile_json", [] { return vis::input::GamepadNavigationSettings{}.json().dump(); });
+        m.def("set_gamepad_profile_json", [](const std::string& serialized) {
+            const auto settings = vis::input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([settings = settings] () mutable {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                settings.enabled = controller->gamepadNavigationSettings().enabled;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false);
+        }, nb::arg("serialized"));
+        m.def("get_gamepad_binding_catalog_json", [] {
+            using namespace vis::input;
+            nlohmann::json catalog{{"actions", nlohmann::json::array()}, {"controls", nlohmann::json::array()}, {"modes", gamepad_modes}};
+            for (size_t a = 0; a < gamepad_action_count; ++a) {
+                nlohmann::json modes = nlohmann::json::array();
+                for (size_t m = 0; m < gamepad_modes.size(); ++m) if (allowedGamepadAction(m, a)) modes.push_back(gamepad_modes[m]);
+                catalog["actions"].push_back({{"id", gamepad_actions[a]}, {"continuous", continuousAction(a)}, {"modes", modes}});
+            }
+            for (int c = -1; c < SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT; ++c)
+                catalog["controls"].push_back({{"id", controlName(c)}, {"axis", c >= 0 && c < SDL_GAMEPAD_AXIS_COUNT},
+                                               {"signed", c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER},
+                                               {"index", c < SDL_GAMEPAD_AXIS_COUNT ? c : c - SDL_GAMEPAD_AXIS_COUNT}});
+            return catalog.dump();
+        });
 
         m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
         m.def("set_rendering_defaults_json", [](const std::string& serialized) {
