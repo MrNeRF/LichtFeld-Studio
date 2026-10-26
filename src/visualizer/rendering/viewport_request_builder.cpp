@@ -563,6 +563,7 @@ namespace lfs::vis {
                  .node_visibility_mask = ctx.scene_state.node_visibility_mask,
                  .node_active_sh_degrees = ctx.scene_state.node_active_sh_degrees},
             .filters = {},
+            .reveal = ctx.scene_state.reveal,
             .overlay =
                 {.markers =
                      {.show_object_outline = outline,

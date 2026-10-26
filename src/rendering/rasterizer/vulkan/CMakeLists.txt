@@ -190,6 +190,40 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                 )
                 list(APPEND _outputs ${_banded_out})
         endif()
+        # Reveal shaders are selected only while a sequencer reveal is active.
+        if(OUT_NAME MATCHES "^projection_forward" OR OUT_NAME STREQUAL "cull_splats"
+           OR OUT_NAME MATCHES "^rasterize_forward_3dgut" OR OUT_NAME MATCHES "^rasterize_outline_gut")
+                set(_reveal_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal.spv)
+                set(_reveal_validation)
+                if(_VULKAN_SPIRV_VAL)
+                        set(_reveal_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_out})
+                endif()
+                add_custom_command(
+                        OUTPUT ${_reveal_out}
+                        COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1
+                                -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_out}
+                        ${_reveal_validation}
+                        DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                        COMMENT "slangc ${OUT_NAME}_reveal.spv" VERBATIM)
+                list(APPEND _outputs ${_reveal_out})
+                if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward)")
+                        set(_reveal_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal_banded.spv)
+                        set(_reveal_banded_validation)
+                        if(_VULKAN_SPIRV_VAL)
+                                set(_reveal_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_banded_out})
+                        endif()
+                        add_custom_command(
+                                OUTPUT ${_reveal_banded_out}
+                                COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                        ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1 -DLFS_BANDED_EXPORT_RENDER=1
+                                        -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_banded_out}
+                                ${_reveal_banded_validation}
+                                DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                                COMMENT "slangc ${OUT_NAME}_reveal_banded.spv" VERBATIM)
+                        list(APPEND _outputs ${_reveal_banded_out})
+                endif()
+        endif()
         set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_outputs} PARENT_SCOPE)
 endfunction()
 

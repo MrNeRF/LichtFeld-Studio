@@ -31,6 +31,8 @@
 #include "scene/viewer_splat_quantize.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/keyframe.hpp"
+#include "sequencer/reveal_effect_i18n.hpp"
+#include "sequencer/reveal_render_state.hpp"
 #include "sequencer/timeline_view_math.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
@@ -56,6 +58,40 @@
 namespace lfs::vis::gui {
 
     namespace {
+        [[nodiscard]] bool sameReveal(const std::optional<sequencer::RevealClip>& a, const std::optional<sequencer::RevealClip>& b) {
+            return (!a && !b) || (a && b && a->start == b->start && a->end == b->end &&
+                                  a->softness == b->softness && a->effect == b->effect);
+        }
+
+        class RevealUndoEntry final : public op::UndoEntry {
+        public:
+            RevealUndoEntry(SequencerController& controller, std::weak_ptr<void> lifetime,
+                            std::optional<sequencer::RevealClip> before, std::optional<sequencer::RevealClip> after,
+                            float duration_before, float duration_after)
+                : controller_(controller), lifetime_(std::move(lifetime)), generation_(controller.timelineGeneration()), before_(before), after_(after), duration_before_(duration_before), duration_after_(duration_after) {}
+            void undo() override { apply(after_, before_, duration_after_, duration_before_); }
+            void redo() override { apply(before_, after_, duration_before_, duration_after_); }
+            [[nodiscard]] std::string name() const override { return lfs::event::LocalizationManager::getInstance().get("sequencer.change_reveal"); }
+            [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+
+        private:
+            void apply(const std::optional<sequencer::RevealClip>& expected, const std::optional<sequencer::RevealClip>& desired,
+                       float expected_duration, float desired_duration) {
+                if (lifetime_.expired() || controller_.timelineGeneration() != generation_ ||
+                    !sameReveal(controller_.timeline().revealClip(), expected))
+                    throw op::HistoryStaleEntryError(lfs::event::LocalizationManager::getInstance().get("sequencer.reveal_history_stale"));
+                const bool restore_duration = controller_.clipDuration() == expected_duration;
+                controller_.setRevealClip(desired);
+                if (restore_duration && desired_duration != expected_duration)
+                    controller_.setClipDuration(desired_duration);
+            }
+            SequencerController& controller_;
+            std::weak_ptr<void> lifetime_;
+            uint64_t generation_;
+            std::optional<sequencer::RevealClip> before_, after_;
+            float duration_before_, duration_after_;
+        };
+
         [[nodiscard]] bool sameKeyframe(const sequencer::Keyframe& lhs, const sequencer::Keyframe& rhs) {
             return lhs.id == rhs.id && lhs.time == rhs.time && lhs.position == rhs.position &&
                    lhs.rotation == rhs.rotation && lhs.focal_length_mm == rhs.focal_length_mm &&
@@ -435,6 +471,10 @@ namespace lfs::vis::gui {
           panel_(std::make_unique<RmlSequencerPanel>(controller_, ui_state_, rml_manager)),
           overlay_(std::make_unique<RmlSequencerOverlay>(controller_, rml_manager)),
           scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {
+        controller_.setRevealCommitCallback([this](auto before, auto after, float duration_before, float duration_after) {
+            if (!op::undoHistory().isPlaybackActive())
+                op::undoHistory().push(std::make_unique<RevealUndoEntry>(controller_, history_lifetime_, before, after, duration_before, duration_after));
+        });
         controller_.setKeyframeRemovedCallback([this](const sequencer::Keyframe& keyframe, const float duration_before) {
             auto& history = op::undoHistory();
             if (!history.isPlaybackActive())
@@ -460,6 +500,7 @@ namespace lfs::vis::gui {
     }
 
     SequencerUIManager::~SequencerUIManager() {
+        controller_.setRevealCommitCallback({});
         controller_.setKeyframeRemovedCallback({});
         controller_.setKeyframeTimeCommitCallback({});
         controller_.setKeyframeEasingChangedCallback({});
@@ -657,6 +698,7 @@ namespace lfs::vis::gui {
         state::SceneCleared::when([this](const auto&) {
             if (controller_.timeline().realKeyframeCount() == 0 &&
                 !controller_.timeline().hasAnimationClip() &&
+                !controller_.timeline().revealClip() &&
                 !controller_.hasPlySequence())
                 return;
             stopPlySequenceStreaming();
@@ -1418,20 +1460,32 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::tickPlaybackBeforeSceneRender() {
+        const auto update_reveal = [this] {
+            auto* const rm = viewer_->getRenderingManager();
+            auto* const sm = viewer_->getSceneManager();
+            if (!rm)
+                return;
+            const auto& clip = controller_.timeline().revealClip();
+            rm->setSequencerReveal(clip && sm ? makeRevealRenderState(sm->getScene(), *clip, controller_.playhead())
+                                              : std::nullopt);
+        };
         if (export_ply_frame_) {
             last_playback_tick_time_ = std::nullopt;
             applyPlySequenceFrame();
+            update_reveal();
             return;
         }
         if (!controller_.isPlaying()) {
             last_playback_tick_time_ = std::nullopt;
             drainPlySequenceStream();
             applyPlySequenceFrame();
+            update_reveal();
             return;
         }
 
         advancePanelClock();
         advancePlayback(advancePlaybackClock());
+        update_reveal();
         playback_ticked_before_scene_ = true;
     }
 
@@ -1587,7 +1641,7 @@ namespace lfs::vis::gui {
         const auto buttons = [this, draft, export_label = export_label, cancel_label = cancel_label]() {
             const bool valid = draft->validated().has_value();
             return std::vector<core::ModalButtonSpec>{
-                {export_label, "primary", !valid || controller_.timeline().realKeyframeCount() == 0},
+                {export_label, "primary", !valid || (controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().revealClip())},
                 {cancel_label, "secondary", false}};
         };
         const auto body = [this, draft]() {
@@ -1598,7 +1652,7 @@ namespace lfs::vis::gui {
                     escape(LOC(label)), name, escape(value));
             };
             std::string html = R"(<div class="project-form sequencer-export-form">)";
-            if (controller_.timeline().realKeyframeCount() == 0)
+            if (controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().revealClip())
                 html += std::format(R"(<div class="modal-note warning-text">{}</div>)", escape(LOC("sequencer.export_no_keyframes")));
             html += R"(<label class="modal-field"><span class="modal-field-label">)";
             html += escape(LOC("sequencer.export_preset"));
@@ -1726,7 +1780,7 @@ namespace lfs::vis::gui {
             const auto options = draft->validated();
             if (!options)
                 return;
-            if (controller_.timeline().realKeyframeCount() == 0)
+            if (controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().revealClip())
                 return;
             const auto path = SaveMp4FileDialog("camera_path");
             if (path.empty() || lifetime.expired())
@@ -1785,7 +1839,7 @@ namespace lfs::vis::gui {
         const auto timeline_menu = panel_->consumeContextMenu();
         if (timeline_menu.open) {
             overlay_->showContextMenu(panel_input_.mouse_x, panel_input_.mouse_y,
-                                      timeline_menu.keyframe, timeline_menu.time, viewport_edit_mode_);
+                                      timeline_menu.keyframe, timeline_menu.time, viewport_edit_mode_, timeline_menu.reveal);
         }
 
         const auto time_req = panel_->consumeTimeEditRequest();
@@ -1867,9 +1921,10 @@ namespace lfs::vis::gui {
             case Target::PATH:
                 items.push_back({LOC("sequencer.load_camera_path"), "load_path"});
                 items.push_back({LOC("sequencer.save_camera_path"), "save_path", false,
-                                 controller_.timeline().realKeyframeCount() == 0});
+                                 controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().revealClip()});
                 items.push_back({LOC("sequencer.clear_camera_path"), "clear_path", true,
-                                 controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().hasAnimationClip()});
+                                 controller_.timeline().realKeyframeCount() == 0 && !controller_.timeline().hasAnimationClip() &&
+                                     !controller_.timeline().revealClip()});
                 break;
             case Target::PLY:
                 if (const auto* sequence = controller_.plySequence())
@@ -1919,6 +1974,10 @@ namespace lfs::vis::gui {
                 }
                 break;
             }
+            case Target::REVEAL:
+                for (size_t i = 0; i < reveal_effect_keys.size(); ++i)
+                    items.push_back({LOC(reveal_effect_keys[i]), std::format("reveal_{}", i + 1)});
+                break;
             default:
                 break;
             }
@@ -2016,6 +2075,26 @@ namespace lfs::vis::gui {
                                            ui_state_.pip_preview_scale = value;
                                    }
                                    break;
+                               case Target::REVEAL: {
+                                   if (!action.starts_with("reveal_"))
+                                       break;
+                                   const int effect = std::stoi(std::string(action.substr(7)));
+                                   if (effect < 1 || effect > 11)
+                                       break;
+                                   controller_.beginRevealEdit();
+                                   auto clip = controller_.timeline().revealClip();
+                                   if (!clip) {
+                                       const float start = std::min(controller_.playhead(), sequencer::MAX_SEQUENCER_TIME_SECONDS - 3.0f);
+                                       clip = sequencer::RevealClip{start, start + 3.0f, 0.1f};
+                                       if (controller_.timeline().realKeyframeCount() == 0 && !controller_.hasPlySequence() &&
+                                           controller_.clipDuration() == sequencer::DEFAULT_CLIP_DURATION_SECONDS)
+                                           controller_.setClipDuration(start + 3.0f);
+                                   }
+                                   clip->effect = static_cast<sequencer::RevealEffect>(effect);
+                                   controller_.setRevealClip(clip);
+                                   controller_.endRevealEdit();
+                                   break;
+                               }
                                case Target::NONE:
                                    break;
                                }
@@ -2856,6 +2935,9 @@ namespace lfs::vis::gui {
 
         while (auto action = overlay_->consumeAction()) {
             switch (action->action) {
+            case Action::REMOVE_REVEAL:
+                controller_.setRevealClip(std::nullopt);
+                break;
             case Action::ADD_KEYFRAME: {
                 const auto& cam = viewer_->getViewport().camera;
                 auto* const rm = viewer_->getRenderingManager();

@@ -1515,6 +1515,12 @@ namespace lfs::vis {
                 std::vector<float> cpu(static_cast<std::size_t>(ParamCount) * 4u, 0.0f);
                 float* const dst = cpu.data();
 
+                if (request.reveal) {
+                    const auto& reveal = *request.reveal;
+                    writeVec4(dst, RevealParams, glm::vec4(1.0f + std::clamp(reveal.softness, 0.001f, 1.0f), reveal.min_y, reveal.max_y, std::clamp(reveal.progress, 0.0f, 1.0f)));
+                    writeVec4(dst, RevealEffectBounds, glm::vec4(static_cast<float>(reveal.effect), reveal.center_x, reveal.center_z, reveal.radius));
+                }
+
                 const auto write_crop = [&](const lfs::rendering::GaussianScopedBoxFilter& crop,
                                             const std::size_t flags_index) {
                     writeVec4(dst,
@@ -9255,6 +9261,7 @@ namespace lfs::vis {
                 uniforms.grid_height = _CEIL_DIV(uniforms.camera_height, TILE_HEIGHT);
             }
         }
+        renderer_.setRevealEffect(request.reveal.has_value());
         renderer_.setBandedExport((uniforms.mip_filter & 4u) != 0u);
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.

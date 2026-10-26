@@ -1062,6 +1062,46 @@ namespace {
         }
     }
 
+    TEST(SequencerTimelineRegressionTest, RevealClipRoundTripsAndClampsProgress) {
+        Timeline timeline;
+        timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f});
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(1.0f), 0.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(3.5f), 0.5f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(6.0f), 1.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->softness, 0.2f);
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        for (const auto effect : {lfs::sequencer::RevealEffect::Magic, lfs::sequencer::RevealEffect::Spread,
+                                  lfs::sequencer::RevealEffect::Unroll, lfs::sequencer::RevealEffect::Twister,
+                                  lfs::sequencer::RevealEffect::Rain, lfs::sequencer::RevealEffect::Unveil,
+                                  lfs::sequencer::RevealEffect::LightEdge, lfs::sequencer::RevealEffect::Rainbow,
+                                  lfs::sequencer::RevealEffect::DarkToLight, lfs::sequencer::RevealEffect::Distortion,
+                                  lfs::sequencer::RevealEffect::CameraLight}) {
+            timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f, effect});
+            ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+            EXPECT_EQ(loaded.revealClip()->effect, effect);
+        }
+        auto legacy = timeline.saveToJson();
+        legacy["reveal_clip"].erase("effect");
+        ASSERT_TRUE(loaded.loadFromJson(legacy));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid_effect = legacy;
+        invalid_effect["reveal_clip"]["effect"] = 12;
+        EXPECT_FALSE(loaded.loadFromJson(invalid_effect));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid = loaded.saveToJson();
+        invalid["reveal_clip"]["end"] = 1.0f;
+        EXPECT_FALSE(loaded.loadFromJson(invalid));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->end, 5.0f);
+        loaded.setClipDuration(1.0f);
+        EXPECT_FLOAT_EQ(loaded.clipDuration(), 5.0f);
+        loaded.clear();
+        EXPECT_FALSE(loaded.revealClip().has_value());
+    }
+
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
         Timeline timeline;
 

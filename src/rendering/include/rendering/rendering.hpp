@@ -122,6 +122,18 @@ namespace lfs::rendering {
         bool cull_outside_view_volume = false;
     };
 
+    struct GaussianRevealState {
+        float progress = 0.0f;
+        float softness = 0.1f;
+        float center_x = 0.0f;
+        float center_z = 0.0f;
+        float radius = 1.0f;
+        int effect = 2;
+        float min_y = 0.0f;
+        float max_y = 0.0f;
+        bool operator==(const GaussianRevealState&) const = default;
+    };
+
     struct GaussianMarkerOverlayState {
         bool show_object_outline = false;
         glm::vec3 outline_color{0.0f, 0.604f, 0.733f};
@@ -236,6 +248,7 @@ namespace lfs::rendering {
         bool equirectangular = false;
         GaussianSceneState scene;
         GaussianFilterState filters;
+        std::optional<GaussianRevealState> reveal;
         GaussianOverlayState overlay;
         bool transparent_background = false;
         bool depth_view = false;

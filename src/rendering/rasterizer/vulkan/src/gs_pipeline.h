@@ -111,6 +111,7 @@ public:
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
     void setBandedExport(bool enabled);
+    void setRevealEffect(bool enabled);
 
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
@@ -301,6 +302,9 @@ protected:
     std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> banded_export_pipelines_;
     bool banded_export_initialized_ = false;
     bool banded_export_active_ = false;
+    std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> reveal_pipelines_;
+    bool reveal_initialized_ = false;
+    bool reveal_active_ = false;
 
     uint32_t queue_family_index;
 
