@@ -5,6 +5,7 @@
 #include "metal_kernels.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
 #include <stdexcept>
 
@@ -39,7 +40,12 @@ namespace lfs::training {
             int32_t width, height;
             float outside_weight;
             uint32_t inverse;
+            uint64_t polygon;
+            uint32_t polygon_count;
         };
+        static_assert(offsetof(RoiKernelParams, polygon) == 160);
+        static_assert(offsetof(RoiKernelParams, polygon_count) == 168);
+        static_assert(sizeof(RoiKernelParams) == 176);
 
         void roi(const Tensor& view, const Tensor& camera_position, const Tensor& camera_rays,
                  const Tensor& surface_depth, const Tensor& surface_alpha, Tensor& weights, const RoiParams& p) {
@@ -61,6 +67,13 @@ namespace lfs::training {
             if (p.image.w <= 0 || p.image.h <= 0 || (pinhole && (!(p.intrinsics.fx > 0.f) || !(p.intrinsics.fy > 0.f))))
                 throw std::invalid_argument(std::format("ROI needs a positive image and focal length, got {}x{} f=({}, {})",
                                                         p.image.w, p.image.h, p.intrinsics.fx, p.intrinsics.fy));
+            const auto& outline = p.polygon_device;
+            if (!p.polygon.empty() &&
+                (p.polygon.size() % 2 != 0 || p.polygon.size() / 2 < 3 || !outline.is_valid() ||
+                 outline.numel() != p.polygon.size() || outline.dtype() != DataType::Float32 ||
+                 !outline.is_contiguous()))
+                throw std::invalid_argument(std::format("ROI polygon needs its {} vertices as contiguous device floats",
+                                                        p.polygon.size() / 2));
             // world_to_cropbox is column-major; rows of its upper 3x4 block.
             const auto& m = p.world_to_cropbox;
             RoiKernelParams params{
@@ -81,7 +94,14 @@ namespace lfs::training {
                 .height = p.image.h,
                 .outside_weight = p.outside_weight,
                 .inverse = p.inverse ? 1u : 0u,
+                .polygon = p.polygon.empty() ? 0 : mk::address(outline),
+                .polygon_count = mk::count32(p.polygon.size() / 2, "ROI polygon"),
             };
+            if (!p.polygon.empty()) {
+                mk::launch_items("training_image_roi", params, {&view, &camera_position, &weights, &rays, &depth, &alpha, &outline},
+                                 pixels);
+                return;
+            }
             mk::launch_items("training_image_roi", params, {&view, &camera_position, &weights, &rays, &depth, &alpha},
                              static_cast<size_t>(p.image.w) * static_cast<size_t>(p.image.h));
         }
@@ -163,6 +183,7 @@ namespace lfs::training {
             .normalize_scalar = normalize_scalar,
             .flip_error_map = metal_flip_error_map,
             .flip_error_image = metal_flip_error_image,
+            .roi_polygon = true,
         };
         return ops;
     }

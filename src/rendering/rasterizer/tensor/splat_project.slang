@@ -297,6 +297,16 @@ void project_splats(uint3 tid : SV_DispatchThreadID) {
         overlay_filter(p.overlay, 7, true, node, world, active, flags);
         for (uint n = 0; n < 15 && overlay_enabled(p.overlay[131 + n * 5].x); ++n)
             overlay_filter(p.overlay, 131 + n * 5, true, node, world, active, flags);
+        // Bit 1 means the upload includes polygon records after the legacy prefix.
+        if ((layout.overlay & 2u) != 0u) {
+            for (uint n = 0; active && n < kOverlayPolygonCount; ++n) {
+                const uint base = kOverlayParameterCount + n * kOverlayPolygonStride;
+                const float4 polygon_flags = p.overlay[base];
+                if (!overlay_enabled(polygon_flags.x))
+                    break;
+                overlay_polygon_filter(p.overlay, base, polygon_flags, node, world, active, flags);
+            }
+        }
         if (active && overlay_enabled(p.overlay[13].x)) {
             float4 k = p.overlay[12];
             if (k.x <= 0)

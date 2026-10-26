@@ -30,7 +30,9 @@ kernel void extra_regularize(constant ExtraRegularizeParams& p [[buffer(0)]],
         float value, derivative;
         if (p.opacity != 0) {
             value = 1.0f / (1.0f + exp(-x));
-            derivative = value * (1.0f - value);
+            const float e = exp(-fabs(x));
+            const float d = 1.0f + e;
+            derivative = e / (d * d);
         } else {
             value = exp(x);
             derivative = value;

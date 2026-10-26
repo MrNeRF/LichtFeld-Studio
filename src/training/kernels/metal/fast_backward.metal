@@ -892,6 +892,12 @@ struct FastBackwardGeometryParams {
 
 static float fast_sigmoid(const float x) { return 1.0f / (1.0f + exp(-x)); }
 
+static float fast_sigmoid_derivative_from_logit(const float x) {
+    const float e = exp(-fabs(x));
+    const float d = 1.0f + e;
+    return e / (d * d);
+}
+
 static float fast_scale_reg_grad(constant FastBackwardGeometryParams& p, const uint element) {
     constant FastAdamGroup& g = p.scaling_adam;
     if (p.scale_reg_weight <= 0.0f || g.elements <= 0)
@@ -915,8 +921,8 @@ static float fast_opacity_extra_grad(constant FastBackwardGeometryParams& p, con
     constant FastAdamGroup& g = p.opacity_adam;
     float grad = 0.0f;
     if (p.opacity_reg_weight > 0.0f && g.elements > 0) {
-        const float opacity = fast_sigmoid(reinterpret_cast<device const float*>(g.param)[idx]);
-        grad += p.opacity_reg_weight * opacity * (1.0f - opacity) / float(g.elements);
+        const float derivative = fast_sigmoid_derivative_from_logit(reinterpret_cast<device const float*>(g.param)[idx]);
+        grad += p.opacity_reg_weight * derivative / float(g.elements);
     }
     return grad;
 }
@@ -1025,14 +1031,14 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
                                                   bc * dconic.x - (ac + bb) * dconic.y + ab * dconic.z,
                                                   2.0f * ab * dconic.y - bb * dconic.x - aa * dconic.z);
 
-        const float original_opacity = fast_sigmoid(p.opacities[idx]);
         float compensation = 1.0f;
         if (kFastMipFilter != 0u) {
             const float det_raw = raw_a * raw_c - raw_b * raw_b;
             compensation = det_raw > kFastMinDeterminant && determinant > kFastMinDeterminant ? sqrt(det_raw * det_rcp)
                                                                                               : 0.0f;
         }
-        opacity_grads[0] = g[5] * compensation * original_opacity * (1.0f - original_opacity) +
+        const float sigmoid_derivative = fast_sigmoid_derivative_from_logit(p.opacities[idx]);
+        opacity_grads[0] = g[5] * compensation * sigmoid_derivative +
                            fast_opacity_extra_grad(p, idx);
 
         const FastCov3 dcov3d = {

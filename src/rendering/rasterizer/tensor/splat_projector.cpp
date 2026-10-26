@@ -19,6 +19,7 @@ namespace lfs::rendering {
         using M = core::GpuKernelModule;
         constexpr auto RW = M::Access::ReadWrite;
         constexpr size_t kSceneObjectBytes = 96, kOverlayParameterBytes = 207 * 16;
+        constexpr size_t kPolygonOverlayParameterBytes = (207 + 38 * 16) * 16;
 
         struct Parameters {
             uint64_t pointers[22] = {};
@@ -72,7 +73,8 @@ namespace lfs::rendering {
             projected.bytes() < size_t(draw_count) * 64 || (primitive == SplatPrimitive::Gut && (!gut || gut->bytes() < size_t(draw_count) * 64)) ||
             (in.storage == SplatShStorage::RadSigned8) != (in.page_splats != 0) || in.page_splats % 32 || in.objects.size() % kSceneObjectBytes ||
             (in.objects.size() > kSceneObjectBytes && !in.object_indices) ||
-            (overlay && overlay->parameters.size() != kOverlayParameterBytes))
+            (overlay && overlay->parameters.size() != kOverlayParameterBytes &&
+             overlay->parameters.size() != kPolygonOverlayParameterBytes))
             return failure(std::format("Splat projection inputs are incomplete (count={}, draw_count={}, degree={}, primitive={}, storage={}, projected_bytes={}, gut_bytes={}, objects={}, overlay_bytes={})",
                                        in.count, draw_count, degree, uint32_t(primitive), uint32_t(in.storage), projected.bytes(), gut ? gut->bytes() : 0,
                                        in.objects.size() / kSceneObjectBytes, overlay ? overlay->parameters.size() : 0));
@@ -87,7 +89,7 @@ namespace lfs::rendering {
         }
         const auto object_count = uint32_t(in.objects.size() / kSceneObjectBytes);
         const std::array<uint32_t, 12> layout{in.count, in.layout_rest, in.deleted ? 1u : 0u, object_count,
-                                              in.half_attributes ? 1u : 0u, overlay ? 1u : 0u, in.object_indices ? 1u : 0u, draw_count,
+                                              in.half_attributes ? 1u : 0u, overlay ? (overlay->parameters.size() == kPolygonOverlayParameterBytes ? 3u : 1u) : 0u, in.object_indices ? 1u : 0u, draw_count,
                                               lod ? 1u | (lod->logical_indices ? 2u : 0u) | (lod->levels ? 4u : 0u) | (lod->weights ? 8u : 0u) |
                                                         (lod->debug ? 16u : 0u) | (lod->count ? 32u : 0u)
                                                   : 0u,

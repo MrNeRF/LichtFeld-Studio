@@ -971,6 +971,7 @@ namespace lfs::vis {
             vkGetPhysicalDeviceProperties(context.physicalDevice(), &properties);
             p.counts[3] = uint32_t(std::min(511.0f, properties.limits.pointSizeRange[1]));
 #endif
+            const bool has_crop_polygon = !r.crop && !r.crop_ellipsoid && r.crop_polygon && r.crop_polygon->vertices.size() >= core::crop_polygon::kMinVertices && r.crop_polygon->vertices.size() <= core::crop_polygon::kMaxVertices;
             if (r.crop) {
                 p.counts[2] |= 1u | (r.crop->inverse ? 2u : 0u) | (r.crop->desaturate ? 4u : 0u);
                 store(p.crop_to_local, r.crop->to_local);
@@ -980,6 +981,11 @@ namespace lfs::vis {
                 p.counts[2] |= 1025u | (r.crop_ellipsoid->inverse ? 2u : 0u) | (r.crop_ellipsoid->desaturate ? 4u : 0u);
                 store(p.crop_to_local, r.crop_ellipsoid->to_local);
                 p.crop_min = {r.crop_ellipsoid->radii.x, r.crop_ellipsoid->radii.y, r.crop_ellipsoid->radii.z, 0};
+            }
+            if (has_crop_polygon) {
+                p.counts[2] |= 4097u | (r.crop_polygon->inverse ? 2u : 0u) | (r.crop_polygon->desaturate ? 4u : 0u);
+                store(p.crop_to_local, r.crop_polygon->to_local);
+                p.crop_min = {r.crop_polygon->half_depth, float(r.crop_polygon->vertices.size()), 0, 0};
             }
             p.crop_min[3] = r.depth_view_min;
             p.crop_max[3] = r.depth_view_max;
@@ -998,6 +1004,7 @@ namespace lfs::vis {
                 .deleted = r.deleted_mask,
                 .objects = std::as_bytes(std::span(objects)),
                 .selection_palette = std::as_bytes(std::span(palette)),
+                .crop_polygon = has_crop_polygon ? std::as_bytes(r.crop_polygon->vertices) : std::span<const std::byte>{},
             };
             if (auto rendered = state.points->render(inputs, p, uint32_t(r.size.x), uint32_t(r.size.y),
                                                      {r.background_color.x, r.background_color.y, r.background_color.z,
@@ -1259,9 +1266,11 @@ namespace lfs::vis {
                 scene_count = transforms.size();
             }
             const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
-            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region || !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() || request.filters.view_volume || selection_enabled || preview_enabled || node_count || request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled || request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
+            const bool has_crop_polygons = !request.filters.crop_polygon_regions.empty();
+            const bool needs_overlay = has_crop_polygons || request.filters.crop_region || request.filters.ellipsoid_region || !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() || request.filters.view_volume || selection_enabled || preview_enabled || node_count || request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled || request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
             if (needs_overlay) {
                 static_assert(detail::ParamCount == 207);
+                static_assert(detail::CropPolygonBase == 207 && detail::CropPolygonParamStride == 38 && detail::CropPolygonCount == 16 && detail::TableParamCount == 815);
                 static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
                 auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene_count > 0, node_count, false);
                 if (!params)
@@ -1301,7 +1310,7 @@ namespace lfs::vis {
                 sources.object_indices = request.scene.transform_indices.get();
             }
             const bool transparent = request.transparent_background;
-            const rendering::SplatOverlayInputs overlay_inputs{needs_overlay ? host_bytes(f.overlay_parameters, 207 * 16) : std::span<const std::byte>{},
+            const rendering::SplatOverlayInputs overlay_inputs{needs_overlay ? host_bytes(f.overlay_parameters, (has_crop_polygons ? detail::TableParamCount : detail::ParamCount) * 16) : std::span<const std::byte>{},
                                                                node_count ? host_bytes(f.overlay_nodes, node_count) : std::span<const std::byte>{}};
             if (request.gut && (!i.gut_geometry.is_valid() || i.gut_geometry.bytes() < size_t(draw_count) * 64 || core::gpu_backend_of(i.gut_geometry) != *backend))
                 i.gut_geometry = core::Tensor::empty({std::max<size_t>(16, size_t(draw_count) * 64)}, core::Device::GPU, core::DataType::UInt8);

@@ -896,7 +896,7 @@ namespace {
         }
         const Rendered frozen = render(s, base, v, nullptr);
         const auto lists = frozen.lists;
-        auto derivative = [&](std::vector<double> Params::*member, const size_t index) {
+        auto derivative = [&](std::vector<double> Params::* member, const size_t index) {
             constexpr double h = 1e-5;
             Params p = base;
             (p.*member)[index] += h;
@@ -905,7 +905,7 @@ namespace {
             const double down = loss(render(s, p, v, &lists), w);
             return (up - down) / (2 * h);
         };
-        auto all = [&](std::vector<double> Params::*member, const size_t size) {
+        auto all = [&](std::vector<double> Params::* member, const size_t size) {
             std::vector<double> out(size);
             for (size_t i = 0; i < size; ++i)
                 out[i] = derivative(member, i);
@@ -1351,8 +1351,67 @@ namespace {
 
     double sigmoid(const double x) { return 1.0 / (1.0 + std::exp(-x)); }
 
-    // Masks, regularizers and the
-    // screen-share hinge on top of the render gradient, under the unit step.
+    // Scale the unit step so even a tiny analytic derivative moves the stored logit.
+    TEST_P(PortableFastRaster, SaturatedOpacityRegularizationPreservesGradient) {
+        for (const float logit : {-20.f, -17.f, 0.f, 17.f, 20.f, 40.f, 80.f}) {
+            SCOPED_TRACE(logit);
+            Scene s = make_scene(1, 1, 32, 32, 61u, -2.3f, -1.6f);
+            s.opacities[0] = logit;
+            Gpu g = upload_scene(s, ops::ShStorage::Float32);
+            Frame frame;
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            const double e = std::exp(-std::abs(double(logit)));
+            const double derivative = e / ((1.0 + e) * (1.0 + e));
+            AdamState state;
+            auto adam = make_adam(g, state, 1, {.step = float(0.25 / derivative)});
+            adam.opacity_reg_weight = 1.f;
+            Tensor none;
+            const auto grad = Tensor::zeros_like(frame.image);
+            fast_ops().backward(frame.saved, {.image = grad, .alpha = none, .depth = none, .normal = none},
+                                none, none, none, none, adam, DensificationType::None);
+            EXPECT_NEAR(download(g.opacities)[0], logit - 0.25f, 2e-5f);
+        }
+    }
+
+    TEST_P(PortableFastRaster, SaturatedOpacityProjectionPreservesGradient) {
+        for (const bool mip : {false, true}) {
+            SCOPED_TRACE(mip);
+            double reference = 0.0;
+            for (const float logit : {12.f, 17.f, 20.f, 40.f, 80.f}) {
+                SCOPED_TRACE(logit);
+                Scene s = make_scene(1, 1, 32, 32, 61u, -2.3f, -1.6f);
+                s.means = {0.f, 0.f, 0.f};
+                s.bg_color = {0.f, 0.f, 0.f};
+                s.opacities[0] = logit;
+                Gpu g = upload_scene(s, ops::ShStorage::Float32);
+                Frame frame;
+                forward(frame, s, g, {.mip = mip});
+                ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+                ASSERT_TRUE(frame.result.has_work);
+                AdamState state;
+                auto adam = make_adam(g, state, 1, {});
+                for (auto& group : adam.groups)
+                    group.enabled = false;
+                auto& opacity = adam.groups[static_cast<size_t>(ops::AdamSlot::Opacity)];
+                opacity.gradient = Tensor::zeros_like(g.opacities);
+                Tensor none;
+                const auto grad = Tensor::ones(frame.image.shape(), Device::GPU);
+                fast_ops().backward(frame.saved, {grad, none, none, none}, none, none, none, none,
+                                    adam, DensificationType::None);
+                const double actual = download(opacity.gradient)[0];
+                const double derivative = 1.0 / (2.0 + 2.0 * std::cosh(double(logit)));
+                ASSERT_GT(actual, 0.0);
+                if (logit == 12.f)
+                    reference = actual / derivative;
+                else
+                    EXPECT_NEAR(actual / derivative / reference, 1.0, 2e-4);
+                EXPECT_EQ(download(g.opacities)[0], logit);
+            }
+        }
+    }
+
+    // Masks, regularizers and the screen-share hinge on top of the render gradient, under the unit step.
     TEST_P(PortableFastRaster, FusedAdamTermsMatchReference) {
         Scene s = make_scene(24, 1, 48, 40, 61u, -2.3f, -1.6f);
         const auto n = static_cast<size_t>(s.count);
@@ -1475,7 +1534,7 @@ namespace {
         const float inf = std::numeric_limits<float>::infinity();
         struct Case {
             const char* name;
-            std::vector<float> Scene::*field;
+            std::vector<float> Scene::* field;
             int width;
             float value;
         };

@@ -148,6 +148,14 @@ jobs:
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose
 
+      - name: Run tensor rasterizer polygon and projection contracts
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
+            -R '^TensorRasterizerContracts$' --no-tests=error --verbose
+
       - name: Check Vulkan HiGS depth independently of Metal tensors
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |

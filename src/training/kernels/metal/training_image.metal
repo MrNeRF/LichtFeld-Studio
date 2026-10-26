@@ -36,6 +36,8 @@ struct RoiParams {
     int width, height;
     float outside_weight;
     uint inverse;
+    device const float* polygon;
+    uint polygon_count;
 };
 
 static float3 affine_point(constant float4* rows, const float3 point) {
@@ -72,6 +74,51 @@ static bool ray_hits_box(const float3 origin, const float3 direction, const floa
     return t_exit >= 0.0f;
 }
 
+static float2 polygonVertex(constant RoiParams& p, uint i) {
+    device const float* v = p.polygon;
+    return float2(v[2u * i], v[2u * i + 1u]);
+}
+static bool outlineContains(constant RoiParams& p, float2 q) {
+    bool inside = false;
+    float2 b = polygonVertex(p, p.polygon_count - 1u);
+    for (uint i = 0; i < p.polygon_count; ++i) {
+        float2 a = polygonVertex(p, i);
+        if ((a.y > q.y) != (b.y > q.y) && q.x < (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        b = a;
+    }
+    return inside;
+}
+static float cross2(float2 a, float2 b) { return a.x * b.y - a.y * b.x; }
+// The ray (t >= 0) clipped to the slab and the outline bounds must leave a segment that
+// touches the outline: an endpoint inside it, or a crossing with one of its edges.
+static bool rayHitsPrism(constant RoiParams& p, float3 origin, float3 direction) {
+    float enter = 0.0f, leave = 3.402823466e+38f;
+    for (uint axis = 0; axis < 3; ++axis) {
+        if (fabs(direction[axis]) < 1.0e-8f) {
+            if (origin[axis] < p.crop_min[axis] || origin[axis] > p.crop_max[axis]) return false;
+        } else {
+            float inverseDirection = 1.0f / direction[axis];
+            float a = (p.crop_min[axis] - origin[axis]) * inverseDirection;
+            float b = (p.crop_max[axis] - origin[axis]) * inverseDirection;
+            if (a > b) { float t = a; a = b; b = t; }
+            enter = max(enter, a); leave = min(leave, b);
+            if (leave < enter) return false;
+        }
+    }
+    if (leave == 3.402823466e+38f) leave = enter;
+    float2 p0 = origin.xy + enter * direction.xy, p1 = origin.xy + leave * direction.xy;
+    if (outlineContains(p, p0) || outlineContains(p, p1)) return true;
+    float2 d = p1 - p0;
+    float2 a = polygonVertex(p, p.polygon_count - 1u);
+    for (uint i = 0; i < p.polygon_count; ++i) {
+        float2 b = polygonVertex(p, i), e = b - a;
+        if (((cross2(d, a - p0) > 0.0f) != (cross2(d, b - p0) > 0.0f)) &&
+            ((cross2(e, p0 - a) > 0.0f) != (cross2(e, p1 - a) > 0.0f))) return true;
+        a = b;
+    }
+    return false;
+}
+
 kernel void training_image_roi(constant RoiParams& p [[buffer(0)]], uint index [[thread_position_in_grid]]) {
     if (index >= uint(p.width) * uint(p.height))
         return;
@@ -98,9 +145,11 @@ kernel void training_image_roi(constant RoiParams& p [[buffer(0)]], uint index [
         // Below half coverage a pixel shows mostly background, so no surface in the box.
         const float alpha = p.surface_alpha[index];
         const float3 point = origin_in_box + (p.surface_depth[index] / alpha) * direction_in_box;
-        hit = alpha >= 0.5f && all(point >= p.crop_min) && all(point <= p.crop_max);
+        hit = alpha >= 0.5f && all(point >= p.crop_min) && all(point <= p.crop_max) &&
+              (p.polygon_count == 0u || outlineContains(p, point.xy));
     } else {
-        hit = ray_hits_box(origin_in_box, direction_in_box, p.crop_min, p.crop_max);
+        hit = p.polygon_count != 0u ? rayHitsPrism(p, origin_in_box, direction_in_box)
+                                   : ray_hits_box(origin_in_box, direction_in_box, p.crop_min, p.crop_max);
     }
     p.output[index] = (p.inverse != 0 ? !hit : hit) ? 1.0f : p.outside_weight;
 }

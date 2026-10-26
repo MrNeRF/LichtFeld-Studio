@@ -326,7 +326,7 @@ namespace {
         std::vector<float> keys(sources.size());
         for (size_t i = 0; i < sources.size(); ++i) {
             const float w = weights[static_cast<size_t>(sources[i])];
-            if (!compact && w <= 0.f) {
+            if (!compact && !(w > 0.f)) {
                 keys[i] = -1e30f;
                 continue;
             }
@@ -372,6 +372,25 @@ namespace {
         auto top = Tensor::empty({64}, Device::GPU, DataType::Int64);
         mrnf().gumbel(nullptr, gpu(large), top, {.seed = 99});
         EXPECT_EQ(host_i64(top), gumbel_reference(large, 64, 99, true));
+    }
+
+    TEST_P(PortableDensifyOps, MrnfGumbelNaNWeightsFollowPositiveWeights) {
+        const std::vector<float> weights{std::numeric_limits<float>::quiet_NaN(), 2.f, 0.f, -1.f,
+                                         1.f, std::numeric_limits<float>::quiet_NaN(), 3.f, 0.f};
+        for (const bool compact : {false, true}) {
+            for (const size_t k : {size_t{3}, size_t{6}}) {
+                SCOPED_TRACE(testing::Message() << "compact=" << compact << " k=" << k);
+                auto top = Tensor::empty({k}, Device::GPU, DataType::Int64);
+                mrnf().gumbel(nullptr, gpu(weights), top, {.seed = 7, .compact_sparse = compact});
+                const auto selected = host_i64(top);
+                EXPECT_EQ(selected, gumbel_reference(weights, k, 7, compact));
+                for (size_t i = 0; i < 3; ++i) {
+                    ASSERT_GE(selected[i], 0);
+                    ASSERT_LT(static_cast<size_t>(selected[i]), weights.size());
+                    EXPECT_GT(weights[selected[i]], 0.f);
+                }
+            }
+        }
     }
 
     TEST_P(PortableDensifyOps, MrnfFoldsAndMasks) {

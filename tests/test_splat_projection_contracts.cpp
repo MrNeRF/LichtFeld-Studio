@@ -332,6 +332,64 @@ namespace {
         EXPECT_NEAR(cropped.mean_depth[1] + 192, reference.mean_depth[1], 1e-5);
     }
 
+    TEST_P(SplatProjectionContracts, CropPolygonFiltersConcavityDepthParentAndPackedSlots) {
+        const std::vector<float> xyz{-.5f, -.5f, 3.f, .5f, .5f, 3.f, .6f, -.2f, 3.f, -.5f, .5f, 4.f};
+        auto means = upload(xyz), alpha = upload(std::vector<float>(4, 5.f)), sh0 = upload(std::vector<float>(12, 0.f));
+        SplatSources source{&means, nullptr, nullptr, &alpha, &sh0, nullptr, nullptr, nullptr, 4};
+        auto output = Tensor::empty({4 * 64}, Device::GPU, DataType::UInt8);
+        SplatProjector projector(GetParam());
+        std::vector<std::array<float, 4>> table(815);
+        const auto polygon = [&](size_t base, const std::vector<std::array<float, 2>>& vertices) {
+            table[base] = {1, 0, 0, -1};
+            table[base + 1] = {.5f, float(vertices.size()), 0, 0};
+            table[base + 2] = {1, 0, 0, 0};
+            table[base + 3] = {0, 1, 0, 0};
+            table[base + 4] = {0, 0, 1, -3};
+            table[base + 5] = {0, 0, 0, 1};
+            for (size_t i = 0; i < vertices.size(); ++i) {
+                table[base + 6 + i / 2][(i % 2) * 2] = vertices[i][0];
+                table[base + 6 + i / 2][(i % 2) * 2 + 1] = vertices[i][1];
+            }
+        };
+        polygon(207, {{-1, -1}, {1, -1}, {1, 0}, {0, 0}, {0, 1}, {-1, 1}});
+        for (const bool inverse : {false, true}) {
+            for (const bool dim : {false, true}) {
+                table[207][1] = float(inverse);
+                table[207][2] = float(dim);
+                const SplatOverlayInputs overlay{std::as_bytes(std::span(table)), {}};
+                ASSERT_TRUE(projector.project(source, projection(), 0, SplatPrimitive::Points, false, output, nullptr, &overlay));
+                const auto result = download<ProjectedSplat>(output, 4);
+                const auto flags = download<uint32_t>(projector.overlay_flags(), 4);
+                for (size_t i = 0; i < 4; ++i) {
+                    const bool outside = ((i == 0 || i == 2) == inverse);
+                    EXPECT_EQ(result[i].bounds[2] > result[i].bounds[0], !outside || dim);
+                    EXPECT_EQ(flags[i], outside ? (dim ? 3u : 2u) : 0u);
+                    if (outside && dim)
+                        EXPECT_NEAR(result[i].color[0], .125f, 1e-6f);
+                }
+            }
+        }
+        // A parent that does not match this single-node model leaves every point visible.
+        table[207] = {1, 0, 0, 1};
+        SplatOverlayInputs overlay{std::as_bytes(std::span(table)), {}};
+        ASSERT_TRUE(projector.project(source, projection(), 0, SplatPrimitive::Points, false, output, nullptr, &overlay));
+        for (const auto& point : download<ProjectedSplat>(output, 4))
+            EXPECT_GT(point.bounds[2], point.bounds[0]);
+        // A second, odd-sized outline reads the last vertex from the correct half of its pair.
+        table[207] = {1, 0, 0, -1};
+        polygon(207 + 38, {{-1, -1}, {1, -1}, {-1, 1}});
+        ASSERT_TRUE(projector.project(source, projection(), 0, SplatPrimitive::Points, false, output, nullptr, &overlay));
+        const auto clipped = download<ProjectedSplat>(output, 4);
+        EXPECT_GT(clipped[0].bounds[2], clipped[0].bounds[0]);
+        for (size_t i = 1; i < 4; ++i)
+            EXPECT_EQ(clipped[i].bounds[2], 0u);
+        // The legacy prefix is still accepted, with no reads of the polygon tail.
+        overlay.parameters = std::as_bytes(std::span(table).first(207));
+        ASSERT_TRUE(projector.project(source, projection(), 0, SplatPrimitive::Points, false, output, nullptr, &overlay));
+        for (const auto& point : download<ProjectedSplat>(output, 4))
+            EXPECT_GT(point.bounds[2], point.bounds[0]);
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, SplatProjectionContracts, testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });
 } // namespace

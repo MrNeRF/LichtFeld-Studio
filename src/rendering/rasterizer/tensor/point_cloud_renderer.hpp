@@ -35,6 +35,7 @@ namespace lfs::rendering {
         // camera, uint4 flags. The palette is packed float4 records.
         std::span<const std::byte> objects;
         std::span<const std::byte> selection_palette;
+        std::span<const std::byte> crop_polygon; // packed float2 vertices, only with polygon flag
     };
 
     // Rasterizes point-cloud discs through GpuKernelModule on Metal or Vulkan.

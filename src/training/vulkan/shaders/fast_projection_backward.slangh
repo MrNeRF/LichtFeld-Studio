@@ -50,9 +50,16 @@ void flattenRegularization(BackPush back, uint i, inout float grads[3]) {
                                                           : 2;
     grads[axis] += 3 * back.flattenWeight * exp(s[axis]) / float(back.scaleElements);
 }
+float fastSigmoidDerivativeFromLogit(float x) {
+    const float e = exp(-abs(x));
+    const float d = 1.0f + e;
+    return e / (d * d);
+}
 float opacityRegularization(BackPush back, uint i) {
-    float opacity = 1 / (1 + exp(-loadFloat(back.forward.opacities, i)));
-    return back.opacityWeight > 0 && back.opacityElements > 0 ? back.opacityWeight * opacity * (1 - opacity) / float(back.opacityElements) : 0;
+    if (!(back.opacityWeight > 0) || back.opacityElements == 0)
+        return 0;
+    const float derivative = fastSigmoidDerivativeFromLogit(loadFloat(back.forward.opacities, i));
+    return back.opacityWeight * derivative / float(back.opacityElements);
 }
 float3 shPositionGradient(FastPush p, uint primitive_idx, float3 grad_color) {
     float3 position = load3(p.means, primitive_idx), cam_position = load3(p.camera, 0), dcolor_dposition = 0;
@@ -232,7 +239,6 @@ void projectionBackward(BackPush back, uint primitive_idx) {
                                                     bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
                                                     2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
 
-        const float original_opacity = 1.0f / (1.0f + exp(-loadFloat(p.opacities, primitive_idx)));
         const float grad_compensated_opacity = screen(back, work_idx, 5);
         float opacity_compensation = 1.0f;
         if ((p.mip & 1u) != 0) {
@@ -244,7 +250,7 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             }
         }
 
-        const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+        const float sigmoid_derivative = fastSigmoidDerivativeFromLogit(loadFloat(p.opacities, primitive_idx));
         opacity_grads[0] = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                            opacityRegularization(back, primitive_idx);
 

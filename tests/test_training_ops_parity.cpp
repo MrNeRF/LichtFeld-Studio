@@ -2953,6 +2953,40 @@ namespace {
         EXPECT_EQ(means.to_vector(), expected_means);
     }
 
+    class OpacityRegularizationContract : public testing::TestWithParam<GpuBackend> {};
+
+    TEST_P(OpacityRegularizationContract, SaturatedLogitsRetainGradient) {
+        const auto backend = GetParam();
+        if (!lfs::core::gpu_backend_available(backend))
+            GTEST_SKIP() << backend_name(backend) << " device unavailable";
+        const auto* ops_table = lfs::training::training_ops(backend).extra_loss;
+        ASSERT_NE(ops_table, nullptr);
+        const lfs::core::GpuBackendScope scope(backend);
+        const std::vector<float> logits{-80.f, -40.f, -20.f, -17.f, -1.f, 0.f, 1.f, 17.f, 20.f, 40.f, 80.f};
+        auto raw = Tensor::from_vector(logits, {logits.size(), 1}, Device::GPU);
+        auto gradient = Tensor::zeros_like(raw);
+        auto loss = Tensor::zeros({1}, Device::GPU);
+        auto temp = Tensor::zeros({1024}, Device::GPU);
+        double expected_loss = 0.0;
+        for (const float x : logits)
+            expected_loss += 1.0 / (1.0 + std::exp(-double(x)));
+        for (int pass = 1; pass <= 2; ++pass) {
+            ops_table->regularize(raw, gradient, loss, temp, ops::Regularizer::Opacity, float(logits.size()));
+            const auto actual = gradient.cpu().to_vector();
+            for (size_t i = 0; i < logits.size(); ++i) {
+                SCOPED_TRACE(testing::Message() << "logit=" << logits[i] << " pass=" << pass);
+                const double expected = pass / (2.0 + 2.0 * std::cosh(double(logits[i])));
+                ASSERT_GT(actual[i], 0.f);
+                EXPECT_NEAR(double(actual[i]) / expected, 1.0, 5e-6);
+            }
+            EXPECT_NEAR(loss.cpu().item<float>(), expected_loss, 1e-5);
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, OpacityRegularizationContract,
+                             testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+
     class TrainingOpsFamilyParity
         : public ::testing::TestWithParam<std::tuple<lfs::training::Family, GpuBackend>> {};
 

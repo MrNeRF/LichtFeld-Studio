@@ -146,6 +146,47 @@ namespace {
         }
     }
 
+    TEST_P(SplatPointRendererContracts, CropPolygonHidesOrDimsConcaveNotchAndOutsideDepth) {
+        const std::vector<float> xyz{-.5f, -.5f, -2.f, .5f, .5f, -2.f, .5f, -.5f, -2.f, -.5f, .5f, -4.f};
+        auto positions = Tensor::from_vector(xyz, {4, 3}, Device::GPU);
+        auto colors = Tensor::from_vector({1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f}, {4, 3}, Device::GPU);
+        const std::array<std::array<float, 2>, 6> polygon{{{-1, -1}, {1, -1}, {1, 0}, {0, 0}, {0, 1}, {-1, 1}}};
+        const SplatPointInputs inputs{.positions = &positions, .colors = &colors, .crop_polygon = std::as_bytes(std::span(polygon))};
+        PointParameters params;
+        params.view = params.view_projection = params.crop_to_local = identity();
+        params.view_projection[10] = -.1f;
+        params.crop_to_local[14] = 2.f;
+        params.crop_min = {.5f, 6.f, 0, 0};
+        params.voxel_focal_ortho = {.0625f, 1, 64, 0};
+        SplatPointRenderer renderer(GetParam());
+        for (const bool inverse : {false, true}) {
+            for (const bool dim : {false, true}) {
+                params.counts = {0, 0, 4097u | 8u | (inverse ? 2u : 0u) | (dim ? 4u : 0u), 64};
+                const auto rendered = renderer.render(inputs, params, 64, 64, {0, 0, 0, 0});
+                ASSERT_TRUE(rendered) << rendered.error().detail();
+                const auto rgba = renderer.color().cpu();
+                const auto depth = renderer.linear_depth().cpu();
+                const std::array<size_t, 4> pixels{16 * 64 + 16, 48 * 64 + 48, 16 * 64 + 48, 48 * 64 + 16};
+                for (size_t i = 0; i < 4; ++i) {
+                    const bool outside = ((i == 0 || i == 2) == inverse);
+                    const bool visible = !outside || dim;
+                    EXPECT_EQ(rgba.ptr<uint8_t>()[4 * pixels[i] + 3], visible ? 255 : 0);
+                    EXPECT_NEAR(rgba.ptr<uint8_t>()[4 * pixels[i]],
+                                !visible ? 0.f : outside ? 255.f * (.25f + .75f * .299f)
+                                                         : 255.f,
+                                1.f);
+                    EXPECT_FLOAT_EQ(depth.ptr<float>()[pixels[i]], visible ? (i == 3 ? 4.f : 2.f) : -1.f);
+                }
+            }
+        }
+        // Reusing the renderer after a polygon frame must not keep its crop enabled.
+        params.counts[2] = 8u;
+        ASSERT_TRUE(renderer.render(inputs, params, 64, 64, {0, 0, 0, 0}));
+        const auto depth = renderer.linear_depth().cpu();
+        EXPECT_FLOAT_EQ(depth.ptr<float>()[48 * 64 + 48], 2.f);
+        EXPECT_FLOAT_EQ(depth.ptr<float>()[48 * 64 + 16], 4.f);
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, SplatPointRendererContracts,
                              testing::ValuesIn(kCompiledGpuBackends),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });
