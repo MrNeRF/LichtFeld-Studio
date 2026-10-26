@@ -143,6 +143,28 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        TEST_F(KeymapTest, ScaleDistanceUpgradeAndPreserveRebindingAndRemoval) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_scale_distance_upgrade.json";
+            auto old = test::historicalSavedProfile("v37");
+            std::erase_if(old["bindings"].get_ref<json::array_t&>(), [](const json& binding) {
+                return binding.value("action", -1) == static_cast<int>(Action::TOGGLE_UI);
+            });
+            test::writeProfile(path, old);
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::GLOBAL, KEY_7, 0),
+                      Action::TOOL_SCALE_DISTANCE);
+            upgraded.setBinding(ToolMode::GLOBAL, Action::TOOL_SCALE_DISTANCE, KeyTrigger{KEY_F9});
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_F9, 0),
+                      Action::TOOL_SCALE_DISTANCE);
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_7, 0), Action::NONE);
+            EXPECT_FALSE(reloaded.getTriggerForAction(Action::TOGGLE_UI));
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

@@ -1214,7 +1214,8 @@
     "scale": "Skaluj",
     "mirror": "Odbij",
     "crop": "Przytnij",
-    "align": "Wyrównaj"
+    "align": "Wyrównaj",
+    "scale_distance": "Skaluj według odległości"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1284,7 +1285,13 @@
     "resize_bounds": "Zmień Rozmiar Granic",
     "reset_default": "Resetuj do Domyślnych",
     "fullscreen": "Pełny Ekran",
-    "toggle_ui": "Przełącz UI"
+    "toggle_ui": "Przełącz UI",
+    "scale_distance": "Skaluj według odległości",
+    "scale_distance_tool": "Skala odległości",
+    "scale_distance_measured": "Zmierzono:",
+    "scale_distance_set": "Ustaw odległość:",
+    "scale_distance_apply": "Zatwierdź skalę",
+    "scale_distance_reset": "Zresetuj punkty"
   },
   "transform": {
     "node": "Węzeł: %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "Wysokość głowy",
   "collision.radius": "Promień ciała",
   "collision.step": "Wysokość stopnia",
-  "collision.replace_pair": "Zastąpić istniejącą parę plików wokseli?"
+  "collision.replace_pair": "Zastąpić istniejącą parę plików wokseli?",
+  "scale_distance": {
+    "click_1st": "Kliknij 1. punkt",
+    "click_2nd": "Kliknij 2. punkt",
+    "points_count": "Punkty: {}/2",
+    "hint_picking": "Klik: ustaw/wybierz punkt. Przeciągnij marker: przesuń. {0}: usuń wybrany. {1}: anuluj.",
+    "hint_review": "Wpisz docelową odległość na pasku i kliknij Zatwierdź. Przeciągnij punkty, aby poprawić. {0}: anuluj.",
+    "status_invalid_distance": "Odległość musi być większa od zera.",
+    "status_no_surface": "Brak powierzchni pod kursorem.",
+    "status_no_target": "Brak obiektu do przeskalowania."
+  }
 }

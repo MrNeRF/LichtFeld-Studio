@@ -28,6 +28,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
+#include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
@@ -1482,6 +1483,8 @@ namespace lfs::vis::gui {
 
             if (auto* const t = viewer_->getAlignTool())
                 t->setEnabled(false);
+            if (auto* const t = viewer_->getScaleDistanceTool())
+                t->setEnabled(false);
             if (sm)
                 sm->syncCropBoxToRenderSettings();
             node_bounds_cache_valid_ = false;
@@ -1490,6 +1493,8 @@ namespace lfs::vis::gui {
         ui::NodeDeselected::when([this](const auto&) {
             python::cancel_active_operator();
             if (auto* const t = viewer_->getAlignTool())
+                t->setEnabled(false);
+            if (auto* const t = viewer_->getScaleDistanceTool())
                 t->setEnabled(false);
             node_bounds_cache_valid_ = false;
             node_selection_bounds_cache_valid_ = false;
@@ -1525,6 +1530,7 @@ namespace lfs::vis::gui {
             case ToolType::Scale: tool_id = "builtin.scale"; break;
             case ToolType::Mirror: tool_id = "builtin.mirror"; break;
             case ToolType::Align: tool_id = "builtin.align"; break;
+            case ToolType::ScaleDistance: tool_id = "builtin.scale_distance"; break;
             }
             if (tool_id)
                 registry.setActiveTool(tool_id);
@@ -1727,6 +1733,7 @@ namespace lfs::vis::gui {
     void GizmoManager::updateToolState(const UIContext& ctx, bool ui_hidden) {
         auto* const scene_manager = ctx.viewer->getSceneManager();
         auto* const align_tool = ctx.viewer->getAlignTool();
+        auto* const scale_distance_tool = ctx.viewer->getScaleDistanceTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
         auto* const rendering_manager = ctx.viewer->getRenderingManager();
         const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
@@ -1744,6 +1751,7 @@ namespace lfs::vis::gui {
         stamp.has_scene_manager = scene_manager != nullptr;
         stamp.has_selected_node = has_selected_node;
         stamp.align_tool = align_tool;
+        stamp.scale_distance_tool = scale_distance_tool;
         stamp.selection_tool = selection_tool;
         stamp.rendering_manager = rendering_manager;
         stamp.active_tool_id = active_tool_id;
@@ -1799,9 +1807,20 @@ namespace lfs::vis::gui {
             }
 
             const bool is_align_mode = (active_tool_id == "builtin.align");
+            const bool is_scale_distance_mode = (active_tool_id == "builtin.scale_distance");
 
-            if (align_tool)
-                align_tool->setEnabled(is_align_mode && has_selected_node && !selected_crop_volume);
+            const bool enable_align = is_align_mode && has_selected_node && !selected_crop_volume;
+            const bool enable_scale_distance = is_scale_distance_mode && has_selected_node && !selected_crop_volume;
+
+            if (!enable_align && align_tool)
+                align_tool->setEnabled(false);
+            if (!enable_scale_distance && scale_distance_tool)
+                scale_distance_tool->setEnabled(false);
+
+            if (enable_align && align_tool)
+                align_tool->setEnabled(true);
+            if (enable_scale_distance && scale_distance_tool)
+                scale_distance_tool->setEnabled(true);
             if (selection_tool)
                 selection_tool->setEnabled(is_selection_mode && !selected_crop_volume);
 
@@ -1825,6 +1844,8 @@ namespace lfs::vis::gui {
             crop_tool_target_node_id_ = core::NULL_NODE;
             clearCropToolOverlayState();
             if (auto* const tool = ctx.viewer->getAlignTool())
+                tool->setEnabled(false);
+            if (auto* const tool = ctx.viewer->getScaleDistanceTool())
                 tool->setEnabled(false);
             if (auto* const tool = ctx.viewer->getSelectionTool())
                 tool->setEnabled(false);
@@ -3811,6 +3832,8 @@ namespace lfs::vis::gui {
     void GizmoManager::deactivateAllTools() {
         python::cancel_active_operator();
         if (auto* const t = viewer_->getAlignTool())
+            t->setEnabled(false);
+        if (auto* const t = viewer_->getScaleDistanceTool())
             t->setEnabled(false);
 
         auto& editor = viewer_->getEditorContext();

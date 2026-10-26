@@ -1214,7 +1214,8 @@
     "scale": "Skalieren",
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
-    "align": "Ausrichten"
+    "align": "Ausrichten",
+    "scale_distance": "Abstand skalieren"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -1284,7 +1285,13 @@
     "resize_bounds": "Grenzen ändern",
     "reset_default": "Auf Standard zurücksetzen",
     "fullscreen": "Vollbild",
-    "toggle_ui": "UI umschalten"
+    "toggle_ui": "UI umschalten",
+    "scale_distance": "Abstand skalieren",
+    "scale_distance_tool": "Abstand skalieren",
+    "scale_distance_measured": "Gemessen:",
+    "scale_distance_set": "Abstand festlegen:",
+    "scale_distance_apply": "Skalierung bestätigen",
+    "scale_distance_reset": "Punkte zurücksetzen"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "Kopfhöhe",
   "collision.radius": "Körperradius",
   "collision.step": "Stufenhöhe",
-  "collision.replace_pair": "Das vorhandene Voxel-Dateipaar ersetzen?"
+  "collision.replace_pair": "Das vorhandene Voxel-Dateipaar ersetzen?",
+  "scale_distance": {
+    "click_1st": "1. Punkt klicken",
+    "click_2nd": "2. Punkt klicken",
+    "points_count": "Punkte: {}/2",
+    "hint_picking": "Klick: Punkt setzen/auswählen. Marker ziehen: bewegen. {0}: Auswahl. {1}: abbrechen.",
+    "hint_review": "Zielabstand in der Leiste eingeben und Bestätigen klicken. Punkte zum Anpassen ziehen. {0}: abbrechen.",
+    "status_invalid_distance": "Der Abstand muss größer als null sein.",
+    "status_no_surface": "Keine Oberfläche unter dem Cursor.",
+    "status_no_target": "Kein transformierbares Ziel zum Skalieren."
+  }
 }

@@ -165,6 +165,7 @@ namespace lfs::vis::input {
         INSERT_CROP_POLYGON_VERTEX,
         REMOVE_CROP_POLYGON_VERTEX,
         EXIT_WALK,
+        TOOL_SCALE_DISTANCE,
     };
 
     enum class ShortcutScope : uint8_t {

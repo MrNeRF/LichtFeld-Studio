@@ -1214,7 +1214,8 @@
     "scale": "Escalar",
     "mirror": "Reflejar",
     "crop": "Recortar",
-    "align": "Alinear"
+    "align": "Alinear",
+    "scale_distance": "Escalar distancia"
   },
   "toolbar": {
     "selection": "Selección",
@@ -1284,7 +1285,13 @@
     "resize_bounds": "Redimensionar Límites",
     "reset_default": "Restablecer a Predeterminado",
     "fullscreen": "Pantalla completa",
-    "toggle_ui": "Alternar interfaz"
+    "toggle_ui": "Alternar interfaz",
+    "scale_distance": "Escalar distancia",
+    "scale_distance_tool": "Escalar distancia",
+    "scale_distance_measured": "Medido:",
+    "scale_distance_set": "Establecer distancia:",
+    "scale_distance_apply": "Confirmar escala",
+    "scale_distance_reset": "Restablecer puntos"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "Altura de la cabeza",
   "collision.radius": "Radio del cuerpo",
   "collision.step": "Altura del escalón",
-  "collision.replace_pair": "¿Reemplazar el par de archivos de vóxeles existente?"
+  "collision.replace_pair": "¿Reemplazar el par de archivos de vóxeles existente?",
+  "scale_distance": {
+    "click_1st": "Clic en el 1.er punto",
+    "click_2nd": "Clic en el 2.º punto",
+    "points_count": "Puntos: {}/2",
+    "hint_picking": "Clic: colocar/seleccionar punto. Arrastrar marca: mover. {0}: quitar seleccionada. {1}: cancelar.",
+    "hint_review": "Introduce la distancia objetivo en la barra y haz clic en Confirmar. Arrastra los puntos para ajustar. {0}: cancelar.",
+    "status_invalid_distance": "La distancia debe ser mayor que cero.",
+    "status_no_surface": "No hay superficie bajo el cursor.",
+    "status_no_target": "No hay un objetivo transformable para escalar."
+  }
 }

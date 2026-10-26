@@ -1214,7 +1214,8 @@
     "scale": "拡大縮小",
     "mirror": "ミラー",
     "crop": "切り抜き",
-    "align": "整列"
+    "align": "整列",
+    "scale_distance": "距離で拡大縮小"
   },
   "toolbar": {
     "selection": "選択",
@@ -1284,7 +1285,13 @@
     "resize_bounds": "境界をリサイズ",
     "reset_default": "デフォルトにリセット",
     "fullscreen": "全画面表示",
-    "toggle_ui": "UIを切り替え"
+    "toggle_ui": "UIを切り替え",
+    "scale_distance": "距離で拡大縮小",
+    "scale_distance_tool": "距離スケール",
+    "scale_distance_measured": "測定値:",
+    "scale_distance_set": "距離を設定:",
+    "scale_distance_apply": "スケールを確定",
+    "scale_distance_reset": "点をリセット"
   },
   "transform": {
     "node": "ノード: %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "頭の高さ",
   "collision.radius": "身体の半径",
   "collision.step": "段差の高さ",
-  "collision.replace_pair": "既存のボクセルファイルのペアを置き換えますか？"
+  "collision.replace_pair": "既存のボクセルファイルのペアを置き換えますか？",
+  "scale_distance": {
+    "click_1st": "1点目をクリック",
+    "click_2nd": "2点目をクリック",
+    "points_count": "点: {}/2",
+    "hint_picking": "クリック: 点を配置/選択。マーカーをドラッグ: 移動。{0}: 選択削除。{1}: キャンセル。",
+    "hint_review": "ツールバーで目標距離を入力し、確定をクリックしてスケール。点をドラッグして調整。{0}: キャンセル。",
+    "status_invalid_distance": "距離はゼロより大きい必要があります。",
+    "status_no_surface": "カーソル下にサーフェスがありません。",
+    "status_no_target": "スケールできる対象がありません。"
+  }
 }

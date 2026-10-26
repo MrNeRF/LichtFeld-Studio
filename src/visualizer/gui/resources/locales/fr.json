@@ -1214,7 +1214,8 @@
     "scale": "Mettre à l’échelle",
     "mirror": "Miroir",
     "crop": "Rogner",
-    "align": "Aligner"
+    "align": "Aligner",
+    "scale_distance": "Mettre à l’échelle par distance"
   },
   "toolbar": {
     "selection": "Sélection",
@@ -1284,7 +1285,13 @@
     "resize_bounds": "Redimensionner les Limites",
     "reset_default": "Réinitialiser par Défaut",
     "fullscreen": "Plein Écran",
-    "toggle_ui": "Basculer UI"
+    "toggle_ui": "Basculer UI",
+    "scale_distance": "Mettre à l’échelle par distance",
+    "scale_distance_tool": "Échelle par distance",
+    "scale_distance_measured": "Mesuré :",
+    "scale_distance_set": "Définir la distance :",
+    "scale_distance_apply": "Confirmer l’échelle",
+    "scale_distance_reset": "Réinitialiser les points"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "Hauteur de la tête",
   "collision.radius": "Rayon du corps",
   "collision.step": "Hauteur de marche",
-  "collision.replace_pair": "Remplacer la paire de fichiers de voxels existante ?"
+  "collision.replace_pair": "Remplacer la paire de fichiers de voxels existante ?",
+  "scale_distance": {
+    "click_1st": "Cliquez le 1er point",
+    "click_2nd": "Cliquez le 2e point",
+    "points_count": "Points : {}/2",
+    "hint_picking": "Clic : placer/sélectionner un point. Glisser un point : déplacer. {0} : sélection. {1} : annuler.",
+    "hint_review": "Entrez la distance cible dans la barre et cliquez sur Confirmer. Faites glisser les points pour ajuster. {0} : annuler.",
+    "status_invalid_distance": "La distance doit être supérieure à zéro.",
+    "status_no_surface": "Aucune surface sous le curseur.",
+    "status_no_target": "Aucune cible transformable à mettre à l’échelle."
+  }
 }

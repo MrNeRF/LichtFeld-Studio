@@ -134,6 +134,7 @@ namespace lfs::vis {
                 bool has_scene_manager = false;
                 bool has_selected_node = false;
                 const void* align_tool = nullptr;
+                const void* scale_distance_tool = nullptr;
                 const void* selection_tool = nullptr;
                 const void* rendering_manager = nullptr;
                 std::string active_tool_id;

@@ -114,6 +114,7 @@ class KeymapBindingsSection:
             lf.keymap.Action.TOOL_SCALE,
             lf.keymap.Action.TOOL_MIRROR,
             lf.keymap.Action.TOOL_ALIGN,
+            lf.keymap.Action.TOOL_SCALE_DISTANCE,
             lf.keymap.Action.PIE_MENU,
         ],
         "ui_global": [

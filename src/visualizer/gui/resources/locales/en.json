@@ -1225,7 +1225,8 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "crop": "Crop",
-    "align": "Align"
+    "align": "Align",
+    "scale_distance": "Scale Distance"
   },
   "toolbar": {
     "selection": "Selection",
@@ -1295,7 +1296,13 @@
     "resize_bounds": "Resize Bounds",
     "reset_default": "Reset to Default",
     "fullscreen": "Fullscreen",
-    "toggle_ui": "Toggle UI"
+    "toggle_ui": "Toggle UI",
+    "scale_distance": "Scale Distance",
+    "scale_distance_tool": "Scale Distance",
+    "scale_distance_measured": "Measured:",
+    "scale_distance_set": "Set Distance:",
+    "scale_distance_apply": "Confirm scale",
+    "scale_distance_reset": "Reset points"
   },
   "transform": {
     "node": "Node: %s",
@@ -3391,5 +3398,15 @@
   "collision.height": "Head height",
   "collision.radius": "Body radius",
   "collision.step": "Step height",
-  "collision.replace_pair": "Replace the existing voxel pair?"
+  "collision.replace_pair": "Replace the existing voxel pair?",
+  "scale_distance": {
+    "click_1st": "Click 1st point",
+    "click_2nd": "Click 2nd point",
+    "points_count": "Points: {}/2",
+    "hint_picking": "Click: place/select point. Drag marker: move. {0}: remove selected. {1}: cancel.",
+    "hint_review": "Enter target distance in toolbar and click Confirm to scale. Drag points to adjust. {0}: cancel.",
+    "status_invalid_distance": "Distance must be greater than zero.",
+    "status_no_surface": "No surface under the cursor.",
+    "status_no_target": "No transformable target to scale."
+  }
 }
