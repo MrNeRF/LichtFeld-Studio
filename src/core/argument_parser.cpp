@@ -2087,6 +2087,19 @@ namespace {
 } // anonymous namespace
 
 // Public interface
+std::vector<lfs::core::args::TrainingFlag> lfs::core::args::training_flags() {
+    std::vector<TrainingFlag> flags;
+    lfs::core::param::TrainingParameters params;
+    (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
+        for (const auto* const flag : parser.Group::GetAllFlags()) {
+            for (const auto& name : flag->GetMatcher().GetFlagStrings())
+                flags.push_back({name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag,
+                                 flag->NumberOfArguments().max > 0});
+        }
+    });
+    return flags;
+}
+
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
 lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory, const bool validate_only) {
 
@@ -2863,18 +2876,11 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
     }
 
-    // Asks the training parser, so batch-train keeps no list of its flags. Unknown flags
-    // take a value; validate_job_arguments reports them before any job starts.
+    // Unknown flags take a value; validate_job_arguments reports them before any job starts.
     bool training_flag_takes_value(const std::string_view flag) {
-        bool takes_value = true;
-        lfs::core::param::TrainingParameters params;
-        (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
-            const auto name = flag.starts_with("--") ? ::args::EitherFlag(std::string(flag.substr(2)))
-                                                     : ::args::EitherFlag(flag.size() == 2 ? flag[1] : '\0');
-            if (const auto* const match = parser.Group::Match(name))
-                takes_value = match->NumberOfArguments().max > 0;
-        });
-        return takes_value;
+        static const auto flags = lfs::core::args::training_flags();
+        const auto it = std::ranges::find(flags, flag, &lfs::core::args::TrainingFlag::name);
+        return it == flags.end() || it->takes_value;
     }
 
     std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
@@ -2896,17 +2902,19 @@ dataset options work as in training; see the Evaluation page of the docs.
             "  # Train recursively scanning for datasets:\n"
             "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --recursive\n\n"
             "  # Train from a JSON batch manifest with per-scene overrides:\n"
-            "  lichtfeld-studio batch-train --config batch_manifest.json\n\n"
+            "  lichtfeld-studio batch-train --manifest batch_manifest.json\n\n"
             "  # Preview the resolved job queue without running (dry run):\n"
             "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --dry-run\n\n"
             "  # Stop immediately if any dataset fails (default is to continue):\n"
-            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n";
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n\n"
+            "Every other option is a training option (see LichtFeld-Studio --help) and is passed to\n"
+            "each job. -d/--data-path adds a dataset and -o/--output-path sets the output root.\n";
 
         ::args::ArgumentParser parser(BATCH_TRAIN_HELP_HEADER, BATCH_TRAIN_HELP_FOOTER);
         ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
-        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch config");
-        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir"});
-        ::args::ValueFlag<std::string> config(parser, "path", "Batch configuration JSON file", {'c', "config"});
+        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch manifest");
+        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir", "output-path"});
+        ::args::ValueFlag<std::string> manifest(parser, "path", "Batch manifest JSON file", {"manifest"});
         ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {"recursive"});
         ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
         ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
@@ -2919,56 +2927,39 @@ dataset options work as in training; see the Evaluation page of the docs.
         std::vector<std::string> shared_training_args;
         batch_args.push_back(std::string(argv[0]) + " batch-train");
 
+        // Only batch-train's own options stay here, so every training option reaches the jobs.
+        static constexpr std::string_view batch_switches[] = {"-h", "--help", "--recursive", "--stop-on-failure", "--fail-fast", "--dry-run"};
+        static constexpr std::string_view batch_values[] = {"-o", "--output", "--output-dir", "--output-path", "--manifest",
+                                                            "--timeout", "--summary", "--report", "--log-level"};
+        const auto is_one_of = [](const auto& names, const std::string_view name) {
+            return std::ranges::find(names, name) != std::end(names);
+        };
         bool after_double_dash = false;
         for (int i = 2; i < argc; ++i) {
-            std::string_view arg = argv[i];
+            const std::string_view arg = argv[i];
+            const std::string_view name = arg.substr(0, arg.find('='));
             if (after_double_dash) {
-                shared_training_args.push_back(std::string(arg));
-                continue;
-            }
-            if (arg == "--") {
+                shared_training_args.emplace_back(arg);
+            } else if (arg == "--") {
                 after_double_dash = true;
-                continue;
-            }
-
-            if (arg == "-h" || arg == "--help" || arg == "--recursive" ||
-                arg == "--stop-on-failure" || arg == "--fail-fast" || arg == "--dry-run") {
-                batch_args.push_back(std::string(arg));
-                continue;
-            }
-
-            if (arg == "-o" || arg == "--output" || arg == "--output-dir" ||
-                arg == "-c" || arg == "--config" ||
-                arg == "--timeout" || arg == "--summary" || arg == "--report" ||
-                arg == "--log-level") {
-                batch_args.push_back(std::string(arg));
-                if (i + 1 < argc && argv[i + 1][0] != '-') {
-                    batch_args.push_back(argv[++i]);
-                }
-                continue;
-            }
-
-            if (arg.starts_with("-o=") || arg.starts_with("--output=") || arg.starts_with("--output-dir=") ||
-                arg.starts_with("-c=") || arg.starts_with("--config=") ||
-                arg.starts_with("--timeout=") || arg.starts_with("--summary=") || arg.starts_with("--report=") ||
-                arg.starts_with("--log-level=")) {
-                batch_args.push_back(std::string(arg));
-                continue;
-            }
-
-            if (!arg.starts_with('-')) {
-                batch_args.push_back(std::string(arg));
-                continue;
-            }
-
-            // Unrecognized by batch parser: forward to child training runs
-            shared_training_args.push_back(std::string(arg));
-            if (!arg.contains('=')) {
-                if (training_flag_takes_value(arg)) {
-                    if (i + 1 < argc && argv[i + 1][0] != '-') {
-                        shared_training_args.push_back(argv[++i]);
-                    }
-                }
+            } else if (is_one_of(batch_switches, arg) || !arg.starts_with('-')) {
+                batch_args.emplace_back(arg);
+            } else if (name == "-d" || name == "--data-path") {
+                if (name != arg)
+                    batch_args.emplace_back(arg.substr(name.size() + 1));
+                else if (i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+            } else if (is_one_of(batch_values, name)) {
+                const auto first = batch_args.size();
+                batch_args.emplace_back(arg);
+                if (name == arg && i + 1 < argc && argv[i + 1][0] != '-')
+                    batch_args.emplace_back(argv[++i]);
+                if (name == "--log-level")
+                    shared_training_args.insert(shared_training_args.end(), batch_args.begin() + first, batch_args.end());
+            } else {
+                shared_training_args.emplace_back(arg);
+                if (name == arg && training_flag_takes_value(arg) && i + 1 < argc && argv[i + 1][0] != '-')
+                    shared_training_args.emplace_back(argv[++i]);
             }
         }
 
@@ -2990,15 +2981,15 @@ dataset options work as in training; see the Evaluation page of the docs.
         }
 
         param::BatchTrainingParameters params;
-        if (config) {
-            params.config_file = lfs::core::utf8_to_path(::args::get(config));
+        if (manifest) {
+            params.config_file = lfs::core::utf8_to_path(::args::get(manifest));
             if (!lfs::core::native_fs::exists(params.config_file)) {
-                error = std::format("Config file not found: {}", lfs::core::path_to_utf8(params.config_file));
+                error = std::format("Batch manifest not found: {}", lfs::core::path_to_utf8(params.config_file));
                 return std::nullopt;
             }
             auto loaded = param::read_batch_training_parameters_from_json(params.config_file, params);
             if (!loaded) {
-                error = std::format("Error reading batch config: {} {}", loaded.error().user_message(), loaded.error().detail());
+                error = std::format("Error reading batch manifest: {} {}", loaded.error().user_message(), loaded.error().detail());
                 return std::nullopt;
             }
             params = std::move(*loaded);

@@ -978,11 +978,6 @@ namespace lfs::app {
         args.push_back("-o");
         args.push_back(lfs::core::path_to_utf8(job.output_path));
 
-        if (job.config_file && !job.config_file->empty()) {
-            args.push_back("--config");
-            args.push_back(lfs::core::path_to_utf8(*job.config_file));
-        }
-
         // Append shared args, filtering out any conflicting dataset/output flags
         for (size_t i = 0; i < params.shared_args.size(); ++i) {
             const auto& arg = params.shared_args[i];
@@ -997,7 +992,11 @@ namespace lfs::app {
             args.push_back(arg);
         }
 
-        // Append per-job extra arguments
+        // The job's own config and arguments come last so they win over shared ones
+        if (job.config_file && !job.config_file->empty()) {
+            args.push_back("--config");
+            args.push_back(lfs::core::path_to_utf8(*job.config_file));
+        }
         for (const auto& extra : job.extra_args) {
             args.push_back(extra);
         }
@@ -1051,7 +1050,7 @@ namespace lfs::app {
         if (jobs.empty()) {
             LOG_ERROR("Batch training: No valid datasets found.");
             std::println(stderr, "\nError: No valid datasets found.");
-            std::println(stderr, "Specify dataset directories containing sparse/ or transforms.json, or pass a --config manifest.");
+            std::println(stderr, "Specify dataset directories containing sparse/ or transforms.json, or pass a --manifest file.");
             std::println(stderr, "Run 'LichtFeld-Studio batch-train --help' for details.\n");
             return 1;
         }

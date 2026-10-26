@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace lfs::core::args {
 
@@ -39,6 +40,14 @@ namespace lfs::core::args {
 
     LFS_CORE_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
     LFS_CORE_API std::string optimization_cli_help(std::string_view flag);
+
+    struct TrainingFlag {
+        std::string name; // "--iter" or "-i"
+        bool takes_value = false;
+    };
+
+    // Every option of the training command line, read from the parser itself.
+    LFS_CORE_API std::vector<TrainingFlag> training_flags();
 
     // Parsed argument modes
     struct TrainingMode {

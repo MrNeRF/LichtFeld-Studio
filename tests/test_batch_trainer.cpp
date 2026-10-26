@@ -240,6 +240,51 @@ namespace {
         EXPECT_FALSE(params.recursive); // -r is the training resize factor
     }
 
+    TEST(BatchTrainerTest, EveryTrainingFlagReachesTheJobs) {
+        const auto flags = lfs::core::args::training_flags();
+        ASSERT_GT(flags.size(), 100u);
+        for (const auto& flag : flags) {
+            if (flag.name == "-h" || flag.name == "--help")
+                continue;
+            const std::string value = flag.name == "--log-level" ? "info" : "value";
+            std::vector<const char*> argv = {"lichtfeld-studio", "batch-train", "./first", flag.name.c_str()};
+            if (flag.takes_value)
+                argv.push_back(value.c_str());
+            argv.push_back("./second");
+
+            auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+            ASSERT_TRUE(res.has_value()) << flag.name << ": " << res.error();
+            const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*res).params;
+            if (flag.name == "-d" || flag.name == "--data-path") {
+                EXPECT_EQ(params.input_paths, (std::vector<fs::path>{"./first", value, "./second"})) << flag.name;
+                continue;
+            }
+            EXPECT_EQ(params.input_paths, (std::vector<fs::path>{"./first", "./second"})) << flag.name;
+            if (flag.name == "-o" || flag.name == "--output-path") {
+                EXPECT_EQ(params.output_dir, fs::path(value)) << flag.name;
+                continue;
+            }
+            auto forwarded = std::vector<std::string>{flag.name};
+            if (flag.takes_value)
+                forwarded.push_back(value);
+            EXPECT_EQ(params.shared_args, forwarded) << flag.name;
+        }
+    }
+
+    TEST(BatchTrainerTest, JobConfigAndArgsComeAfterSharedArgs) {
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "scene";
+        job.output_path = "out";
+        job.config_file = fs::path("job.json");
+        job.extra_args = {"--iter", "7000"};
+        lfs::core::param::BatchTrainingParameters params;
+        params.shared_args = {"--config", "shared.json", "--iter", "30000"};
+
+        EXPECT_EQ(lfs::app::build_child_args(job, params),
+                  (std::vector<std::string>{"--headless", "-d", "scene", "-o", "out", "--config", "shared.json", "--iter", "30000",
+                                            "--config", "job.json", "--iter", "7000"}));
+    }
+
     TEST(BatchTrainerTest, ParseBatchTrainFreezeFlag) {
         std::vector<const char*> argv = {
             "lichtfeld-studio",
