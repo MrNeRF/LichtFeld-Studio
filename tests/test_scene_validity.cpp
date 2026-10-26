@@ -27,9 +27,9 @@
 #include "core/image_io.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
-#include "core/property_registry.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
+#include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -2438,10 +2438,10 @@ namespace lfs::python {
         EXPECT_FALSE(manager.canChangeProperty(*meta_restart, false, true));
         EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, false));
 
-        // When training has finished, changes to restart-required parameters remain rejected
+        // A finished run starts fresh after consent, so its settings can change.
         ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Finished));
         EXPECT_FALSE(manager.isDatasetEditable());
-        EXPECT_FALSE(manager.canChangeProperty(*meta_restart, false, true));
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, true));
         EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, false));
 
         // After clearing trainer / resetting, changes are allowed again

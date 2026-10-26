@@ -2077,7 +2077,7 @@ class TrainingPanel(Panel):
         return (
             RuntimeState.trainer_state.value == "ready"
             and RuntimeState.iteration.value == 0
-        )
+        ) or _trainer_run_is_finished()
 
     def _reset_default(self, prop):
         params = lf.optimization_params()

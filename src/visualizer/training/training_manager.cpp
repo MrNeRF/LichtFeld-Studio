@@ -2828,7 +2828,7 @@ namespace lfs::vis {
                                            const std::any& new_value) const {
         if (!meta.needs_restart())
             return true;
-        if (!trainer_ || isDatasetEditable())
+        if (!trainer_ || isDatasetEditable() || isFinished())
             return true;
         return meta.values_equal(current_value, new_value);
     }

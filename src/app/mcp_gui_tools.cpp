@@ -21,6 +21,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -103,29 +104,6 @@ namespace lfs::app {
         constexpr size_t MAX_MCP_EVENT_QUEUE_BYTES = 4 * 1024 * 1024;
         constexpr size_t MAX_MCP_EVENT_TOTAL_QUEUE_BYTES = 16 * 1024 * 1024;
         constexpr auto MCP_EVENT_SUBSCRIPTION_TTL = std::chrono::minutes(15);
-
-        std::string property_display_name(const core::prop::PropertyMeta& meta) {
-            if (!meta.ui_locale_key.empty()) {
-                std::string label = LOC(meta.ui_locale_key);
-                if (!label.empty() && label != meta.ui_locale_key) {
-                    while (!label.empty() && (label.back() == ':' || label.back() == ' ' || label.back() == '\t')) {
-                        label.pop_back();
-                    }
-                    if (label.size() >= 3 &&
-                        static_cast<unsigned char>(label[label.size() - 3]) == 0xEF &&
-                        static_cast<unsigned char>(label[label.size() - 2]) == 0xBC &&
-                        static_cast<unsigned char>(label[label.size() - 1]) == 0x9A) {
-                        label.erase(label.size() - 3);
-                    }
-                    while (!label.empty() && (label.back() == ' ' || label.back() == '\t')) {
-                        label.pop_back();
-                    }
-                    if (!label.empty())
-                        return label;
-                }
-            }
-            return meta.name.empty() ? meta.id : meta.name;
-        }
 
         json number_array_schema(const size_t count, const std::string& description) {
             return json{{"type", "array"}, {"minItems", count}, {"maxItems", count}, {"items", json{{"type", "number"}}}, {"description", description}};
@@ -3578,7 +3556,7 @@ namespace lfs::app {
                             if (change.meta.needs_restart()) {
                                 auto current_val = change.meta.getter(ref);
                                 if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
-                                    return json{{"error", LOCF("training.reset_before_param_change", property_display_name(change.meta))}};
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
                                 }
                             }
                         }

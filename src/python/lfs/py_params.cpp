@@ -11,6 +11,7 @@
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_defaults.hpp"
+#include "core/property_display_name.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -55,27 +56,6 @@ namespace lfs::python {
             if (!std::isfinite(value) || value < min_value || value > max_value)
                 throw std::invalid_argument(std::format("{} must be within [{}, {}]", name, min_value, max_value));
             return value;
-        std::string property_display_name(const core::prop::PropertyMeta& meta) {
-            if (!meta.ui_locale_key.empty()) {
-                std::string label = LOC(meta.ui_locale_key);
-                if (!label.empty() && label != meta.ui_locale_key) {
-                    while (!label.empty() && (label.back() == ':' || label.back() == ' ' || label.back() == '\t')) {
-                        label.pop_back();
-                    }
-                    if (label.size() >= 3 &&
-                        static_cast<unsigned char>(label[label.size() - 3]) == 0xEF &&
-                        static_cast<unsigned char>(label[label.size() - 2]) == 0xBC &&
-                        static_cast<unsigned char>(label[label.size() - 1]) == 0x9A) {
-                        label.erase(label.size() - 3);
-                    }
-                    while (!label.empty() && (label.back() == ' ' || label.back() == '\t')) {
-                        label.pop_back();
-                    }
-                    if (!label.empty())
-                        return label;
-                }
-            }
-            return meta.name.empty() ? meta.id : meta.name;
         }
 
     } // namespace
@@ -500,7 +480,7 @@ namespace lfs::python {
                 auto current_ref = PropertyObjectRef::cpp(&params());
                 auto current_val = meta->getter(current_ref);
                 if (!tm->canChangeProperty(*meta, current_val, new_value)) {
-                    throw std::invalid_argument(LOCF("training.reset_before_param_change", property_display_name(*meta)));
+                    throw std::invalid_argument(LOCF("training.reset_before_param_change", core::prop::property_display_name(*meta)));
                 }
             }
         }
