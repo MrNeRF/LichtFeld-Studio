@@ -12,7 +12,7 @@ The viewport can draw 3DGS scenes without sorting the splats. **Rendering → Qu
 | Stochastic | Each pixel shows one splat per frame, picked at random by its opacity. Frames are averaged while the view rests. |
 | SteadySplats | Stochastic samples, combined with the samples of neighboring pixels and previous frames, so there is less noise, also in motion. |
 
-Each frame is shown at once. **Refinement frames** (16 by default, up to 1024) is the number of frames rendered after the view or the scene changes; then the viewport idles until the next change. More frames give a cleaner still image.
+Each frame is shown at once. **Refinement frames** (16 by default, up to 1024) is the number of frames rendered after the view or the scene changes, at most one per display refresh; then the viewport idles until the next change. More frames give a cleaner still image.
 
 Python uses `lf.get_render_settings().transparency_mode` (`"alpha_blend"`, `"stochastic"`, `"steady_splats"`) and `stochastic_max_frames`. The MCP tools `render_settings_get` and `render_settings_set` take the same fields. The setting is saved with the session.
 

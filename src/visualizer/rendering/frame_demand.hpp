@@ -114,6 +114,17 @@ namespace lfs::vis {
         return std::max(0.0, std::chrono::duration<double>(deadline - now).count());
     }
 
+    // Frames no input asked for, stochastic refinement included, start at most one display
+    // interval after the last presented frame started. Input starts its frame at once.
+    [[nodiscard]] inline double secondsUntilPacedFrame(const bool user_input,
+                                                       const std::optional<FrameClock::time_point> last_presented_start,
+                                                       const FrameClock::duration display_interval,
+                                                       const FrameClock::time_point now) {
+        if (user_input || !last_presented_start)
+            return 0.0;
+        return secondsUntilFrameDeadline(*last_presented_start + display_interval, now);
+    }
+
     struct FrameRequest {
         FrameReason reason;
         FrameScope scope;
@@ -285,12 +296,6 @@ namespace lfs::vis {
             else
                 last_plan_started_ = now;
             return plan;
-        }
-
-        [[nodiscard]] bool hasPendingRequest(const FrameReason reason) const {
-            std::lock_guard lock(mutex_);
-            return std::any_of(one_shots_.begin(), one_shots_.end(),
-                               [reason](const FrameRequest& request) { return request.reason == reason; });
         }
 
         // Earliest time anything needs the loop awake; empty means block forever.

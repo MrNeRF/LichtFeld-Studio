@@ -2672,26 +2672,19 @@ namespace lfs::vis {
             return;
         }
 
-        // Frames no input asked for (GUI animation, Python redraws, training updates) would run far
-        // above the display rate when presenting does not block. Wakes without input start at most
-        // one display interval after the last presented frame started; requests stay queued for this
-        // frame, and work posted meanwhile is picked up by the next wait.
-        // Stochastic refinement is finite work, not a periodic animation. Keep
-        // polling input between samples, but let available GPU slots advance it.
-        const bool refinement_pending = rendering_manager_ &&
-                                        rendering_manager_->frameDemandLedger().hasPendingRequest(
-                                            FrameReason::StochasticAccumulation);
-        if (last_presented_frame_start_ && !refinement_pending) {
-            const auto ready_at = *last_presented_frame_start_ +
-                                  std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                                      std::chrono::duration<double>(displayFrameInterval()));
-            while (!window_manager_->frameInput().hasUserInput()) {
-                const double remaining =
-                    std::chrono::duration<double>(ready_at - std::chrono::steady_clock::now()).count();
-                if (remaining <= 0.0)
-                    break;
-                window_manager_->waitEvents(remaining);
-            }
+        // Frames no input asked for (GUI animation, Python redraws, training updates, stochastic
+        // refinement) would run far above the display rate when presenting does not block. Wakes
+        // without input start at most one display interval after the last presented frame started;
+        // requests stay queued for this frame, and work posted meanwhile is picked up by the next wait.
+        const auto display_interval = std::chrono::duration_cast<FrameClock::duration>(
+            std::chrono::duration<double>(displayFrameInterval()));
+        while (true) {
+            const double wait = secondsUntilPacedFrame(window_manager_->frameInput().hasUserInput(),
+                                                       last_presented_frame_start_, display_interval,
+                                                       FrameClock::now());
+            if (wait <= 0.0)
+                break;
+            window_manager_->waitEvents(wait);
         }
         const auto frame_started_at = std::chrono::steady_clock::now();
 

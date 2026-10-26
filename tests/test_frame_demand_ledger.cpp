@@ -187,19 +187,24 @@ namespace {
         EXPECT_EQ(plan.view_flags[1], DirtyFlag::CAMERA);
     }
 
-    TEST(FrameDemandLedger, PendingRefinementIsOneShotAndEndsWhenConsumed) {
+    TEST(FrameDemandLedger, RefinementFramesArePacedToTheDisplay) {
+        using lfs::vis::secondsUntilPacedFrame;
         FrameDemandLedger ledger;
-        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
         ledger.request(FrameRequest{.reason = FrameReason::StochasticAccumulation,
                                     .scope = FrameScope::View,
                                     .views = 1,
                                     .flags = DirtyFlag::CAMERA});
-        EXPECT_TRUE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
-        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::GuiAnimation));
-        const auto plan = ledger.plan(t0());
+        // A pending sample wakes the loop at once, so it never blocks on events,
+        // but its frame starts one display interval after the last one started.
+        EXPECT_EQ(ledger.nextDeadline(t0() + 4ms), t0() + 4ms);
+        const std::optional<FrameClock::time_point> last_presented = t0();
+        EXPECT_DOUBLE_EQ(secondsUntilPacedFrame(false, last_presented, 16ms, t0() + 4ms), 0.012);
+        EXPECT_DOUBLE_EQ(secondsUntilPacedFrame(false, last_presented, 16ms, t0() + 16ms), 0.0);
+        EXPECT_DOUBLE_EQ(secondsUntilPacedFrame(true, last_presented, 16ms, t0() + 4ms), 0.0);
+        EXPECT_DOUBLE_EQ(secondsUntilPacedFrame(false, std::nullopt, 16ms, t0() + 4ms), 0.0);
+        const auto plan = ledger.plan(t0() + 16ms);
         EXPECT_TRUE(plan.reasons.test(static_cast<std::size_t>(FrameReason::StochasticAccumulation)));
-        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
-        EXPECT_TRUE(ledger.plan(t0() + 1ms).empty());
+        EXPECT_FALSE(ledger.nextDeadline(t0() + 17ms).has_value());
     }
 
     TEST(FrameDemandLedger, PresentWithoutReasonIsCounted) {
