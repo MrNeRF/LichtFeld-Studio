@@ -8,6 +8,7 @@
 
 #include "core/crop_polygon.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -1170,12 +1171,10 @@ namespace lfs::vis::cap {
         std::vector<std::string> candidate_names;
         if (!requested_targets.empty()) {
             candidate_names = requested_targets;
-        } else if (scene_manager.hasSelectedNode()) {
-            candidate_names = scene_manager.getSelectedNodeNames();
         } else {
             for (const auto* const node : scene.getNodes()) {
-                if (node && isAlignTransformTargetType(node->type) &&
-                    !scene.isNodeEffectivelyLocked(node->id)) {
+                if (node && (isAlignTransformTargetType(node->type) ||
+                             node->type == core::NodeType::CAMERA_GROUP || node->type == core::NodeType::CAMERA)) {
                     candidate_names.push_back(node->name);
                 }
             }
@@ -1279,6 +1278,24 @@ namespace lfs::vis::cap {
 
         result.applied = true;
         result.transformed_nodes = transform_targets;
+        return result;
+    }
+
+    AprilTagSceneApplyResult applyAprilTagScaleReport(
+        SceneManager& scene_manager,
+        const core::AprilTagSceneSnapshot& snapshot,
+        core::AprilTagSceneScaleReport report,
+        const std::vector<std::string>& requested_targets) {
+        AprilTagSceneApplyResult result;
+        if (!snapshot.matches(scene_manager.getScene())) {
+            result.error_message = LOC("runtime.apriltag_scene_changed");
+        } else if (!report.success) {
+            result.error_message = report.error_message;
+        } else {
+            result = applyUniformScaleAboutDataPivot(scene_manager, requested_targets,
+                                                     glm::vec3(report.scale_result.pivot), static_cast<float>(report.scale_result.scale_factor));
+        }
+        result.scale_report = std::move(report);
         return result;
     }
 

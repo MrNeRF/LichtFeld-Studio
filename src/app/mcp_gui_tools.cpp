@@ -4795,7 +4795,7 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "transform.detect_apriltags",
-                .description = "Detect AprilTags in scene camera images and triangulate their 3D centers",
+                .description = "Start an AprilTag detection job; read results with runtime.job_describe for apriltag.scan",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -4807,7 +4807,15 @@ namespace lfs::app {
                         {"min_decision_margin", json{{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
                         {"active_cameras_only", json{{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
                         {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}}},
-                    .required = {}}},
+                    .required = {}},
+                .metadata = {
+                    .category = "transform",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -4834,53 +4842,25 @@ namespace lfs::app {
                     const bool active_only = args.value("active_cameras_only", false);
                     const int max_width = args.value("max_image_width", 0);
 
-                    const auto views = core::detectAprilTagsInScene(
-                        scene_manager->getScene(),
-                        det_cfg,
-                        active_only,
-                        max_width);
-                    const auto summary = geometry::apriltag::triangulateAprilTags(views, tri_cfg);
-
-                    json tags_json = json::array();
-                    for (const auto& tag : summary.tags) {
-                        const glm::vec3 vis_pos = rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
-                        tags_json.push_back({
-                            {"tag_id", tag.tag_id},
-                            {"position", {tag.position.x, tag.position.y, tag.position.z}},
-                            {"visualizer_position", {vis_pos.x, vis_pos.y, vis_pos.z}},
-                            {"total_observations", tag.total_observations},
-                            {"inlier_observations", tag.inlier_observations},
-                            {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
-                            {"max_reprojection_error_px", tag.max_reprojection_error_px},
-                            {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
-                            {"camera_uids", tag.camera_uids},
-                            {"image_names", tag.image_names},
-                        });
+                    auto* gui = viewer_impl->getGuiManager();
+                    if (!gui)
+                        return json{{"error", "GUI manager not initialized"}};
+                    core::AprilTagSceneScaleOptions options;
+                    options.detector_config = det_cfg;
+                    options.triangulation_config = tri_cfg;
+                    options.active_cameras_only = active_only;
+                    options.max_image_width = max_width;
+                    if (!gui->asyncTasks().startAprilTagScan(std::move(options))) {
+                        return json{{"error", "AprilTag scan could not start or is already running"}};
                     }
-
-                    json rejected_json = json::array();
-                    for (const auto& rej : summary.rejected_tags) {
-                        rejected_json.push_back({
-                            {"tag_id", rej.tag_id},
-                            {"total_observations", rej.total_observations},
-                            {"max_parallax_angle_deg", rej.max_parallax_angle_deg},
-                            {"reason", rej.reason},
-                        });
-                    }
-
-                    return json{
-                        {"success", true},
-                        {"camera_count", views.size()},
-                        {"triangulated_tags", std::move(tags_json)},
-                        {"rejected_tags", std::move(rejected_json)},
-                    };
+                    return json{{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
                 });
             });
 
         registry.register_tool(
             McpTool{
                 .name = "transform.scale_by_apriltags",
-                .description = "Automatically detect AprilTags, triangulate 3D centers, solve global scale from distance constraints via RANSAC/WLS, and rescale the scene",
+                .description = "Start an AprilTag scene calibration job; read results with runtime.job_describe for apriltag.scan",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
@@ -4899,8 +4879,16 @@ namespace lfs::app {
                         {"max_image_width", json{{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
                         {"manifest_path", json{{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
                         {"apply_to_scene", json{{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
-                        {"targets", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional target node names to scale"}}}},
-                    .required = {"constraints"}}},
+                        {"targets", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Explicit partial targets; omitted targets scale the complete scene"}}}},
+                    .required = {"constraints"}},
+                .metadata = {
+                    .category = "transform",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -4962,38 +4950,14 @@ namespace lfs::app {
                     }
 
                     const bool apply_to_scene = args.value("apply_to_scene", true);
-                    vis::cap::AprilTagSceneApplyResult res;
-                    if (apply_to_scene) {
-                        res = vis::cap::autoScaleSceneWithAprilTags(
-                            *scene_manager,
-                            constraints,
-                            options,
-                            targets);
-                        if (res.applied) {
-                            if (auto* const rm = viewer_impl->getRenderingManager()) {
-                                rm->markDirty(
-                                    vis::DirtyFlag::SPLATS | vis::DirtyFlag::MESH | vis::DirtyFlag::OVERLAY,
-                                    vis::FrameReason::SceneChange);
-                            }
-                        }
-                    } else {
-                        res.scale_report = core::computeAprilTagSceneScale(
-                            scene_manager->getScene(),
-                            constraints,
-                            options);
-                        res.error_message = res.scale_report.error_message;
+                    auto* gui = viewer_impl->getGuiManager();
+                    if (!gui)
+                        return json{{"error", "GUI manager not initialized"}};
+                    if (!gui->asyncTasks().startAprilTagScan(std::move(options), std::move(constraints),
+                                                             std::move(targets), true, apply_to_scene)) {
+                        return json{{"error", "AprilTag scan could not start or is already running"}};
                     }
-
-                    json out = json::parse(res.scale_report.manifest_json, nullptr, false);
-                    if (out.is_discarded())
-                        out = json::object();
-                    out["success"] = apply_to_scene ? res.applied : res.scale_report.success;
-                    out["applied"] = res.applied;
-                    out["transformed_nodes"] = res.transformed_nodes;
-                    out["manifest_saved_path"] = core::path_to_utf8(res.scale_report.manifest_saved_path);
-                    if (!res.error_message.empty())
-                        out["error"] = res.error_message;
-                    return out;
+                    return json{{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
                 });
             });
 

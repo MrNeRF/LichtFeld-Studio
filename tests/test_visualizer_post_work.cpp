@@ -21643,4 +21643,81 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.hasPendingRenderWork());
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobCompletesOnViewerAndCanRestart) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        scene.addCamera("camera", dataset, std::make_shared<core::Camera>());
+        for (int run = 0; run < 2; ++run) {
+            ASSERT_TRUE(tasks.startAprilTagScan({}));
+            EXPECT_FALSE(tasks.startAprilTagScan({}));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+            // The worker publishes a report, but cannot complete or apply it itself.
+            EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
+            EXPECT_TRUE(tasks.hasPendingMainThreadCompletions());
+            tasks.pollAprilTagScanCompletion();
+            EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Completed);
+            EXPECT_FLOAT_EQ(tasks.aprilTagScanStatus()->progress, 1.0f);
+            EXPECT_EQ(tasks.aprilTagScanResult().scale_report.views.size(), 1u);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobLateCancelPreventsCompletion) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startAprilTagScan({}));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        tasks.cancelAprilTagScan();
+        tasks.pollAprilTagScanCompletion();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobRejectsChangedSceneAndShutdownJoinsWorker) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startAprilTagScan({}));
+        viewer.getSceneManager()->getScene().addDataset("replacement");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        tasks.pollAprilTagScanCompletion();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+        ASSERT_TRUE(tasks.startAprilTagScan({}));
+        tasks.shutdown();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobFailedSolveRetainsDiagnostics) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startAprilTagScan({}, {}, {}, true, false));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (tasks.aprilTagScanStatus()->status != JobStatus::CompletionPending &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        ASSERT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::CompletionPending);
+        tasks.pollAprilTagScanCompletion();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().scale_report.error_message.empty());
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
 } // namespace lfs::vis

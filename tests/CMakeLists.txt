@@ -910,6 +910,7 @@ set(TEST_FILES
     test_mask_color_consistency.cpp
     test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
+    test_apriltag_scene_scale.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp

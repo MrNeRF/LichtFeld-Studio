@@ -25,6 +25,30 @@ namespace lfs::core {
         const Camera& camera,
         const glm::mat4& scene_world_transform = glm::mat4(1.0f));
 
+    struct AprilTagCameraInput {
+        geometry::apriltag::CameraObservationView view;
+        std::filesystem::path image_path;
+    };
+
+    struct AprilTagSceneSnapshot {
+        std::vector<AprilTagCameraInput> cameras;
+        std::vector<Uuid> node_uuids;
+        uint64_t render_generation = 0;
+        uint64_t camera_list_generation = 0;
+
+        [[nodiscard]] LFS_CORE_API bool matches(const Scene& scene) const;
+    };
+
+    // Capture and validate on the scene owner thread; workers only use copied inputs.
+    [[nodiscard]] LFS_CORE_API AprilTagSceneSnapshot snapshotAprilTagScene(
+        const Scene& scene, bool active_cameras_only = false);
+
+    [[nodiscard]] LFS_CORE_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInSnapshot(
+        std::span<const AprilTagCameraInput> cameras,
+        const geometry::apriltag::AprilTagDetectorConfig& detector_config = {},
+        int max_image_width = 0,
+        const AprilTagProgressCallback& progress_callback = {});
+
     [[nodiscard]] LFS_CORE_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInCameras(
         std::span<const std::shared_ptr<Camera>> cameras,
         const geometry::apriltag::AprilTagDetectorConfig& detector_config = {},
@@ -75,4 +99,3 @@ namespace lfs::core {
         const AprilTagSceneScaleOptions& options = {});
 
 } // namespace lfs::core
-

@@ -5,6 +5,7 @@
 #include "geometry/apriltag_detector.hpp"
 #include "geometry/apriltag_scaling.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -377,4 +378,97 @@ TEST(AprilTagScalingTest, EndToEndPhotogrammetricDetectionTriangulationAndRescal
     EXPECT_NEAR(parsed["scaling_summary"]["inlier_ratio"].get<double>(), 0.75, 1e-6);
     EXPECT_EQ(parsed["triangulated_tags"].size(), 4U);
     EXPECT_EQ(parsed["evaluated_constraints"].size(), 4U);
+}
+
+TEST(AprilTagScalingTest, RobustInitializationSurvivesSixtyFiveViews) {
+    std::vector<CameraObservationView> views;
+    const glm::dvec3 point(0.0, 0.0, 5.0);
+    for (int i = 0; i < 63; ++i) {
+        const double x = -0.1 + 0.2 * i / 62.0;
+        auto view = makeSyntheticCamera(i, "camera", {x, 0.0, 0.0}, {x, 0.0, 5.0},
+                                        {0.0, -1.0, 0.0}, 1280, 960, 1000.0, 1000.0);
+        view.detections.push_back({.id = 1, .decision_margin = 80.0f, .center = *projectWorldPointToDetectedPixel(view, point)});
+        views.push_back(std::move(view));
+    }
+    auto outlier = makeSyntheticCamera(63, "outlier", {100.0, 0.0, 0.0}, {0.0, 0.0, 10.0});
+    outlier.detections.push_back({.id = 1, .decision_margin = 80.0f, .center = *projectWorldPointToDetectedPixel(outlier, {0.0, 0.0, 10.0})});
+    views.push_back(std::move(outlier));
+    TriangulationConfig config;
+    config.min_parallax_angle_deg = 0.1;
+    for (int count : {64, 65}) {
+        if (count == 65) {
+            auto extra = makeSyntheticCamera(64, "extra", {0.11, 0.0, 0.0}, {0.11, 0.0, 5.0});
+            extra.detections.push_back({.id = 1, .decision_margin = 80.0f, .center = *projectWorldPointToDetectedPixel(extra, point)});
+            views.push_back(std::move(extra));
+        }
+        for (bool reverse : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << count << " views, reversed=" << reverse);
+            if (reverse)
+                std::reverse(views.begin(), views.end());
+            const auto result = triangulateAprilTags(views, config);
+            ASSERT_EQ(result.tags.size(), 1u);
+            EXPECT_NEAR(result.tags[0].position.z, 5.0, 1e-6);
+            EXPECT_EQ(result.tags[0].inlier_observations, count - 1);
+            if (reverse)
+                std::reverse(views.begin(), views.end());
+        }
+    }
+}
+
+TEST(AprilTagScalingTest, FinalFitReclassifiesInliersAndRechecksThresholds) {
+    const std::vector<TriangulatedTag3D> tags{
+        {.tag_id = 0, .position = {0, 0, 0}},
+        {.tag_id = 1, .position = {1, 0, 0}},
+        {.tag_id = 2, .position = {2, 0, 0}},
+        {.tag_id = 3, .position = {3, 0, 0}}};
+    const std::vector<TagDistanceConstraint> constraints{
+        {.tag_a = 0, .tag_b = 1, .target_distance = 1.0},
+        {.tag_a = 0, .tag_b = 2, .target_distance = 2.078},
+        {.tag_a = 0, .tag_b = 3, .target_distance = 3.117}};
+    ScaleSolverConfig config;
+    config.inlier_relative_threshold = 0.02;
+    for (const auto [minimum, ratio] : {std::pair{3, 0.5}, std::pair{1, 0.9}, std::pair{2, 0.5}}) {
+        config.min_inliers = minimum;
+        config.min_inlier_ratio = ratio;
+        const auto result = solveGlobalScale(tags, constraints, config);
+        EXPECT_EQ(result.success, minimum == 2);
+        EXPECT_EQ(result.inlier_count, 2);
+        EXPECT_FALSE(result.evaluated_constraints[0].inlier);
+        for (const auto& constraint : result.evaluated_constraints) {
+            EXPECT_EQ(constraint.inlier, constraint.relative_error <= 0.02);
+        }
+    }
+}
+
+TEST(AprilTagScalingTest, OrthographicProjectionAndParallelRays) {
+    auto view = makeSyntheticCamera(1, "ortho", {0, 0, 0}, {0, 0, 1},
+                                    {0, -1, 0}, 1280, 960, 1000, 1000);
+    view.intrinsics.lens_model = LensModel::Ortho;
+    for (const double depth : {2.0, 4.0}) {
+        const auto pixel = projectWorldPointToDetectedPixel(view, {1, 0, depth});
+        ASSERT_TRUE(pixel);
+        EXPECT_DOUBLE_EQ(pixel->x, 1640.0);
+        EXPECT_DOUBLE_EQ(pixel->y, 480.0);
+        const auto ray = unprojectPixelToWorldRay(view, *pixel);
+        ASSERT_TRUE(ray);
+        EXPECT_NEAR(glm::length(ray->origin - glm::dvec3(1, 0, 0)), 0.0, 1e-12);
+        EXPECT_NEAR(glm::length(ray->direction - glm::dvec3(0, 0, 1)), 0.0, 1e-12);
+    }
+    const auto left = unprojectPixelToWorldRay(view, {640, 480});
+    const auto right = unprojectPixelToWorldRay(view, {1640, 480});
+    ASSERT_TRUE(left && right);
+    EXPECT_EQ(left->direction, right->direction);
+    EXPECT_NE(left->origin, right->origin);
+
+    view.detected_image_width = 640;
+    view.detected_image_height = 480;
+    view.scene_world_transform = glm::translate(glm::dmat4(1), glm::dvec3(2, 3, 4)) *
+                                 glm::rotate(glm::dmat4(1), 0.4, glm::dvec3(0, 1, 0));
+    const auto world = glm::dvec3(view.scene_world_transform * glm::dvec4(1, 0, 4, 1));
+    const auto pixel = projectWorldPointToDetectedPixel(view, world);
+    ASSERT_TRUE(pixel);
+    EXPECT_NEAR(pixel->x, 820.0, 1e-9);
+    const auto ray = unprojectPixelToWorldRay(view, *pixel);
+    ASSERT_TRUE(ray);
+    EXPECT_NEAR(glm::length(glm::cross(world - ray->origin, ray->direction)), 0.0, 1e-9);
 }

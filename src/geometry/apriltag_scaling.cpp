@@ -9,9 +9,10 @@
 #include <ctime>
 #include <glm/gtc/matrix_transform.hpp>
 #include <map>
-#include <numbers>
-#include <set>
 #include <nlohmann/json.hpp>
+#include <numbers>
+#include <random>
+#include <set>
 
 namespace lfs::geometry::apriltag {
 
@@ -365,6 +366,7 @@ namespace lfs::geometry::apriltag {
 
         const glm::dvec2 pixel = toIntrinsicScalePixel(view, detected_pixel);
         glm::dvec3 cam_dir{0.0, 0.0, 1.0};
+        glm::dvec3 cam_origin{0.0};
 
         if (view.intrinsics.lens_model == LensModel::Equirectangular) {
             if (view.intrinsics.width <= 0 || view.intrinsics.height <= 0) {
@@ -398,11 +400,15 @@ namespace lfs::geometry::apriltag {
             if (!undistorted_xy) {
                 return std::nullopt;
             }
-            cam_dir = glm::dvec3(undistorted_xy->x, undistorted_xy->y, 1.0);
+            if (view.intrinsics.lens_model == LensModel::Ortho) {
+                cam_origin = glm::dvec3(*undistorted_xy, 0.0);
+            } else {
+                cam_dir = glm::dvec3(*undistorted_xy, 1.0);
+            }
         }
 
         const glm::dmat3 R_c2w = glm::transpose(view.world_to_camera_rotation);
-        const glm::dvec3 raw_origin = -R_c2w * view.world_to_camera_translation;
+        const glm::dvec3 raw_origin = R_c2w * (cam_origin - view.world_to_camera_translation);
         const glm::dvec3 raw_dir = R_c2w * cam_dir;
 
         const glm::dvec3 world_origin = glm::dvec3(view.scene_world_transform * glm::dvec4(raw_origin, 1.0));
@@ -452,13 +458,14 @@ namespace lfs::geometry::apriltag {
             const double lat = std::asin(std::clamp(-dir.y, -1.0, 1.0));
             intrinsic_pixel.x = (0.5 + lon / (2.0 * std::numbers::pi_v<double>)) *
                                 static_cast<double>(view.intrinsics.width);
-            intrinsic_pixel.y = (0.5 - lat / std::numbers::pi_v<double>) *
-                                static_cast<double>(view.intrinsics.height);
+            intrinsic_pixel.y = (0.5 - lat / std::numbers::pi_v<double>)*static_cast<double>(view.intrinsics.height);
         } else {
             if (cam_pt.z <= 1e-6) {
                 return std::nullopt;
             }
-            const glm::dvec2 normalized_xy{cam_pt.x / cam_pt.z, cam_pt.y / cam_pt.z};
+            const glm::dvec2 normalized_xy = view.intrinsics.lens_model == LensModel::Ortho
+                                                 ? glm::dvec2(cam_pt)
+                                                 : glm::dvec2(cam_pt) / cam_pt.z;
             const int num_dist = std::clamp(
                 view.intrinsics.num_distortion,
                 0,
@@ -545,37 +552,53 @@ namespace lfs::geometry::apriltag {
             }
 
             std::vector<std::size_t> active_indices;
-            if (obs_list.size() >= 3 && obs_list.size() <= 64) {
+            if (obs_list.size() >= 3) {
                 std::size_t best_inlier_count = 0;
                 double best_error_sum = std::numeric_limits<double>::infinity();
 
-                for (std::size_t i = 0; i < obs_list.size(); ++i) {
-                    for (std::size_t j = i + 1; j < obs_list.size(); ++j) {
-                        const std::array<std::size_t, 2> pair_indices{i, j};
-                        if (computeMaxParallaxDeg(obs_list, pair_indices) < config.min_parallax_angle_deg) {
-                            continue;
+                std::vector<std::array<std::size_t, 2>> pairs;
+                if (obs_list.size() <= 64) {
+                    for (std::size_t i = 0; i < obs_list.size(); ++i) {
+                        for (std::size_t j = i + 1; j < obs_list.size(); ++j) {
+                            pairs.push_back({i, j});
                         }
-                        const auto candidate_pt = intersectRaysLeastSquares(obs_list, pair_indices);
-                        if (!candidate_pt) {
-                            continue;
-                        }
+                    }
+                } else {
+                    // Sample across the full list with a fixed seed and bounded work.
+                    std::mt19937_64 rng(0);
+                    std::uniform_int_distribution<std::size_t> first(0, obs_list.size() - 1);
+                    std::uniform_int_distribution<std::size_t> second(0, obs_list.size() - 2);
+                    constexpr std::size_t kPairBudget = 64 * 63 / 2;
+                    for (std::size_t sample = 0; sample < kPairBudget; ++sample) {
+                        const auto i = first(rng);
+                        const auto j = second(rng);
+                        pairs.push_back({i, j >= i ? j + 1 : j});
+                    }
+                }
+                for (const auto& pair_indices : pairs) {
+                    if (computeMaxParallaxDeg(obs_list, pair_indices) < config.min_parallax_angle_deg) {
+                        continue;
+                    }
+                    const auto candidate_pt = intersectRaysLeastSquares(obs_list, pair_indices);
+                    if (!candidate_pt) {
+                        continue;
+                    }
 
-                        std::vector<std::size_t> candidate_inliers;
-                        double error_sum = 0.0;
-                        for (std::size_t k = 0; k < obs_list.size(); ++k) {
-                            const auto err = computeViewReprojectionErrorPx(obs_list[k], *candidate_pt);
-                            if (err && *err <= config.max_reprojection_error_px * 1.5) {
-                                candidate_inliers.push_back(k);
-                                error_sum += *err;
-                            }
+                    std::vector<std::size_t> candidate_inliers;
+                    double error_sum = 0.0;
+                    for (std::size_t k = 0; k < obs_list.size(); ++k) {
+                        const auto err = computeViewReprojectionErrorPx(obs_list[k], *candidate_pt);
+                        if (err && *err <= config.max_reprojection_error_px * 1.5) {
+                            candidate_inliers.push_back(k);
+                            error_sum += *err;
                         }
+                    }
 
-                        if (candidate_inliers.size() > best_inlier_count ||
-                            (candidate_inliers.size() == best_inlier_count && error_sum < best_error_sum)) {
-                            best_inlier_count = candidate_inliers.size();
-                            best_error_sum = error_sum;
-                            active_indices = std::move(candidate_inliers);
-                        }
+                    if (candidate_inliers.size() > best_inlier_count ||
+                        (candidate_inliers.size() == best_inlier_count && error_sum < best_error_sum)) {
+                        best_inlier_count = candidate_inliers.size();
+                        best_error_sum = error_sum;
+                        active_indices = std::move(candidate_inliers);
                     }
                 }
             }
@@ -831,7 +854,7 @@ namespace lfs::geometry::apriltag {
                 polished_inliers.push_back(idx);
             }
         }
-        if (polished_inliers.size() >= best_inliers.size()) {
+        if (!polished_inliers.empty()) {
             best_inliers = std::move(polished_inliers);
             if (const auto second_pass = refineScaleWls(best_inliers);
                 second_pass && *second_pass > 1e-9) {
@@ -840,6 +863,12 @@ namespace lfs::geometry::apriltag {
         }
 
         const double final_scale = *refined_scale;
+        best_inliers.clear();
+        for (const std::size_t idx : valid_indices) {
+            if (isConstraintInlier(result.evaluated_constraints[idx], final_scale)) {
+                best_inliers.push_back(idx);
+            }
+        }
         result.scale_factor = final_scale;
         result.inlier_count = static_cast<int>(best_inliers.size());
         result.inlier_ratio = static_cast<double>(result.inlier_count) /
@@ -1005,4 +1034,3 @@ namespace lfs::geometry::apriltag {
     }
 
 } // namespace lfs::geometry::apriltag
-

@@ -154,6 +154,12 @@ namespace lfs::vis::cap {
         float scale_factor,
         std::string_view undo_label = "transform.scale_apriltag");
 
+    [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult applyAprilTagScaleReport(
+        SceneManager& scene_manager,
+        const core::AprilTagSceneSnapshot& snapshot,
+        core::AprilTagSceneScaleReport report,
+        const std::vector<std::string>& requested_targets = {});
+
     [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult autoScaleSceneWithAprilTags(
         SceneManager& scene_manager,
         std::span<const geometry::apriltag::TagDistanceConstraint> constraints,

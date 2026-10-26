@@ -1300,6 +1300,7 @@
     "toggle_ui": "Alterna UI"
   },
   "transform": {
+    "scale_apriltag": "Ridimensiona la scena con AprilTags",
     "node": "Nodo: %s",
     "world": "Mondo",
     "local": "Locale",
@@ -2753,6 +2754,11 @@
     "scroll_panel_tabs_down": "Scorri le schede dei pannelli verso il basso"
   },
   "runtime": {
+    "apriltag_scan": "Scansione AprilTag",
+    "apriltag_worker_required": "La scansione AprilTag deve essere eseguita in uno script dell’editor in background o tramite il processo MCP",
+    "apriltag_scanning": "Ricerca degli AprilTags",
+    "apriltag_solving": "Calcolo della calibrazione AprilTag",
+    "apriltag_scene_changed": "La scena è cambiata durante il rilevamento degli AprilTags; ripeti la scansione",
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",

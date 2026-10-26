@@ -1287,6 +1287,7 @@
     "toggle_ui": "Basculer UI"
   },
   "transform": {
+    "scale_apriltag": "Mettre la scène à l’échelle avec AprilTags",
     "node": "Nœud : %s",
     "world": "Monde",
     "local": "Local",
@@ -2740,6 +2741,11 @@
     "scroll_panel_tabs_down": "Faire défiler les onglets vers le bas"
   },
   "runtime": {
+    "apriltag_scan": "Recherche AprilTag",
+    "apriltag_worker_required": "La recherche AprilTag doit être exécutée dans un script de l’éditeur en arrière-plan ou via la tâche MCP",
+    "apriltag_scanning": "Recherche des AprilTags",
+    "apriltag_solving": "Calcul de la calibration AprilTag",
+    "apriltag_scene_changed": "La scène a changé pendant la détection des AprilTags ; relancez la recherche",
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
     "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",

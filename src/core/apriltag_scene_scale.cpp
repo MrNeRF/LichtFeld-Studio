@@ -15,6 +15,7 @@
 #include <mutex>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
+#include <unordered_map>
 
 namespace lfs::core {
 
@@ -158,8 +159,21 @@ namespace lfs::core {
         view.intrinsics.lens_model = toGeometryLensModel(camera.camera_model_type());
         populateCameraDistortion(camera, view.intrinsics);
 
-        view.detected_image_width = camera.camera_width();
-        view.detected_image_height = camera.camera_height();
+        // Detection reads the original file, even after training prepares an undistorted grid.
+        if (camera.is_undistort_precomputed()) {
+            const auto& source = camera.undistort_params();
+            view.intrinsics.fx = source.src_fx;
+            view.intrinsics.fy = source.src_fy;
+            view.intrinsics.cx = source.src_cx;
+            view.intrinsics.cy = source.src_cy;
+            view.intrinsics.width = source.src_width;
+            view.intrinsics.height = source.src_height;
+            view.intrinsics.lens_model = toGeometryLensModel(source.model_type);
+            view.intrinsics.num_distortion = std::clamp(source.num_distortion, 0, 12);
+            std::copy_n(source.distortion, view.intrinsics.num_distortion, view.intrinsics.distortion.begin());
+        }
+        view.detected_image_width = view.intrinsics.width;
+        view.detected_image_height = view.intrinsics.height;
         return view;
     }
 
@@ -167,6 +181,62 @@ namespace lfs::core {
         const std::span<const std::shared_ptr<Camera>> cameras,
         const geometry::apriltag::AprilTagDetectorConfig& detector_config,
         const std::span<const glm::mat4> camera_scene_transforms,
+        const int max_image_width,
+        const AprilTagProgressCallback& progress_callback) {
+        std::vector<AprilTagCameraInput> inputs;
+        inputs.reserve(cameras.size());
+        for (std::size_t i = 0; i < cameras.size(); ++i) {
+            if (cameras[i]) {
+                inputs.push_back({buildCameraObservationView(*cameras[i],
+                                                             i < camera_scene_transforms.size() ? camera_scene_transforms[i] : glm::mat4(1.0f)),
+                                  cameras[i]->image_path()});
+            }
+        }
+        return detectAprilTagsInSnapshot(inputs, detector_config, max_image_width, progress_callback);
+    }
+
+    bool AprilTagSceneSnapshot::matches(const Scene& scene) const {
+        if (render_generation != scene.renderGeneration() ||
+            camera_list_generation != scene.cameraListGeneration()) {
+            return false;
+        }
+        const auto nodes = scene.getNodes();
+        if (nodes.size() != node_uuids.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            if (nodes[i]->uuid != node_uuids[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    AprilTagSceneSnapshot snapshotAprilTagScene(const Scene& scene, const bool active_cameras_only) {
+        AprilTagSceneSnapshot snapshot;
+        snapshot.render_generation = scene.renderGeneration();
+        snapshot.camera_list_generation = scene.cameraListGeneration();
+        std::unordered_map<int, glm::mat4> transforms;
+        for (const auto* node : scene.getNodes()) {
+            snapshot.node_uuids.push_back(node->uuid);
+            if (node->camera) {
+                transforms.try_emplace(node->camera->uid(), scene.getWorldTransform(node->id));
+            }
+        }
+        const auto cameras = active_cameras_only ? scene.getActiveCameras() : scene.getAllCameras();
+        for (const auto& camera : cameras) {
+            if (camera) {
+                snapshot.cameras.push_back({buildCameraObservationView(*camera,
+                                                                       transforms.at(camera->uid())),
+                                            camera->image_path()});
+            }
+        }
+        return snapshot;
+    }
+
+    std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInSnapshot(
+        const std::span<const AprilTagCameraInput> cameras,
+        const geometry::apriltag::AprilTagDetectorConfig& detector_config,
         const int max_image_width,
         const AprilTagProgressCallback& progress_callback) {
         std::vector<geometry::apriltag::CameraObservationView> views(cameras.size());
@@ -188,24 +258,24 @@ namespace lfs::core {
                 return;
             }
 
-            const auto& cam_ptr = cameras[idx];
-            if (!cam_ptr) {
-                return;
+            auto view = cameras[idx].view;
+            const auto& img_path = cameras[idx].image_path;
+            if (progress_callback) {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                if (cancelled.load(std::memory_order_relaxed) ||
+                    !progress_callback(completed_count.load(), cameras.size(), view.image_name)) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    return;
+                }
             }
-
-            const glm::mat4 scene_xform =
-                idx < camera_scene_transforms.size() ? camera_scene_transforms[idx] : glm::mat4(1.0f);
-            auto view = buildCameraObservationView(*cam_ptr, scene_xform);
-
-            const auto& img_path = cam_ptr->image_path();
             if (!img_path.empty() && native_fs::exists(img_path)) {
                 auto [pixels, w, h, c] = load_image(img_path, -1, max_image_width);
                 if (pixels && w > 0 && h > 0 && c > 0) {
                     view.detected_image_width = w;
                     view.detected_image_height = h;
+                    const std::unique_ptr<unsigned char, decltype(&free_image)> image(pixels, &free_image);
                     auto& detector = detectors.local();
-                    view.detections = detector.detectInterleaved(pixels, w, h, c);
-                    free_image(pixels);
+                    view.detections = detector.detectInterleaved(image.get(), w, h, c);
                 } else if (pixels) {
                     free_image(pixels);
                 }
@@ -213,11 +283,11 @@ namespace lfs::core {
 
             views[idx] = std::move(view);
 
-            const std::size_t done = completed_count.fetch_add(1, std::memory_order_relaxed) + 1;
+            completed_count.fetch_add(1, std::memory_order_relaxed);
             if (progress_callback) {
                 std::lock_guard<std::mutex> lock(progress_mutex);
                 if (!cancelled.load(std::memory_order_relaxed)) {
-                    if (!progress_callback(done, cameras.size(), cam_ptr->image_name())) {
+                    if (!progress_callback(completed_count.load(std::memory_order_relaxed), cameras.size(), cameras[idx].view.image_name)) {
                         cancelled.store(true, std::memory_order_relaxed);
                     }
                 }
@@ -236,25 +306,8 @@ namespace lfs::core {
         const bool active_cameras_only,
         const int max_image_width,
         const AprilTagProgressCallback& progress_callback) {
-        const auto cameras = active_cameras_only ? scene.getActiveCameras() : scene.getAllCameras();
-        std::vector<glm::mat4> transforms;
-        transforms.reserve(cameras.size());
-        for (const auto& cam : cameras) {
-            if (cam) {
-                if (const auto xform = scene.getCameraSceneTransformByUid(cam->uid())) {
-                    transforms.push_back(*xform);
-                    continue;
-                }
-            }
-            transforms.push_back(glm::mat4(1.0f));
-        }
-
-        return detectAprilTagsInCameras(
-            cameras,
-            detector_config,
-            transforms,
-            max_image_width,
-            progress_callback);
+        const auto snapshot = snapshotAprilTagScene(scene, active_cameras_only);
+        return detectAprilTagsInSnapshot(snapshot.cameras, detector_config, max_image_width, progress_callback);
     }
 
     bool saveCalibrationManifest(

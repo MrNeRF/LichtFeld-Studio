@@ -1287,6 +1287,7 @@
     "toggle_ui": "UI 토글"
   },
   "transform": {
+    "scale_apriltag": "AprilTag로 장면 크기 조정",
     "node": "노드: %s",
     "world": "월드",
     "local": "로컬",
@@ -2740,6 +2741,11 @@
     "scroll_panel_tabs_down": "패널 탭 아래로 스크롤"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag 스캔",
+    "apriltag_worker_required": "AprilTag 스캔은 백그라운드 편집기 스크립트 또는 MCP 작업으로 실행해야 합니다",
+    "apriltag_scanning": "AprilTag 검색 중",
+    "apriltag_solving": "AprilTag 보정 계산 중",
+    "apriltag_scene_changed": "AprilTag 감지 중 장면이 변경되었습니다. 다시 스캔하세요",
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",
     "autosave_deferred_no_memory": "자동 저장이 일시 중지되었습니다: 여유 메모리가 부족합니다({}). 학습은 계속되며, 메모리가 확보되면 자동 저장이 재개됩니다.",

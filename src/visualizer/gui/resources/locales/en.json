@@ -1298,6 +1298,7 @@
     "toggle_ui": "Toggle UI"
   },
   "transform": {
+    "scale_apriltag": "Scale scene with AprilTags",
     "node": "Node: %s",
     "world": "World",
     "local": "Local",
@@ -2752,6 +2753,11 @@
     "scroll_panel_tabs_down": "Scroll panel tabs down"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag Scan",
+    "apriltag_worker_required": "AprilTag scanning must run in a background editor script or through the MCP runtime job",
+    "apriltag_scanning": "Scanning AprilTags",
+    "apriltag_solving": "Solving AprilTag calibration",
+    "apriltag_scene_changed": "Scene changed during AprilTag detection; scan again",
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",

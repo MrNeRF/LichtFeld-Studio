@@ -1287,6 +1287,7 @@
     "toggle_ui": "Przełącz UI"
   },
   "transform": {
+    "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
     "node": "Węzeł: %s",
     "world": "Światowa",
     "local": "Lokalna",
@@ -2740,6 +2741,11 @@
     "scroll_panel_tabs_down": "Przewiń karty paneli w dół"
   },
   "runtime": {
+    "apriltag_scan": "Skanowanie AprilTag",
+    "apriltag_worker_required": "Skanowanie AprilTag musi działać w skrypcie edytora w tle lub jako zadanie MCP",
+    "apriltag_scanning": "Wyszukiwanie AprilTags",
+    "apriltag_solving": "Obliczanie kalibracji AprilTag",
+    "apriltag_scene_changed": "Scena zmieniła się podczas wykrywania AprilTags; zeskanuj ponownie",
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",

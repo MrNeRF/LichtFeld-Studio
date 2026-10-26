@@ -1287,6 +1287,7 @@
     "toggle_ui": "UI umschalten"
   },
   "transform": {
+    "scale_apriltag": "Szene mit AprilTags skalieren",
     "node": "Knoten: %s",
     "world": "Welt",
     "local": "Lokal",
@@ -2740,6 +2741,11 @@
     "scroll_panel_tabs_down": "Panel-Tabs nach unten scrollen"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag-Suche",
+    "apriltag_worker_required": "Die AprilTag-Suche muss in einem Editor-Skript im Hintergrund oder als MCP-Laufzeitauftrag ausgeführt werden",
+    "apriltag_scanning": "AprilTags werden gesucht",
+    "apriltag_solving": "AprilTag-Kalibrierung wird berechnet",
+    "apriltag_scene_changed": "Die Szene wurde während der AprilTag-Erkennung geändert; erneut scannen",
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",

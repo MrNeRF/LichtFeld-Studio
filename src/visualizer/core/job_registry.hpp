@@ -26,6 +26,7 @@ namespace lfs::vis {
         ProjectWrite,
         ProjectOpen,
         DatasetEmbed,
+        AprilTagScan,
     };
 
     enum class JobStatus : std::uint8_t {

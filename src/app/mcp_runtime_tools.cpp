@@ -5,9 +5,11 @@
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
@@ -74,7 +76,7 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 7> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 8> kRuntimeJobIds = {
             "editor.python",
             "training.main",
             "export.scene",
@@ -82,6 +84,7 @@ namespace lfs::app {
             "export.video",
             "mesh2splat",
             "operator.modal",
+            "apriltag.scan",
         };
 
         json supported_runtime_job_ids_json() {
@@ -109,6 +112,8 @@ namespace lfs::app {
         }
 
         std::string_view runtime_job_label(const std::string_view job_id) {
+            if (job_id == "apriltag.scan")
+                return LOC("runtime.apriltag_scan");
             if (job_id == "editor.python") {
                 return "Python Editor";
             }
@@ -654,6 +659,73 @@ namespace lfs::app {
             return payload;
         }
 
+        json apriltag_job_json(vis::gui::GuiManager& gui) {
+            auto& tasks = gui.asyncTasks();
+            const auto state = tasks.aprilTagScanStatus();
+            const bool active = state && state->running();
+            const bool completed = state && state->status == vis::JobStatus::Completed;
+            const bool canceled = state && state->status == vis::JobStatus::Canceled;
+            const bool failed = state && state->status == vis::JobStatus::Failed;
+            json payload{
+                {"id", "apriltag.scan"},
+                {"label", LOC("runtime.apriltag_scan")},
+                {"kind", "calibration"},
+                {"active", active},
+                {"status", active ? "running" : completed ? "finished"
+                                            : failed      ? "failed"
+                                                          : "idle"},
+                {"outcome", active ? "running" : completed ? "completed"
+                                             : canceled    ? "cancelled"
+                                             : failed      ? "failed"
+                                                           : "idle"},
+                {"progress", state ? state->progress : 0.0f},
+                {"stage", state ? state->stage : ""},
+                {"cancel_supported", true},
+                {"dismiss_supported", false},
+                {"actions", {{"start", false}, {"pause", false}, {"resume", false}, {"cancel", active}, {"dismiss", false}}},
+            };
+            if (state) {
+                payload["cancel_requested"] = state->cancel_requested;
+                if (!state->error.empty())
+                    payload["error"] = state->error;
+            }
+            if (completed || failed) {
+                const auto& result = tasks.aprilTagScanResult();
+                const auto& report = result.scale_report;
+                auto output = json::parse(report.manifest_json, nullptr, false);
+                if (output.is_discarded())
+                    output = json::object();
+                output["success"] = completed && report.success;
+                output["applied"] = result.applied;
+                output["camera_count"] = report.views.size();
+                output["transformed_nodes"] = result.transformed_nodes;
+                output["manifest_saved_path"] = core::path_to_utf8(report.manifest_saved_path);
+                output["triangulated_tags"] = json::array();
+                for (const auto& tag : report.triangulation.tags) {
+                    const auto vis_pos = rendering::visualizerWorldPointFromDataWorld(glm::vec3(tag.position));
+                    output["triangulated_tags"].push_back({
+                        {"tag_id", tag.tag_id},
+                        {"position", {tag.position.x, tag.position.y, tag.position.z}},
+                        {"visualizer_position", {vis_pos.x, vis_pos.y, vis_pos.z}},
+                        {"total_observations", tag.total_observations},
+                        {"inlier_observations", tag.inlier_observations},
+                        {"mean_reprojection_error_px", tag.mean_reprojection_error_px},
+                        {"max_reprojection_error_px", tag.max_reprojection_error_px},
+                        {"max_parallax_angle_deg", tag.max_parallax_angle_deg},
+                        {"camera_uids", tag.camera_uids},
+                        {"image_names", tag.image_names},
+                    });
+                }
+                output["rejected_tags"] = json::array();
+                for (const auto& tag : report.triangulation.rejected_tags) {
+                    output["rejected_tags"].push_back({{"tag_id", tag.tag_id}, {"total_observations", tag.total_observations}, {"max_parallax_angle_deg", tag.max_parallax_angle_deg}, {"reason", tag.reason}});
+                }
+                payload["result"] = std::move(output);
+            }
+            add_runtime_job_links(payload);
+            return payload;
+        }
+
         json operator_modal_job_json() {
             auto& operators = vis::op::operators();
             const auto modal_state = operators.modalState();
@@ -698,6 +770,11 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "apriltag.scan") {
+                return gui ? std::expected<json, std::string>(apriltag_job_json(*gui))
+                           : std::expected<json, std::string>(unavailable_job_json(
+                                 "apriltag.scan", LOC("runtime.apriltag_scan"), "calibration", "GUI manager is not initialized"));
+            }
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);
             }
@@ -995,6 +1072,15 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "apriltag.scan") {
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Only cancellation is supported for apriltag.scan");
+                const auto state = gui->asyncTasks().aprilTagScanStatus();
+                if (!state || !state->running())
+                    return std::unexpected("AprilTag scan is not running");
+                gui->asyncTasks().cancelAprilTagScan();
+                return {};
+            }
             if (job_id == "editor.python") {
                 auto& console = vis::gui::panels::PythonConsoleState::getInstance();
                 if (action != "cancel") {

@@ -19,6 +19,7 @@
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include "training/training_cropbox_mask.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -57,6 +58,15 @@ namespace lfs::vis {
             void setupEvents();
             void pollImportCompletion();
             [[nodiscard]] bool hasPendingMainThreadCompletions() const;
+
+            bool startAprilTagScan(core::AprilTagSceneScaleOptions options,
+                                   std::vector<geometry::apriltag::TagDistanceConstraint> constraints = {},
+                                   std::vector<std::string> targets = {},
+                                   bool solve_scale = false, bool apply_to_scene = false);
+            void cancelAprilTagScan();
+            void pollAprilTagScanCompletion();
+            [[nodiscard]] std::optional<JobSnapshot> aprilTagScanStatus() const { return jobs_.peek(apriltag_state_.job); }
+            [[nodiscard]] const cap::AprilTagSceneApplyResult& aprilTagScanResult() const { return apriltag_state_.result; }
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -328,6 +338,17 @@ namespace lfs::vis {
             void settlePendingJobs();
 
             VisualizerImpl* viewer_;
+            struct AprilTagScanState {
+                JobHandle job;
+                core::AprilTagSceneSnapshot snapshot;
+                core::AprilTagSceneScaleReport report;
+                cap::AprilTagSceneApplyResult result;
+                std::vector<std::string> targets;
+                bool apply_to_scene = false;
+                std::optional<std::jthread> thread;
+            };
+            AprilTagScanState apriltag_state_;
+
             JobRegistry& jobs_;
 
             struct ExportState {

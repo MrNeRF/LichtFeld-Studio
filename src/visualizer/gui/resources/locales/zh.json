@@ -1287,6 +1287,7 @@
     "toggle_ui": "切换UI"
   },
   "transform": {
+    "scale_apriltag": "使用 AprilTag 缩放场景",
     "node": "节点：%s",
     "world": "世界",
     "local": "局部",
@@ -2740,6 +2741,11 @@
     "scroll_panel_tabs_down": "向下滚动面板标签"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag 扫描",
+    "apriltag_worker_required": "AprilTag 扫描必须在后台编辑器脚本中或通过 MCP 运行时任务执行",
+    "apriltag_scanning": "正在扫描 AprilTag",
+    "apriltag_solving": "正在计算 AprilTag 标定",
+    "apriltag_scene_changed": "AprilTag 检测期间场景已更改，请重新扫描",
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",

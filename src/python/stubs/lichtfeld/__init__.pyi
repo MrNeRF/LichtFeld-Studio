@@ -3017,11 +3017,11 @@ def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
 def detect_scene_apriltags(family: str = 'tag36h11', min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0) -> dict:
-    """Detect AprilTags in scene cameras and triangulate their 3D centers"""
+    """Detect and triangulate AprilTags from a background editor script; viewer-thread calls are rejected"""
 
 def scale_scene_by_apriltags(constraints: Sequence[tuple[int, int, float]], family: str = 'tag36h11', inlier_relative_threshold: float = 0.02, inlier_absolute_threshold: float = 0.0, min_inliers: int = 1, min_inlier_ratio: float = 0.5, min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0, manifest_path: str = '', apply_to_scene: bool = True, targets: Sequence[str] = []) -> dict:
     """
-    Detect AprilTags, triangulate 3D centers, solve global scale from (tag_a, tag_b, distance) constraints, and rescale the scene
+    Calibrate the complete scene from a background editor script. Explicit targets allow partial scaling; viewer-thread calls are rejected
     """
 
 __all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')

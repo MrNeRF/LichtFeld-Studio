@@ -57,6 +57,7 @@
 #include "core/apriltag_scene_scale.hpp"
 #include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
@@ -266,6 +267,33 @@ namespace {
 
     lfs::Error python_viewer_shutdown_error();
 
+    template <typename F>
+    auto april_tag_on_viewer(lfs::vis::Visualizer& viewer, F&& fn) {
+        using T = std::invoke_result_t<F>;
+        const lfs::core::TaskContext context{
+            .name = "python.apriltag",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        auto result = lfs::vis::post_guarded_and_wait<T>(viewer, context, [fn = std::forward<F>(fn)]() mutable -> lfs::Result<T> { return fn(); }, python_viewer_shutdown_error());
+        if (!result) {
+            throw std::runtime_error(lfs::format_for_developer(result.error()));
+        }
+        return std::move(*result);
+    }
+
+    lfs::vis::Visualizer& april_tag_worker_viewer() {
+        auto* viewer = lfs::python::get_visualizer();
+        if (!viewer) {
+            throw std::runtime_error("Viewer not available");
+        }
+        if (viewer->isOnViewerThread()) {
+            throw std::runtime_error(LOC("runtime.apriltag_worker_required"));
+        }
+        return *viewer;
+    }
+
     lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
     post_project_license_get_to_viewer(lfs::vis::Visualizer& viewer) {
         if (viewer.isOnViewerThread()) {
@@ -411,7 +439,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -4039,10 +4067,7 @@ Example:
            const float min_decision_margin,
            const bool active_cameras_only,
            const int max_image_width) -> nb::dict {
-            auto* const sm = lfs::vis::services().sceneOrNull();
-            if (!sm) {
-                throw std::runtime_error("Scene manager not available");
-            }
+            auto& viewer = april_tag_worker_viewer();
 
             const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
             if (!parsed_family) {
@@ -4065,12 +4090,20 @@ Example:
             lfs::geometry::apriltag::TriangulationSummary summary;
             {
                 nb::gil_scoped_release release;
-                views = lfs::core::detectAprilTagsInScene(
-                    sm->getScene(),
-                    det_cfg,
-                    active_cameras_only,
-                    max_image_width);
+                const auto snapshot = april_tag_on_viewer(viewer, [&] {
+                    auto* sm = viewer.getSceneManager();
+                    if (!sm)
+                        throw std::runtime_error("Scene manager not available");
+                    return lfs::core::snapshotAprilTagScene(sm->getScene(), active_cameras_only);
+                });
+                views = lfs::core::detectAprilTagsInSnapshot(snapshot.cameras, det_cfg, max_image_width);
                 summary = lfs::geometry::apriltag::triangulateAprilTags(views, tri_cfg);
+                if (!april_tag_on_viewer(viewer, [&] {
+                        auto* sm = viewer.getSceneManager();
+                        return sm && snapshot.matches(sm->getScene());
+                    })) {
+                    throw std::runtime_error(LOC("runtime.apriltag_scene_changed"));
+                }
             }
 
             nb::list tags_list;
@@ -4115,7 +4148,7 @@ Example:
         nb::arg("min_decision_margin") = 25.0f,
         nb::arg("active_cameras_only") = false,
         nb::arg("max_image_width") = 0,
-        "Detect AprilTags in scene cameras and triangulate their 3D centers");
+        "Detect and triangulate AprilTags from a background editor script; viewer-thread calls are rejected");
 
     m.def(
         "scale_scene_by_apriltags",
@@ -4135,10 +4168,7 @@ Example:
            const std::string& manifest_path,
            const bool apply_to_scene,
            const std::vector<std::string>& targets) -> nb::dict {
-            auto* const sm = lfs::vis::services().sceneOrNull();
-            if (!sm) {
-                throw std::runtime_error("Scene manager not available");
-            }
+            auto& viewer = april_tag_worker_viewer();
 
             const auto parsed_family = lfs::geometry::apriltag::parseAprilTagFamily(family);
             if (!parsed_family) {
@@ -4180,19 +4210,38 @@ Example:
             lfs::vis::cap::AprilTagSceneApplyResult res;
             {
                 nb::gil_scoped_release release;
-                if (apply_to_scene) {
-                    res = lfs::vis::cap::autoScaleSceneWithAprilTags(*sm, constraints, options, targets);
-                    if (res.applied) {
-                        if (auto* const rm = lfs::vis::services().renderingOrNull()) {
-                            rm->markDirty(
-                                lfs::vis::DirtyFlag::SPLATS | lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY,
-                                lfs::vis::FrameReason::SceneChange);
+                const auto snapshot = april_tag_on_viewer(viewer, [&] {
+                    auto* sm = viewer.getSceneManager();
+                    if (!sm)
+                        throw std::runtime_error("Scene manager not available");
+                    return lfs::core::snapshotAprilTagScene(sm->getScene(), options.active_cameras_only);
+                });
+                const auto views = lfs::core::detectAprilTagsInSnapshot(
+                    snapshot.cameras, options.detector_config, options.max_image_width);
+                auto report = lfs::core::solveAprilTagScaleFromViews(views, constraints, options);
+                res = april_tag_on_viewer(viewer, [&] {
+                    auto* sm = viewer.getSceneManager();
+                    if (!sm)
+                        throw std::runtime_error("Scene manager not available");
+                    if (apply_to_scene) {
+                        auto applied = lfs::vis::cap::applyAprilTagScaleReport(*sm, snapshot, std::move(report), targets);
+                        if (applied.applied) {
+                            if (auto* rm = viewer.getRenderingManager()) {
+                                rm->markDirty(lfs::vis::DirtyFlag::SPLATS | lfs::vis::DirtyFlag::MESH | lfs::vis::DirtyFlag::OVERLAY,
+                                              lfs::vis::FrameReason::SceneChange);
+                            }
                         }
+                        return applied;
                     }
-                } else {
-                    res.scale_report = lfs::core::computeAprilTagSceneScale(sm->getScene(), constraints, options);
-                    res.error_message = res.scale_report.error_message;
-                }
+                    if (!snapshot.matches(sm->getScene())) {
+                        report.success = false;
+                        report.error_message = LOC("runtime.apriltag_scene_changed");
+                    }
+                    lfs::vis::cap::AprilTagSceneApplyResult result;
+                    result.error_message = report.error_message;
+                    result.scale_report = std::move(report);
+                    return result;
+                });
             }
 
             const auto& sr = res.scale_report.scale_result;
@@ -4231,7 +4280,7 @@ Example:
         nb::arg("manifest_path") = "",
         nb::arg("apply_to_scene") = true,
         nb::arg("targets") = std::vector<std::string>{},
-        "Detect AprilTags, triangulate 3D centers, solve global scale from (tag_a, tag_b, distance) constraints, and rescale the scene");
+        "Calibrate the complete scene from a background editor script. Explicit targets allow partial scaling; viewer-thread calls are rejected");
 
     lfs::python::set_invalidate_poll_cache_callback([](uint8_t dependency) {
         const auto dep = static_cast<lfs::vis::op::PollDependency>(dependency);

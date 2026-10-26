@@ -82,3 +82,27 @@ Or set and run in one call:
 - `editor_run` can place code into the editor and execute it in one step
 - use `editor_is_running` for a cheap status check
 - use `editor_interrupt` if the script must be stopped
+
+## AprilTag calibration
+
+`transform_detect_apriltags` and `transform_scale_by_apriltags` start the
+`apriltag.scan` runtime job and return immediately after capturing camera inputs.
+Use `runtime_job_describe` or `runtime_job_wait` with `job_id: "apriltag.scan"`
+to read progress and the completed `result`. A successful start does not mean
+calibration succeeded: check the job's `outcome` and `result.success`.
+
+Cancel with `runtime_job_control` and
+`{"job_id": "apriltag.scan", "action": "cancel"}`. Cancellation is cooperative:
+in-flight image decoding/detection or solving can finish, but cancellation is
+checked again before any scale is applied. Only one AprilTag job runs at a time;
+starting another after completion replaces its stored result.
+
+Image detection and solving run in a worker. Scene reads for the snapshot and
+final application run on the viewer thread. Results are rejected if scene
+identity or transforms changed during scanning. Without `targets`, scaling
+covers the complete scene regardless of selection; pass explicit node names
+only when partial scaling is intended.
+
+Python's `detect_scene_apriltags` and `scale_scene_by_apriltags` remain synchronous
+for background editor scripts. Calls from viewer-thread UI callbacks are
+rejected; use the MCP job for an asynchronous scan.
