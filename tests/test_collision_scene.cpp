@@ -52,8 +52,13 @@ namespace {
                   2);
         EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(COLLISION_VOLUMES_V1));
         EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(COLLISION_VOLUMES_V1));
+        // Assert wire positions independently of the enum to catch renumbering.
+        EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(11));
+        EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(11));
+        EXPECT_FALSE(reader.commit().required_reader_capabilities.contains(10));
+        EXPECT_FALSE(reader.commit().required_writer_capabilities.contains(10));
         ReaderOptions old_reader;
-        old_reader.reader_capabilities.set(COLLISION_VOLUMES_V1, false);
+        old_reader.reader_capabilities.set(11, false);
         auto incompatible = ProjectReader::open(path, old_reader);
         ASSERT_FALSE(incompatible);
         EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
@@ -84,6 +89,13 @@ namespace {
             EXPECT_EQ(count, 1); // Adapter caching is independent of the document's cache.
         const auto copy = temporary.path / "loaded.licht";
         ASSERT_TRUE(reopened.save_as(copy));
+        for (const auto& saved_path : {unloaded_copy, copy}) {
+            auto saved = require_result(ProjectReader::open(saved_path));
+            EXPECT_TRUE(saved.commit().required_reader_capabilities.contains(11));
+            EXPECT_TRUE(saved.commit().required_writer_capabilities.contains(11));
+            EXPECT_FALSE(saved.commit().required_reader_capabilities.contains(10));
+            EXPECT_FALSE(saved.commit().required_writer_capabilities.contains(10));
+        }
         auto copied = require_result(ProjectDocument::open(copy));
         Scene loaded;
         ASSERT_TRUE(copied.hydrate(loaded));

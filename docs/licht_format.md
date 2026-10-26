@@ -51,6 +51,29 @@ not copied again, because generation 2's table of contents just points back at
 the bytes generation 1 already wrote. The preview thumbnail is a stored `THMB`
 chunk; the head stores only its locator, which updates atomically on publish.
 
+## Capability bits
+
+Each generation declares required reader and writer capabilities. Declaring an
+enum value does not mean a build supports it.
+
+| Bit | Capability |
+| --- | --- |
+| 0 | `INDEX_ZSTD_V1` |
+| 1 | `CHUNK_ZSTD_V1` |
+| 2 | `BLOCK_CRC32C_V1` |
+| 3 | `INDEX_TOMBSTONES_V1` |
+| 4 | `SIDECAR_OVERLAY_V1` |
+| 5 | `OPAQUE_CHUNK_PRESERVATION` |
+| 6 | `RETAINED_JSON_FIELDS` |
+| 7 | `CLEAN_PROOF_REUSE` |
+| 8 | `CHUNK_BYTESHUFFLE_ZSTD_V1` |
+| 9 | `ENCODED_SCENE_ASSETS` |
+| 10 | `TILESET_REFERENCES` |
+| 11 | `COLLISION_VOLUMES_V1` |
+
+A reader refuses any generation that requires a capability it does not implement.
+Collision volumes require bit 11.
+
 ## Training and Edit Mode
 
 A `CKPT` chapter is resumable project state only while `SCNG` identifies the
