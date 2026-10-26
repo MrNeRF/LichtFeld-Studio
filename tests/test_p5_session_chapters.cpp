@@ -2676,6 +2676,9 @@ namespace {
 
 } // namespace
 
+namespace lfs::vis {
+    void installSessionTestInputController(VisualizerImpl& viewer);
+}
 
 namespace {
 

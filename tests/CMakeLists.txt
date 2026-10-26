@@ -260,8 +260,8 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
-    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
-    add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings)
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*:VisualizerImplResetTest.StartupRecoveryScansRootAndProjectLocationScratch)
+    add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings:VisualizerImplResetTest.ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable)
     set_tests_properties(lichtfeld.collision_archive PROPERTIES LABELS "cpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

@@ -447,6 +447,8 @@ class VisualizerImplResetTest : public ::testing::Test {
 protected:
     void SetUp() override {
         isolated_home_.emplace(temporary_.path / "home");
+        if (initialize_logger_)
+            lfs::core::Logger::get().init(lfs::core::LogLevel::Info, "", "", false, (temporary_.path / "home").string());
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
@@ -459,6 +461,8 @@ protected:
         lfs::vis::services().clear();
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::clearProjectLocationPreference();
+        if (initialize_logger_)
+            lfs::core::Logger::get().reset_for_testing();
         isolated_home_.reset();
     }
 
@@ -638,6 +642,7 @@ protected:
 
     lfs::test::licht::TemporaryDirectory temporary_{"lfs-visualizer-project"};
     std::optional<ScopedLfsHome> isolated_home_;
+    const bool initialize_logger_ = !lfs::core::Logger::get().is_ready();
 };
 
 namespace {
@@ -21678,9 +21683,7 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.hasPendingRenderWork());
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
-} // namespace lfs::vis
 
-namespace lfs::vis {
     void installSessionTestInputController(VisualizerImpl& viewer) {
         viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
     }
@@ -21718,9 +21721,7 @@ namespace lfs::vis::gui {
         }
         Scene& scene() { return viewer_->getScene(); }
         std::vector<const SceneNode*> colliders() {
-            auto result = scene().getNodes();
-            std::erase_if(result, [](const auto* node) { return node->type != NodeType::COLLISION; });
-            return result;
+            return scene().getNodes() | std::views::filter([](const auto* node) { return node->type == NodeType::COLLISION; }) | std::ranges::to<std::vector>();
         }
         void finish() {
             release_.release();
@@ -21733,11 +21734,7 @@ namespace lfs::vis::gui {
         }
         void finishOpen() {
             const auto open = viewer_->jobs().active(JobType::ProjectOpen);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            while (viewer_->jobs().anyRunning(JobType::ProjectOpen) && std::chrono::steady_clock::now() < deadline) {
-                viewer_->pumpPostedWorkForProjectWrite();
-                std::this_thread::yield();
-            }
+            EXPECT_TRUE(pumpUntil(viewer_->work_queue_mutex_, viewer_->work_queue_, [&] { return !viewer_->jobs().anyRunning(JobType::ProjectOpen); }));
             EXPECT_FALSE(viewer_->jobs().active(JobType::ProjectOpen));
             if (open)
                 EXPECT_FALSE(viewer_->jobs().peek(open->handle));
