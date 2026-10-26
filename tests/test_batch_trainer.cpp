@@ -221,17 +221,78 @@ namespace {
                   batch_mode.params.shared_args.end());
     }
 
-    TEST(BatchTrainerTest, ParseBatchTrainInvalidOptionFails) {
+    TEST(BatchTrainerTest, ParseBatchTrainFreezeFlag) {
         std::vector<const char*> argv = {
             "lichtfeld-studio",
             "batch-train",
-            "./my_datasets",
-            "--iters",
-            "300"
+            "--add-splat",
+            "model.ply",
+            "--freeze",
+            "./my_datasets"
         };
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
-        EXPECT_FALSE(res.has_value());
+        ASSERT_TRUE(res.has_value()) << res.error();
+        ASSERT_TRUE(std::holds_alternative<lfs::core::args::BatchTrainingMode>(*res));
+        const auto& batch_mode = std::get<lfs::core::args::BatchTrainingMode>(*res);
+        ASSERT_EQ(batch_mode.params.input_paths.size(), 1u);
+        EXPECT_EQ(batch_mode.params.input_paths[0], fs::path("./my_datasets"));
+        EXPECT_NE(std::find(batch_mode.params.shared_args.begin(), batch_mode.params.shared_args.end(), "--freeze"),
+                  batch_mode.params.shared_args.end());
+    }
+
+    TEST(BatchTrainerTest, ValidateJobArgumentsCatchesInvalidOption) {
+        lfs::core::param::BatchJobItem job;
+        job.name = "test_job";
+        job.dataset_path = "./my_datasets";
+        job.output_path = "./my_outputs";
+
+        lfs::core::param::BatchTrainingParameters params;
+        params.shared_args = {"--iters", "300"};
+
+        std::string error;
+        EXPECT_FALSE(lfs::app::validate_job_arguments(job, params, error));
+    }
+
+    TEST(BatchTrainerTest, ValidateJobArgumentsAcceptsSharedEvalStepsWithPerJobEval) {
+        lfs::core::param::BatchJobItem job;
+        job.name = "test_job";
+        job.dataset_path = "./my_datasets";
+        job.output_path = "./my_outputs";
+        job.extra_args = {"--eval"};
+
+        lfs::core::param::BatchTrainingParameters params;
+        params.shared_args = {"--eval-steps", "5000"};
+
+        std::string error;
+        EXPECT_TRUE(lfs::app::validate_job_arguments(job, params, error)) << error;
+    }
+
+    TEST(BatchTrainerTest, ResolveBatchJobsReservesExplicitNames) {
+        TempDirectoryGuard temp;
+        const auto site = temp.path() / "scene";
+        fs::create_directories(site);
+        std::ofstream(site / "transforms.json") << "{}";
+
+        lfs::core::param::BatchTrainingParameters params;
+        // Three jobs: two default names (will be "scene"), one explicit "scene_2"
+        lfs::core::param::BatchJobItem j1;
+        j1.dataset_path = site;
+        lfs::core::param::BatchJobItem j2;
+        j2.dataset_path = site;
+        lfs::core::param::BatchJobItem j3;
+        j3.dataset_path = site;
+        j3.name = "scene_2";
+
+        params.jobs = {j1, j2, j3};
+        params.output_dir = temp.path() / "outputs";
+
+        const auto jobs = lfs::app::resolve_batch_jobs(params);
+        ASSERT_EQ(jobs.size(), 3u);
+        EXPECT_NE(jobs[0].name, jobs[1].name);
+        EXPECT_NE(jobs[0].name, jobs[2].name);
+        EXPECT_NE(jobs[1].name, jobs[2].name);
+        EXPECT_EQ(jobs[2].name, "scene_2");
     }
 
     TEST(BatchTrainerTest, ResolveBatchJobsDisambiguatesDuplicateNames) {

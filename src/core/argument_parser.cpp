@@ -705,7 +705,8 @@ namespace {
 
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
-        lfs::core::param::TrainingParameters& params) {
+        lfs::core::param::TrainingParameters& params,
+        const bool create_output_directory = true) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -1393,13 +1394,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory) {
+                        // Create output directory
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
@@ -1415,13 +1418,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory if provided
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory) {
+                        // Create output directory if provided
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             }
@@ -2062,7 +2067,7 @@ namespace {
 
 // Public interface
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
+lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
@@ -2077,7 +2082,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             args.insert(args.begin() + 1, "-v");
     }
 
-    auto parse_result = parse_arguments(args, *params);
+    auto parse_result = parse_arguments(args, *params, create_output_directory);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -2863,30 +2868,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             "--quiet",
             "--tcp-connection",
             "--undistort",
-            "--eval",
-            "--eval-all",
-            "--eval-flip",
-            "--use-depth-loss",
-            "--no-depth-auto-generate",
-            "--use-normal-loss",
-            "--no-normal-auto-generate",
-            "--bilateral-grid",
-            "--exposure-correction",
-            "--no-exposure-correction",
-            "--ppisp",
-            "--no-ppisp-exif-exposure",
-            "--ppisp-controller",
-            "--ppisp-freeze",
-            "--gut",
-            "--enable-sparsity",
-            "--enable-mip",
-            "--random",
-            "--invert-masks",
-            "--no-alpha-as-mask",
-            "--no-error-map",
-            "--no-edge-map",
-            "--opacity-decay-rendered-only",
-            "--no-opacity-decay-rendered-only"
+            "--freeze"
         };
         for (const auto& f : EXTRA_BOOL_FLAGS) {
             if (f == flag)
@@ -3058,39 +3040,6 @@ dataset options work as in training; see the Evaluation page of the docs.
 
         for (auto&& a : shared_training_args) {
             params.shared_args.push_back(std::move(a));
-        }
-
-        if (!params.shared_args.empty()) {
-            std::vector<std::string> validate_args = {"lichtfeld-studio", "--headless"};
-            bool has_d = false;
-            bool has_o = false;
-            for (size_t k = 0; k < params.shared_args.size(); ++k) {
-                if (params.shared_args[k] == "-d" || params.shared_args[k] == "--data-path")
-                    has_d = true;
-                if (params.shared_args[k] == "-o" || params.shared_args[k] == "--output-path")
-                    has_o = true;
-            }
-            if (!has_d) {
-                validate_args.push_back("-d");
-                validate_args.push_back("val_dummy_dataset");
-            }
-            if (!has_o) {
-                validate_args.push_back("-o");
-                validate_args.push_back("val_dummy_output");
-            }
-            for (const auto& a : params.shared_args) {
-                validate_args.push_back(a);
-            }
-            std::vector<const char*> validate_argv;
-            validate_argv.reserve(validate_args.size());
-            for (const auto& a : validate_args) {
-                validate_argv.push_back(a.c_str());
-            }
-            auto val_res = lfs::core::args::parse_args_and_params(static_cast<int>(validate_argv.size()), validate_argv.data());
-            if (!val_res) {
-                error = std::format("Invalid training argument: {}", val_res.error());
-                return std::nullopt;
-            }
         }
 
         if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
