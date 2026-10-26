@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "input/navigation_movement.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/navigation_up_axis.hpp"
@@ -222,27 +223,49 @@ class Viewport {
             }
         }
 
+        // Walk uses the navigation plane, regardless of look pitch. Only trim
+        // excessive length: a partially deflected stick must remain slower.
+        [[nodiscard]] glm::vec3 walkVelocity(const lfs::vis::input::NavigationMovement& input,
+                                             float speed) const {
+            const auto up = navigationUp();
+            auto forward = -R[2];
+            forward -= up * glm::dot(forward, up);
+            if (glm::length(forward) < 1e-5f)
+                forward = glm::cross(up, R[0]);
+            forward = glm::normalize(forward);
+            const auto right = glm::normalize(glm::cross(forward, up));
+            const auto direction = forward * input.forward() + right * input.right();
+            const float amount = std::min(glm::length(glm::vec2(input.right(), input.forward())), 1.0f);
+            return amount > 0.0f ? glm::normalize(direction) * (amount * speed) : glm::vec3(0);
+        }
+
         // WASD movement carried by an exponentially-damped velocity: holding a
         // key eases the camera up to wasdSpeed, releasing lets it glide to rest
         // instead of stopping dead, giving a light sense of inertia. Call every
         // frame while hasWasdMomentum() so a released key can decay to zero.
         void advanceWasd(float deltaTime, bool forward, bool backward, bool left,
                          bool right, bool up, bool down, float additional_speed = 0.0f) {
+            advanceWasd(deltaTime, lfs::vis::input::NavigationMovement::fromKeys(forward, backward, left, right, up, down),
+                        additional_speed);
+        }
+
+        void advanceWasd(float deltaTime, const lfs::vis::input::NavigationMovement& input,
+                         float additional_speed = 0.0f) {
             glm::vec3 dir(0.0f);
-            if (forward != backward) {
+            if (input.forward() != 0.0f) {
                 const glm::vec3 f = lfs::rendering::cameraForward(R);
-                dir += forward ? f : -f;
+                dir += f * input.forward();
             }
-            if (left != right) {
+            if (input.right() != 0.0f) {
                 const glm::vec3 r = glm::normalize(R * glm::vec3(1, 0, 0));
-                dir += right ? r : -r;
+                dir += r * input.right();
             }
-            if (up != down) {
+            if (input.up() != 0.0f) {
                 const glm::vec3 u = glm::normalize(R * glm::vec3(0, 1, 0));
-                dir += up ? u : -u;
+                dir += u * input.up();
             }
 
-            const bool held = forward || backward || left || right || up || down;
+            const bool held = input.held();
             if (held)
                 wasd_hold_seconds_ += deltaTime;
             const float effective_speed = (wasdSpeed + additional_speed) * unitsPerSecondPerLevel();
@@ -267,12 +290,20 @@ class Viewport {
                                       bool right, bool up, bool down, float ortho_scale,
                                       float perspective_scale, float distance_to_pivot,
                                       float additional_speed = 0.0f) {
+            return advanceOrthographicWasd(
+                deltaTime, lfs::vis::input::NavigationMovement::fromKeys(forward, backward, left, right, up, down),
+                ortho_scale, perspective_scale, distance_to_pivot, additional_speed);
+        }
+
+        float advanceOrthographicWasd(float deltaTime, const lfs::vis::input::NavigationMovement& input,
+                                      float ortho_scale, float perspective_scale, float distance_to_pivot,
+                                      float additional_speed = 0.0f) {
             const glm::vec3 f = lfs::rendering::cameraForward(R);
             const glm::vec3 r = glm::normalize(R * glm::vec3(1, 0, 0));
             const glm::vec3 u = glm::normalize(R * glm::vec3(0, 1, 0));
-            const float forward_input = static_cast<float>(forward) - static_cast<float>(backward);
-            const float side_input = static_cast<float>(right) - static_cast<float>(left);
-            const float vertical_input = static_cast<float>(up) - static_cast<float>(down);
+            const float forward_input = input.forward();
+            const float side_input = input.right();
+            const float vertical_input = input.up();
             const bool held = forward_input != 0.0f || side_input != 0.0f || vertical_input != 0.0f;
             if (held)
                 wasd_hold_seconds_ += deltaTime;
@@ -320,10 +351,16 @@ class Viewport {
         // settle to rest.
         void advanceDrone(float deltaTime, bool forward, bool backward, bool left,
                           bool right, bool up, bool down, float additional_speed = 0.0f) {
+            advanceDrone(deltaTime, lfs::vis::input::NavigationMovement::fromKeys(forward, backward, left, right, up, down),
+                         additional_speed);
+        }
+
+        void advanceDrone(float deltaTime, const lfs::vis::input::NavigationMovement& input,
+                          float additional_speed = 0.0f) {
             syncDroneIfStale();
 
             const bool sport = additional_speed > 0.0f;
-            const bool held = forward || backward || left || right || up || down;
+            const bool held = input.held();
             if (held)
                 wasd_hold_seconds_ += deltaTime;
             const float max_speed = (wasdSpeed + additional_speed) * unitsPerSecondPerLevel();
@@ -346,18 +383,18 @@ class Viewport {
             const glm::vec3 right_h = navigationVector(glm::vec3(cos_yaw, 0.0f, -sin_yaw));
 
             glm::vec3 dir_h(0.0f);
-            if (forward != backward)
-                dir_h += forward ? fwd_h : -fwd_h;
-            if (left != right)
-                dir_h += right ? right_h : -right_h;
+            if (input.forward() != 0.0f)
+                dir_h += fwd_h * input.forward();
+            if (input.right() != 0.0f)
+                dir_h += right_h * input.right();
             const float dir_len2 = glm::length2(dir_h);
             if (dir_len2 > 1.0f)
                 dir_h /= std::sqrt(dir_len2);
             const bool has_h_input = dir_len2 > 0.0f;
-            const bool has_v_input = up != down;
+            const bool has_v_input = input.up() != 0.0f;
 
             const glm::vec3 target_h = dir_h * max_speed;
-            const float target_v = has_v_input ? (up ? max_climb : -max_climb) : 0.0f;
+            const float target_v = input.up() * max_climb;
 
             // Real drones brake noticeably harder than they spool up, so the
             // release rate is steeper than the acceleration rate.

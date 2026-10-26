@@ -2804,17 +2804,11 @@ namespace lfs::vis {
             auto& camera = active_movement_viewport->camera;
             try {
                 const auto up = camera.navigationUp();
-                auto forward = -camera.R[2];
-                forward -= up * glm::dot(forward, up);
-                if (glm::length(forward) < 1e-5f)
-                    forward = glm::cross(up, camera.R[0]);
-                forward = glm::normalize(forward);
-                const auto right = glm::normalize(glm::cross(forward, up));
-                auto velocity = keys_active ? forward * float(keys_movement_[0] - keys_movement_[2]) +
-                                                  right * float(keys_movement_[3] - keys_movement_[1])
-                                            : glm::vec3(0);
-                if (glm::length(velocity) > 0)
-                    velocity = glm::normalize(velocity) * walk_settings.speed;
+                const auto movement = input::NavigationMovement::fromKeys(
+                    keys_active && keys_movement_[0], keys_active && keys_movement_[2],
+                    keys_active && keys_movement_[1], keys_active && keys_movement_[3],
+                    false, false);
+                const auto velocity = camera.walkVelocity(movement, walk_settings.speed);
                 core::advanceWalk(walk_state_, walk_settings, up, velocity, delta_time, walkQuery());
                 const auto delta = walk_state_.presentation - camera.t;
                 camera.t += delta;
