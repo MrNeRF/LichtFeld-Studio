@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Farbvarianz-Gewicht:",
     "losses.color_variance_warmup_iters": "Aufwärmphase der Farbvarianz:",
-    "tooltip.color_variance_weight": "Gleicht die Farben sichtbarer Splats an, um das Rauschen beim stochastischen Rendern zu verringern. Erfordert FastGS mit ausgeschaltetem Mip-Filter, ohne Erscheinungsbildkorrektur und ohne Masken. Höhere Werte können Details entfernen. 0 schaltet sie aus.",
+    "tooltip.color_variance_weight": "Gleicht die Farben sichtbarer Splats an, um das Rauschen beim stochastischen Rendern zu verringern. Erfordert FastGS mit ausgeschaltetem Mip-Filter und ohne Masken. Höhere Werte können Details entfernen. 0 schaltet sie aus.",
     "tooltip.color_variance_warmup_iters": "Abgeschlossene Trainingsiterationen, bevor die Farbvarianz einsetzt. Skaliert mit dem Trainingsplan. 15000 ergibt bei 30000 Iterationen einen Versuch aus Aufwärmen und Verfeinern.",
     "losses.opacity_reg": "Opazitätsreg.:",
     "losses.scale_reg_decay_power": "Ausblenden der Größenstrafe:",

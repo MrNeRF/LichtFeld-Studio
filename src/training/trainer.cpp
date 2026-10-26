@@ -6595,7 +6595,7 @@ namespace lfs::training {
                     if (!color_variance_loss_.is_valid())
                         color_variance_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
                     color_variance_loss_.zero_();
-                    color_variance = {gt_image, color_variance_loss_, step_params.color_variance_weight_at(iter)};
+                    color_variance = {color_variance_loss_, step_params.color_variance_weight_at(iter)};
                 }
                 if (fastgs_path && core::param::is_mrnf_strategy(params_.optimization.strategy) &&
                     params_.optimization.opacity_decay_rendered_only) {
@@ -7251,6 +7251,15 @@ namespace lfs::training {
 
                         lfs::core::Tensor corrected_image = output.image;
                         lfs::core::Tensor ppisp_input;
+                        // Until a correction writes a new image, corrected_image is the raw render,
+                        // which the color variance backward still reads: clamp a copy of it then.
+                        const auto clamp_corrected = [&]() {
+                            if (color_variance.weight > 0.0f &&
+                                corrected_image.ptr<float>() == output.image.ptr<float>())
+                                corrected_image = corrected_image.clamp(0.0f, 1.0f);
+                            else
+                                corrected_image.clamp_(0.0f, 1.0f);
+                        };
                         if (exposure_correction) {
                             if (ppisp_on) {
                                 nvtxRangePush("ppisp_forward");
@@ -7272,7 +7281,7 @@ namespace lfs::training {
                                 }
                                 nvtxRangePop();
                             }
-                            corrected_image.clamp_(0.0f, 1.0f);
+                            clamp_corrected();
                         } else {
                             if (grid_on) {
                                 nvtxRangePush("bilateral_grid_forward");
@@ -7294,7 +7303,7 @@ namespace lfs::training {
                             // Final tonemapping: clamp to [0, 1] for loss computation.
                             // skip when PPISP is active — CRF already clamps.
                             if (!ppisp_on) {
-                                corrected_image.clamp_(0.0f, 1.0f);
+                                clamp_corrected();
                             }
                         }
                         // For decoupled D-SSIM, the active appearance model provides the corrected image

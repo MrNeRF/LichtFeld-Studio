@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Waga wariancji koloru:",
     "losses.color_variance_warmup_iters": "Rozgrzewka wariancji koloru:",
-    "tooltip.color_variance_weight": "Wyrównuje kolory widocznych splatów, aby zmniejszyć szum w renderowaniu stochastycznym. Wymaga FastGS z wyłączonym filtrem Mip, korekcją wyglądu i maskami. Wyższe wartości mogą usuwać szczegóły. 0 wyłącza.",
+    "tooltip.color_variance_weight": "Wyrównuje kolory widocznych splatów, aby zmniejszyć szum w renderowaniu stochastycznym. Wymaga FastGS z wyłączonym filtrem Mip i maskami. Wyższe wartości mogą usuwać szczegóły. 0 wyłącza.",
     "tooltip.color_variance_warmup_iters": "Liczba ukończonych iteracji treningu przed włączeniem wariancji koloru. Skaluje się z harmonogramem treningu. Użyj 15000 dla eksperymentu z rozgrzewką i dopracowaniem w 30000 iteracjach.",
     "losses.opacity_reg": "Reg. nieprzezroczystości:",
     "losses.scale_reg_decay_power": "Wygaszanie kary za skalę:",

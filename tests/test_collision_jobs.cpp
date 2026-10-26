@@ -452,7 +452,7 @@ namespace lfs::vis::gui {
                   2);
         EXPECT_TRUE(reader.commit().required_reader_capabilities.contains(COLLISION_VOLUMES_V1));
         ReaderOptions old_reader;
-        old_reader.reader_capabilities.set(COLLISION_VOLUMES_V1, false);
+        old_reader.reader_capabilities.set(11, false);
         auto incompatible = ProjectReader::open(path, old_reader);
         ASSERT_FALSE(incompatible);
         EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported);
@@ -465,11 +465,19 @@ namespace lfs::vis::gui {
         std::filesystem::rename(path, temporary.path / "retained.licht");
         auto document = require_result(ProjectDocument::open(path, {.defer_geometry_payloads = true, .retained_source = &reader}));
         EXPECT_EQ(document.source_commit_uuid(), reader.commit().commit_uuid);
+        const auto verify_capabilities = [](const ProjectReader& saved) {
+            for (const auto& bits : {saved.commit().required_reader_capabilities, saved.commit().required_writer_capabilities}) {
+                EXPECT_TRUE(bits.contains(11));
+                EXPECT_FALSE(bits.contains(10));
+            }
+        };
+        verify_capabilities(reader);
         const auto expected = require_result(capture_scene_graph(scene, {})).to_bytes();
         for (bool deferred : {true, false}) {
             SCOPED_TRACE(deferred);
             const auto copy = temporary.path / (deferred ? "unloaded.licht" : "loaded.licht");
             ASSERT_TRUE(document.save_as(copy));
+            verify_capabilities(require_result(ProjectReader::open(copy)));
             for (const auto& state : document.payload_states())
                 EXPECT_EQ(state.loaded, !deferred);
             document = require_result(ProjectDocument::open(copy, {.defer_geometry_payloads = deferred}));

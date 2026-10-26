@@ -112,6 +112,9 @@ namespace lfs::vis::gui {
         void cacheElements();
 
         void showNext();
+        void applyFormUpdate(const std::optional<std::string>& body_rml,
+                             const std::vector<lfs::core::ModalButtonSpec>& buttons);
+        void flushPendingActions();
         void updateButtons(const std::vector<lfs::core::ModalButtonSpec>& buttons);
         bool dismissFirstEnabledButton();
         void bindTextInputRevert();
@@ -123,6 +126,27 @@ namespace lfs::vis::gui {
             RmlModalOverlay* overlay = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
+
+        struct DispatchScope {
+            explicit DispatchScope(RmlModalOverlay& overlay, bool flush = true);
+            ~DispatchScope();
+            RmlModalOverlay& overlay;
+            bool flush;
+        };
+
+        struct PendingAction {
+            enum class Kind { Update,
+                              Dismiss,
+                              Cancel } kind;
+            std::optional<std::string> body_rml;
+            std::vector<lfs::core::ModalButtonSpec> buttons;
+            std::string button_label;
+        };
+
+        std::deque<PendingAction> pending_actions_;
+        int dispatch_depth_ = 0;
+        bool flushing_actions_ = false;
+        bool close_pending_ = false;
 
         RmlUIManager* rml_manager_;
         OverlayEventListener listener_;

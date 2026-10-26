@@ -800,15 +800,17 @@ namespace fast_lfs::rasterization::kernels::backward {
         float variance_scale1 = 0.0f;
         float variance_loss_local = 0.0f;
         if constexpr (COLOR_VARIANCE) {
-            auto load_target = [&](const bool inside, const uint idx) {
-                if (!inside)
+            // The target is the expected splat color C = sum_i P(i) c_i / sum_i P(i): the forward
+            // color without the background, divided by the coverage sum_i P(i) = 1 - T_final.
+            // At this C, dL/dC = -2 sum_i P(i) (c_i - C) = 0, so holding it fixed below is exact.
+            // A covered pixel has coverage of at least min_alpha_threshold; an uncovered one has
+            // no fragments, so its target does not matter.
+            auto expected_color = [&](const bool inside, const uint idx, const float T_final) {
+                const float coverage = 1.0f - T_final;
+                if (!inside || !(coverage >= 0.5f * config::min_alpha_threshold))
                     return make_float3(0.0f);
-                if (color_variance.target_u8 != nullptr) {
-                    const auto* p = color_variance.target_u8;
-                    return make_float3(p[idx], p[n_pixels + idx], p[2 * n_pixels + idx]) * (1.0f / 255.0f);
-                }
-                const auto* p = color_variance.target;
-                return make_float3(p[idx], p[n_pixels + idx], p[2 * n_pixels + idx]);
+                const float3 rendered = make_float3(image[idx], image[n_pixels + idx], image[2 * n_pixels + idx]);
+                return (rendered - T_final * background_color_at(background_grad, idx, n_pixels)) / coverage;
             };
             const float pixel_weight_sum =
                 color_variance.pixel_weight != nullptr ? *color_variance.pixel_weight_sum : 0.0f;
@@ -821,8 +823,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                            ? color_variance.weight * color_variance.pixel_weight[idx] / pixel_weight_sum
                            : 0.0f;
             };
-            target0 = load_target(inside0, pixel_idx0);
-            target1 = load_target(inside1, pixel_idx1);
+            target0 = expected_color(inside0, pixel_idx0, T0);
+            target1 = expected_color(inside1, pixel_idx1, T1);
             variance_scale0 = load_scale(inside0, pixel_idx0);
             variance_scale1 = load_scale(inside1, pixel_idx1);
         }
