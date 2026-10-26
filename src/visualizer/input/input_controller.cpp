@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_controller.hpp"
+#include "core/collision.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
@@ -64,16 +65,6 @@ namespace lfs::vis {
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
         namespace string_keys = lichtfeld::Strings;
-
-        std::string localizedWalkError(const std::string_view message) {
-            if (message == "No collision nodes are loaded")
-                return LOC("collision.walk_no_collision");
-            if (message == "No Walk support below the camera")
-                return LOC("collision.walk_no_support");
-            if (message == "Walk capsule does not fit at the camera")
-                return LOC("collision.walk_blocked");
-            return std::string(message);
-        }
 
         // Expand [world_min, world_max] by a node's local AABB transformed to world
         // space. With use_percentile, the splat/point-cloud box is the trimmed
@@ -667,22 +658,18 @@ namespace lfs::vis {
     }
 
     core::CapsuleQuery InputController::walkQuery() const {
-        struct Collider {
-            std::shared_ptr<const core::CollisionVolume> volume;
-            glm::mat4 transform;
-        };
-        std::vector<Collider> colliders;
+        std::vector<core::Scene::VisibleMesh> colliders;
         if (const auto* manager = services().sceneOrNull()) {
             const auto& scene = manager->getScene();
             for (const auto* node : scene.getNodes())
                 if (node && node->type == core::NodeType::COLLISION && node->collision)
-                    colliders.push_back({node->collision, lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id))});
+                    colliders.push_back({.mesh = nullptr, .transform = lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id)), .collision = node->collision});
         }
         if (colliders.empty())
-            throw std::runtime_error("No collision nodes are loaded");
+            throw core::collisionError("collision.walk_no_collision", "No collision nodes are loaded");
         return [colliders = std::move(colliders)](glm::vec3 feet, glm::vec3 up, float height, float radius) {
             return std::ranges::any_of(colliders, [&](const auto& collider) {
-                return core::collisionCapsuleIntersects(*collider.volume, collider.transform, feet, up, height, radius);
+                return core::collisionCapsuleIntersects(*collider.collision, collider.transform, feet, up, height, radius);
             });
         };
     }
@@ -694,7 +681,7 @@ namespace lfs::vis {
             const auto up = camera.navigationUp();
             const auto feet = walk_state_.feet;
             if (walkQuery()(feet, up, settings.height, settings.radius))
-                throw std::runtime_error("The edited Walk capsule does not fit");
+                throw core::collisionError("collision.walk_blocked", "The edited Walk capsule does not fit");
             walk_state_.eye = feet + up * settings.height;
             walk_state_.presentation = walk_state_.eye;
             camera.pivot += walk_state_.eye - camera.t;
@@ -715,19 +702,21 @@ namespace lfs::vis {
             try {
                 core::settleWalk(candidate, walk_settings, camera.navigationUp(), walkQuery());
             } catch (const std::exception& error) {
-                if (walk_error != error.what()) {
+                const auto message = core::localizedCollisionError(error);
+                if (walk_error != message) {
                     lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
                         .error = lfs::make_error({.code = lfs::ErrorCode::InvalidArgument,
                                                   .domain = lfs::ErrorDomain::App,
                                                   .severity = lfs::Severity::Warning,
-                                                  .user_message = LOCF("collision.walk_enter_failed", localizedWalkError(error.what())),
+                                                  .user_message = message,
+                                                  .detail = error.what(),
                                                   .detection = LFS_SOURCE_SITE_CURRENT()})
                                      .with_context("enter_walk", LFS_SOURCE_SITE_CURRENT()),
                         .surface = lfs::ErrorSurface::Toast,
                         .actions = {},
                         .operation_id = lfs::OperationId::generate(),
                     });
-                    walk_error = error.what();
+                    walk_error = message;
                     publish_viewport_toolbar_generation();
                 }
                 python::request_redraw();
@@ -3062,8 +3051,8 @@ namespace lfs::vis {
                 if (glm::length(delta) > 0)
                     publishCameraMove(active_movement_viewport);
             } catch (const std::exception& e) {
-                walk_error = e.what();
-                LOG_ERROR("Walk stopped: {}", walk_error);
+                walk_error = core::localizedCollisionError(e);
+                LOG_ERROR("Walk stopped: {}", e.what());
                 setCameraNavigationMode(CameraNavigationMode::Orbit);
             }
         } else if (camera_navigation_mode_ == CameraNavigationMode::Drone) {

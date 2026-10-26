@@ -401,7 +401,9 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
                       "tr:rendering_panel.section_simplify", "tr:collision.title", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
     items[5]["items"][0]["callback"]()
     items[2]["callback"]()
+    state["panels"]["lfs.collision"] = SimpleNamespace(show=lambda export=False: state.__setitem__("collision_export", export))
     items[3]["callback"]()
+    assert state["collision_export"] is False
 
     assert state["python_console_shown"] == 1
 

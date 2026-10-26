@@ -860,6 +860,12 @@ namespace lfs::vis {
                     state.equirectangular = s.equirectangular;
                 if (s.sequence_fps != last.sequence_fps)
                     state.sequence_fps = s.sequence_fps;
+                if ((s.camera_width != last.camera_width || s.camera_height != last.camera_height) &&
+                    s.camera_width >= 1 && s.camera_width <= 8192 && s.camera_height >= 1 && s.camera_height <= 8192) {
+                    state.camera_width = s.camera_width;
+                    state.camera_height = s.camera_height;
+                    projectMarkSessionChapterCommitted("SEQR");
+                }
             }
 
             s.show_camera_path = state.show_camera_path;
@@ -872,6 +878,11 @@ namespace lfs::vis {
             s.show_film_strip = state.show_film_strip;
             s.equirectangular = state.equirectangular;
             s.sequence_fps = state.sequence_fps;
+            s.camera_width = state.camera_width;
+            s.camera_height = state.camera_height;
+            s.framerate = state.framerate;
+            s.framerate_denominator = state.framerate_denominator;
+            s.export_fit = state.export_fit;
             const auto sel = gm->sequencer().selectedKeyframe();
             s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
             if (!sequencer_ui_last_handed_out_)
@@ -1121,7 +1132,31 @@ namespace lfs::vis {
             if (!rendering_manager_)
                 return std::nullopt;
 
+            if (!window_manager_)
+                return std::nullopt;
+            ViewportRegion region;
+            if (gui_manager_) {
+                const auto pos = gui_manager_->getSceneRenderViewportPos();
+                const auto size = gui_manager_->getSceneRenderViewportSize();
+                region.x = pos.x;
+                region.y = pos.y;
+                region.width = size.x;
+                region.height = size.y;
+            }
+            const RenderingManager::RenderContext capture_context{
+                .viewport = viewport_,
+                .settings = rendering_manager_->getSettings(),
+                .screen_size_px = window_manager_->getFramebufferSize(),
+                .viewport_region = gui_manager_ ? &region : nullptr,
+                .scene_manager = scene_manager_.get(),
+                .vulkan_context = window_manager_->getVulkanContext(),
+                .deterministic_export = true};
+            const auto frame = rendering_manager_->renderVulkanFrame(capture_context);
+            if (!frame.rendered)
+                return std::nullopt;
             auto image = rendering_manager_->captureViewportImage();
+            // The next interactive frame resumes its normal transparency mode.
+            rendering_manager_->markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion);
             if (!image)
                 return std::nullopt;
 
@@ -1522,7 +1557,7 @@ namespace lfs::vis {
                         : ProjectSwitchDisposition::RequireClean,
                     command.stop_training,
                     command.allow_existing_destination_replacement);
-                last_project_create_succeeded_ = created.has_value();
+                last_project_create_succeeded_ = created.has_value() && !projectCreatePending();
             });
 
         cmd::SwitchToEditMode::when(
@@ -2816,12 +2851,8 @@ namespace lfs::vis {
             const bool has_mesh = scene_manager_ &&
                                   !scene_manager_->getScene().getVisibleMeshes().empty();
             if (scene_capture_jobs_.beginFrame(has_mesh)) {
-                // Preserve stochastic history on capture. Alpha blending keeps
-                // its existing full invalidation; edits carry their own flags.
-                const bool stochastic_capture = context.settings.transparency_mode !=
-                                                lfs::rendering::GaussianTransparencyMode::AlphaBlend;
-                const auto capture_dirty = stochastic_capture ? DirtyFlag::CAMERA : DirtyFlag::ALL;
-                rendering_manager_->markDirty(capture_dirty, FrameReason::AsyncCompletion,
+                context.deterministic_export = true;
+                rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion,
                                               "viewport_capture");
             }
         }
@@ -3436,6 +3467,12 @@ namespace lfs::vis {
             return std::unexpected("No data loader available");
         }
 
+        if (scene_manager_ && scene_manager_->canClearScene() && gui_manager_ &&
+            gui_manager_->asyncTasks().deferSceneReplacement([this] {
+                if (auto result = clearScene(); !result)
+                    LOG_ERROR("Deferred scene clear failed: {}", result.error());
+            }))
+            return {};
         if (scene_manager_ && scene_manager_->canClearScene()) {
             data_loader_->cancelPendingImports();
             if (gui_manager_)
@@ -4196,8 +4233,10 @@ namespace lfs::vis {
         if (scene_capture_jobs_.hasActive()) {
             if (!frame_recorded)
                 scene_capture_jobs_.cancelActive();
-            else
+            else {
                 scene_capture_jobs_.completeFrame();
+                rendering_manager_->markDirty(DirtyFlag::CAMERA, FrameReason::AsyncCompletion);
+            }
         }
         if (scene_capture_jobs_.hasPending())
             wakeMainLoop();
@@ -4934,6 +4973,7 @@ namespace lfs::vis {
             if (!path.empty()) {
                 const auto created = performCreateProject(
                     path, disposition, allow_existing);
+                last_project_create_succeeded_ = created.has_value() && !projectCreatePending();
                 if (!created) {
                     pending_load_files_.clear();
                     pending_project_dataset_embed_ = false;

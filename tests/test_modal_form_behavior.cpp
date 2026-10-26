@@ -5,7 +5,6 @@
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include <RmlUi/Core.h>
-#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -113,6 +112,10 @@ namespace lfs::vis::gui {
         void cancel() { overlay.cancel(); }
         void resultHandler(std::function<void(const core::ModalResult&)> callback) { overlay.active_->on_result = std::move(callback); }
         void cancelHandler(std::function<void()> callback) { overlay.active_->on_cancel = std::move(callback); }
+        void defaultButton(const std::string& label, bool disabled) {
+            overlay.active_->submit_button_label = label;
+            overlay.updateForm("test.form", std::nullopt, {{label, "primary", disabled}, {"Cancel", "secondary"}});
+        }
         void type(PanelInputState input) {
             input.input_events.push_back({.kind = FrameInputEventKind::Text, .text = "x"});
             send(input);
@@ -429,6 +432,39 @@ namespace lfs::vis::gui {
         EXPECT_TRUE(replace("<input id='replacement' />"));
         EXPECT_FALSE(alive);
         EXPECT_NE(document->GetElementById("replacement"), nullptr);
+    }
+
+    TEST_F(ModalFormBehaviorTest, QueuedValidationDisablesExplicitSubmitWithoutFallingThroughToCancel) {
+        openForm();
+        defaultButton("Export", false);
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult&) { submitted = true; });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Export", "primary", true}, {"Cancel", "secondary"}}));
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_FALSE(submitted);
+        EXPECT_TRUE(overlay.isOpen());
+    }
+
+    TEST_F(ModalFormBehaviorTest, QueuedValidationEnablesExplicitSubmitOnTheSameEnter) {
+        openForm();
+        defaultButton("Export", true);
+        auto* field = document->GetElementById("field");
+        field->Focus();
+        bool submitted = false;
+        resultHandler([&](const core::ModalResult& result) {
+            submitted = true;
+            EXPECT_EQ(result.button_label, "Export");
+        });
+        changeHandler([&](const core::ModalResult&) {
+            EXPECT_TRUE(overlay.updateForm("test.form", std::nullopt, {{"Export", "primary"}, {"Cancel", "secondary"}}));
+        });
+        key(over(field), SDL_SCANCODE_RETURN, SDLK_RETURN);
+        EXPECT_TRUE(submitted);
+        EXPECT_FALSE(overlay.isOpen());
     }
 
     TEST_F(ModalFormBehaviorTest, EscapeOnUneditedFieldDoesNotNotifyChange) {

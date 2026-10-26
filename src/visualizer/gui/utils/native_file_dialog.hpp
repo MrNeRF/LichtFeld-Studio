@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -56,9 +57,8 @@ namespace lfs::vis::gui {
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                                          const std::filesystem::path& defaultPath = {});
-    LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
-                                                         const std::filesystem::path& defaultPath,
-                                                         bool* overwriteConfirmed);
+    LFS_VIS_API std::pair<std::filesystem::path, bool> SaveJsonFileDialogWithConfirmation(
+        const std::string& defaultName, const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SavePngFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveJpgFileDialog(const std::string& defaultName,

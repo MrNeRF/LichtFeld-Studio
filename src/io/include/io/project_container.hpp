@@ -430,6 +430,9 @@ namespace lfs::io::project {
         ProjectReader& operator=(const ProjectReader&) = delete;
         ~ProjectReader();
 
+        // Retain the already validated commit and native file handle; never reopen by path.
+        [[nodiscard]] ProjectReader share() const { return ProjectReader(impl_); }
+        [[nodiscard]] lfs::Result<void> validate_source_identity() const;
         [[nodiscard]] const std::filesystem::path& path() const noexcept;
         [[nodiscard]] std::uint64_t physical_file_size() const noexcept;
         [[nodiscard]] OpenState open_state() const noexcept;

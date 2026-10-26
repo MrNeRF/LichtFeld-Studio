@@ -377,6 +377,7 @@ namespace lfs::io::project {
             SuperblockInfo superblock;
             ParsedHead selected;
             std::vector<HeadInfo> published_heads;
+            std::array<std::array<std::byte, HEAD_SLOT_BYTES>, 2> head_bytes{};
             std::vector<std::string> warnings;
             OpenState open_state = OpenState::Open;
             ReaderOptions options;
@@ -2423,6 +2424,7 @@ namespace lfs::io::project {
             }
 
             std::array<HeadAttempt, 2> attempts;
+            std::array<std::array<std::byte, HEAD_SLOT_BYTES>, 2> head_bytes{};
             CommitRecordCache commit_cache;
             for (std::uint32_t slot_id = 0; slot_id < attempts.size(); ++slot_id) {
                 HeadAttempt& attempt = attempts[slot_id];
@@ -2434,6 +2436,7 @@ namespace lfs::io::project {
                     attempt.error = std::move(raw).error();
                     continue;
                 }
+                head_bytes[slot_id] = *raw;
                 if (all_zero(byte_span(*raw))) {
                     attempt.blank = true;
                     continue;
@@ -2631,6 +2634,7 @@ namespace lfs::io::project {
             state->physical_size = physical_size;
             state->superblock = *superblock;
             state->selected = selected;
+            state->head_bytes = head_bytes;
             for (const auto& attempt : attempts) {
                 if (attempt.head.has_value()) {
                     state->published_heads.push_back(attempt.head->info);
@@ -2901,6 +2905,33 @@ namespace lfs::io::project {
                                          "no head slot has a valid checksum", path);
         }
         return *newest;
+    }
+
+    lfs::Result<void> ProjectReader::validate_source_identity() const {
+        auto current = detail::NativeFile::open_read(path());
+        if (!current)
+            return lfs::Result<void>::failure(std::move(current).error());
+        auto same = impl_->state->file->same_file(**current);
+        if (!same)
+            return lfs::Result<void>::failure(std::move(same).error());
+        auto size = (*current)->size();
+        if (!size)
+            return lfs::Result<void>::failure(std::move(size).error());
+        auto block = parse_superblock(**current, *size);
+        if (!block)
+            return lfs::Result<void>::failure(std::move(block).error());
+        bool unchanged = *same && *size >= commit().committed_file_end && block->crc32c == superblock().crc32c;
+        for (std::size_t slot = 0; slot < HEAD_SLOT_OFFSETS.size(); ++slot) {
+            auto raw = read_fixed<HEAD_SLOT_BYTES>(**current, HEAD_SLOT_OFFSETS[slot], *size, *size, "head.identity");
+            if (!raw)
+                return lfs::Result<void>::failure(std::move(raw).error());
+            unchanged &= *raw == impl_->state->head_bytes[slot];
+        }
+        if (!unchanged)
+            return lfs::Result<void>::failure(detail::project_error(lfs::ErrorCode::FailedPrecondition,
+                                                                    "The project file changed while opening. Open it again.",
+                                                                    std::format("The destination is not the validated file and exact commit: size={}, required_extent={}", *size, commit().committed_file_end), path()));
+        return {};
     }
 
     OpenClassification

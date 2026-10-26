@@ -142,6 +142,11 @@ namespace lfs::python {
             set_attr_steal(inst, "details",
                            PyUnicode_FromString(lfs::format_for_developer(error).c_str()));
             set_context_attr(inst, error);
+            for (const auto& frame : error.frames())
+                for (const auto& field : frame.fields.entries())
+                    if (field.key == "message_key" || field.key == "message_details")
+                        if (const auto* value = std::get_if<std::string>(&field.value))
+                            set_attr_steal(inst, field.key.c_str(), PyUnicode_FromString(value->c_str()));
             if (error.code() == lfs::ErrorCode::ResourceExhausted) {
                 set_bytes_attr(inst, "requested_bytes", error);
                 set_bytes_attr(inst, "available_bytes", error);
@@ -233,7 +238,8 @@ namespace lfs::python {
             "lichtfeld.Error",
             "Base class for every typed LichtFeld error crossing the Python boundary. "
             "Derives RuntimeError for backward compatibility. Carries .code, .domain, "
-            ".user_message, .operation_id, .retryable, .details, and .context.",
+            ".user_message, .operation_id, .retryable, .details, and .context. "
+            "Presentation fields .message_key and .message_details are included when provided.",
             PyExc_RuntimeError);
 
         {

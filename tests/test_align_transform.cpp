@@ -137,6 +137,30 @@ namespace {
                          .scene_manager = &manager,
                          .settings = {},
                          .render_size = {640, 480}};
+        auto& scene = manager.getScene();
+        const auto volume = collision_test::box({}, glm::ivec3(1), .05f);
+        scene.addCollision("First", volume);
+        scene.addCollision("Second", volume);
+        scene.addGroup("Other");
+        const auto transform = glm::scale(glm::rotate(glm::translate(glm::mat4(1), {3, -2, 5}), .7f, {0, 1, 0}), {-2, 3, .5f});
+        scene.setNodeTransform("First", transform);
+        EXPECT_FLOAT_EQ(ctx.settings.collision_preview_opacity, .4f);
+        for (const auto [name, visible, opacity] : {std::tuple{"First", true, .4f}, {"Other", true, .4f}, {"", true, .4f}, {"Other", false, 0.f}, {"Other", false, .25f}, {"Other", false, 1.f}, {"", true, 1.f}}) {
+            manager.clearSelection();
+            if (*name)
+                manager.selectNode(name);
+            scene.setNodeVisibility("First", visible);
+            ctx.settings.collision_preview_opacity = opacity;
+            ctx.scene_state = manager.buildRenderState({.metadata_only = true});
+            const auto items = buildViewportMeshDrawItems(ctx.scene_state, ctx.settings, {0, 0, 1});
+            ASSERT_EQ(items.size(), visible ? 2 : 1);
+            if (visible)
+                EXPECT_EQ(items[0].model, lfs::rendering::dataWorldTransformToVisualizerWorld(transform));
+            for (const auto& item : items) {
+                EXPECT_EQ(item.collision, volume);
+                EXPECT_FLOAT_EQ(item.collision_opacity, opacity);
+            }
+        }
         EXPECT_FALSE(buildViewportRenderRequest(ctx, {640, 480}).require_exact_depth);
         ctx.settings.show_camera_frustums = true;
         auto request = buildViewportRenderRequest(ctx, {640, 480});

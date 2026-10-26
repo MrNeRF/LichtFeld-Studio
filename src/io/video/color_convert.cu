@@ -32,6 +32,39 @@ namespace lfs::io::video {
 
     } // namespace
 
+    __global__ void reframeRgbKernel(const float* src, float* dst, int sw, int sh,
+                                     int width, int height, VideoFrameMapping mapping) {
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+        if (x >= width || y >= height)
+            return;
+        const float source_x = (x + 0.5f) * mapping.scale_x + mapping.offset_x;
+        const float source_y = (y + 0.5f) * mapping.scale_y + mapping.offset_y;
+        const int index = (y * width + x) * 3;
+        if (source_x < 0 || source_x >= sw || source_y < 0 || source_y >= sh) {
+            dst[index] = dst[index + 1] = dst[index + 2] = 0.0f;
+            return;
+        }
+        const float fx = fminf(fmaxf(source_x - 0.5f, 0.0f), static_cast<float>(sw - 1));
+        const float fy = fminf(fmaxf(source_y - 0.5f, 0.0f), static_cast<float>(sh - 1));
+        const int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+        const int x1 = min(x0 + 1, sw - 1), y1 = min(y0 + 1, sh - 1);
+        const float tx = fx - x0, ty = fy - y0;
+        for (int c = 0; c < 3; ++c) {
+            const float top = src[(y0 * sw + x0) * 3 + c] * (1 - tx) + src[(y0 * sw + x1) * 3 + c] * tx;
+            const float bottom = src[(y1 * sw + x0) * 3 + c] * (1 - tx) + src[(y1 * sw + x1) * 3 + c] * tx;
+            dst[index + c] = top * (1 - ty) + bottom * ty;
+        }
+    }
+
+    void reframeRgbCuda(const float* src, float* dst, int source_width, int source_height,
+                        int width, int height, VideoFrameMapping mapping, cudaStream_t stream) {
+        const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+        const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE, (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        reframeRgbKernel<<<grid, block, 0, stream>>>(src, dst, source_width, source_height, width, height, mapping);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.reframe_rgb");
+    }
+
     __global__ void rgbToNv12Kernel(
         const float* __restrict__ rgb,
         uint8_t* __restrict__ y_plane,

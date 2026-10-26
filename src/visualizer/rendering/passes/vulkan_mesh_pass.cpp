@@ -163,7 +163,18 @@ namespace lfs::vis {
             VmaAllocation allocation = VK_NULL_HANDLE;
             VkDescriptorPool pool = VK_NULL_HANDLE;
             VkDescriptorSet descriptor = VK_NULL_HANDLE;
+            VkBuffer staging = VK_NULL_HANDLE;
+            VmaAllocation staging_allocation = VK_NULL_HANDLE;
+            VkFence pending_upload = VK_NULL_HANDLE;
             ~CollisionFrame() {
+                if (pending_upload && vkGetFenceStatus(device, pending_upload) != VK_SUCCESS) {
+                    LOG_ERROR("Collision upload has not retired; retaining its buffers until device teardown");
+                    return;
+                }
+                if (pending_upload)
+                    vkDestroyFence(device, pending_upload, nullptr);
+                if (staging)
+                    vmaDestroyBuffer(allocator, staging, staging_allocation);
                 if (buffer)
                     vmaDestroyBuffer(allocator, buffer, allocation);
                 if (pool)
@@ -177,6 +188,7 @@ namespace lfs::vis {
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
         std::vector<VkDescriptorPool> material_descriptor_pools;
         VkCommandPool transfer_pool = VK_NULL_HANDLE;
+        mutable bool retain_transfer_pool = false;
         VkQueue graphics_queue = VK_NULL_HANDLE;
 
         struct LightDrawResources {
@@ -372,7 +384,7 @@ namespace lfs::vis {
             return cb;
         }
 
-        bool endSingleTimeCommands(VkCommandBuffer cb) const {
+        bool endSingleTimeCommands(VkCommandBuffer cb, VkFence* pending = nullptr) const {
             VkResult r = vkEndCommandBuffer(cb);
             if (r != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
@@ -457,6 +469,11 @@ namespace lfs::vis {
                         vkHandleValue(cb),
                         formatWaitFailure(wait_outcome));
                 }
+            }
+            if (submitted && !wait_ready) {
+                retain_transfer_pool = true;
+                if (pending)
+                    *pending = fence;
             }
             // AMB-4: destroy fence/CB only when never submitted or wait Ready.
             if (fence != VK_NULL_HANDLE) {
@@ -549,7 +566,7 @@ namespace lfs::vis {
                 vkDestroySampler(device, shadow_sampler, nullptr);
                 shadow_sampler = VK_NULL_HANDLE;
             }
-            if (transfer_pool != VK_NULL_HANDLE) {
+            if (transfer_pool != VK_NULL_HANDLE && !retain_transfer_pool) {
                 vkDestroyCommandPool(device, transfer_pool, nullptr);
                 transfer_pool = VK_NULL_HANDLE;
             }
@@ -1740,6 +1757,15 @@ namespace lfs::vis {
         }
 
         bool createOverlayPipeline(VkFormat color_format, VkFormat depth_format, bool collision = false) {
+            if (collision) {
+                collision_pipeline_attempted = true;
+                VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+                const VkDescriptorSetLayoutCreateInfo descriptors{
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 1, &binding};
+                if (!vk_try_bool(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &collision_layout),
+                                 "vkCreateDescriptorSetLayout", "Collision preview descriptor layout"))
+                    return false;
+            }
             if (!collision && (context == nullptr || !context->hasFillModeNonSolid())) {
                 // VK_POLYGON_MODE_LINE is optional. Keep the pass usable on
                 // conformant devices that do not expose fillModeNonSolid; the UI
@@ -2077,12 +2103,11 @@ namespace lfs::vis {
         bool createStagingBuffer(VkDeviceSize size,
                                  const void* data,
                                  VkBuffer& buffer,
-                                 VmaAllocation& alloc,
-                                 VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT) const {
+                                 VmaAllocation& alloc) const {
             VkBufferCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             info.size = size;
-            info.usage = usage;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
@@ -2545,19 +2570,6 @@ namespace lfs::vis {
             return true;
         }
 
-        bool createCollisionPipeline() {
-            collision_pipeline_attempted = true;
-            VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-            VkDescriptorSetLayoutCreateInfo descriptors{};
-            descriptors.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            descriptors.bindingCount = 1;
-            descriptors.pBindings = &binding;
-            if (!vk_try_bool(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &collision_layout),
-                             "vkCreateDescriptorSetLayout", "Collision preview descriptor layout"))
-                return false;
-            return createOverlayPipeline(color_format_cached, depth_format_cached, true);
-        }
-
         void prepareCollision(const VulkanMeshPassParams& params) {
             if (collision_frames.size() <= params.frame_slot)
                 collision_frames.resize(params.frame_slot + 1);
@@ -2565,7 +2577,7 @@ namespace lfs::vis {
             for (const auto& item : params.items) {
                 if (!item.collision)
                     continue;
-                if (!collision_pipeline_attempted && !createCollisionPipeline())
+                if (!collision_pipeline_attempted && !createOverlayPipeline(color_format_cached, depth_format_cached, true))
                     LOG_ERROR("Collision preview pipeline failed; other rendering is unaffected");
                 if (!collision_pipeline)
                     break;
@@ -2595,34 +2607,86 @@ namespace lfs::vis {
                 LOG_ERROR("Collision preview requires {} storage bytes; device limit is {}", bytes, properties.limits.maxStorageBufferRange);
                 return;
             }
-            std::vector<uint32_t> data{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
-                                       uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
-            data.insert(data.end(), volume.words.begin(), volume.words.end());
-            if (!createStagingBuffer(bytes, data.data(), frame.buffer, frame.allocation, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+            VkBufferCreateInfo buffer_info{};
+            buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            buffer_info.size = bytes;
+            buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+            if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
+                                             &frame.buffer, &frame.allocation, nullptr),
+                             "vmaCreateBuffer", "Collision preview storage buffer"))
                 return;
+
+            VkMemoryPropertyFlags memory_properties{};
+            vmaGetAllocationMemoryProperties(allocator, frame.allocation, &memory_properties);
+            const bool direct_upload = (memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+            VmaAllocation upload_allocation = frame.allocation;
+            if (!direct_upload) {
+                buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
+                                                 &frame.staging, &frame.staging_allocation, nullptr),
+                                 "vmaCreateBuffer", "Collision preview staging buffer"))
+                    return;
+                upload_allocation = frame.staging_allocation;
+            }
+
+            void* mapped = nullptr;
+            if (!vk_try_bool(vmaMapMemory(allocator, upload_allocation, &mapped),
+                             "vmaMapMemory", "Collision preview upload mapping"))
+                return;
+            const std::array<uint32_t, 4> header{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
+                                                 uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
+            std::memcpy(mapped, header.data(), sizeof(header));
+            if (!volume.words.empty())
+                std::memcpy(static_cast<uint32_t*>(mapped) + header.size(), volume.words.data(),
+                            volume.words.size() * sizeof(uint32_t));
+            // VMA flushes non-coherent memory and does nothing for coherent allocations.
+            const VkResult flush_result = vmaFlushAllocation(allocator, upload_allocation, 0, bytes);
+            vmaUnmapMemory(allocator, upload_allocation);
+            if (!vk_try_bool(flush_result, "vmaFlushAllocation", "Collision preview upload flush"))
+                return;
+
+            // The immutable buffer is written and flushed before the draw's queue submission.
+            // Submission makes these host writes visible to fragment shader reads (or to the
+            // staging transfer below), so direct uploads need no copy, barrier, or upload fence.
+            if (!direct_upload) {
+                const auto commands = beginSingleTimeCommands();
+                if (commands == VK_NULL_HANDLE)
+                    return;
+                const VkBufferCopy copy{0, 0, bytes};
+                vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
+                const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+                vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 1, &barrier, 0, nullptr, 0, nullptr);
+                // One upload fence, never a device-wide wait or a per-frame transfer.
+                if (!endSingleTimeCommands(commands, &frame.pending_upload))
+                    return;
+                vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
+                frame.staging = VK_NULL_HANDLE;
+                frame.staging_allocation = VK_NULL_HANDLE;
+            }
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
-            VkDescriptorPoolCreateInfo pool{};
-            pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pool.maxSets = pool.poolSizeCount = 1;
-            pool.pPoolSizes = &size;
+            const VkDescriptorPoolCreateInfo pool{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, 1, 1, &size};
             if (!vk_try_bool(vkCreateDescriptorPool(device, &pool, nullptr, &frame.pool),
                              "vkCreateDescriptorPool", "Collision preview descriptors"))
                 return;
-            VkDescriptorSetAllocateInfo allocation{};
-            allocation.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocation.descriptorPool = frame.pool;
-            allocation.descriptorSetCount = 1;
-            allocation.pSetLayouts = &collision_layout;
+            const VkDescriptorSetAllocateInfo allocation{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr, frame.pool, 1, &collision_layout};
             if (!vk_try_bool(vkAllocateDescriptorSets(device, &allocation, &frame.descriptor),
                              "vkAllocateDescriptorSets", "Collision preview descriptor"))
                 return;
             const VkDescriptorBufferInfo buffer{frame.buffer, 0, bytes};
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = frame.descriptor;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            write.pBufferInfo = &buffer;
+            const VkWriteDescriptorSet write{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, frame.descriptor, 0, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffer, nullptr};
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
             LOG_DEBUG("Collision preview uploaded {} bytes for immutable volume", bytes);
         }

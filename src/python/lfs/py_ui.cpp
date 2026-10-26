@@ -26,6 +26,7 @@
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "preferences.hpp"
 #include "window/window_manager.hpp"
@@ -3495,16 +3496,20 @@ namespace lfs::python {
 
         m.def(
             "save_json_file_dialog",
-            [](const std::string& default_name, bool with_overwrite_confirmation) -> nb::object {
-                bool confirmed = false;
-                const auto result = lfs::vis::gui::SaveJsonFileDialog(default_name, {}, &confirmed);
-                const auto path = lfs::core::path_to_utf8(result);
-                if (with_overwrite_confirmation)
-                    return nb::make_tuple(path, confirmed);
-                return nb::cast(path);
+            [](const std::string& default_name) -> std::string {
+                return lfs::core::path_to_utf8(lfs::vis::gui::SaveJsonFileDialog(default_name));
             },
-            nb::arg("default_name") = "config.json", nb::arg("with_overwrite_confirmation") = false,
-            "Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).");
+            nb::arg("default_name") = "config.json",
+            "Choose a JSON path. Returns empty string if cancelled.");
+
+        m.def(
+            "save_json_file_dialog_with_confirmation",
+            [](const std::string& default_name) -> std::tuple<std::string, bool> {
+                const auto [path, confirmed] = lfs::vis::gui::SaveJsonFileDialogWithConfirmation(default_name);
+                return {lfs::core::path_to_utf8(path), confirmed};
+            },
+            nb::arg("default_name") = "config.json",
+            "Return (JSON path, overwrite_confirmed); empty path on cancellation.");
 
         m.def(
             "save_png_file_dialog",
@@ -5020,6 +5025,11 @@ namespace lfs::python {
             .def_rw("pip_preview_scale", &SequencerUIStateData::pip_preview_scale, "Picture-in-picture preview scale factor")
             .def_rw("show_film_strip", &SequencerUIStateData::show_film_strip, "Whether film strip thumbnails are shown above sequencer")
             .def_rw("sequence_fps", &SequencerUIStateData::sequence_fps, "Playback FPS for loaded PLY sequences")
+            .def_rw("camera_width", &SequencerUIStateData::camera_width, "Sequence camera aspect width (1-8192)")
+            .def_rw("camera_height", &SequencerUIStateData::camera_height, "Sequence camera aspect height (1-8192)")
+            .def_ro("framerate", &SequencerUIStateData::framerate, "Video export FPS numerator")
+            .def_ro("framerate_denominator", &SequencerUIStateData::framerate_denominator, "Video export FPS denominator")
+            .def_ro("export_fit", &SequencerUIStateData::export_fit, "Video fitting: 0 fit, 1 crop, 2 stretch")
             .def_ro("selected_keyframe", &SequencerUIStateData::selected_keyframe);
 
         m.def(
@@ -5054,22 +5064,52 @@ namespace lfs::python {
         m.def(
             "export_video",
             [](int width, int height, int framerate, int crf, const std::string& path,
-               bool include_provenance) {
+               bool include_provenance, int framerate_denominator, int camera_width, int camera_height,
+               const std::string& framing) {
+                using namespace lfs::io::video;
+                VideoExportOptions options;
+                options.width = width;
+                options.height = height;
+                options.framerate = framerate;
+                options.crf = crf;
+                options.framerate_denominator = framerate_denominator;
+                options.camera_width = camera_width;
+                options.camera_height = camera_height;
+                if (framing == "fit")
+                    options.framing = VideoFrameFit::FIT;
+                else if (framing == "crop" || framing == "fill")
+                    options.framing = VideoFrameFit::CROP;
+                else if (framing == "stretch")
+                    options.framing = VideoFrameFit::STRETCH;
+                else
+                    throw nb::value_error("framing must be 'fit', 'crop' (or 'fill'), or 'stretch'");
+                if (const auto result = validateVideoEncodingOptions(options); !result)
+                    throw nb::value_error(result.error().c_str());
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
                     .crf = crf,
                     .path = path,
-                    .include_provenance = include_provenance}
+                    .include_provenance = include_provenance,
+                    .framerate_denominator = framerate_denominator,
+                    .camera_width = camera_width,
+                    .camera_height = camera_height,
+                    .framing = static_cast<int>(options.framing)}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
             nb::arg("include_provenance") = true,
+            nb::arg("framerate_denominator") = 1,
+            nb::arg("camera_width") = 0,
+            nb::arg("camera_height") = 0,
+            nb::arg("framing") = "fit",
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
-            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
+            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. "
+            "FPS is framerate/framerate_denominator. Camera aspect defaults to the output size (0, 0); "
+            "framing is 'fit', 'crop' (alias 'fill'), or 'stretch'.");
 
         m.def(
             "add_keyframe",

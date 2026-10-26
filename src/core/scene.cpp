@@ -1959,11 +1959,11 @@ namespace lfs::core {
         return mask;
     }
 
-    std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes() const {
+    std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes(bool include_collision) const {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
-            if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
-                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id});
+            if (((node->type == NodeType::MESH && node->mesh) || (include_collision && node->collision)) && isNodeEffectivelyVisible(node->id)) {
+                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id, false, node->collision});
             }
         }
         return result;
@@ -4275,16 +4275,10 @@ namespace lfs::core {
     }
 
     NodeId Scene::addCollision(const std::string& name, std::shared_ptr<const CollisionVolume> volume, NodeId parent) {
-        if (!volume)
-            throw std::invalid_argument("Collision volume is missing");
-        if (parent != NULL_NODE && (!getNodeById(parent) || !isSceneNodeParentCompatible(getNodeById(parent)->type, NodeType::COLLISION)))
-            throw std::invalid_argument("Invalid collision parent");
-        auto node = std::make_unique<SceneNode>();
-        node->parent_id = parent;
-        node->type = NodeType::COLLISION;
-        node->name = makeUniqueNodeName(name_to_id_, name);
-        node->collision = std::move(volume);
-        return insertNode(std::move(node), false, std::nullopt, nullptr);
+        const auto id = restoreNodeWithUuid({.uuid = generate_uuid_v4(), .type = NodeType::COLLISION, .name = makeUniqueNodeName(name_to_id_, name), .parent = parent, .collision = std::move(volume)});
+        if (id == NULL_NODE)
+            throw std::invalid_argument("Cannot add collision node: invalid name or parent");
+        return id;
     }
 
     std::optional<Scene::CollisionSourceIdentity> Scene::collisionSourceIdentity(NodeId id) const {
@@ -4301,7 +4295,7 @@ namespace lfs::core {
             model->deleted_mask_version(), model->param_layout_generation(), getWorldTransform(id)};
     }
 
-    std::vector<CollisionSource> Scene::captureCollisionSources(NodeId id, CollisionSourceIdentity* identity) const {
+    CollisionSource Scene::captureCollisionSource(NodeId id, CollisionSourceIdentity* identity) const {
         std::optional<std::shared_lock<std::shared_mutex>> lock;
         if (auto* mutex = liveModelMutex(); mutex && live_model_lock_depth() == 0)
             lock.emplace(*mutex);
@@ -4310,39 +4304,29 @@ namespace lfs::core {
             const Scene& scene;
             ~DepthGuard() { scene.noteLiveModelLockReleased(); }
         } depth_guard{*this};
-        const auto* node = getNodeById(id);
-        if (!node || node->type != NodeType::SPLAT)
-            throw std::runtime_error("Select one loaded splat node to voxelize");
-        const auto* model = consolidated_ ? getCombinedModel() : node->model.get();
-        if (!model)
-            throw std::runtime_error("The selected splat payload is not loaded");
+        if (consolidated_)
+            (void)getCombinedModel();
         const auto captured_identity = collisionSourceIdentity(id);
         if (!captured_identity)
-            throw std::runtime_error("The selected splat payload is not loaded");
-        const auto inverse = glm::inverse(captured_identity->world_transform);
-        for (int column = 0; column < 4; ++column)
-            for (int row = 0; row < 4; ++row)
-                if (!std::isfinite(inverse[column][row]))
-                    throw std::runtime_error("Collision source transform must be invertible");
-        // Capture fences successful and exceptional reads before this writer lock is released.
-        auto source = captureCollisionSource(*model, getWorldTransform(id));
+            throw collisionError("collision.source_unavailable", "The selected splat payload is not loaded");
+        (void)core::collisionInverse(captured_identity->world_transform);
+        const auto* model = captured_identity->model;
+        size_t begin = 0, count = model->size();
         if (consolidated_) {
-            size_t begin = 0;
             const auto slot = std::find_if(consolidated_node_slots_.begin(), consolidated_node_slots_.end(), [&](const auto& entry) {
                 if (entry.id == id)
                     return true;
                 begin += entry.gaussian_count;
                 return false;
             });
-            if (slot == consolidated_node_slots_.end() || begin + slot->gaussian_count > source.means.shape()[0])
-                throw std::runtime_error("The selected consolidated splat range is unavailable");
-            for (auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
-                if (tensor->is_valid())
-                    *tensor = tensor->slice(0, begin, begin + slot->gaussian_count);
+            if (slot == consolidated_node_slots_.end() || begin > model->size() || slot->gaussian_count > model->size() - begin)
+                throw collisionError("collision.source_unavailable", "The selected consolidated splat range is unavailable");
+            count = slot->gaussian_count;
         }
         if (identity)
             *identity = *captured_identity;
-        return {std::move(source)};
+        // Slice before cloning/activation; fence all reads before releasing writer exclusion.
+        return core::captureCollisionSource(*model, captured_identity->world_transform, begin, count);
     }
 
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {

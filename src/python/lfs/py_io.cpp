@@ -341,10 +341,10 @@ namespace lfs::python {
                 PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
                 nb::gil_scoped_release release;
                 auto source = io::loadCollisionSource(path, {}, io::scale_export_progress(report, 0, .2f));
-                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1));
+                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1), {}, io::checkCollisionExportMixedBlocks);
             },
             nb::arg("path"), nb::arg("settings") = core::CollisionSettings{}, nb::arg("progress") = nb::none(),
-            "Generate owned full-detail occupancy from a splat file; callback False cancels.");
+            "Generate owned full-detail occupancy within voxel-pair export limits; callback False cancels.");
         m.def(
             "save_voxels",
             [](const core::CollisionVolume& volume, const LogicalPath& path, bool overwrite,
@@ -352,15 +352,12 @@ namespace lfs::python {
                 glm::mat4 transform(1);
                 if (!matrix.empty()) {
                     if (matrix.size() != 16)
-                        throw_invalid_io_argument("transform must contain 16 column-major affine matrix values");
-                    for (int c = 0; c < 4; ++c)
-                        for (int r = 0; r < 4; ++r)
-                            transform[c][r] = matrix[c * 4 + r];
+                        throw core::collisionError("collision.export_transform", "transform must contain 16 column-major affine matrix values", ErrorCode::InvalidArgument);
+                    std::memcpy(&transform[0][0], matrix.data(), sizeof(transform));
                 }
-                auto binary = std::filesystem::path(path);
-                binary.replace_extension(".bin");
+                const auto binary = std::filesystem::path(path).replace_extension(".bin");
                 if (!overwrite && (core::native_fs::exists(path) || core::native_fs::exists(binary)))
-                    throw_invalid_io_argument("Voxel pair already exists; approve replacement with overwrite=True");
+                    throw core::collisionError("collision.replace_required", "Voxel pair already exists; approve replacement with overwrite=True", ErrorCode::InvalidArgument, core::path_to_utf8(path));
                 PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
                 nb::gil_scoped_release release;
                 io::exportCollision(volume, path, transform, {}, report);

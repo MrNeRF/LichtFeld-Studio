@@ -126,6 +126,25 @@ namespace lfs::core::prop {
         [[nodiscard]] bool needs_restart() const { return has_flag(PROP_NEEDS_RESTART); }
         [[nodiscard]] bool is_animatable() const { return has_flag(PROP_ANIMATABLE); }
         [[nodiscard]] bool is_advanced() const { return has_flag(PROP_ADVANCED); }
+
+        [[nodiscard]] bool values_equal(const std::any& a, const std::any& b) const {
+            if (!a.has_value() || !b.has_value())
+                return false;
+            switch (type) {
+            case PropType::Bool:
+                return std::any_cast<bool>(a) == std::any_cast<bool>(b);
+            case PropType::Int:
+            case PropType::Enum:
+                return std::any_cast<int>(a) == std::any_cast<int>(b);
+            case PropType::Float:
+                return std::any_cast<float>(a) == std::any_cast<float>(b);
+            case PropType::String:
+                return std::any_cast<std::string>(a) == std::any_cast<std::string>(b);
+            case PropType::SizeT:
+                return std::any_cast<size_t>(a) == std::any_cast<size_t>(b);
+            }
+            return false;
+        }
     };
 
     struct PropertyGroup {

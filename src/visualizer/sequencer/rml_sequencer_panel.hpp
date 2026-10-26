@@ -28,6 +28,7 @@ namespace Rml {
 
 namespace lfs::vis::gui {
     class FilmStripRenderer;
+    class SequencerExportWorkflowTest;
     class RmlUIManager;
 } // namespace lfs::vis::gui
 
@@ -61,7 +62,6 @@ namespace lfs::vis {
     };
 
     namespace panel_config {
-        inline constexpr float TRANSPORT_ROW_HEIGHT = 36.0f;
         inline constexpr float HEIGHT = 108.0f;
         inline constexpr float PADDING_H = 16.0f;
         inline constexpr float PADDING_BOTTOM = 18.0f;
@@ -94,10 +94,13 @@ namespace lfs::vis {
 
     struct TransportContextMenuRequest {
         enum class Target { NONE,
+                            SPEED,
+                            PATH,
+                            PLY,
                             SNAP,
                             PREVIEW,
-                            FORMAT,
-                            CLEAR };
+                            PROJECTION,
+                            CAMERA_ASPECT };
         Target target = Target::NONE;
         float screen_x = 0.0f;
         float screen_y = 0.0f;
@@ -140,7 +143,6 @@ namespace lfs::vis {
         [[nodiscard]] bool consumeLoadSequenceRequest();
         [[nodiscard]] bool consumeDockToggleRequest();
         [[nodiscard]] bool consumeClosePanelRequest();
-        [[nodiscard]] bool consumeClearRequest();
 
         void openFocalLengthEdit(size_t index, float current_focal_mm);
 
@@ -157,6 +159,10 @@ namespace lfs::vis {
 
         [[nodiscard]] TimelineContextMenuState consumeContextMenu();
         [[nodiscard]] TransportContextMenuRequest consumeTransportContextMenu();
+        void requestSavePath() { save_path_requested_ = true; }
+        void requestLoadPath() { load_path_requested_ = true; }
+        void requestLoadSequence() { load_sequence_requested_ = true; }
+
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
@@ -165,6 +171,7 @@ namespace lfs::vis {
 
     private:
         friend class SequencerMarkupRegressionTest;
+        friend class gui::SequencerExportWorkflowTest;
 
         friend class SequencerRulerRegressionTest;
         void initContext(int width, int height);
@@ -204,8 +211,8 @@ namespace lfs::vis {
 
         void handleTimelineInteraction(const Vec2& pos, float width, float height,
                                        const PanelInputState& input);
-        void handleEasingStripeInteraction(float timeline_x, float timeline_width,
-                                           const PanelInputState& input);
+        LFS_VIS_API void handleEasingStripeInteraction(float timeline_x, float timeline_width,
+                                                       const PanelInputState& input);
         void handleFilmStripInteraction(float timeline_x, float timeline_width,
                                         const PanelInputState& input,
                                         gui::FilmStripRenderer& film_strip);
@@ -220,20 +227,10 @@ namespace lfs::vis {
             void ProcessEvent(Rml::Event& event) override;
         };
 
-        struct QualityScrubListener : Rml::EventListener {
-            RmlSequencerPanel* panel = nullptr;
-            void ProcessEvent(Rml::Event& event) override;
-        };
-
         struct DurationEditListener : Rml::EventListener {
             RmlSequencerPanel* panel = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
-
-        void syncQualityScrub();
-        void applyQualityFromDrag(float mouse_x);
-        void enterQualityEdit();
-        void exitQualityEdit(bool commit);
 
         void syncDurationDisplay();
         void enterDurationEdit();
@@ -247,15 +244,6 @@ namespace lfs::vis {
         void syncSequenceFpsDisplay();
         void enterSequenceFpsEdit();
         void exitSequenceFpsEdit(bool commit);
-
-        struct ResolutionEditListener : Rml::EventListener {
-            RmlSequencerPanel* panel = nullptr;
-            void ProcessEvent(Rml::Event& event) override;
-        };
-
-        void syncResolutionDisplay();
-        void enterResolutionEdit();
-        void exitResolutionEdit(bool commit);
 
         struct RenderSignature {
             int width = 0;
@@ -279,13 +267,10 @@ namespace lfs::vis {
             int pip_scale_milli = 1000;
             int state = 0;
             int loop_mode = 0;
-            int preset = 0;
-            int custom_width = 0;
-            int custom_height = 0;
-            int framerate = 0;
-            int quality = 0;
             bool follow_playback = false;
             bool show_camera_path = false;
+            int camera_width = 16;
+            int camera_height = 9;
             bool snap_to_grid = false;
             bool show_film_strip = false;
             bool show_pip_preview = false;
@@ -312,18 +297,10 @@ namespace lfs::vis {
         gui::panels::SequencerUIState& ui_state_;
         gui::RmlUIManager* rml_manager_;
         TransportClickListener transport_listener_;
-        QualityScrubListener quality_scrub_listener_;
         DurationEditListener duration_listener_;
         SequenceFpsEditListener sequence_fps_listener_;
-        ResolutionEditListener resolution_listener_;
-
-        bool quality_scrub_active_ = false;
-        bool quality_scrub_dragging_ = false;
-        bool quality_scrub_editing_ = false;
-        float quality_scrub_start_x_ = 0.0f;
         bool duration_editing_ = false;
         bool sequence_fps_editing_ = false;
-        bool resolution_editing_ = false;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -383,25 +360,11 @@ namespace lfs::vis {
         Rml::Element* el_sequence_fps_field_ = nullptr;
         Rml::Element* el_sequence_fps_display_ = nullptr;
         Rml::Element* el_sequence_fps_input_ = nullptr;
-        Rml::Element* el_format_label_ = nullptr;
-        Rml::Element* el_resolution_field_ = nullptr;
-        Rml::Element* el_resolution_info_ = nullptr;
-        Rml::Element* el_resolution_input_ = nullptr;
-        Rml::Element* el_quality_scrub_ = nullptr;
-        Rml::Element* el_quality_fill_ = nullptr;
-        Rml::Element* el_quality_display_ = nullptr;
-        Rml::Element* el_quality_input_ = nullptr;
         Rml::Element* el_duration_field_ = nullptr;
         Rml::Element* el_duration_input_ = nullptr;
         Rml::Element* el_btn_equirect_ = nullptr;
-        Rml::Element* el_btn_save_ = nullptr;
-        Rml::Element* el_btn_load_ = nullptr;
         Rml::Element* el_btn_load_sequence_ = nullptr;
-        Rml::Element* el_btn_export_ = nullptr;
-        Rml::Element* el_btn_clear_ = nullptr;
-        Rml::Element* el_transport_dock_sep_ = nullptr;
         Rml::Element* el_btn_dock_toggle_ = nullptr;
-        Rml::Element* el_dock_toggle_label_ = nullptr;
         Rml::Element* el_btn_close_panel_ = nullptr;
         Rml::Element* el_close_panel_label_ = nullptr;
 
@@ -464,7 +427,6 @@ namespace lfs::vis {
         bool export_requested_ = false;
         bool dock_toggle_requested_ = false;
         bool close_panel_requested_ = false;
-        bool clear_requested_ = false;
 
         TransportContextMenuRequest transport_ctx_request_;
 

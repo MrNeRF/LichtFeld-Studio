@@ -96,6 +96,7 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             VulkanContext* vulkan_context = nullptr;
+            bool deterministic_export = false;
             bool preparing_import = false;
             core::Uuid provisional_import_node;
         };
@@ -180,7 +181,8 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
@@ -229,7 +231,8 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
@@ -764,7 +767,8 @@ namespace lfs::vis {
             float rasterization_scale = 1.0f,
             bool equirectangular = false,
             const RenderSettings* settings_override = nullptr,
-            bool gaussian_selection_visible = true);
+            bool gaussian_selection_visible = true,
+            bool deterministic_export = true);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -816,7 +820,8 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            bool deterministic_export = true);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;
@@ -1100,6 +1105,7 @@ namespace lfs::vis {
         friend class SceneManager;
         friend class AlignDepthIntegrationTest;
         friend struct SplitOutputLifetimeTestAccess;
+        friend struct HiGSExportTestAccess;
     };
 
 } // namespace lfs::vis

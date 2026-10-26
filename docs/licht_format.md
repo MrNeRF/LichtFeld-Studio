@@ -53,26 +53,12 @@ chunk; the head stores only its locator, which updates atomically on publish.
 
 ## Capability bits
 
-Each generation declares required reader and writer capabilities. Declaring an
-enum value does not mean a build supports it.
-
-| Bit | Capability |
-| --- | --- |
-| 0 | `INDEX_ZSTD_V1` |
-| 1 | `CHUNK_ZSTD_V1` |
-| 2 | `BLOCK_CRC32C_V1` |
-| 3 | `INDEX_TOMBSTONES_V1` |
-| 4 | `SIDECAR_OVERLAY_V1` |
-| 5 | `OPAQUE_CHUNK_PRESERVATION` |
-| 6 | `RETAINED_JSON_FIELDS` |
-| 7 | `CLEAN_PROOF_REUSE` |
-| 8 | `CHUNK_BYTESHUFFLE_ZSTD_V1` |
-| 9 | `ENCODED_SCENE_ASSETS` |
-| 10 | `TILESET_REFERENCES` |
-| 11 | `COLLISION_VOLUMES_V1` |
-
-A reader refuses any generation that requires a capability it does not implement.
-Collision volumes require bit 11.
+Each generation declares required reader and writer capabilities; a reader refuses
+requirements it does not implement. The canonical bit assignments are the
+[`CapabilityBit` enum](../src/io/include/io/project_container.hpp), rather than a
+second registry in this guide. Declaring an enum value does not enable support:
+bit 10 (`TILESET_REFERENCES`) remains reserved and unsupported, while collision
+volumes require bit 11 (`COLLISION_VOLUMES_V1`).
 
 ## Training and Edit Mode
 
