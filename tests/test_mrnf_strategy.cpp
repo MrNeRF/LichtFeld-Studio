@@ -21,6 +21,13 @@ class MRNFStrategyTest_DensificationInfoShapeIsTwoRows_Test;
 class MRNFStrategyTest_ZeroVisibilityProducesNoGrowth_Test;
 class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
+class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
+class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
+class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
+class MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
+class MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
+class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -55,6 +62,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -479,7 +487,7 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
 
     auto crop_mask = Tensor::zeros_bool({10}, Device::CPU);
     crop_mask.ptr<unsigned char>()[0] = 1;
-    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_crop_score_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
 
     const auto damped_candidates =
@@ -493,10 +501,106 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
     const auto unit_scale_candidates =
         strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
-    strategy.get_optimizer().set_crop_damping_mask({});
+    strategy.get_optimizer().set_crop_score_mask({});
     const auto unmasked_candidates =
         strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
     EXPECT_EQ(unit_scale_candidates, unmasked_candidates);
+}
+
+namespace {
+    Tensor roi_rows(const std::vector<int>& inside, const size_t n) {
+        auto rows = Tensor::zeros_bool({n}, Device::CPU);
+        for (const int i : inside)
+            rows.ptr<unsigned char>()[i] = 1;
+        return rows.cuda();
+    }
+} // namespace
+
+// Catches growth that ignores the crop box share, or a strict 0 % / 100 % share that still grows on
+// the excluded side when its own side runs out of candidates.
+TEST(CropDampingStrategyTest, RoiGrowthShareSplitsPicksAndSpillsLeftovers) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto weights = Tensor::ones({10}, Device::CUDA);
+
+    EXPECT_FALSE(split_growth_by_roi(optimizer, weights, 10).has_value()) << "no crop box, no split";
+
+    const auto split = [&](const float share, const int64_t k) {
+        optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), share);
+        const auto result = split_growth_by_roi(optimizer, weights, k);
+        EXPECT_TRUE(result.has_value());
+        return std::pair{result->roi_count, result->rest_count};
+    };
+    EXPECT_EQ(split(0.5f, 4), (std::pair<int64_t, int64_t>{2, 2}));
+    // Only four ROI rows: the other four ROI picks spill outside.
+    EXPECT_EQ(split(0.8f, 10), (std::pair<int64_t, int64_t>{4, 6}));
+    // Strict shares never spill.
+    EXPECT_EQ(split(1.0f, 10), (std::pair<int64_t, int64_t>{4, 0}));
+    EXPECT_EQ(split(0.0f, 10), (std::pair<int64_t, int64_t>{0, 6}));
+
+    optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
+    const auto picks = strategy.sample_with_roi_share(weights, 4, 7, 10).cpu().to_vector_int64();
+    ASSERT_EQ(picks.size(), 4u);
+    for (const auto index : picks)
+        EXPECT_LT(index, 4) << "a 100 % share picked a row outside the box";
+}
+
+// Catches the crop box split counting NaN and negative weights as candidates (#3806): the sampler then
+// read Gumbel scratch indices that compaction never wrote, which picked stale rows or faulted.
+TEST(CropDampingStrategyTest, RoiGrowthSplitCountsOnlySelectableWeights) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
+
+    // Leaves rows 0..3 in the scratch the next draw reuses.
+    ASSERT_EQ(strategy.sample_with_roi_share(Tensor::ones({10}, Device::CUDA), 4, 7, 10).numel(), 4u);
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const auto weights = Tensor::from_vector(
+        std::vector<float>{nan, 1.0f, 2.0f, -1.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f}, TensorShape({10}), Device::CUDA);
+    const auto split = split_growth_by_roi(optimizer, weights, 8);
+    ASSERT_TRUE(split.has_value());
+    EXPECT_EQ(split->roi_nnz, 2);
+    EXPECT_EQ(split->rest_nnz, 6);
+    EXPECT_EQ(split->roi_count, 2);
+
+    auto picks = strategy.sample_with_roi_share(weights, 8, 11, 8).cpu().to_vector_int64();
+    std::sort(picks.begin(), picks.end());
+    EXPECT_EQ(picks, (std::vector<int64_t>{1, 2}));
+}
+
+// Catches MCMC sampling weights that do not give the ROI its share of the probability mass.
+TEST(CropDampingStrategyTest, RoiShareSamplingWeightsHoldTheShareOfTheMass) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+    auto& optimizer = strategy.get_optimizer();
+    const auto weights = Tensor::ones({10}, Device::CUDA);
+
+    const auto masses = [&](const std::vector<int>& inside, const float share) {
+        optimizer.set_crop_roi_rows(roi_rows(inside, 10), share);
+        const auto values = roi_share_sampling_weights(optimizer, weights).cpu().to_vector();
+        float roi = 0.0f, rest = 0.0f;
+        for (size_t i = 0; i < values.size(); ++i)
+            (std::find(inside.begin(), inside.end(), static_cast<int>(i)) != inside.end() ? roi : rest) += values[i];
+        return std::pair{roi, rest};
+    };
+    const auto [roi, rest] = masses({0, 1, 2, 3}, 0.8f);
+    EXPECT_NEAR(roi, 0.8f, 1e-5f);
+    EXPECT_NEAR(rest, 0.2f, 1e-5f);
+    EXPECT_EQ(masses({0, 1, 2, 3}, 1.0f).second, 0.0f);
+    EXPECT_EQ(masses({}, 1.0f), (std::pair{0.0f, 0.0f})) << "a strict share with an empty ROI draws nothing";
+    EXPECT_GT(masses({}, 0.8f).second, 0.0f) << "an empty ROI hands a partial share to the rest";
 }
 
 TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
@@ -997,16 +1101,16 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
+TEST(MRNFStrategyTest, StepScalingDoesNotScalePOPSpaSteps) {
     auto params = vanilla_mrnf_params();
     params.grow_until_iter = 15000;
-    params.sparsify_steps = 15000;
+    params.popspa_sparsify_steps = 15000;
     params.steps_scaler = 0.5f;
 
     params.apply_step_scaling();
 
     EXPECT_EQ(params.grow_until_iter, 7500u);
-    EXPECT_EQ(params.sparsify_steps, 15000);
+    EXPECT_EQ(params.popspa_sparsify_steps, 15000);
     EXPECT_EQ(params.refine_every, 82u);
     EXPECT_EQ(params.stop_refine, 14250u);
 }
@@ -1276,11 +1380,17 @@ TEST(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
 
     strategy._mean_lr_unscaled = 2.0e-6;
     strategy._scale_lr_current = 4.0e-4;
+    strategy._exchange_importance_sum = Tensor::ones({splat_data.size()}, Device::CUDA);
+    strategy._exchange_importance_peak = Tensor::ones({splat_data.size()}, Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({splat_data.size()}, Device::CUDA);
+    strategy._exchange_windows = 3;
+    strategy._exchange_first_iter = 100;
 
     auto resumed_params = opt_params;
     resumed_params.iterations = 3000;
     resumed_params.means_lr_end = 1.0e-7f;
     resumed_params.scaling_lr_end = 1.0e-4f;
+    resumed_params.gut = !opt_params.gut;
 
     strategy.set_optimization_params(resumed_params);
 
@@ -1294,6 +1404,11 @@ TEST(MRNFStrategyTest, SetOptimizationParamsRecomputesDecayFromCurrentState) {
     EXPECT_NEAR(strategy._mean_lr_gamma, expected_mean_gamma, 1e-12);
     EXPECT_NEAR(strategy._scale_lr_gamma, expected_scale_gamma, 1e-12);
     EXPECT_NEAR(strategy.get_optimizer().get_param_lr(ParamType::Scaling), strategy._scale_lr_current, 1e-12);
+    EXPECT_FALSE(strategy._exchange_importance_sum.is_valid());
+    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
+    EXPECT_FALSE(strategy._exchange_birth.is_valid());
+    EXPECT_EQ(strategy._exchange_windows, 0);
+    EXPECT_EQ(strategy._exchange_first_iter, -1);
 }
 
 namespace {
@@ -1442,6 +1557,216 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
     strategy.visibility_accumulator().fill_(1.0f);
     strategy.grow_and_split(100, 0);
     EXPECT_GT(strategy.active_count(), active);
+}
+
+namespace {
+    param::OptimizationParameters growth_exchange_test_params() {
+        auto opt = vanilla_mrnf_params();
+        opt.iterations = 10'000;
+        opt.sh_degree_interval = 10'000;
+        opt.max_cap = 32;
+        opt.grow_fraction = 1.0f;
+        opt.grow_until_iter = 10'000;
+        opt.growth_exchange = true;
+        return opt;
+    }
+
+    const std::vector<float> kExchangeSum{1000.0f, 0.1f, 0.5f, 0.6f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f};
+    const std::vector<float> kExchangePeak{0.01f, 0.95f, 0.02f, 0.03f, 0.40f, 0.41f, 0.42f, 0.43f, 0.44f, 0.45f};
+
+    std::vector<int64_t> selected_rows(const Tensor& indices) {
+        if (!indices.is_valid())
+            return {};
+        const auto cpu = indices.cpu();
+        const auto* rows = cpu.ptr<int64_t>();
+        std::vector<int64_t> result(rows, rows + cpu.numel());
+        std::sort(result.begin(), result.end());
+        return result;
+    }
+} // namespace
+
+TEST(MRNFStrategyTest, GrowthExchangeUsesMaxOfImpactRanks) {
+    const auto run = [](const std::vector<float>& primary, const std::vector<float>* secondary) {
+        auto splat_data = create_mrnf_test_splat_data();
+        MRNF strategy(splat_data);
+        strategy.initialize(growth_exchange_test_params());
+        const size_t n = splat_data.size();
+        strategy._exchange_importance_sum = Tensor::from_vector(primary, TensorShape({n}), Device::CUDA);
+        if (secondary)
+            strategy._exchange_importance_peak = Tensor::from_vector(*secondary, TensorShape({n}), Device::CUDA);
+        strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+        strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+        return selected_rows(strategy.select_exchange_victims(2));
+    };
+
+    EXPECT_EQ(run(kExchangeSum, &kExchangePeak), (std::vector<int64_t>{2, 3}));
+    EXPECT_EQ(run(kExchangeSum, nullptr), (std::vector<int64_t>{1, 2}));
+    EXPECT_EQ(run(kExchangePeak, nullptr), (std::vector<int64_t>{0, 2}));
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeSkipsNewbornsUntilScored) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto filled = Tensor::from_vector(std::vector<int>{2, 3}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::CUDA);
+    strategy._exchange_free_before_growth.index_put_(filled, Tensor::ones_bool({2}, Device::CUDA));
+    strategy.record_exchange_births();
+
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
+              (std::vector<int64_t>{4, 5}));
+
+    strategy._exchange_windows += strategy.exchange_warmup_windows() + 1;
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
+              (std::vector<int64_t>{2, 3}));
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeMarksSplitParentsAndChildrenNewborn) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 3;
+    strategy._exchange_free_before_growth = Tensor::zeros_bool({n}, Device::CUDA);
+    const auto children = Tensor::from_vector(std::vector<int>{2, 3}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    strategy._exchange_free_before_growth.index_put_(children, Tensor::ones_bool({2}, Device::CUDA));
+    const auto parents = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+
+    strategy.record_exchange_births(parents);
+
+    const auto sum = strategy._exchange_importance_sum.cpu().to_vector();
+    const auto peak = strategy._exchange_importance_peak.cpu().to_vector();
+    const auto birth = strategy._exchange_birth.cpu().to_vector();
+    for (const size_t row : {0u, 2u, 3u}) {
+        EXPECT_EQ(sum[row], 0.0f);
+        EXPECT_EQ(peak[row], 0.0f);
+        EXPECT_EQ(birth[row], static_cast<float>(strategy._exchange_windows));
+    }
+    EXPECT_EQ(sum[1], kExchangeSum[1]);
+}
+
+TEST(MRNFStrategyTest, RemoveGaussiansKeepsGrowthExchangeStateAligned) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    std::vector<float> impact_sum(n);
+    std::vector<float> impact_peak(n);
+    std::iota(impact_sum.begin(), impact_sum.end(), 20.0f);
+    std::iota(impact_peak.begin(), impact_peak.end(), 40.0f);
+    strategy._exchange_window_impact_sum = Tensor::from_vector(impact_sum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_window_impact_peak = Tensor::from_vector(impact_peak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_impact_written = true;
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+
+    const auto mask = Tensor::from_vector(
+        std::vector<bool>{true, false, false, false, false, false, false, false, false, true},
+        TensorShape({10}),
+        Device::CUDA);
+    strategy.remove_gaussians(mask);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_EQ(strategy._exchange_importance_sum.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_importance_peak.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_birth.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_window_impact_sum.numel(), 8u);
+    ASSERT_EQ(strategy._exchange_window_impact_peak.numel(), 8u);
+    EXPECT_TRUE(strategy._exchange_impact_written);
+    EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(),
+              std::vector<float>(kExchangeSum.begin() + 1, kExchangeSum.end() - 1));
+    EXPECT_EQ(strategy._exchange_window_impact_sum.cpu().to_vector(),
+              std::vector<float>(impact_sum.begin() + 1, impact_sum.end() - 1));
+    EXPECT_EQ(strategy._exchange_window_impact_peak.cpu().to_vector(),
+              std::vector<float>(impact_peak.begin() + 1, impact_peak.end() - 1));
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
+              (std::vector<int64_t>{1, 2}));
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeFallsBackToCoverageWithoutImpact) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    strategy.initialize(growth_exchange_test_params());
+
+    const size_t n = splat_data.size();
+    strategy.visibility_accumulator().copy_(
+        Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA));
+    strategy._exchange_window_impact_sum = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_window_impact_peak = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_impact_written = false;
+    strategy.update_exchange_importance();
+
+    EXPECT_EQ(strategy._exchange_importance_sum.cpu().to_vector(), kExchangeSum);
+    EXPECT_FALSE(strategy._exchange_importance_peak.is_valid());
+    EXPECT_FALSE(strategy._exchange_window_impact_sum.is_valid());
+    EXPECT_FALSE(strategy._exchange_window_impact_peak.is_valid());
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    EXPECT_EQ(selected_rows(strategy.select_exchange_victims(2)),
+              (std::vector<int64_t>{1, 2}));
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeMatchesDemandWithoutDeletingParents) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = growth_exchange_test_params();
+    params.max_cap = static_cast<int>(splat_data.size());
+    params.grow_fraction = 0.3f;
+    strategy.initialize(params);
+
+    const size_t n = splat_data.size();
+    strategy._exchange_importance_sum = Tensor::from_vector(kExchangeSum, TensorShape({n}), Device::CUDA);
+    strategy._exchange_importance_peak = Tensor::from_vector(kExchangePeak, TensorShape({n}), Device::CUDA);
+    strategy._exchange_birth = Tensor::zeros({n}, Device::CUDA);
+    strategy._exchange_windows = strategy.exchange_warmup_windows() + 1;
+    strategy._refine_weight_max = Tensor::ones({n}, Device::CUDA);
+    strategy.visibility_accumulator().fill_(1.0f);
+
+    const auto pruned = Tensor::from_vector(std::vector<int>{9}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy.soft_delete_rows(pruned);
+    const auto result = strategy.grow_and_split(100, 1, Tensor::ones_bool({n}, Device::CUDA), 2);
+
+    ASSERT_EQ(result.replacement_count, 1);
+    ASSERT_EQ(result.growth_count, 2);
+    ASSERT_EQ(result.exchange_victims, 2u);
+    ASSERT_TRUE(result.split_indices.is_valid());
+    ASSERT_TRUE(result.exchange_victim_indices.is_valid());
+    EXPECT_LE(result.exchange_victims, static_cast<size_t>(result.growth_count));
+    const auto parents = selected_rows(result.split_indices);
+    const auto victims = selected_rows(result.exchange_victim_indices);
+    std::vector<int64_t> overlap;
+    std::set_intersection(parents.begin(), parents.end(), victims.begin(), victims.end(),
+                          std::back_inserter(overlap));
+    EXPECT_TRUE(overlap.empty());
+    EXPECT_EQ(strategy.active_count(), n);
+}
+
+TEST(MRNFStrategyTest, GrowthExchangeCosineQuotaAtStartMiddleAndEnd) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+    auto params = growth_exchange_test_params();
+    params.grow_until_iter = 1000;
+    strategy.initialize(params);
+    strategy._exchange_first_iter = 200;
+
+    // 4% of 1010 active splats at the first exchange, 2.25% halfway, 0.5% at grow_until_iter.
+    EXPECT_EQ(strategy.exchange_quota(200, 1010), 40u);
+    EXPECT_EQ(strategy.exchange_quota(600, 1010), 22u);
+    EXPECT_EQ(strategy.exchange_quota(1000, 1010), 5u);
 }
 
 namespace {
@@ -1920,7 +2245,7 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
 
     std::stringstream checkpoint(std::ios::in | std::ios::out | std::ios::binary);
     const auto saved = serialize_checkpoint(checkpoint, 100, original, params,
-                                            nullptr, nullptr, nullptr, nullptr);
+                                            nullptr, nullptr, nullptr);
     ASSERT_TRUE(saved);
 
     auto resumed_model = create_mrnf_test_splat_data(8);
@@ -1929,7 +2254,7 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     resumed.initialize(params.optimization);
     checkpoint.seekg(0);
     const auto loaded = load_checkpoint(checkpoint, saved->bytes, resumed, params,
-                                        nullptr, nullptr, nullptr, nullptr);
+                                        nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded) << loaded.error();
     ASSERT_EQ(*loaded, 100);
     ASSERT_NE(resumed.get_optimizer().mean_step_far_mask(), nullptr);

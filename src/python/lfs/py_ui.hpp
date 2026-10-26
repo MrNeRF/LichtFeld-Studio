@@ -34,7 +34,8 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis::op {
     struct ModalEvent;
-}
+    class OperatorProperties;
+} // namespace lfs::vis::op
 
 namespace Rml {
     class ElementDocument;
@@ -270,6 +271,10 @@ namespace lfs::python {
 
     // Python operator instance registry - for property setting during invocation
     nb::object get_python_operator_instance(const std::string& id);
+
+    // Keyword arguments of an operator invoke as the properties of a C++ operator, typed by the arguments it
+    // registered. Raises TypeError for an argument it does not declare.
+    vis::op::OperatorProperties builtin_operator_properties(const std::string& id, const nb::kwargs& kwargs);
 
     // Forward declarations for scene types (defined in py_scene.hpp)
     class PyScene;
@@ -699,6 +704,7 @@ namespace lfs::python {
         void unregister_panel(nb::object panel_class);
         void unregister_for_module(const std::string& prefix);
         void unregister_all();
+        [[nodiscard]] std::string module_for_panel(const std::string& panel_id) const;
 
     private:
         PyPanelRegistry() = default;
@@ -976,6 +982,7 @@ namespace lfs::python {
     void register_ui_menus(nb::module_& m);
     void register_ui_context_menu(nb::module_& m);
     void register_ui_panels(nb::module_& m);
+    bool unload_panel_plugin(const std::string& panel_id);
     void register_rml_im_mode_layout(nb::module_& m);
     void register_keymap(nb::module_& m);
 

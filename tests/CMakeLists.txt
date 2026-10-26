@@ -34,6 +34,20 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_collision_tests test_collision.cpp)
+target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
+target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
+add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests --gtest_filter=-CollisionGpu.*)
+add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_tests --gtest_filter=CollisionGpu.*)
+set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision")
+set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120)
+add_executable(lichtfeld_voxelize_cli_tests test_voxelize_cli.cpp
+    ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
+target_compile_features(lichtfeld_voxelize_cli_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_voxelize_cli_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(lichtfeld_voxelize_cli_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_voxelize_cli_tests PRIVATE lfs_io lfs_core GTest::gtest_main LibArchive::LibArchive)
+add_test(NAME lichtfeld.voxelize_cli COMMAND lichtfeld_voxelize_cli_tests)
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
@@ -153,6 +167,13 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        licht_test_support.cpp
+        test_collision_scene.cpp
+        test_collision_jobs.cpp
+        test_keymap_upgrade.cpp
+        test_keymap_default_contract.cpp
+        test_keymap_layout_contract.cpp
+        test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
@@ -164,12 +185,13 @@ if(BUILD_VISUALIZER_TESTS)
         test_guide_segment_clipping.cpp
         test_viewport_depth_layout.cpp
         test_panel_layout_render_demand.cpp
-        test_right_panel_tab_picker.cpp
+        test_right_panel_tabs.cpp
         test_preferences_migration.cpp
         test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
+        test_input_key_repeat.cpp
     )
     add_executable(lichtfeld_visualizer_tests
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -206,6 +228,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_training
         lfs_io
         lfs_visualizer
         lfs_core
@@ -213,15 +236,35 @@ if(BUILD_VISUALIZER_TESTS)
         GTest::gtest_main
         Zep::Zep
         SDL3::SDL3
+        ZLIB::ZLIB
     )
+    # Exercise sidebar gestures through the SDL dispatcher without building the
+    # full CUDA test suite or unrelated transform/LSP/project test helpers.
+    add_executable(lichtfeld_sidebar_input_tests test_sidebar_input_dispatch.cpp)
+    target_compile_features(lichtfeld_sidebar_input_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_sidebar_input_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(lichtfeld_sidebar_input_tests PRIVATE
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(lichtfeld_sidebar_input_tests PRIVATE
+        lfs_io lfs_visualizer lfs_core lfs_python_runtime
+        GTest::gtest_main Zep::Zep SDL3::SDL3)
+    add_test(NAME lichtfeld.sidebar_input COMMAND lichtfeld_sidebar_input_tests
+        --gtest_filter=SidebarInputDispatchTest.Sidebar*)
+    set_tests_properties(lichtfeld.sidebar_input PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
+    set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
         return()
     endif()
@@ -330,6 +373,7 @@ endif()
 # unreferenced function sections before resolution. Keep the dependency-heavy
 # chapter coverage in the non-Windows composition.
 set(LICHT_FORMAT_WINDOWS_FILES
+    test_property_defaults.cpp
     test_atomic_output.cpp
     test_project_save_as_paths.cpp
     test_native_fs.cpp
@@ -493,6 +537,22 @@ set_tests_properties(lichtfeld_frame_tests PROPERTIES
     TIMEOUT 30
 )
 
+add_executable(lichtfeld_tls_distrust_tests test_tls_distrust.cpp)
+target_include_directories(lichtfeld_tls_distrust_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_link_libraries(lichtfeld_tls_distrust_tests PRIVATE GTest::gtest_main OpenSSL::SSL OpenSSL::Crypto)
+set_target_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+add_test(NAME lichtfeld_tls_distrust_tests
+    COMMAND $<TARGET_FILE:lichtfeld_tls_distrust_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_tls_distrust_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;security"
+    TIMEOUT 30
+)
+
 if(NOT BUILD_TESTS)
     message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
     return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
@@ -522,6 +582,15 @@ else()
 endif()
 find_package(Torch REQUIRED)
 message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tests")
+
+# Shared by the full suite and the focused POPSpa target.
+set(POPSPA_TEST_FILES
+    test_pop_score_backends.cpp
+    test_popspa_controller.cpp
+    test_popspa_regularization.cpp
+    test_popspa_compaction.cpp
+    test_popspa_pipeline.cpp
+)
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
@@ -561,6 +630,7 @@ set(TEST_FILES
     test_rendered_structure.cpp
     test_gradient_residual.cpp
     test_fused_reg_loss.cpp
+    test_opacity_gradients.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_persistent_masks.cpp
@@ -618,10 +688,11 @@ set(TEST_FILES
     test_dual_rep_optimizer.cpp
     test_gut_shN_joint_adam.cpp
     test_gut_undistort_parity.cpp
-    test_sparsity_optimizer.cpp
+    ${POPSPA_TEST_FILES}
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
+    test_property_defaults.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -666,6 +737,7 @@ set(TEST_FILES
     test_selection_chapter.cpp
     test_project_document.cpp
     test_project_thumbnail_sources.cpp
+    test_project_training_copy.cpp
     test_gallery_scene_publication.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp
@@ -700,11 +772,13 @@ set(TEST_FILES
     test_video_export_utils.cpp
     test_viewport_point_cloud_export.cpp
     test_video_export_frame_schedule.cpp
+    test_video_resolution.cpp
     test_video_frame_extractor_naming.cpp
     test_video_cpu_rgb_conversion.cpp
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_file_association.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp
     test_panel_layout_render_demand.cpp
@@ -739,6 +813,7 @@ set(TEST_FILES
     test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
+    test_color_variance.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
@@ -759,20 +834,25 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_crop_polygon.cpp
     test_higs_exact_depth.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
+    test_point_cloud_selection_overlay.cpp
     test_viewport_grid.cpp
     test_theme_registry.cpp
     test_viewport.cpp
     test_navigation_up_axis.cpp
+    test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
+    test_input_key_repeat.cpp
     test_input_layout_chords.cpp
     test_keymap_layout_contract.cpp
     test_keymap_profile_io.cpp
     test_keymap_upgrade.cpp
     test_keymap_default_contract.cpp
     test_ordered_input_dispatch.cpp
+    test_sidebar_input_dispatch.cpp
     test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
@@ -796,6 +876,7 @@ set(TEST_FILES
     test_pipelined_loader.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
+    test_image_sharpen.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
@@ -810,6 +891,7 @@ set(TEST_FILES
     test_sequencer_regressions.cpp
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
+    test_modal_form_behavior.cpp
     test_modal_registry_regression.cpp
     test_training_notifications.cpp
     test_camera_training_notice.cpp
@@ -877,7 +959,8 @@ set(TEST_FILES
     test_menu_bar_title.cpp
     test_guide_segment_clipping.cpp
     test_status_bar_mining.cpp
-    test_right_panel_tab_picker.cpp
+    test_status_bar_tessle.cpp
+    test_right_panel_tabs.cpp
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
@@ -1092,6 +1175,51 @@ target_link_libraries(lichtfeld_tests PRIVATE
 )
 
 target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
+
+# Focused post-training compaction loop, including parameter and checkpoint
+# compatibility contracts, without compiling the unrelated tensor oracle suite.
+add_executable(popspa_tests
+    test_main.cpp
+    licht_test_support.cpp
+    ${POPSPA_TEST_FILES}
+    test_training_parameters.cpp
+    test_checkpoint_resume.cpp
+    test_training_snapshot_service.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
+)
+target_include_directories(popspa_tests PRIVATE
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CMAKE_SOURCE_DIR}/src/app/include
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${NB_DIR}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_compile_definitions(popspa_tests PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(popspa_tests PRIVATE
+    ${LFS_TEST_INTERNAL_LINK_LIBS}
+    GTest::gtest nanobind-static
+    lfs_vulkan_rasterizer Vulkan::Vulkan CUDA::cudart CUDA::curand CUDA::cupti
+)
+set_target_properties(popspa_tests PROPERTIES
+    CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
+)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(popspa_tests)
+endif()
+add_test(NAME POPSpaContracts COMMAND popspa_tests
+    "--gtest_filter=*POPSpa*:PopScore*:CheckpointSparsityRoundTripTest.*:CheckpointVersionTest.*:TrainingParameters*"
+)
+set_tests_properties(POPSpaContracts PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "fast;gpu"
+    TIMEOUT 180
+)
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
@@ -1380,9 +1508,11 @@ endif()
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_default_reset.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_format_push.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_ci_retry_configure.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gallery_storage.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_icon_export.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
@@ -1778,19 +1908,19 @@ endif()
 # Custom targets for convenience
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
-    DEPENDS lichtfeld_tests lichtfeld_format_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests popspa_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running the fast developer test tier"
 )
 
 add_custom_target(run_full_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -LE nightly
-    DEPENDS lichtfeld_tests lichtfeld_format_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests popspa_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
 
-foreach(TEST_TARGET lichtfeld_tests)
+foreach(TEST_TARGET lichtfeld_tests popspa_tests)
     add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
@@ -1806,14 +1936,13 @@ endforeach()
 if(WIN32)
     # Copy Torch DLLs for testing on Windows
     file(GLOB TORCH_DLLS "${Torch_DIR}/../../../lib/*.dll")
-    foreach(TEST_TARGET lichtfeld_tests)
-        foreach(TORCH_DLL ${TORCH_DLLS})
-            add_custom_command(
-                TARGET ${TEST_TARGET}
-                POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORCH_DLL}"
-                "$<TARGET_FILE_DIR:${TEST_TARGET}>")
-        endforeach()
+    foreach(TORCH_DLL ${TORCH_DLLS})
+        add_custom_command(TARGET lichtfeld_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${TORCH_DLL}" "$<TARGET_FILE_DIR:lichtfeld_tests>"
+        )
+    endforeach()
+    foreach(TEST_TARGET lichtfeld_tests popspa_tests)
         if(TARGET nvimgcodec)
             add_dependencies(${TEST_TARGET} nvimgcodec)
             add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
@@ -1923,7 +2052,40 @@ add_test(NAME lichtfeld.decimate.perf
 set_tests_properties(lichtfeld.decimate.perf PROPERTIES
     LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)
 
+# Focused Vulkan stochastic renderer contracts.
+if(TARGET lfs_vulkan_rasterizer)
+    add_executable(stochastic_tests test_stochastic_resampling.cpp)
+    target_compile_features(stochastic_tests PRIVATE cxx_std_23)
+    target_link_libraries(stochastic_tests PRIVATE lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    get_target_property(_stochastic_shader_dir lfs_vulkan_rasterizer LFS_VULKAN_RASTERIZER_SPV_DIR)
+    target_compile_definitions(stochastic_tests PRIVATE
+        LFS_STOCHASTIC_TEST_SPIRV_DIR="${_stochastic_shader_dir}/generated")
+    add_test(NAME lichtfeld.stochastic COMMAND stochastic_tests)
+    set_tests_properties(lichtfeld.stochastic PROPERTIES LABELS "gpu" TIMEOUT 120)
+    # Test private history state without widening the Windows DLL exports.
+    add_executable(stochastic_viewport_tests
+        test_stochastic_viewport.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/rendering/stochastic_viewport.cpp)
+    target_compile_features(stochastic_viewport_tests PRIVATE cxx_std_23)
+    target_include_directories(stochastic_viewport_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(stochastic_viewport_tests PRIVATE
+        lfs_visualizer lfs_vulkan_rasterizer lfs_core GTest::gtest_main)
+    add_test(NAME lichtfeld.stochastic_viewport COMMAND stochastic_viewport_tests)
+endif()
+
 # Focused CUDA renderer contracts.
+add_executable(color_variance_tests test_main.cpp test_color_variance.cpp)
+target_compile_features(color_variance_tests PRIVATE cxx_std_23)
+target_include_directories(color_variance_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(color_variance_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(color_variance_tests)
+endif()
+add_test(NAME ColorVarianceContracts COMMAND color_variance_tests)
+set_tests_properties(ColorVarianceContracts PROPERTIES LABELS "fast;gpu" TIMEOUT 120)
+
 add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp)
 target_compile_features(gsplat_tests PRIVATE cxx_std_23)
 target_include_directories(gsplat_tests PRIVATE
@@ -1931,4 +2093,20 @@ target_include_directories(gsplat_tests PRIVATE
 target_link_libraries(gsplat_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
 if(COMMAND lfs_enable_fast_cxx_compile)
     lfs_enable_fast_cxx_compile(gsplat_tests)
+endif()
+
+add_executable(opacity_gradient_tests test_main.cpp test_opacity_gradients.cpp test_fused_reg_loss.cpp)
+target_compile_features(opacity_gradient_tests PRIVATE cxx_std_23)
+target_compile_definitions(opacity_gradient_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(opacity_gradient_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(opacity_gradient_tests PRIVATE lfs_training lfs_core GTest::gtest CUDA::cudart)
+if(COMMAND lfs_enable_fast_cxx_compile)
+    lfs_enable_fast_cxx_compile(opacity_gradient_tests)
+endif()
+add_test(NAME OpacityGradients COMMAND opacity_gradient_tests)
+set_tests_properties(OpacityGradients PROPERTIES LABELS "fast;gpu" TIMEOUT 120)
+if(WIN32)
+    set_tests_properties(OpacityGradients PROPERTIES ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
 endif()

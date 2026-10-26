@@ -37,6 +37,10 @@ body {
     margin-bottom: 6dp;
 }
 
+#floating-header.hidden {
+    display: none;
+}
+
 #floating-title {
     font-size: 12dp;
     font-weight: bold;

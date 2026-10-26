@@ -150,7 +150,7 @@ scene-graph,
     flex: 1;
     display: block;
     overflow-x: auto;
-    overflow-y: scroll;
+    overflow-y: auto;
     min-height: 0;
     position: relative;
     tab-index: auto;

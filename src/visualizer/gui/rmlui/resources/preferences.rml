@@ -181,6 +181,38 @@
           <span class="preferences-label">@tr:main_panel.camera_frustums</span>
           <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
         </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline">
+          <span class="preferences-label">@tr:main_panel.selection_outline</span>
+          <input type="checkbox" data-checked="default_selection_outline" />
+        </div>
+        <div data-if="default_selection_outline">
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_color">
+            <span class="preferences-label">@tr:main_panel.selection_outline_color</span>
+            <div class="preferences-color">
+              <div class="color-swatch" data-style-background-color="default_selection_outline_color_swatch" data-event-click="default_color_click('selection_outline_color')"></div>
+              <input type="text" class="preferences-select" data-value="default_selection_outline_color" />
+            </div>
+          </div>
+          <div id="picker-selection_outline_color" class="preferences-color-picker" data-if="default_color_editing == 'selection_outline_color'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+            <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_opacity">
+            <span class="preferences-label">@tr:main_panel.selection_outline_opacity</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_opacity" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_width">
+            <span class="preferences-label">@tr:main_panel.selection_outline_width</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_width" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_threshold">
+            <span class="preferences-label">@tr:main_panel.selection_outline_threshold</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_threshold" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline_holes">
+            <span class="preferences-label">@tr:main_panel.selection_outline_holes</span>
+            <input type="checkbox" data-checked="default_selection_outline_holes" />
+          </div>
+        </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
           <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
           <input type="checkbox" class="" data-checked="default_desaturate_unselected" />
@@ -194,19 +226,19 @@
           <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.axes_size">
-          <span class="preferences-label">@tr:main_panel.axes_size</span>
+          <span class="preferences-label" data-reset-prop="axes_size">@tr:main_panel.axes_size</span>
           <input type="text" class="preferences-select" data-value="default_axes_size" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.grid_opacity">
-          <span class="preferences-label">@tr:main_panel.grid_opacity</span>
+          <span class="preferences-label" data-reset-prop="grid_opacity">@tr:main_panel.grid_opacity</span>
           <input type="text" class="preferences-select" data-value="default_grid_opacity" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.camera_frustum_scale">
-          <span class="preferences-label">@tr:main_panel.camera_frustum_scale</span>
+          <span class="preferences-label" data-reset-prop="camera_frustum_scale">@tr:main_panel.camera_frustum_scale</span>
           <input type="text" class="preferences-select" data-value="default_camera_frustum_scale" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
-          <span class="preferences-label">@tr:main_panel.preview</span>
+          <span class="preferences-label" data-reset-prop="selection_color_preview">@tr:main_panel.preview</span>
           <div class="preferences-color">
             <div class="color-swatch" data-style-background-color="default_selection_color_preview_swatch" data-event-click="default_color_click('selection_color_preview')"></div>
             <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
@@ -216,7 +248,7 @@
           <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
-          <span class="preferences-label">@tr:main_panel.center_marker</span>
+          <span class="preferences-label" data-reset-prop="selection_color_center_marker">@tr:main_panel.center_marker</span>
           <div class="preferences-color">
             <div class="color-swatch" data-style-background-color="default_selection_color_center_marker_swatch" data-event-click="default_color_click('selection_color_center_marker')"></div>
             <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
@@ -227,11 +259,11 @@
         </div>
         <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
         <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
-          <span class="preferences-label">@tr:rendering_panel.lod_page_pool_splats</span>
+          <span class="preferences-label" data-reset-prop="lod_page_pool_splats">@tr:rendering_panel.lod_page_pool_splats</span>
           <input type="text" class="preferences-select" data-value="default_lod_page_pool_splats" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
-          <span class="preferences-label">@tr:rendering_panel.lod_pool_vram_fraction</span>
+          <span class="preferences-label" data-reset-prop="lod_pool_vram_fraction">@tr:rendering_panel.lod_pool_vram_fraction</span>
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
         <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
@@ -379,6 +411,20 @@
               <span class="slider-value">{{ navigation_speed | format_int }}</span>
             </div>
           </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.camera_browse_repeat_tooltip">
+            <span class="preferences-label">@tr:preferences.camera_browse_repeat</span>
+            <input type="checkbox" data-checked="camera_browse_repeat" />
+          </div>
+          <div class="setting-row setting-row--aligned" data-if="camera_browse_repeat">
+            <span class="setting-row__label-col">@tr:preferences.camera_browse_repeat_rate</span>
+            <div class="setting-row__control-col preferences-repeat-rate">
+              <input type="text" class="number-input" data-value="camera_browse_repeat_rate" maxlength="2"
+                     data-event-change="camera_repeat_rate_change(ev.value)"
+                     data-event-blur="commit_camera_repeat_rate" data-event-escapecancel="cancel_camera_repeat_rate" />
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(-1)">-</button>
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(1)">+</button>
+            </div>
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />
@@ -479,11 +525,22 @@
           <span class="text-accent">@tr:preferences.scene_graph</span>
         </div>
         <div class="section-content" data-if="scene_graph_expanded">
-          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option" data-tooltip="preferences.scene_graph_selection_markers_description">
             <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
-          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+          <div class="preferences-row" data-tooltip="preferences.drag_format_hint">
+            <span class="preferences-label">@tr:preferences.drag_default</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option></select>
+          </div>
+          <div class="preferences-row" data-tooltip="preferences.drag_sh_hint">
+            <span class="preferences-label">@tr:preferences.drag_sh_limit</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sh_degree"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+          </div>
+          <div class="preferences-row" data-if="splat_drag_format == 'ply'" data-tooltip="preferences.drag_axes_hint">
+            <span class="preferences-label">@tr:preferences.drag_up_axis</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_up_axis"><option value="-2">@tr:preferences.drag_axis_default</option><option value="2">@tr:preferences.drag_axis_positive_y</option><option value="-3">@tr:preferences.drag_axis_negative_z</option><option value="3">@tr:preferences.drag_axis_positive_z</option></select>
+          </div>
         </div>
       </div>
 

@@ -652,3 +652,197 @@ class TestRLockForReentrantCalls:
             concurrent.futures.wait(futures, timeout=10.0)
 
         assert not errors, f"Errors: {errors}"
+
+
+class TestHotReloadManifestPolicy:
+    """Issue #1487: Enforce hot_reload manifest flag policy."""
+
+    def test_manifest_missing_hot_reload_fails(self, plugin_test_dir):
+        """A manifest without hot_reload flag must fail with Missing tool.lichtfeld.hot_reload."""
+        from lfs_plugins import PluginManager, PluginState
+
+        plugin_dir = plugin_test_dir / "missing_hot_reload"
+        plugin_dir.mkdir(exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "missing_hot_reload"
+version = "1.0.0"
+description = ""
+
+[tool.lichtfeld]
+auto_start = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass\ndef on_unload(): pass")
+
+        mgr = PluginManager.instance()
+        with pytest.raises(ValueError, match="Missing tool.lichtfeld.hot_reload"):
+            mgr._parse_manifest(plugin_dir)
+
+        from lfs_plugins.errors import PluginError
+        with pytest.raises(PluginError, match="not found"):
+            mgr.load("missing_hot_reload")
+
+    def test_reload_refuses_when_hot_reload_disabled(self, plugin_test_dir):
+        """reload() must refuse and set is_restart_required = True when hot_reload is false."""
+        from lfs_plugins import PluginManager, PluginState
+
+        plugin_dir = plugin_test_dir / "no_reload"
+        plugin_dir.mkdir(exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "no_reload"
+version = "1.0.0"
+description = ""
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass\ndef on_unload(): pass")
+
+        mgr = PluginManager.instance()
+        assert mgr.load("no_reload") is True
+        assert mgr.get_state("no_reload") == PluginState.ACTIVE
+        assert mgr.is_restart_required("no_reload") is False
+
+        result = mgr.reload("no_reload")
+        assert result is False
+        assert mgr.is_restart_required("no_reload") is True
+
+    def test_watcher_marks_plugin_instead_of_reloading(self, plugin_test_dir):
+        """Watcher marks plugin needs_restart without queuing reload when hot_reload is false."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.watcher import PluginWatcher
+
+        plugin_dir = plugin_test_dir / "watch_no_reload"
+        plugin_dir.mkdir(exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "watch_no_reload"
+version = "1.0.0"
+description = ""
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        init_file = plugin_dir / "__init__.py"
+        init_file.write_text("def on_load(): pass\ndef on_unload(): pass")
+
+        mgr = PluginManager.instance()
+        assert mgr.load("watch_no_reload") is True
+
+        watcher = PluginWatcher(mgr, poll_interval=1.0)
+        plugin = mgr._plugins["watch_no_reload"]
+        assert plugin.needs_restart is False
+        assert mgr.is_restart_required("watch_no_reload") is False
+
+        # Simulate on-disk file change
+        time.sleep(0.05)
+        init_file.write_text("def on_load(): pass\ndef on_unload(): pass\n# changed")
+
+        watcher._check_for_changes()
+
+        assert plugin.needs_restart is True
+        assert mgr.is_restart_required("watch_no_reload") is True
+        assert "watch_no_reload" not in watcher._pending_reloads
+
+    def test_watcher_prunes_venv_during_scan(self, plugin_test_dir):
+        """Watcher must prune .venv directory and not flag changes inside .venv."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.watcher import PluginWatcher
+
+        plugin_dir = plugin_test_dir / "watch_venv_prune"
+        plugin_dir.mkdir(exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "watch_venv_prune"
+version = "1.0.0"
+description = ""
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        init_file = plugin_dir / "__init__.py"
+        init_file.write_text("def on_load(): pass\ndef on_unload(): pass")
+        venv_dir = plugin_dir / ".venv" / "lib"
+        venv_dir.mkdir(parents=True, exist_ok=True)
+        venv_file = venv_dir / "site_package.py"
+        venv_file.write_text("# initial venv file")
+
+        mgr = PluginManager.instance()
+        assert mgr.load("watch_venv_prune") is True
+
+        watcher = PluginWatcher(mgr, poll_interval=1.0)
+        plugin = mgr._plugins["watch_venv_prune"]
+
+        time.sleep(0.05)
+        venv_file.write_text("# modified venv file")
+        watcher._check_for_changes()
+
+        assert plugin.needs_restart is False
+        assert mgr.is_restart_required("watch_venv_prune") is False
+
+    def test_watcher_skips_plugins_with_needs_restart(self, plugin_test_dir):
+        """Watcher skips scanning plugins that already have needs_restart set."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.watcher import PluginWatcher
+
+        plugin_dir = plugin_test_dir / "watch_already_flagged"
+        plugin_dir.mkdir(exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "watch_already_flagged"
+version = "1.0.0"
+description = ""
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass\ndef on_unload(): pass")
+
+        mgr = PluginManager.instance()
+        assert mgr.load("watch_already_flagged") is True
+
+        watcher = PluginWatcher(mgr, poll_interval=1.0)
+        plugin = mgr._plugins["watch_already_flagged"]
+        plugin.needs_restart = True
+
+        called = []
+        orig_has_changes = watcher._has_changes
+        def mock_has_changes(p):
+            called.append(p)
+            return orig_has_changes(p)
+        watcher._has_changes = mock_has_changes
+
+        watcher._check_for_changes()
+        assert len(called) == 0, "Plugin with needs_restart=True should be skipped"
+
+

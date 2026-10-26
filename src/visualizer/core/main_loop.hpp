@@ -39,6 +39,9 @@ namespace lfs::vis {
         void setWakeCallback(std::function<void()> cb) { wake_callback_ = std::move(cb); }
 
         void run();
+        // Modal native protocols may advance the app only after a complete
+        // frame, never recursively from update/render or a live Rml callback.
+        bool runModalFrame();
 
         static void installInterruptHandlers();
         static void (*interruptHandlerForTest())(int);
@@ -53,6 +56,7 @@ namespace lfs::vis {
         FrameErrorCallback frame_error_callback_;
         FrameCompletedCallback frame_completed_callback_;
         std::function<void()> wake_callback_;
+        bool frame_active_ = false;
     };
 
 } // namespace lfs::vis

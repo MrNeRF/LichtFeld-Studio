@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "core/error.hpp"
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
+#include "dirty_flags.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_pool_quant.hpp"
 #include "lod_upload_engine.hpp"
@@ -46,6 +49,7 @@ namespace lfs::vis {
     class VksplatViewportRenderer {
         friend struct VksplatScratchReleaseTestAccess;
         friend struct SplitOutputLifetimeTestAccess;
+        friend struct StochasticHistoryTestAccess;
 
     public:
         struct RenderResult {
@@ -65,6 +69,7 @@ namespace lfs::vis {
             std::uint64_t lod_page_generation = 0;
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
+            bool stochastic_accumulation_active = false;
         };
 
         struct ModelInputSnapshot {
@@ -143,7 +148,7 @@ namespace lfs::vis {
         VksplatViewportRenderer(const VksplatViewportRenderer&) = delete;
         VksplatViewportRenderer& operator=(const VksplatViewportRenderer&) = delete;
 
-        [[nodiscard]] std::expected<RenderResult, std::string> render(
+        [[nodiscard]] LFS_VIS_API std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
@@ -200,6 +205,7 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
+        void invalidateStochasticHistory(DirtyMask dirty_flags = DirtyFlag::ALL);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -219,10 +225,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
         // Reads the most recent render's raw per-pixel linear depth (the
@@ -248,7 +254,7 @@ namespace lfs::vis {
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
-        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+        [[nodiscard]] LFS_VIS_API std::expected<float, std::string> sampleDepthAtPixel(
             VulkanContext& context,
             const DepthSampleRequest& request) const;
 
@@ -281,7 +287,7 @@ namespace lfs::vis {
         [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
         [[nodiscard]] std::uint64_t readbackCellPinWaitCount() const;
 
-        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
+        [[nodiscard]] LFS_VIS_API std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const SelectionMaskRequest& request,
@@ -392,7 +398,51 @@ namespace lfs::vis {
             bool depth_view,
             float depth_min,
             float depth_max,
-            lfs::rendering::DepthVisualizationMode depth_visualization_mode);
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            const _VulkanBuffer* color_override = nullptr);
+
+        struct StochasticHistory {
+            VulkanGSStochasticBuffers buffers;
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t last_color = 0;
+            bool valid = false;
+        };
+        struct StochasticFrame {
+            VulkanGSRendererUniforms camera{};
+            const lfs::core::SplatData* model = nullptr;
+            std::uint64_t generation = 0;
+            std::uint32_t samples = 0;
+            std::size_t output_color = 0;
+            bool history_valid = false;
+            bool enabled = false;
+        };
+        // Projection scratch is shared by all views. Only the last submitted
+        // projection can be reused, even when another view still has color history.
+        struct StochasticProjectionCache {
+            StochasticFrame frame;
+            OutputSlot slot = OutputSlot::Main;
+            std::uint64_t first_submission = 0;
+            std::uint64_t last_submission = 0;
+            std::size_t wave_count = 0;
+            std::optional<VulkanGSRenderer::StochasticTileState> tiles;
+        };
+        [[nodiscard]] static bool canReuseStochasticProjection(
+            const StochasticFrame& frame, OutputSlot slot, const StochasticProjectionCache& cache);
+        static void updateStochasticProjectionStats(
+            StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats);
+        [[nodiscard]] StochasticFrame prepareStochasticFrame(
+            VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
+            OutputSlot slot, bool content_changed) const;
+        [[nodiscard]] const _VulkanBuffer* resolveStochasticFrame(
+            const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
+            OutputSlot slot, const glm::vec3& background);
+        void commitStochasticFrame(const StochasticFrame& frame, OutputSlot slot);
+        void retireStochasticBuffer(_VulkanBuffer& buffer, bool destroy_now);
+        void releaseUnusedStochasticBuffers(OutputSlot slot, std::uint32_t mode);
+        void releaseStochasticBuffers();
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);
@@ -677,6 +727,13 @@ namespace lfs::vis {
         std::unique_ptr<ComposePipeline> compose_;
         static constexpr std::size_t kOutputSlotCount = OutputSlotRing::kOutputSlotCount;
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
+        std::array<StochasticHistory, kOutputSlotCount> stochastic_histories_;
+        std::uint64_t stochastic_history_generation_ = 1;
+        std::array<std::uint32_t, kOutputSlotCount> stochastic_sample_serials_{};
+        StochasticProjectionCache stochastic_projection_cache_;
+        // Stochastic frames keep depth keys alive, so the sort-index copy owns
+        // its own allocation instead of aliasing them.
+        bool stochastic_sort_indices_owned_ = false;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
         struct PublishedOutput {

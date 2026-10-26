@@ -132,8 +132,11 @@ namespace lfs::core {
             EVENT(SetNodeLocked, std::string name; bool locked;);            // Lock/unlock node for editing
             EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
             EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);
+            // world_transform maps the polygon's local frame to data world space.
+            EVENT(CropPLYPolygon, glm::mat4 world_transform; std::vector<glm::vec2> vertices; float half_depth; bool inverse; int32_t target_node_id = -1;);
             EVENT(ApplyCropBox, );
             EVENT(ApplyEllipsoid, );
+            EVENT(ApplyCropPolygon, );
             EVENT(AddCropBox, std::string node_name;);       // Add cropbox to splat node
             EVENT(AddCropEllipsoid, std::string node_name;); // Add ellipsoid to splat node
             EVENT(ResetCropBox, );                           // Reset selected cropbox

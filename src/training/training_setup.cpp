@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#define GLM_ENABLE_EXPERIMENTAL
+
 #include "training_setup.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
@@ -35,6 +37,8 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/euler_angles.hpp>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -45,6 +49,14 @@
 namespace lfs::training {
 
     namespace {
+        // The model local training continues from. A transient training model
+        // is only a preview (e.g. a model trained elsewhere) that is never
+        // saved, so training starts from the dataset instead.
+        lfs::core::SplatData* localTrainingModel(lfs::core::Scene& scene) {
+            const auto* node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+            return node && node->transient ? nullptr : scene.getTrainingModel();
+        }
+
         std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud(const lfs::core::param::TrainingParameters& params) {
             const auto N = static_cast<size_t>(params.optimization.init_num_pts);
             const float extent = params.optimization.init_extent;
@@ -450,6 +462,8 @@ namespace lfs::training {
             install.has_preserved_cropbox = context.has_preserved_cropbox;
             install.preserved_cropbox_data = context.preserved_cropbox_data;
             install.preserved_cropbox_transform = context.preserved_cropbox_transform;
+            install.preserved_crop_polygon = context.preserved_crop_polygon;
+            install.preserved_crop_polygon_transform = context.preserved_crop_polygon_transform;
             return install;
         }
 
@@ -1097,21 +1111,29 @@ namespace lfs::training {
 
     TrainingModelGraphCapture captureTrainingModelGraph(lfs::core::Scene& scene) {
         TrainingModelGraphCapture context;
-        context.training_model = scene.getTrainingModel();
+        context.training_model = localTrainingModel(scene);
         context.scene_center = scene.getSceneCenter();
         context.training_data_origin = scene.getTrainingDataOrigin();
-        for (const auto* node : scene.getNodes()) {
-            if (!node || node->type != lfs::core::NodeType::POINTCLOUD || !node->point_cloud) {
-                continue;
-            }
+        if (const auto* node = scene.getDatasetPointCloudNode()) {
             context.point_cloud_node_id = node->id;
             context.parent_id = node->parent_id;
             context.node_transform = node->transform();
             context.point_cloud = *node->point_cloud;
-            break;
         }
         if (context.point_cloud_node_id == lfs::core::NULL_NODE) {
             return context;
+        }
+
+        const auto local_to_point_cloud = [&](const lfs::core::SceneNode& volume) {
+            return volume.parent_id == context.point_cloud_node_id
+                       ? volume.transform()
+                       : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
+                             scene.getWorldTransform(volume.id);
+        };
+        if (const auto* polygon_node = scene.getNodeById(scene.getCropPolygonForSplat(context.point_cloud_node_id));
+            polygon_node && polygon_node->crop_polygon) {
+            context.preserved_crop_polygon = *polygon_node->crop_polygon;
+            context.preserved_crop_polygon_transform = local_to_point_cloud(*polygon_node);
         }
 
         const lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(context.point_cloud_node_id);
@@ -1123,11 +1145,7 @@ namespace lfs::training {
             return context;
         }
         context.preserved_cropbox_data = *cropbox_node->cropbox;
-        context.preserved_cropbox_transform =
-            cropbox_node->parent_id == context.point_cloud_node_id
-                ? cropbox_node->transform()
-                : glm::inverse(scene.getWorldTransform(context.point_cloud_node_id)) *
-                      scene.getWorldTransform(cropbox_id);
+        context.preserved_cropbox_transform = local_to_point_cloud(*cropbox_node);
         context.has_preserved_cropbox = true;
         return context;
     }
@@ -1154,7 +1172,7 @@ namespace lfs::training {
         };
 
         const bool has_training_model =
-            graph_capture ? graph_capture->training_model != nullptr : scene.getTrainingModel() != nullptr;
+            graph_capture ? graph_capture->training_model != nullptr : localTrainingModel(scene) != nullptr;
         if (!has_training_model) {
             if (const auto init_file = gaussianSplatInitPath(params)) {
                 auto added = loadAddedSplats(params);
@@ -1187,7 +1205,7 @@ namespace lfs::training {
             }
         }
 
-        if (auto* model = graph_capture ? graph_capture->training_model : scene.getTrainingModel()) {
+        if (auto* model = graph_capture ? graph_capture->training_model : localTrainingModel(scene)) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
             if (auto result = appendAddedSplats(params, *model, dataset_origin); !result) {
                 return std::unexpected(std::move(result.error()));
@@ -1317,6 +1335,62 @@ namespace lfs::training {
                 scene.setNodeTransform(model_cropbox_id, install.preserved_cropbox_transform);
             }
         }
+        if (install.preserved_crop_polygon) {
+            static_cast<void>(scene.addCropPolygon("Model_crop_polygon", model_id, *install.preserved_crop_polygon,
+                                                   install.preserved_crop_polygon_transform));
+        }
+        return {};
+    }
+
+    lfs::Status applyTrainingCropBox(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::Scene& scene) {
+        if (!params.cropbox) {
+            return {};
+        }
+        const auto* model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        if (!model) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "--cropbox needs the training model in the scene",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        lfs::core::NodeId cropbox_id = scene.getCropBoxForSplat(model->id);
+        if (cropbox_id == lfs::core::NULL_NODE) {
+            cropbox_id = scene.addCropBox("Model_cropbox", model->id);
+        }
+        if (cropbox_id == lfs::core::NULL_NODE) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "Failed to add the --cropbox region of interest to the training model",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        const auto& box = *params.cropbox;
+        lfs::core::CropBoxData data = scene.getCropBoxData(cropbox_id) ? *scene.getCropBoxData(cropbox_id)
+                                                                       : lfs::core::CropBoxData{};
+        data.min = {box[0], box[1], box[2]};
+        data.max = {box[3], box[4], box[5]};
+        data.inverse = false;
+        data.enabled = true;
+        LOG_INFO("Region of interest: crop box ({}, {}, {}) to ({}, {}, {})", box[0], box[1], box[2], box[3], box[4],
+                 box[5]);
+        glm::mat4 transform{1.0f};
+        if (params.cropbox_rotation) {
+            // Rx * Ry * Rz about the dataset's axes, the frame of the corners, turning the box about its centre.
+            const auto& degrees = *params.cropbox_rotation;
+            transform = glm::translate(glm::mat4{1.0f}, (data.min + data.max) * 0.5f) *
+                        glm::eulerAngleXYZ(glm::radians(degrees[0]), glm::radians(degrees[1]), glm::radians(degrees[2]));
+            data.max = (data.max - data.min) * 0.5f;
+            data.min = -data.max;
+            LOG_INFO("Region of interest: crop box turned by ({}, {}, {}) degrees about its centre", degrees[0],
+                     degrees[1], degrees[2]);
+        }
+        scene.setCropBoxData(cropbox_id, data);
+        scene.setNodeTransform(cropbox_id, transform);
         return {};
     }
 
@@ -1331,7 +1405,13 @@ namespace lfs::training {
         if (!*prepared) {
             return {};
         }
-        return installTrainingModel(scene, std::move(**prepared));
+        if (auto installed = installTrainingModel(scene, std::move(**prepared)); !installed) {
+            return installed;
+        }
+        if (auto applied = applyTrainingCropBox(params, scene); !applied) {
+            return std::unexpected(std::string(applied.error().user_message()));
+        }
+        return {};
     }
 
     std::expected<void, std::string> validateDatasetPath(
@@ -1632,8 +1712,17 @@ namespace lfs::training {
                 return lfs::io::save_spz(splat, {.output_path = output, .version = 4, .provenance = provenance});
             case OutputFormat::GLB:
                 return lfs::io::save_spz(splat, {.output_path = output, .provenance = provenance, .glb = true});
-            case OutputFormat::HTML:
-                return lfs::io::export_html(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
+            case OutputFormat::HTML: {
+                std::optional<glm::vec3> bg_color;
+                if (params.optimization.bg_mode == lfs::core::param::BackgroundMode::SolidColor) {
+                    const auto& train_bg = params.optimization.bg_color;
+                    bg_color = glm::vec3(train_bg[0], train_bg[1], train_bg[2]);
+                }
+                return lfs::io::export_html(splat, {.output_path = output,
+                                                    .kmeans_iterations = 10,
+                                                    .provenance = provenance,
+                                                    .background_color = bg_color});
+            }
             case OutputFormat::USD:
             case OutputFormat::USDA:
             case OutputFormat::USDC:
@@ -1680,7 +1769,24 @@ namespace lfs::training {
                 return lfs::Status::failure(std::move(kept).error());
             without_frozen = std::move(*kept);
         }
-        const auto& model = without_frozen ? *without_frozen : trained;
+        const auto& unfrozen = without_frozen ? *without_frozen : trained;
+        // A stopped run keeps every splat so it can resume; its exports still hold only the crop box.
+        std::optional<lfs::core::SplatData> cropped;
+        if (const auto cropbox = trainer.export_cropbox()) {
+            cropped = crop_copy_to_training_cropbox(unfrozen, *cropbox);
+            if (cropped && cropped->size() == 0) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = "Final export failed: no splat lies inside the crop box or polygon.",
+                    .detail = "--crop leaves no rows to export",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            if (cropped)
+                LOG_INFO("Exporting the splats inside the crop box: {} of {}", cropped->size(), unfrozen.visible_count());
+        }
+        const auto& model = cropped ? *cropped : unfrozen;
         const std::filesystem::path out_dir = params.dataset.output_path;
         const std::string stem = params.dataset.output_name.empty()
                                      ? std::format("splat_{}", trainer.get_current_iteration())

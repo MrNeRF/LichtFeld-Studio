@@ -97,6 +97,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/perf_sampler.cpp
         gui/rml_status_bar.cpp
         gui/status_bar_mining.cpp
+        gui/status_bar_tessle.cpp
+        gui/status_bar_progress.cpp
         gui/gpu_memory_query.cpp
         gui/line_renderer.cpp
         gui/film_strip_renderer.cpp
@@ -166,6 +168,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_id.cpp
         operator/operator_registry.cpp
         operator/ops/align_ops.cpp
+        operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
         operator/ops/selection_ops.cpp
@@ -189,6 +192,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.cpp
         gui/panels/menu_bar.hpp
         gui/utils/native_file_dialog.cpp
+        gui/utils/native_file_drag.cpp
+        gui/utils/native_file_drag_wayland.cpp
+        gui/utils/splat_transfer.cpp
+        gui/utils/splat_export_request.cpp
         gui/utils/drag_drop_native.cpp
         gui/utils/file_association.cpp
 
@@ -209,23 +216,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/scene_graph_element.cpp
         gui/rmlui/elements/terminal_element.cpp
 )
-
-# These large visualizer TUs exceed the COFF section limit in Debug and need
-# /bigobj. Let CMake select the supported spelling of the C++23 language flag.
-if(MSVC)
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-    set_source_files_properties(
-            ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
-            PROPERTIES COMPILE_OPTIONS "/bigobj"
-    )
-endif()
 
 # Set include directories
 target_include_directories(lfs_visualizer
@@ -277,6 +267,9 @@ set_property(SOURCE
 # cmake/SetupNativeFileDialog.cmake.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
     target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
+    pkg_check_modules(LFS_DRAG_WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+    target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_DRAG_WAYLAND)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_HAS_WAYLAND_DRAG=1)
 endif()
 
 target_sources(lfs_visualizer
@@ -286,6 +279,7 @@ target_sources(lfs_visualizer
         rendering/vksplat_input_packer.cpp
         rendering/vksplat_input_packer_cuda.cu
         rendering/vksplat_viewport_renderer.cpp
+        rendering/stochastic_viewport.cpp
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
 
@@ -331,6 +325,8 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/frustum.vert" "
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.vert.spv.h" kMeshVertSpv "${LFS_EQUIRECT_PROJECTION_SHADER}")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.geom" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.geom.spv.h" kMeshGeomSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.frag.spv.h" kMeshFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/collision_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/collision_overlay.vert.spv.h" kCollisionOverlayVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/collision_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/collision_overlay.frag.spv.h" kCollisionOverlayFragSpv "${LFS_EQUIRECT_PROJECTION_SHADER}")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.vert.spv.h" kMeshShadowVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.frag.spv.h" kMeshShadowFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_wireframe.vert.spv.h" kMeshWireframeVertSpv)
@@ -498,6 +494,7 @@ if (WIN32)
     )
     target_link_libraries(lfs_visualizer PRIVATE
             Advapi32    # Read the Windows application light/dark preference
+            Uuid
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
             dxgi        # DXGI per-process VRAM query

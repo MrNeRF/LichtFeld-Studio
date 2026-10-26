@@ -314,6 +314,9 @@ namespace lfs::python {
         void (*draw_modals)() = nullptr;
         bool (*has_modals)() = nullptr;
 
+        // Panels: unloads the plugin that registered a panel; false if no plugin owns it.
+        bool (*unload_panel_plugin)(const char* panel_id) = nullptr;
+
         // Toolbar
 
         // Lifecycle

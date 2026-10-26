@@ -4,19 +4,29 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
+#include "gui/utils/native_file_drag.hpp"
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/EventListener.h>
 #include <core/scene.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <future>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+struct SDL_Window;
 
 namespace lfs::vis {
     class SceneManager;
@@ -25,6 +35,8 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
 
     struct PanelDrawContext;
+    class NativeDragContext;
+    struct FileTransferProgressState;
 
     class SceneGraphElement : public Rml::Element {
     public:
@@ -39,16 +51,16 @@ namespace lfs::vis::gui {
         };
 
         explicit SceneGraphElement(const Rml::String& tag);
+        ~SceneGraphElement() override;
 
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
         void setSelectionMarkersVisible(bool visible);
         [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
-        [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
+        [[nodiscard]] LFS_VIS_API bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
         [[nodiscard]] bool needsAnimationFrame() const {
-            return (drag_source_id_ != core::NULL_NODE &&
-                    auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
+            return external_armed_ || (drag_source_id_ != core::NULL_NODE && auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
                    !just_moved_ids_.empty();
         }
 
@@ -171,6 +183,18 @@ namespace lfs::vis::gui {
             bool visible = false;
         };
 
+        NativeDragContext* external_context_ = nullptr;
+        FileProvider external_provider_;
+        std::shared_ptr<FileTransferProgressState> external_progress_;
+        std::future<FileDragResult> external_result_;
+        SDL_Window* external_window_ = nullptr;
+        void beginExternalTransfer(core::NodeId id, bool outside_only = false, std::vector<core::NodeId> ids = {});
+        void updateExternalTransfer();
+        glm::vec2 external_origin_{0.0f};
+        bool external_outside_only_ = false;
+        glm::vec4 external_window_bounds_{};
+        bool external_armed_ = false;
+        bool external_native_active_ = false;
         void ensureDom();
         void ensureRowPool(size_t count);
         void clear();

@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <glm/vec3.hpp>
 #include <optional>
 #include <span>
 #include <string>
@@ -124,6 +125,7 @@ namespace lfs::io {
         int kmeans_iterations = 10;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        std::optional<glm::vec3> background_color{};
     };
 
     /**

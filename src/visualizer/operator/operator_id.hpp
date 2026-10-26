@@ -35,6 +35,8 @@ namespace lfs::vis::op {
         EllipsoidSet,
         EllipsoidFit,
         EllipsoidReset,
+        CropPolygonDraw,
+        CropPolygonSet,
 
         _Count
     };

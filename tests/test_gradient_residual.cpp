@@ -332,3 +332,19 @@ TEST(GradientResidual, ParameterJsonCliBoundsAndProjectRoundTrip) {
     EXPECT_FLOAT_EQ(require_result(restored.parameters().snapshot()).active_optimization().gradient_loss_weight, 2.3f);
     std::filesystem::remove(path);
 }
+
+// The crop box loss report evaluates the residual without a gradient; it must equal the training call.
+TEST(GradientResidual, LossOnlyMatchesTheTrainingLoss) {
+    Tensor::manual_seed(7);
+    const auto image = Tensor::rand({3, 40, 56}, Device::CUDA);
+    const auto target = Tensor::rand({3, 40, 56}, Device::CUDA);
+    auto region = Tensor::zeros({40, 56}, Device::CUDA);
+    region.slice(0, 8, 30).slice(1, 10, 44).fill_(1.0f);
+    GradientResidualWorkspace training, report;
+    auto gradient = Tensor::zeros_like(image);
+    for (const auto& weights : {region, Tensor{}}) {
+        const float trained = gradient_residual_loss_gradient(image, target, weights, gradient, 1.8f, training).item<float>();
+        EXPECT_EQ(gradient_residual_loss(image, target, weights, 1.8f, report).item<float>(), trained);
+    }
+    EXPECT_FALSE(gradient_residual_loss(image, target, region, 0.0f, report).is_valid());
+}

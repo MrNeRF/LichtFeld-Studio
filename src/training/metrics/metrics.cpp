@@ -21,6 +21,7 @@
 #include "flip.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/loader.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
@@ -1347,6 +1348,7 @@ namespace lfs::training {
         report_file << "3D Gaussian Splatting Evaluation Report\n";
         report_file << "==============================================\n";
         report_file << "Output Directory: " << lfs::core::path_to_utf8(output_dir_) << "\n";
+        report_file << "JPEG Decoder: " << lfs::io::NvCodecImageLoader::jpeg_decoder() << "\n";
 
         // Get current time
         const auto now = std::chrono::system_clock::now();

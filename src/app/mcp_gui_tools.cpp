@@ -534,6 +534,8 @@ namespace lfs::app {
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
                 return "ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "crop_polygon";
             case core::NodeType::DATASET:
                 return "dataset";
             case core::NodeType::CAMERA_GROUP:
@@ -546,6 +548,8 @@ namespace lfs::app {
                 return "image";
             case core::NodeType::MESH:
                 return "mesh";
+            case core::NodeType::COLLISION:
+                return "collision";
             case core::NodeType::KEYFRAME_GROUP:
                 return "keyframe_group";
             case core::NodeType::KEYFRAME:
@@ -1082,6 +1086,12 @@ namespace lfs::app {
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
                                  {"use_ellipsoid", settings.use_ellipsoid},
+                                 {"selection_outline", settings.selection_outline},
+                                 {"selection_outline_opacity", settings.selection_outline_opacity},
+                                 {"selection_outline_width", settings.selection_outline_width},
+                                 {"selection_outline_threshold", settings.selection_outline_threshold},
+                                 {"selection_outline_holes", settings.selection_outline_holes},
+                                 {"selection_outline_color", settings.selection_outline_color},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
                                  {"hide_outside_depth_box", settings.hide_outside_depth_box},
@@ -1132,6 +1142,8 @@ namespace lfs::app {
                                  {"split_position", settings.split_position},
                                  {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
+                                 {"transparency_mode", std::string(lfs::rendering::gaussianTransparencyModeId(static_cast<lfs::rendering::GaussianTransparencyMode>(settings.transparency_mode)))},
+                                 {"stochastic_max_frames", settings.stochastic_max_frames},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
@@ -1281,6 +1293,53 @@ namespace lfs::app {
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
             set_bool("use_ellipsoid", settings.use_ellipsoid);
+            set_bool("selection_outline", settings.selection_outline);
+            set_bool("selection_outline_holes", settings.selection_outline_holes);
+            if (args.contains("selection_outline_opacity")) {
+                const auto& value = args["selection_outline_opacity"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_opacity");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0 || number > 1)
+                    return std::unexpected("Invalid selection_outline_opacity");
+                settings.selection_outline_opacity = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_width")) {
+                const auto& value = args["selection_outline_width"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_width");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 1 || number > 12)
+                    return std::unexpected("Invalid selection_outline_width");
+                settings.selection_outline_width = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_threshold")) {
+                const auto& value = args["selection_outline_threshold"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_threshold");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0.05 || number > 0.95)
+                    return std::unexpected("Invalid selection_outline_threshold");
+                settings.selection_outline_threshold = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_color")) {
+                const auto& value = args["selection_outline_color"];
+                if (!value.is_array() || value.size() != 3)
+                    return std::unexpected("Invalid selection_outline_color");
+                for (int i = 0; i < 3; ++i) {
+                    if (!value[i].is_number())
+                        return std::unexpected("Invalid selection_outline_color");
+                    const double channel = value[i].get<double>();
+                    if (!std::isfinite(channel) || channel < 0.0 || channel > 1.0)
+                        return std::unexpected("Invalid selection_outline_color");
+                    settings.selection_outline_color[i] = static_cast<float>(channel);
+                }
+                touched = true;
+            }
+
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
             set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
@@ -1312,6 +1371,21 @@ namespace lfs::app {
             }
             if (auto result = set_raster_backend(settings); !result)
                 return std::unexpected(result.error());
+            if (args.contains("transparency_mode")) {
+                const auto& value = args["transparency_mode"];
+                if (!value.is_string() || !lfs::rendering::isGaussianTransparencyModeId(value.get<std::string>()))
+                    return std::unexpected("Field 'transparency_mode' must be 'alpha_blend', 'stochastic', or 'steady_splats'");
+                settings.transparency_mode = static_cast<int>(
+                    lfs::rendering::gaussianTransparencyModeFromId(value.get<std::string>()));
+                touched = true;
+            }
+            if (args.contains("stochastic_max_frames")) {
+                const auto& value = args["stochastic_max_frames"];
+                if (!value.is_number_integer() || value < 1 || value > 1024)
+                    return std::unexpected("Field 'stochastic_max_frames' must be an integer in [1, 1024]");
+                settings.stochastic_max_frames = value.get<int>();
+                touched = true;
+            }
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
@@ -1916,6 +1990,11 @@ namespace lfs::app {
                                             core::required_scene_export_extension(format)));
 
             const auto& scene = scene_manager.getScene();
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
+            // A cropped copy of the training model; the scene model stays whole so a stopped run can resume.
+            std::optional<core::SplatData> cropped;
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
@@ -1926,7 +2005,14 @@ namespace lfs::app {
                         return std::unexpected(std::format(
                             "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
                     }
-                    splats.emplace_back(node->model.get(), vis::scene_coords::nodeDataWorldTransform(scene, node->id));
+                    const core::SplatData* data = node->model.get();
+                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
+                        (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
+                        if (cropped->size() == 0)
+                            continue;
+                        data = &*cropped;
+                    }
+                    splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
             }
 
@@ -1942,7 +2028,6 @@ namespace lfs::app {
             const int effective_sh_degree = std::clamp(sh_degree.value_or(max_sh_degree), 0, max_sh_degree);
             const bool sh_degree_was_clamped = sh_degree && effective_sh_degree != *sh_degree;
 
-            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
                 return std::unexpected("Failed to merge scene nodes for export");
@@ -1987,7 +2072,12 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
+                const auto bg_color = vis::gui::resolve_html_export_background_color();
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{
+                                                                            .output_path = path,
+                                                                            .provenance = stamp,
+                                                                            .background_color = bg_color});
+                    !result)
                     return std::unexpected(result.error());
                 break;
             }
@@ -2053,14 +2143,10 @@ namespace lfs::app {
 
             const core::PointCloud* point_cloud = nullptr;
             glm::mat4 point_cloud_transform{1.0f};
-            for (const auto* node : scene.getNodes()) {
-                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
-                    !scene.isNodeEffectivelyVisible(node->id)) {
-                    continue;
-                }
+            if (const auto* node = scene.getDatasetPointCloudNode();
+                node && scene.isNodeEffectivelyVisible(node->id)) {
                 point_cloud = node->point_cloud.get();
                 point_cloud_transform = scene.getWorldTransform(node->id);
-                break;
             }
             if (!point_cloud) {
                 for (const auto* node : scene.getNodes()) {
@@ -2431,6 +2517,33 @@ namespace lfs::app {
         }
 
         // --- Scene operations (posted to GUI thread) ---
+        registry.register_tool(
+            McpTool{.name = "scene.generate_collision",
+                    .description = "Voxelize exactly one selected loaded splat into a new undoable collision node; observe collision.main",
+                    .input_schema = {.type = "object", .properties = json{{"voxel_size", {{"type", "number"}}}, {"opacity", {{"type", "number"}}}, {"auto_resolution", {{"type", "boolean"}}}, {"cleanup", {{"type", "boolean"}}}, {"max_gaussian_area", {{"type", "number"}}}}, .required = {}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    if (!viewer_impl->getGuiManager())
+                        throw std::runtime_error("GUI manager is not initialized");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollision({.voxel_size = args.value("voxel_size", .05f), .opacity = args.value("opacity", .1f), .max_gaussian_area = args.value("max_gaussian_area", 0.f), .auto_resolution = args.value("auto_resolution", false), .cleanup = args.value("cleanup", true)});
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
+        registry.register_tool(
+            McpTool{.name = "scene.export_collision",
+                    .description = "Export a collision node UUID to a voxel JSON/binary pair; caller approves replacing both files",
+                    .input_schema = {.type = "object", .properties = json{{"uuid", {{"type", "string"}}}, {"path", {{"type", "string"}}}}, .required = {"uuid", "path"}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    const auto uuid = core::Uuid::from_string(args.at("uuid").get<std::string>());
+                    if (!uuid || !viewer_impl->getGuiManager())
+                        throw std::invalid_argument("Invalid collision UUID or unavailable GUI");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollisionExport(*uuid, core::utf8_to_path(args.at("path").get<std::string>()));
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
 
         registry.register_tool(
             McpTool{
@@ -2743,8 +2856,17 @@ namespace lfs::app {
                                                       : core::make_provenance_stamp())
                                                : core::make_minimal_provenance_stamp();
 
+                        // A cropped copy with "Crop to ROI at end" on; the model stays whole so a stopped run can resume.
+                        std::optional<core::SplatData> cropped;
+                        const auto* const trainer_manager =
+                            viewer->getSceneManager() ? viewer->getSceneManager()->getTrainerManager() : nullptr;
+                        if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
+                            cropped = training::crop_copy_to_training_cropbox(*model, *crop);
+                        if (cropped && cropped->size() == 0)
+                            return std::unexpected("No splat lies inside the crop box or polygon");
+
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
-                        auto result = io::save_ply(*model, options);
+                        auto result = io::save_ply(cropped ? *cropped : *model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
                         return {};
@@ -3329,10 +3451,18 @@ namespace lfs::app {
                         {"environment_exposure", json{{"type", "number"}}},
                         {"environment_rotation_degrees", json{{"type", "number"}}},
                         {"raster_backend", json{{"type", "string"}, {"enum", json::array({"3dgs", "3dgut"})}}},
+                        {"transparency_mode", json{{"type", "string"}, {"enum", json::array({"alpha_blend", "stochastic", "steady_splats"})}}},
+                        {"stochastic_max_frames", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 1024}}},
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
                         {"point_cloud_mode", json{{"type", "boolean"}}},
+                        {"selection_outline", json{{"type", "boolean"}}},
+                        {"selection_outline_holes", json{{"type", "boolean"}}},
+                        {"selection_outline_color", json{{"type", "array"}, {"items", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}}, {"minItems", 3}, {"maxItems", 3}}},
+                        {"selection_outline_opacity", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                        {"selection_outline_width", json{{"type", "number"}, {"minimum", 1}, {"maximum", 12}}},
+                        {"selection_outline_threshold", json{{"type", "number"}, {"minimum", 0.05}, {"maximum", 0.95}}},
                         {"show_crop_box", json{{"type", "boolean"}}},
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},

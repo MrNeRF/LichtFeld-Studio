@@ -4722,6 +4722,9 @@ namespace lfs::io {
 
             LOG_INFO("Read {} cameras and {} images from COLMAP", cam_map.size(), images.size());
 
+            if (first_uid < 0 || images.size() > static_cast<size_t>(std::numeric_limits<int>::max() - first_uid))
+                throw std::overflow_error("COLMAP camera uids would exceed the int range");
+
             std::vector<std::shared_ptr<Camera>> cameras;
             cameras.reserve(images.size());
 

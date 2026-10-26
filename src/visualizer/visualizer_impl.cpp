@@ -32,6 +32,7 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/align_ops.hpp"
+#include "operator/ops/crop_polygon_ops.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
@@ -208,7 +209,8 @@ namespace lfs::vis {
                    node.type == core::NodeType::POINTCLOUD ||
                    node.type == core::NodeType::SPLAT ||
                    node.type == core::NodeType::CROPBOX ||
-                   node.type == core::NodeType::ELLIPSOID;
+                   node.type == core::NodeType::ELLIPSOID ||
+                   node.type == core::NodeType::CROP_POLYGON;
         }
 
         [[nodiscard]] std::unordered_map<std::string, glm::mat4> collectResetTransforms(const core::Scene& scene) {
@@ -369,6 +371,7 @@ namespace lfs::vis {
         op::registerTransformOperators();
         op::registerAlignOperators();
         op::registerSelectionOperators();
+        op::registerCropPolygonOperators();
         op::registerEditOperators();
         op::registerSceneOperators();
 
@@ -401,6 +404,7 @@ namespace lfs::vis {
         // Clear operator system
         op::unregisterEditOperators();
         op::unregisterSceneOperators();
+        op::unregisterCropPolygonOperators();
         op::unregisterSelectionOperators();
         op::unregisterAlignOperators();
         op::unregisterTransformOperators();
@@ -1190,7 +1194,11 @@ namespace lfs::vis {
         main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
             handleFrameException(std::move(eptr));
         });
-        main_loop_->setFrameCompletedCallback([this]() { onFrameCompleted(); });
+        main_loop_->setFrameCompletedCallback([this]() {
+            onFrameCompleted();
+            if (window_manager_)
+                window_manager_->dispatchNativeDrags([this] { return main_loop_->runModalFrame(); });
+        });
     }
 
     void VisualizerImpl::handleFrameException(std::exception_ptr eptr) noexcept {
@@ -2292,6 +2300,8 @@ namespace lfs::vis {
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
+        if (trainer_manager_)
+            trainer_manager_->syncCropBox();
 
         if (pending_training_completion_refresh_frames_ > 0 &&
             (!trainer_manager_ || !trainer_manager_->isTrainingActive())) {
@@ -2666,7 +2676,12 @@ namespace lfs::vis {
         // above the display rate when presenting does not block. Wakes without input start at most
         // one display interval after the last presented frame started; requests stay queued for this
         // frame, and work posted meanwhile is picked up by the next wait.
-        if (last_presented_frame_start_) {
+        // Stochastic refinement is finite work, not a periodic animation. Keep
+        // polling input between samples, but let available GPU slots advance it.
+        const bool refinement_pending = rendering_manager_ &&
+                                        rendering_manager_->frameDemandLedger().hasPendingRequest(
+                                            FrameReason::StochasticAccumulation);
+        if (last_presented_frame_start_ && !refinement_pending) {
             const auto ready_at = *last_presented_frame_start_ +
                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                       std::chrono::duration<double>(displayFrameInterval()));
@@ -2784,6 +2799,7 @@ namespace lfs::vis {
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
+            rendering_manager_->setCropPolygonGizmoActive(gui_manager_->gizmo().isCropPolygonGizmoActive());
         }
 
         bool store_dirty = false;
@@ -2799,9 +2815,15 @@ namespace lfs::vis {
         if (scene_capture_jobs_.hasPending()) {
             const bool has_mesh = scene_manager_ &&
                                   !scene_manager_->getScene().getVisibleMeshes().empty();
-            if (scene_capture_jobs_.beginFrame(has_mesh))
-                rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion,
+            if (scene_capture_jobs_.beginFrame(has_mesh)) {
+                // Preserve stochastic history on capture. Alpha blending keeps
+                // its existing full invalidation; edits carry their own flags.
+                const bool stochastic_capture = context.settings.transparency_mode !=
+                                                lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+                const auto capture_dirty = stochastic_capture ? DirtyFlag::CAMERA : DirtyFlag::ALL;
+                rendering_manager_->markDirty(capture_dirty, FrameReason::AsyncCompletion,
                                               "viewport_capture");
+            }
         }
 
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
@@ -4649,6 +4671,18 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->pollWrite();
+    }
+
+    lfs::Result<ProjectTrainingSource>
+    VisualizerImpl::projectTrainingSource() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectTrainingSource>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->trainingSource();
     }
 
     bool VisualizerImpl::consumeProjectSaveStarted() {

@@ -6,9 +6,9 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
-#include "components/sparsity_optimizer.hpp"
 #include "core/camera.hpp"
 #include "core/error.hpp"
 #include "core/parameters.hpp"
@@ -27,6 +27,7 @@
 #include "progress.hpp"
 #include "project_snapshot_chapters.hpp"
 #include "strategies/istrategy.hpp"
+#include "training_cropbox_mask.hpp"
 #include "training_snapshot_service.hpp"
 #include <array>
 #include <atomic>
@@ -329,6 +330,13 @@ namespace lfs::training {
             return params_;
         }
         void setParams(const lfs::core::param::TrainingParameters& params);
+
+        // The viewer publishes the training crop box from the thread that owns the scene, so the
+        // training thread never reads scene nodes while they are being edited. Without a
+        // publisher (headless) the trainer reads the scene itself at each step.
+        void setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry);
+        // With crop_to_cropbox on, the training crop box that exports of the trained model are cropped to.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> export_cropbox() const;
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -577,6 +585,14 @@ namespace lfs::training {
         int get_sparsity_boundary_iteration() const;
         lfs::core::param::OptimizationParameters get_runtime_optimization_params() const;
         void sync_strategy_optimization_params();
+        [[nodiscard]] bool popspa_enabled() const;
+        [[nodiscard]] bool popspa_optimizing() const noexcept;
+        [[nodiscard]] lfs::Status advance_popspa_boundaries(int completed_iteration, std::stop_token stop_token);
+        void initialize_popspa_optimizer();
+        AdamOptimizer& active_gaussian_optimizer();
+        [[nodiscard]] lfs::core::param::OptimizationParameters popspa_step_parameters() const;
+        void preserve_active_popspa_parameters(lfs::core::param::TrainingParameters& update) const;
+        void consume_popspa_project_snapshot(int completed_iteration);
         std::expected<void, std::string> initialize_camera_loss_heatmap(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
         void update_camera_loss_heatmap(const lfs::core::Camera& camera,
@@ -621,6 +637,8 @@ namespace lfs::training {
             std::optional<RawGradientResidual> raw_residual;
             lfs::core::Tensor grad_alpha;
             lfs::core::Tensor normal_pixel_weight;
+            // Already included in loss; retain it when replacing only the image terms for ROI reporting.
+            lfs::core::Tensor mask_regularization_loss;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -650,15 +668,26 @@ namespace lfs::training {
             AdamOptimizer& optimizer,
             const lfs::core::param::OptimizationParameters& opt_params);
 
-        // Sparsity optimization - returns GPU tensor (no CPU sync)
-        std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string> compute_sparsity_loss_forward(
-            const int iter, const lfs::core::SplatData& splat_data);
-
-        std::expected<void, std::string> handle_sparsity_update(const int iter, lfs::core::SplatData& splat_data);
-        std::expected<void, std::string> apply_sparsity_pruning(const int iter, lfs::core::SplatData& splat_data);
-        void install_cropbox_step_damping(
+        // The crop box from the published snapshot or the scene.
+        [[nodiscard]] std::optional<TrainingCropBoxGeometry> current_cropbox() const;
+        // Crop box for this step, from the published snapshot or the scene.
+        void refresh_cropbox_snapshot();
+        // Adam steps of splats that this view does not see inside, in front of or behind the
+        // crop box are scaled by cropbox_lr_scale.
+        void install_cropbox_view_damping(
+            lfs::core::SplatData& model,
+            AdamOptimizer& optimizer,
+            const lfs::core::Camera& camera);
+        // Refine, sampling and keep scores of splats that no training camera sees inside, in
+        // front of or behind the crop box are scaled by cropbox_lr_scale, and new splats are
+        // split between the ROI and the rest by cropbox_growth_inside.
+        void install_cropbox_score_damping(
             lfs::core::SplatData& model,
             AdamOptimizer& optimizer);
+        // Removes the splats outside the training crop box (inside it when inverse).
+        void crop_to_training_cropbox();
+        // Whether the camera stands inside the crop box (host pose, no device read).
+        [[nodiscard]] bool cropbox_contains_camera(const lfs::core::Camera& camera) const;
         [[nodiscard]] bool morton_reorder_due(int iter) const;
         void maybe_morton_reorder(int iter);
         [[nodiscard]] bool normal_supervision_active(int iter) const {
@@ -830,7 +859,10 @@ namespace lfs::training {
         // Shared CNN and per-camera FC weights for memory efficiency
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
-        std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
+        POPSpaController popspa_controller_;
+        std::unique_ptr<AdamOptimizer> popspa_optimizer_;
+        bool popspa_dataset_validated_ = false;
+        std::atomic<int> popspa_completed_iteration_{-1};
 
         std::unique_ptr<TrainingSnapshotService>
             project_snapshot_service_;
@@ -840,6 +872,10 @@ namespace lfs::training {
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
+        // Independent of coalesced explicit requests; reserved before the
+        // target POPSpa step and consumed only by its CLI capture.
+        std::shared_ptr<ProjectSnapshotChapters>
+            popspa_cli_project_chapters_;
         std::uint64_t
             prestaged_project_request_id_ = 0;
         std::filesystem::path prepared_project_path_;
@@ -919,14 +955,18 @@ namespace lfs::training {
         core::Tensor fused_erank_reg_loss_;
         core::Tensor fused_dc_reg_loss_;
         core::Tensor fused_sh_rest_reg_loss_;
+        core::Tensor color_variance_loss_;
         float train_frame_scale_ = 1.0f;
-        // cropbox damping mask cache (rebuild on cropbox/topology change only)
-        core::Tensor cropbox_damping_cached_mask_;
-        size_t cropbox_damping_cached_n_ = 0;
-        size_t cropbox_damping_geom_fp_ = 0;
-        float cropbox_damping_cached_scale_ = 1.0f;
-        bool cropbox_damping_cache_valid_ = false;
-        std::uint64_t cropbox_damping_rebuild_count_ = 0;
+        // Crop box (ROI) state: the snapshot for this step, the published one, and per-step masks.
+        std::optional<TrainingCropBoxGeometry> cropbox_;
+        mutable std::mutex cropbox_publish_mutex_;
+        std::optional<TrainingCropBoxGeometry> cropbox_published_;
+        std::atomic<bool> cropbox_published_mode_{false};
+        core::Tensor cropbox_view_reject_;
+        core::Tensor cropbox_score_reject_;
+        core::Tensor cropbox_roi_rows_;
+        core::Tensor cropbox_camera_centres_;
+        core::Tensor roi_camera_rays_;
         core::Tensor depth_loss_scalar_;
         core::Tensor depth_loss_grad_;
         core::Tensor depth_loss_grad_alpha_;
@@ -938,6 +978,13 @@ namespace lfs::training {
         core::Tensor normal_consistency_partials_;
         core::Tensor normal_prior_depth_scalar_;
         core::Tensor roi_weight_map_;
+        // The reported loss measures the image inside the crop box: its weight map (outside 0)
+        // and the forward-only L1/D-SSIM over it, on loss readback iterations.
+        core::Tensor roi_report_weight_map_;
+        lfs::training::kernels::MaskedL1SSIMValueWorkspace roi_report_loss_;
+        kernels::GradientResidualWorkspace roi_report_residual_;
+        losses::MaskPreprocessWorkspace roi_report_mask_;
+        core::Tensor roi_report_structure_weight_;
         // Dataset-level normal-prior convention, resolved once at startup
         bool normal_prior_flip_yz_ = false;
         bool normal_prior_world_space_ = false;
@@ -1092,8 +1139,12 @@ namespace lfs::training {
         // the pipeline with .item(). NaN/Inf detection lags by at most
         // LOSS_RING * LOSS_SYNC_INTERVAL iterations.
         static constexpr size_t LOSS_RING = 4;
+        static constexpr int LOSS_SYNC_INTERVAL = 10;
+        [[nodiscard]] static bool is_loss_readback_iteration(const int iter) {
+            return iter % LOSS_SYNC_INTERVAL == 0 || iter == 1;
+        }
         struct LossReadbackSlot {
-            float* pinned = nullptr;
+            float* pinned = nullptr; // [loss, weight of the reported region]
             cudaEvent_t done = nullptr;
             int iter = 0;
             bool in_flight = false;
@@ -1106,7 +1157,15 @@ namespace lfs::training {
         // called directly.
         std::function<cudaError_t()> recovery_sync_for_testing_;
 
-        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
+        // `region_weight` is the pixel weight behind a crop box loss; a sample whose view
+        // misses the box is not reported.
+        core::Tensor report_region_image_loss(const core::Tensor& corrected, const core::Tensor& raw,
+                                              const core::Tensor& target, const core::Tensor& mask,
+                                              const core::Tensor& region, const core::Tensor& structure_map,
+                                              const core::param::OptimizationParameters& params, int iteration,
+                                              const core::Tensor& mask_regularization_loss = {});
+        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter,
+                                const lfs::core::Tensor& region_weight = {});
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
         int invisible_iteration_streak_ = 0;
@@ -1149,19 +1208,24 @@ namespace lfs::training {
         const std::filesystem::path& destination,
         const lfs::Error& cause);
 
-    // test hook for cropbox damping mask cache.
+    // Test hooks for the crop box damping masks.
     struct TrainerCropboxMaskTestAccess {
-        static void install(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer) {
-            t.install_cropbox_step_damping(model, optimizer);
+        static void refresh(Trainer& t) { t.refresh_cropbox_snapshot(); }
+        static void install_view(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer,
+                                 const core::Camera& camera) {
+            t.install_cropbox_view_damping(model, optimizer, camera);
+        }
+        static void install_score(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer) {
+            t.install_cropbox_score_damping(model, optimizer);
         }
         static void set_cropbox_lr_scale(Trainer& t, float scale) {
             t.params_.optimization.cropbox_lr_scale = scale;
         }
-        [[nodiscard]] static std::uint64_t rebuild_count(const Trainer& t) noexcept {
-            return t.cropbox_damping_rebuild_count_;
+        [[nodiscard]] static bool contains_camera(const Trainer& t, const core::Camera& camera) {
+            return t.cropbox_contains_camera(camera);
         }
-        static void reset_rebuild_count(Trainer& t) noexcept {
-            t.cropbox_damping_rebuild_count_ = 0;
+        [[nodiscard]] static const std::optional<TrainingCropBoxGeometry>& snapshot(const Trainer& t) {
+            return t.cropbox_;
         }
     };
 } // namespace lfs::training

@@ -194,7 +194,7 @@ namespace lfs::vis::gui {
             masked.mouse_button_events.clear();
             return masked;
         };
-        const PanelInputState masked_panel_input =
+        PanelInputState masked_panel_input =
             float_blocks_right_panel ? mask_mouse_input(input) : input;
 
         const bool python_console_visible = window_states["python_console"];
@@ -228,7 +228,8 @@ namespace lfs::vis::gui {
         const float content_top = screen.work_pos.y + PAD;
 
         const float splitter_h = SPLITTER_H * dpi;
-        const float tab_bar_h = TAB_BAR_H * dpi;
+        const float tab_content_x = content_x + RIGHT_TAB_BAR_W * dpi;
+        const float tab_content_w = std::max(0.0f, content_w - RIGHT_TAB_BAR_W * dpi);
         const float avail_h = panel_h - 2.0f * PAD;
 
         const float scene_h = scenePanelHeight(avail_h, dpi);
@@ -241,6 +242,8 @@ namespace lfs::vis::gui {
                                       .mode = PanelRenderMode::DirectPreload,
                                       .width = content_w,
                                       .height = scene_h,
+                                      .clip_y_min = content_top,
+                                      .clip_y_max = content_top + scene_h,
                                       .input = &masked_panel_input,
                                   },
                                   draw_ctx);
@@ -254,6 +257,8 @@ namespace lfs::vis::gui {
                                       .y = content_top,
                                       .width = content_w,
                                       .height = scene_h,
+                                      .clip_y_min = content_top,
+                                      .clip_y_max = content_top + scene_h,
                                       .input = &masked_panel_input,
                                   },
                                   draw_ctx);
@@ -267,6 +272,8 @@ namespace lfs::vis::gui {
                                   .y = content_top,
                                   .width = content_w,
                                   .height = scene_h,
+                                  .clip_y_min = content_top,
+                                  .clip_y_max = content_top + scene_h,
                                   .input = &masked_panel_input,
                               },
                               draw_ctx);
@@ -279,7 +286,7 @@ namespace lfs::vis::gui {
         }
         syncActiveTab(main_tabs, focus_panel_name);
 
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
         if (active_tab_id_.empty()) {
@@ -301,7 +308,7 @@ namespace lfs::vis::gui {
                 preloaded_main_h = reg.render_panels({
                                                          .target = PanelRenderTarget::for_panel(active_tab_id_),
                                                          .mode = PanelRenderMode::DirectPreload,
-                                                         .width = content_w,
+                                                         .width = tab_content_w,
                                                          .height = kPreloadMaxHeight,
                                                          .clip_y_min = clip_y_min,
                                                          .clip_y_max = clip_y_max,
@@ -314,7 +321,7 @@ namespace lfs::vis::gui {
                 preloaded_child_h = reg.render_panels({
                                                           .target = PanelRenderTarget::for_children(active_tab_id_),
                                                           .mode = PanelRenderMode::DirectPreload,
-                                                          .width = content_w,
+                                                          .width = tab_content_w,
                                                           .height = kPreloadMaxHeight,
                                                           .clip_y_min = clip_y_min,
                                                           .clip_y_max = clip_y_max,
@@ -331,8 +338,8 @@ namespace lfs::vis::gui {
         }
 
         const bool over_tab_content =
-            masked_panel_input.mouse_x >= content_x &&
-            masked_panel_input.mouse_x < content_x + content_w &&
+            masked_panel_input.mouse_x >= tab_content_x &&
+            masked_panel_input.mouse_x < tab_content_x + tab_content_w &&
             masked_panel_input.mouse_y >= tab_content_y &&
             masked_panel_input.mouse_y < tab_content_y + tab_content_h;
 
@@ -350,9 +357,9 @@ namespace lfs::vis::gui {
                 main_h = reg.render_panels({
                                                .target = PanelRenderTarget::for_panel(active_tab_id_),
                                                .mode = PanelRenderMode::Direct,
-                                               .x = content_x,
+                                               .x = tab_content_x,
                                                .y = y_cursor,
-                                               .width = content_w,
+                                               .width = tab_content_w,
                                                .height = kPreloadMaxHeight,
                                                .clip_y_min = clip_y_min,
                                                .clip_y_max = clip_y_max,
@@ -365,9 +372,9 @@ namespace lfs::vis::gui {
                 child_h = reg.render_panels({
                                                 .target = PanelRenderTarget::for_children(active_tab_id_),
                                                 .mode = PanelRenderMode::Direct,
-                                                .x = content_x,
+                                                .x = tab_content_x,
                                                 .y = y_cursor + main_h,
-                                                .width = content_w,
+                                                .width = tab_content_w,
                                                 .height = kPreloadMaxHeight,
                                                 .clip_y_min = clip_y_min,
                                                 .clip_y_max = clip_y_max,
@@ -381,9 +388,9 @@ namespace lfs::vis::gui {
                 main_h = reg.render_panels({
                                                .target = PanelRenderTarget::for_panel(active_tab_id_),
                                                .mode = PanelRenderMode::DirectCached,
-                                               .x = content_x,
+                                               .x = tab_content_x,
                                                .y = y_cursor,
-                                               .width = content_w,
+                                               .width = tab_content_w,
                                                .height = kPreloadMaxHeight,
                                                .clip_y_min = clip_y_min,
                                                .clip_y_max = clip_y_max,
@@ -396,9 +403,9 @@ namespace lfs::vis::gui {
                 child_h = reg.render_panels({
                                                 .target = PanelRenderTarget::for_children(active_tab_id_),
                                                 .mode = PanelRenderMode::DirectCached,
-                                                .x = content_x,
+                                                .x = tab_content_x,
                                                 .y = y_cursor + main_h,
-                                                .width = content_w,
+                                                .width = tab_content_w,
                                                 .height = kPreloadMaxHeight,
                                                 .clip_y_min = clip_y_min,
                                                 .clip_y_max = clip_y_max,
@@ -467,7 +474,8 @@ namespace lfs::vis::gui {
         const float content_top = screen.work_pos.y + PAD;
 
         const float splitter_h = SPLITTER_H * dpi;
-        const float tab_bar_h = TAB_BAR_H * dpi;
+        const float tab_content_x = content_x + RIGHT_TAB_BAR_W * dpi;
+        const float tab_content_w = std::max(0.0f, content_w - RIGHT_TAB_BAR_W * dpi);
         const float avail_h = panel_h - 2.0f * PAD;
         const float scene_h = scenePanelHeight(avail_h, dpi);
 
@@ -481,6 +489,8 @@ namespace lfs::vis::gui {
                                   .y = content_top,
                                   .width = content_w,
                                   .height = scene_h,
+                                  .clip_y_min = content_top,
+                                  .clip_y_max = content_top + scene_h,
                                   .input = &input,
                               },
                               draw_ctx);
@@ -493,7 +503,7 @@ namespace lfs::vis::gui {
         }
         syncActiveTab(main_tabs, focus_panel_name);
 
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
         if (active_tab_id_.empty()) {
@@ -516,9 +526,9 @@ namespace lfs::vis::gui {
             main_h = reg.render_panels({
                                            .target = PanelRenderTarget::for_panel(active_tab_id_),
                                            .mode = PanelRenderMode::DirectCached,
-                                           .x = content_x,
+                                           .x = tab_content_x,
                                            .y = y_cursor,
-                                           .width = content_w,
+                                           .width = tab_content_w,
                                            .height = kPreloadMaxHeight,
                                            .clip_y_min = clip_y_min,
                                            .clip_y_max = clip_y_max,
@@ -531,9 +541,9 @@ namespace lfs::vis::gui {
             child_h = reg.render_panels({
                                             .target = PanelRenderTarget::for_children(active_tab_id_),
                                             .mode = PanelRenderMode::DirectCached,
-                                            .x = content_x,
+                                            .x = tab_content_x,
                                             .y = y_cursor + main_h,
-                                            .width = content_w,
+                                            .width = tab_content_w,
                                             .height = kPreloadMaxHeight,
                                             .clip_y_min = clip_y_min,
                                             .clip_y_max = clip_y_max,

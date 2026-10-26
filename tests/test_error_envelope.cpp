@@ -254,7 +254,7 @@ TEST(ErrorEnvelopeTest, PresentationKeyStaysOutOfLogsAndWireMessages) {
     EXPECT_EQ(log.find("message_key"), std::string::npos);
     EXPECT_EQ(log.find("messages.err_"), std::string::npos);
     const auto wire = lfs::core::to_wire_envelope(*returned);
-    EXPECT_EQ(wire["message"], error.user_message());
+    EXPECT_EQ(wire["message"].get<std::string>(), error.user_message());
     EXPECT_EQ(wire.dump().find("messages.err_"), std::string::npos);
     EXPECT_EQ(wire.dump().find("message_key"), std::string::npos);
 }

@@ -18,6 +18,7 @@
 #include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -304,6 +305,93 @@ namespace lfs::io {
             return lfs::core::environment::flag("LFS_NVCODEC_DIAGNOSTICS");
         }
 
+        // 16x16 baseline JPEG. Built-in modules alone create an instance that decodes no JPEG, so the GPU path
+        // counts as available only when this decodes.
+        constexpr std::array<std::uint8_t, 317> kProbeJpeg{
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08,
+            0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0a, 0x0c, 0x14, 0x0d, 0x0c, 0x0b, 0x0b, 0x0c, 0x19, 0x12,
+            0x13, 0x0f, 0x14, 0x1d, 0x1a, 0x1f, 0x1e, 0x1d, 0x1a, 0x1c, 0x1c, 0x20, 0x24, 0x2e, 0x27, 0x20,
+            0x22, 0x2c, 0x23, 0x1c, 0x1c, 0x28, 0x37, 0x29, 0x2c, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1f, 0x27,
+            0x39, 0x3d, 0x38, 0x32, 0x3c, 0x2e, 0x33, 0x34, 0x32, 0xff, 0xdb, 0x00, 0x43, 0x01, 0x09, 0x09,
+            0x09, 0x0c, 0x0b, 0x0c, 0x18, 0x0d, 0x0d, 0x18, 0x32, 0x21, 0x1c, 0x21, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+            0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0xff, 0xc0,
+            0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x10, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11,
+            0x01, 0xff, 0xc4, 0x00, 0x15, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x07, 0xff, 0xc4, 0x00, 0x18, 0x10, 0x00, 0x02, 0x03,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x05,
+            0x22, 0x31, 0xff, 0xc4, 0x00, 0x15, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0xff, 0xc4, 0x00, 0x1a, 0x11, 0x00, 0x02,
+            0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05,
+            0x04, 0x06, 0x21, 0x31, 0x61, 0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11,
+            0x00, 0x3f, 0x00, 0x9f, 0xa3, 0x05, 0x94, 0x13, 0x21, 0x05, 0x94, 0x12, 0xa1, 0x05, 0x94, 0x13,
+            0xa3, 0x05, 0x94, 0x29, 0x2d, 0xaf, 0x42, 0xbe, 0xef, 0x59, 0x3f, 0xff, 0xd9};
+
+        bool decodes_probe_jpeg(nvimgcodecInstance_t instance) {
+            using namespace lfs::core;
+            const nvimgcodecExecutionParams_t exec_params{
+                NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS, sizeof(nvimgcodecExecutionParams_t), nullptr, nullptr,
+                nullptr, 0, nullptr, 0, 0, 0, 0, nullptr};
+            nvimgcodecDecoder_t decoder = nullptr;
+            if (nvimgcodecDecoderCreate(instance, &decoder, &exec_params, nullptr) != NVIMGCODEC_STATUS_SUCCESS ||
+                !decoder) {
+                return false;
+            }
+
+            nvimgcodecCodeStream_t code_stream = nullptr;
+            nvimgcodecImage_t image = nullptr;
+            nvimgcodecFuture_t future = nullptr;
+            nvimgcodecProcessingStatus_t processing = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
+            nvimgcodecImageInfo_t info{};
+            info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+            info.struct_size = sizeof(nvimgcodecImageInfo_t);
+            Tensor pixels;
+            if (nvimgcodecCodeStreamCreateFromHostMem(instance, &code_stream, kProbeJpeg.data(), kProbeJpeg.size(),
+                                                      nullptr) == NVIMGCODEC_STATUS_SUCCESS &&
+                nvimgcodecCodeStreamGetImageInfo(code_stream, &info) == NVIMGCODEC_STATUS_SUCCESS) {
+                const auto width = info.plane_info[0].width;
+                const auto height = info.plane_info[0].height;
+                pixels = Tensor::empty(TensorShape({height, width, 3}), Device::CUDA, DataType::UInt8);
+
+                nvimgcodecImageInfo_t output{};
+                output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                output.struct_size = sizeof(nvimgcodecImageInfo_t);
+                output.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+                output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+                output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+                output.num_planes = 1;
+                output.plane_info[0].height = height;
+                output.plane_info[0].width = width;
+                output.plane_info[0].row_stride = width * 3;
+                output.plane_info[0].num_channels = 3;
+                output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+                output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                output.buffer = pixels.data_ptr();
+
+                nvimgcodecDecodeParams_t decode_params{};
+                decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+                decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+                size_t status_count = 1;
+                if (nvimgcodecImageCreate(instance, &image, &output) == NVIMGCODEC_STATUS_SUCCESS &&
+                    nvimgcodecDecoderDecode(decoder, &code_stream, &image, 1, &decode_params, &future) ==
+                        NVIMGCODEC_STATUS_SUCCESS &&
+                    nvimgcodecFutureWaitForAll(future) == NVIMGCODEC_STATUS_SUCCESS) {
+                    nvimgcodecFutureGetProcessingStatus(future, &processing, &status_count);
+                }
+            }
+
+            if (future)
+                nvimgcodecFutureDestroy(future);
+            if (image)
+                nvimgcodecImageDestroy(image);
+            if (code_stream)
+                nvimgcodecCodeStreamDestroy(code_stream);
+            nvimgcodecDecoderDestroy(decoder);
+            return processing == NVIMGCODEC_PROCESSING_STATUS_SUCCESS;
+        }
+
         bool check_nvimgcodec_availability_fast() {
             int device_count = 0;
             cudaError_t err = cudaGetDeviceCount(&device_count);
@@ -338,8 +426,9 @@ namespace lfs::io {
                 return false;
             }
 
+            const bool decodes = decodes_probe_jpeg(test_instance);
             nvimgcodecInstanceDestroy(test_instance);
-            return true;
+            return decodes;
         }
 
         // Comprehensive availability check with diagnostics
@@ -447,7 +536,12 @@ namespace lfs::io {
                              nvimgcodec_status_to_string(decoder_status));
                 }
 
+                const bool decodes = decodes_probe_jpeg(test_instance);
                 nvimgcodecInstanceDestroy(test_instance);
+                if (!decodes) {
+                    LOG_ERROR("[nvImageCodec Diagnostics] === nvImageCodec UNAVAILABLE (JPEG probe did not decode) ===");
+                    return false;
+                }
                 LOG_INFO("[nvImageCodec Diagnostics] === nvImageCodec AVAILABLE ===");
                 return true;
             }
@@ -1135,8 +1229,18 @@ namespace lfs::io {
             } else {
                 available = check_nvimgcodec_availability_fast();
             }
+            if (available) {
+                LOG_INFO("JPEG decoding runs on the GPU (nvImageCodec)");
+            } else {
+                LOG_WARN("JPEG decoding runs on the CPU: nvImageCodec cannot decode JPEG on this system. "
+                         "Set LFS_NVCODEC_DIAGNOSTICS=1 for details.");
+            }
         });
         return available;
+    }
+
+    std::string_view NvCodecImageLoader::jpeg_decoder() {
+        return is_available() ? "nvImageCodec (GPU)" : "CPU";
     }
 
     std::vector<uint8_t> NvCodecImageLoader::read_file(const std::filesystem::path& path) {

@@ -229,6 +229,12 @@ def remember_camera_view_snap() -> bool:
 def set_remember_camera_view_snap(enabled: bool) -> None:
     """Enable or disable camera view snap persistence"""
 
+def take_splat_export_request() -> list[str]: ...
+
+def get_splat_drag_preferences() -> dict: ...
+
+def set_splat_drag_preferences(arg: dict, /) -> None: ...
+
 def scene_graph_selection_markers() -> bool:
     """Return whether Scene Graph selection markers are visible"""
 
@@ -236,10 +242,10 @@ def set_scene_graph_selection_markers(enabled: bool) -> None:
     """Show or hide Scene Graph selection markers"""
 
 def get_progress_bar_style() -> str:
-    """Return the status bar progress style (classic or miner)"""
+    """Return the status bar progress style (classic, miner, or tessle)"""
 
 def set_progress_bar_style(style: str) -> None:
-    """Set the status bar progress style (classic or miner)"""
+    """Set the status bar progress style (classic, miner, or tessle)"""
 
 def get_viewport_chrome_style() -> str:
     """Return the viewport controls style (solid, translucent, or frosted)"""
@@ -2003,9 +2009,9 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
 def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
     """Choose a text log export path. Returns empty string if cancelled."""
 
-def save_json_file_dialog(default_name: str = 'config.json') -> str:
+def save_json_file_dialog(default_name: str = 'config.json', with_overwrite_confirmation: bool = False) -> object:
     """
-    Open a save file dialog for JSON files. Returns empty string if cancelled.
+    Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).
     """
 
 def save_png_file_dialog(default_name: str = 'export.png') -> str:
@@ -2142,6 +2148,34 @@ def is_ctrl_down() -> bool:
 
 def is_shift_down() -> bool:
     """Check if Shift is currently held"""
+
+def is_mouse_button_down(button: int = 0) -> bool:
+    """Check if a mouse button is held: 0 left, 1 right, 2 middle"""
+
+def begin_value_drag() -> bool:
+    """
+    Hide and lock the pointer for a value drag from a UI event handler. Motion keeps accumulating past the window edge; returns False when the pointer cannot be locked.
+    """
+
+def take_value_drag_delta() -> float:
+    """
+    Horizontal pointer motion in window points since the previous call during a value drag.
+    """
+
+def value_drag_state() -> str:
+    """
+    'active' while the value drag holds the pointer, 'cancelled' after Escape, the right button or focus loss ended it, otherwise 'idle'.
+    """
+
+def request_viewport_overlay_sync() -> None:
+    """
+    Run the viewport overlay's document sync on the next frame. It does not wake the frame loop; pair it with request_redraw when no input will arrive.
+    """
+
+def end_value_drag() -> None:
+    """
+    Release the value drag pointer lock and return the pointer to where the drag started.
+    """
 
 @overload
 def tr(key: str) -> str:
@@ -2300,7 +2334,7 @@ def apply_cropbox() -> None:
     """Apply the selected cropbox"""
 
 def set_crop_tool_shape(shape: str) -> None:
-    """Set the active crop tool shape: box or ellipsoid"""
+    """Set the active crop tool shape: box, ellipsoid, or polygon"""
 
 def get_crop_tool_shape() -> str:
     """Get the active crop tool shape"""
@@ -2316,6 +2350,11 @@ def get_crop_tool_operation() -> str:
 def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
+    """
+
+def start_crop_polygon() -> None:
+    """
+    Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane
     """
 
 def can_apply_align() -> bool:
@@ -2357,6 +2396,16 @@ def reset_crop_tool() -> None:
 
 def delete_crop_tool_volume() -> None:
     """Delete the active crop tool primitive and leave the crop tool"""
+
+def toggle_crop_tool_inverse() -> None:
+    """
+    Invert the selected crop polygon, crop box or ellipsoid, as the pie menu's Invert does
+    """
+
+def get_crop_tool_inverse() -> bool | None:
+    """
+    Whether the crop volume Invert acts on is inverted, or None without one
+    """
 
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""
@@ -2760,6 +2809,18 @@ def get_zoom_speed_preference() -> float:
 
 def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
     """Set the default WASD navigation speed (1-100)"""
+
+def get_camera_browse_repeat() -> bool:
+    """Get whether held camera shortcuts repeat through dataset images"""
+
+def set_camera_browse_repeat(enabled: bool) -> None:
+    """Enable held camera shortcuts through dataset images"""
+
+def get_camera_browse_repeat_rate() -> float:
+    """Get camera image repeat rate in images per second"""
+
+def set_camera_browse_repeat_rate(rate: float, persist: bool = True) -> None:
+    """Set camera image repeat rate (1-20 images per second)"""
 
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""

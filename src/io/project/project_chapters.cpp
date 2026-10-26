@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
@@ -2434,6 +2435,92 @@ namespace lfs::io::project {
             };
         }
 
+        lfs::Result<CropPolygonRecord> parse_crop_polygon(
+            const Json& value, const std::string_view field) {
+            if (auto valid = require_object(value, "SCNG", field); !valid) {
+                return std::move(valid).error();
+            }
+            const auto vertices_member = value.find("vertices");
+            const auto color_member = value.find("color");
+            if (vertices_member == value.end() || color_member == value.end() ||
+                !vertices_member->is_array()) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is incomplete.",
+                    std::format("SCNG.{} is missing vertices or color", field), "SCNG",
+                    field);
+            }
+            if (vertices_member->size() < lfs::core::crop_polygon::kMinVertices ||
+                vertices_member->size() > lfs::core::crop_polygon::kMaxVertices) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{}.vertices has {} entries, expected 3 to {}", field,
+                                vertices_member->size(), lfs::core::crop_polygon::kMaxVertices),
+                    "SCNG", field);
+            }
+            CropPolygonRecord result;
+            std::vector<glm::vec2> outline;
+            outline.reserve(vertices_member->size());
+            for (std::size_t i = 0; i < vertices_member->size(); ++i) {
+                auto vertex = fixed_array<float, 2>((*vertices_member)[i], "SCNG",
+                                                    std::format("{}.vertices[{}]", field, i));
+                if (!vertex) {
+                    return std::move(vertex).error();
+                }
+                result.vertices.push_back(*vertex);
+                outline.emplace_back((*vertex)[0], (*vertex)[1]);
+            }
+            auto color = fixed_array<float, 3>(*color_member, "SCNG",
+                                               std::format("{}.color", field));
+            auto half_depth = required<float>(value, "half_depth", "SCNG", field);
+            auto inverse = required<bool>(value, "inverse", "SCNG", field);
+            auto enabled = required<bool>(value, "enabled", "SCNG", field);
+            auto line_width = required<float>(value, "line_width", "SCNG", field);
+            if (!color) {
+                return std::move(color).error();
+            }
+            if (!half_depth) {
+                return std::move(half_depth).error();
+            }
+            if (!inverse) {
+                return std::move(inverse).error();
+            }
+            if (!enabled) {
+                return std::move(enabled).error();
+            }
+            if (!line_width) {
+                return std::move(line_width).error();
+            }
+            if (!std::isfinite(*line_width) || *line_width <= 0.0f ||
+                !lfs::core::crop_polygon::isValidHalfDepth(*half_depth) ||
+                !lfs::core::crop_polygon::isValidOutline(outline)) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{} has a degenerate outline, depth, or line width", field),
+                    "SCNG", field);
+            }
+            result.half_depth = *half_depth;
+            result.inverse = *inverse;
+            result.enabled = *enabled;
+            result.color = *color;
+            result.line_width = *line_width;
+            return result;
+        }
+
+        Json crop_polygon_json(const CropPolygonRecord& value) {
+            Json vertices = Json::array();
+            for (const auto& vertex : value.vertices) {
+                vertices.push_back(json_array(vertex));
+            }
+            return Json{
+                {"vertices", std::move(vertices)},
+                {"half_depth", value.half_depth},
+                {"inverse", value.inverse},
+                {"enabled", value.enabled},
+                {"color", json_array(value.color)},
+                {"line_width", value.line_width},
+            };
+        }
+
         lfs::Result<std::vector<float>> finite_float_vector(
             const Json& object, const std::string_view key,
             const std::string_view field, const std::size_t maximum_size) {
@@ -2650,12 +2737,22 @@ namespace lfs::io::project {
                 .locked = *locked,
                 .training_enabled = *training,
                 .payload_diverged = *diverged,
+                .point_cloud_source = false,
                 .georef_pose = std::nullopt,
                 .payload = std::nullopt,
                 .cropbox = std::nullopt,
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
+                .crop_polygon = std::nullopt,
             };
+            if (JsonChapterDom::read_json_ref(element, "point_cloud_source")) {
+                auto point_source = JsonChapterDom::read<bool>(element, "point_cloud_source");
+                if (!point_source)
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "A scene node source hint is invalid.",
+                        "point_cloud_source must be a boolean", "SCNG", "nodes.point_cloud_source");
+                result.point_cloud_source = *point_source;
+            }
 
             if (const Json* pose =
                     JsonChapterDom::read_json_ref(element, "georef_pose");
@@ -2722,6 +2819,24 @@ namespace lfs::io::project {
                 }
                 result.ellipsoid = std::move(*parsed);
             }
+            if (const Json* crop_polygon =
+                    JsonChapterDom::read_json_ref(element, "crop_polygon");
+                crop_polygon) {
+                auto parsed = parse_crop_polygon(*crop_polygon, "nodes.crop_polygon");
+                if (!parsed) {
+                    return std::move(parsed).error();
+                }
+                result.crop_polygon = std::move(*parsed);
+            }
+            if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
+                if (!collision->is_string() ||
+                    !(result.collision = lfs::core::Uuid::from_string(collision->get<std::string>())) ||
+                    result.collision->is_nil())
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "Invalid collision payload reference.",
+                        "SCNG collision must reference a COLV UUID; unreleased inline hexadecimal occupancy is unsupported",
+                        "SCNG", "nodes.collision");
+            }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
                 camera) {
@@ -2744,6 +2859,13 @@ namespace lfs::io::project {
 
     SceneGraphChapter::SceneGraphChapter(JsonChapterDom dom)
         : dom_(std::move(dom)) {}
+
+    std::vector<std::byte> SceneGraphChapter::to_bytes() const {
+        auto bytes = dom_.to_bytes();
+        if (bytes.size() > JsonChapterDom::max_bytes)
+            throw std::length_error("Scene graph exceeds the project JSON chapter size supported by the reader");
+        return bytes;
+    }
 
     lfs::Result<SceneGraphChapter> SceneGraphChapter::parse(
         const std::string_view bytes) {
@@ -2858,6 +2980,10 @@ namespace lfs::io::project {
                 "UUID/type/name/transform must be valid and generated keyframes are excluded",
                 "SCNG", "nodes");
         }
+        if (value.collision && (value.collision->is_nil() || value.type != "collision"))
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
+                "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
         if (value.payload &&
             (value.payload->fourcc.size() != 4 ||
              value.payload->instance_uuid.is_nil() ||
@@ -2906,6 +3032,10 @@ namespace lfs::io::project {
         element["locked"] = value.locked;
         element["training_enabled"] = value.training_enabled;
         element["payload_diverged"] = value.payload_diverged;
+        if (value.point_cloud_source)
+            element["point_cloud_source"] = true;
+        else
+            element.erase("point_cloud_source");
         if (pose) {
             element["georef_pose"] = std::move(*pose);
         } else {
@@ -2926,6 +3056,15 @@ namespace lfs::io::project {
         } else {
             element.erase("ellipsoid");
         }
+        if (value.crop_polygon) {
+            element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
+        } else {
+            element.erase("crop_polygon");
+        }
+        if (value.collision)
+            element["collision"] = value.collision->to_string();
+        else
+            element.erase("collision");
         if (value.camera) {
             element["camera"] = camera_json(*value.camera);
         } else {
@@ -3940,11 +4079,47 @@ namespace lfs::io::project {
             std::move(*result), parameters);
     }
 
+    void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot) {
+        using Role = std::pair<
+            lfs::core::param::OptimizationParameters*,
+            const ParameterManagerSnapshot::ReferenceBindings*>;
+        const std::array roles{
+            Role{&snapshot.mcmc_session, &snapshot.mcmc_session_references},
+            Role{&snapshot.mrnf_session, &snapshot.mrnf_session_references},
+            Role{&snapshot.igs_session, &snapshot.igs_session_references},
+            Role{&snapshot.mcmc_current, &snapshot.mcmc_current_references},
+            Role{&snapshot.mrnf_current, &snapshot.mrnf_current_references},
+            Role{&snapshot.igs_current, &snapshot.igs_current_references},
+        };
+        for (const auto& [params, bindings] : roles) {
+            if (bindings->background_image_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->background_image_reference,
+                        params->bg_image_path)) {
+                    params->bg_image_path = *resolved;
+                }
+            }
+            if (bindings->ppisp_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->ppisp_reference,
+                        params->ppisp_sidecar_path)) {
+                    params->ppisp_sidecar_path = *resolved;
+                }
+            }
+        }
+    }
+
     void adopt_project_training_parameters(
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder) {
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root) {
+        resolve_parameter_path_references(references, project_root, snapshot);
 
         // Take the stored options and supply the resolved and command-line locations.
         auto dataset = std::move(snapshot.dataset);

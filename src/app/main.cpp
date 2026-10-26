@@ -7,6 +7,7 @@
 #include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/licht_command.hpp"
+#include "app/voxelizer.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
@@ -153,6 +154,10 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VoxelizeMode>) {
+                applyCudaContextTuning();
+                preflightGpuOrExit(false);
+                return lfs::app::run_voxelizer(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);

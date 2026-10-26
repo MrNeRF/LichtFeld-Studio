@@ -53,13 +53,15 @@ class ScrubFieldController:
                  set_value: Callable[[str, float], None], *,
                  commit_value: Callable[[str, float], None] | None = None,
                  capture_edit: Callable[[str], object] | None = None,
-                 restore_edit: Callable[[str, object], None] | None = None):
+                 restore_edit: Callable[[str, object], None] | None = None,
+                 on_error: Callable[[str], None] | None = None):
         self._specs = dict(specs)
         self._get_value = get_value
         self._set_value = set_value
         self._commit_value = commit_value
         self._capture_edit = capture_edit
         self._restore_edit = restore_edit
+        self._on_error = on_error
         self._doc = None
         self._fields: dict[str, _ScrubFieldState] = {}
         self._active_prop: str | None = None
@@ -77,6 +79,19 @@ class ScrubFieldController:
         self._fields.clear()
         self._active_prop = None
         self._doc = None
+
+    def prepare_reset(self, prop):
+        """Discard an active text draft before an external committed reset."""
+        state = self._fields.get(prop)
+        if state is None:
+            return
+        if self._active_prop == prop:
+            self._finish_active_drag(False)
+        if state.editing:
+            state.cancel_on_blur = True
+            state.input_el.blur()
+            if state.editing:
+                self._exit_edit(state)
 
     def set_spec(self, prop: str, spec: ScrubFieldSpec) -> bool:
         self._specs[prop] = spec
@@ -357,7 +372,9 @@ class ScrubFieldController:
             return
         try:
             self._commit_value(state.prop, value)
-        except (RuntimeError, TypeError, ValueError):
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
     def _enter_edit(self, state: _ScrubFieldState) -> None:
@@ -413,10 +430,14 @@ class ScrubFieldController:
                 bounded = max(state.spec.min_value, min(state.spec.max_value, parsed))
                 value = int(bounded)
             elif not math.isfinite(parsed):
+                if self._on_error:
+                    self._on_error("Expected a finite number")
                 return
             else:
                 value = parsed
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
         self._apply_value(state, value)
@@ -425,9 +446,8 @@ class ScrubFieldController:
         width = max(float(getattr(state.field, "absolute_width", 0.0)), 1.0)
         delta_x = mouse_x - state.drag_last_mouse_x
         state.drag_last_mouse_x = mouse_x
-        factor = 10.0 if event.get_bool_parameter("ctrl_key", False) else (
-            0.1 if event.get_bool_parameter("shift_key", False) else 1.0
-        )
+        accelerated = event.get_bool_parameter("shift_key", False) or event.get_bool_parameter("ctrl_key", False)
+        factor = 10.0 if accelerated else 1.0
         state.drag_value += delta_x * (state.spec.max_value - state.spec.min_value) / width * factor
         state.drag_value = max(state.spec.min_value, min(state.spec.max_value, state.drag_value))
         value = self._snap_value(state.spec, state.drag_value)
@@ -442,7 +462,9 @@ class ScrubFieldController:
 
         try:
             self._set_value(state.prop, next_value)
-        except (RuntimeError, TypeError, ValueError):
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if self._on_error:
+                self._on_error(str(exc))
             return
 
         self._sync_field(state)

@@ -45,6 +45,7 @@ namespace lfs::io {
     // through this API. Such keys are still retained and serialized unchanged.
     class LFS_IO_API JsonChapterDom {
     public:
+        static constexpr std::size_t max_bytes = 64ull * 1024 * 1024;
         using Json = nlohmann::ordered_json;
 
         class ConstElement;

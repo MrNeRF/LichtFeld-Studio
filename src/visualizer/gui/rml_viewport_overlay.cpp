@@ -11,9 +11,11 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -31,6 +33,7 @@
 #include <format>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -52,6 +55,7 @@ namespace lfs::vis::gui {
                    element->GetId() != "dm-root" &&
                    element->GetId() != "viewport-content" &&
                    !element->IsClassSet("viewport-split-divider") &&
+                   !element->IsClassSet("comparison-name") &&
                    !element->IsClassSet("left-dock-resize-indicator");
         }
 
@@ -330,7 +334,8 @@ namespace lfs::vis::gui {
     }
 
     bool RmlViewportOverlay::syncBuiltinDocument(const bool force) {
-        if (!document_ || (!force && !document_sync_dirty_))
+        const bool requested = std::exchange(document_sync_requested_, false);
+        if (!document_ || (!force && !document_sync_dirty_ && !requested))
             return false;
 
         LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.builtin_document_sync", 0.25);
@@ -413,6 +418,12 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setSplitDividerOverlay(SplitDividerOverlayState state) {
         const bool changed =
+            split_divider_overlay_.left_name != state.left_name ||
+            split_divider_overlay_.right_name != state.right_name ||
+            split_divider_overlay_.left_name_right != state.left_name_right ||
+            split_divider_overlay_.right_name_right != state.right_name_right ||
+            split_divider_overlay_.name_bottom != state.name_bottom ||
+            split_divider_overlay_.name_max_width != state.name_max_width ||
             split_divider_overlay_.visible != state.visible ||
             std::abs(split_divider_overlay_.x - state.x) > 0.5f ||
             std::abs(split_divider_overlay_.y - state.y) > 0.5f ||
@@ -956,6 +967,17 @@ namespace lfs::vis::gui {
             overlay->SetProperty("height", std::format("{:.1f}px", std::max(split_divider_overlay_.height, 0.0f)));
             markRenderNeeded(RenderReason::SplitDivider);
         }
+        const auto apply_name = [&](const char* id, const std::string& name, float right) {
+            if (auto* element = document_->GetElementById(id)) {
+                element->SetClass("hidden", !split_divider_overlay_.visible || name.empty());
+                element->SetInnerRML(Rml::StringUtilities::EncodeRml(name));
+                element->SetProperty("right", std::format("{:.1f}px", vp_size_.x - right));
+                element->SetProperty("bottom", std::format("{:.1f}px", vp_size_.y - split_divider_overlay_.name_bottom));
+                element->SetProperty("max-width", std::format("{:.1f}px", split_divider_overlay_.name_max_width));
+            }
+        };
+        apply_name("comparison-name-left", split_divider_overlay_.left_name, split_divider_overlay_.left_name_right);
+        apply_name("comparison-name-right", split_divider_overlay_.right_name, split_divider_overlay_.right_name_right);
     }
 
     void RmlViewportOverlay::applyLeftDockResizeIndicator() {
@@ -1089,8 +1111,12 @@ namespace lfs::vis::gui {
         if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, false, std::move(pointer_blocker)))
             return;
         wants_input_ = false;
+        cursor_request_ = {};
         if (!rml_context_ || !document_)
             return;
+        // The pointer rests on the dragged field; its tooltip would cover the panel.
+        const auto* const input_controller = InputController::instance();
+        const bool value_drag = input_controller && input_controller->isValueDragActive();
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
         if (rml_manager_) {
@@ -1136,8 +1162,13 @@ namespace lfs::vis::gui {
             const auto* const hover_root = viewportOverlayHoverRoot(hover);
             if (hovered_interactive_) {
                 guiFocusState().want_capture_mouse = true;
-                if (hover)
-                    tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
+                if (hover) {
+                    cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
+                    if (value_drag)
+                        tooltip_.setHover({}, nullptr);
+                    else
+                        tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
+                }
             } else {
                 tooltip_.setHover({}, nullptr);
             }
@@ -1218,6 +1249,8 @@ namespace lfs::vis::gui {
         const auto* const hover_root = viewportOverlayHoverRoot(hover);
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
+        if (over_interactive && hover)
+            cursor_request_ = rmlCursorRequestForName(hover->GetProperty<Rml::String>("cursor"));
 
         bool replayed_button_events = false;
         for (const auto& event : input.mouse_button_events) {
@@ -1285,7 +1318,9 @@ namespace lfs::vis::gui {
                     Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
             }
 
-            if (hover)
+            if (value_drag)
+                tooltip_.setHover({}, nullptr);
+            else if (hover)
                 tooltip_.setHover(resolveRmlTooltip(hover), hover_root ? hover_root : hover);
         } else {
             tooltip_.setHover({}, nullptr);
@@ -1521,7 +1556,7 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
-        const bool builtin_document_sync_due = document_sync_dirty_ ||
+        const bool builtin_document_sync_due = document_sync_dirty_ || document_sync_requested_ ||
                                                lfs::python::has_pending_rml_document_updates(document_);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {

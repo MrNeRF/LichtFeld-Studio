@@ -4,6 +4,7 @@
 
 #include "environment_math.hpp"
 #include "point_cloud_raster.cuh"
+#include "point_cloud_style.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -120,6 +121,33 @@ namespace lfs::rendering::pcraster {
                     }
                     desaturate = true;
                 }
+            } else if (params.has_crop_polygon) {
+                const auto& polygon = params.crop_polygon;
+                const float* T = polygon.to_local;
+                const float lx = matMulRow(T, 0, x, y, z, 1.0f);
+                const float ly = matMulRow(T, 1, x, y, z, 1.0f);
+                const float lz = matMulRow(T, 2, x, y, z, 1.0f);
+                // |z| <= half depth and the even-odd rule over the outline, as in soft_crop_by_polygon.
+                bool inside = fabsf(lz) <= polygon.half_depth && polygon.count >= 3;
+                if (inside) {
+                    bool crossing = false;
+                    for (int i = 0, j = polygon.count - 1; i < polygon.count; j = i++) {
+                        const float ax = polygon.vertices[2 * i];
+                        const float ay = polygon.vertices[2 * i + 1];
+                        const float bx = polygon.vertices[2 * j];
+                        const float by = polygon.vertices[2 * j + 1];
+                        if ((ay > ly) != (by > ly) && lx < (bx - ax) * (ly - ay) / (by - ay) + ax)
+                            crossing = !crossing;
+                    }
+                    inside = crossing;
+                }
+                const bool visible = polygon.inverse ? !inside : inside;
+                if (!visible) {
+                    if (!polygon.desaturate) {
+                        return;
+                    }
+                    desaturate = true;
+                }
             }
 
             const float* V = params.view;
@@ -194,9 +222,25 @@ namespace lfs::rendering::pcraster {
             b = fminf(fmaxf(b, 0.0f), 1.0f);
             if (desaturate) {
                 const float gray = 0.299f * r + 0.587f * g + 0.114f * b;
-                r = r + (gray - r) * 0.75f;
-                g = g + (gray - g) * 0.75f;
-                b = b + (gray - b) * 0.75f;
+                r = r + (gray - r) * DESATURATE_BLEND;
+                g = g + (gray - g) * DESATURATE_BLEND;
+                b = b + (gray - b) * DESATURATE_BLEND;
+            }
+
+            // Match the selection-group and additive/subtractive preview colors
+            // used by the Vulkan point renderer. Unmarked points keep their RGB.
+            const unsigned group = params.selection_mask ? params.selection_mask[idx] : 0;
+            const bool committed = group != 0;
+            const bool in_preview = params.preview_mask && params.preview_mask[idx] != 0;
+            const bool preview = in_preview && (params.preview_additive ? !committed : committed);
+            if (params.selection_colors && (committed || preview)) {
+                const float* tint = params.selection_colors + 4 * (preview ? SELECTION_PREVIEW_COLOR_INDEX : group);
+                const float blend = preview ? SELECTION_PREVIEW_BLEND : SELECTION_COMMITTED_BLEND;
+                r += (tint[0] - r) * blend;
+                g += (tint[1] - g) * blend;
+                b += (tint[2] - b) * blend;
+                const float scale = preview ? SELECTION_PREVIEW_SCALE : SELECTION_COMMITTED_SCALE;
+                radius = static_cast<int>(ceilf(fmaxf(radius + 1.0f, radius * scale)));
             }
 
             const std::uint64_t packed = packDepthColor(depth, r, g, b);

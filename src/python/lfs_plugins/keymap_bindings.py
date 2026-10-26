@@ -18,9 +18,11 @@ class KeymapBindingsSection:
         lf.keymap.ToolMode.SCALE,
         lf.keymap.ToolMode.ALIGN,
         lf.keymap.ToolMode.CROP_BOX,
+        lf.keymap.ToolMode.WALK,
     ]
 
     BINDING_SECTIONS = {
+        "walk": [lf.keymap.Action.EXIT_WALK],
         "navigation": [
             lf.keymap.Action.CAMERA_ORBIT,
             lf.keymap.Action.CAMERA_PAN,
@@ -74,6 +76,12 @@ class KeymapBindingsSection:
         ],
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,
+            lf.keymap.Action.INSERT_CROP_POLYGON_VERTEX,
+            lf.keymap.Action.REMOVE_CROP_POLYGON_VERTEX,
+        ],
+        "align": [
+            lf.keymap.Action.APPLY_ALIGNMENT,
+            lf.keymap.Action.REMOVE_LAST_POINT,
         ],
         "node_picking": [
             lf.keymap.Action.NODE_PICK,
@@ -109,6 +117,8 @@ class KeymapBindingsSection:
             lf.keymap.Action.PIE_MENU,
         ],
         "ui_global": [
+            lf.keymap.Action.NEXT_SIDEBAR_CATEGORY,
+            lf.keymap.Action.PREVIOUS_SIDEBAR_CATEGORY,
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
             lf.keymap.Action.OPEN_PREFERENCES,
@@ -487,6 +497,8 @@ class KeymapBindingsSection:
         tr = lf.ui.tr
         rows = []
 
+        if mode == lf.keymap.ToolMode.WALK:
+            self._append_binding_section(rows, tr("collision.walk"), self.BINDING_SECTIONS["walk"], mode)
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(
                 rows, tr("input_settings.section.navigation"),
@@ -513,6 +525,11 @@ class KeymapBindingsSection:
             self._append_binding_section(
                 rows, tr("input_settings.section.crop_box"),
                 self.BINDING_SECTIONS["crop_box"], mode)
+
+        if mode == lf.keymap.ToolMode.ALIGN:
+            self._append_binding_section(
+                rows, tr("input_settings.section.align"),
+                self.BINDING_SECTIONS["align"], mode)
 
         if mode in self.SCENE_NODE_MODES:
             self._append_binding_section(

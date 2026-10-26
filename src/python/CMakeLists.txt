@@ -586,7 +586,7 @@ install(TARGETS lfs_python_runtime
 if(BUILD_PORTABLE)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
-        FILES_MATCHING PATTERN "*.py"
+        FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
@@ -595,7 +595,7 @@ if(BUILD_PORTABLE)
 else()
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${PYTHON_INSTALL_DIR}"
-        FILES_MATCHING PATTERN "*.py"
+        FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"

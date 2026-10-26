@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "core/image_sharpen.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/path_utils.hpp"
 
@@ -254,10 +255,20 @@ namespace lfs::core {
             float late_lr_anneal = 1.0f;
             float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
-            // Adam and refinement signals only; strategy noise, decay, and resets remain crop-unaware.
+            // With an active crop box: Adam steps and refine scores of splats that no camera sees
+            // inside, in front of or behind the box. Strategy noise, decay and resets are unscaled.
             float cropbox_lr_scale = 0.1f;
             float cropbox_loss_weight = 0.1f;
+            // With an active crop box: share of new splats placed inside it (0..1). 0 = auto: growth
+            // follows the ROI-weighted error with no fixed split.
+            float cropbox_growth_inside = 0.0f;
+            // With an active crop box: the splats outside it are removed when training completes and left out
+            // of every export. A stopped run keeps them so it can resume.
+            bool crop_to_cropbox = false;
             float lambda_dssim = 0.2f;
+            // SteadySplats Eq. 30: weighted RGB squared distance to the training target.
+            float color_variance_weight = 0.0f;
+            size_t color_variance_warmup_iters = 0;
             float min_opacity = 0.005f;
             size_t refine_every = 100;
             size_t start_refine = 500;
@@ -375,6 +386,9 @@ namespace lfs::core {
             float growth_grad_threshold = 0.003f;
             float grow_fraction = 0.07f;
             size_t grow_until_iter = 15000;
+            // At the cap, frees the splats whose removal changes the image least so error-guided
+            // growth keeps working until grow_until_iter.
+            bool growth_exchange = false;
             float opacity_decay = 0.004f;
             float scale_decay = 0.002f;
             float means_noise_weight = 50.0f;
@@ -394,11 +408,25 @@ namespace lfs::core {
             // Mesh2Splat raster resolution when the init file is a mesh
             int init_mesh_resolution = Mesh2SplatOptions{}.resolution_target;
 
-            // Sparsity optimization parameters
+            // POPSpa post-training sparsification
             bool enable_sparsity = false;
-            int sparsify_steps = 15000;
-            float init_rho = 0.0005f;
-            float prune_ratio = 0.6f;
+            int popspa_target_count = 256000;
+            int popspa_first_prune_count = 0;
+            int popspa_sparsify_steps = 5000;
+            int popspa_refine_steps = 5000;
+            int popspa_projection_interval = 50;
+            int popspa_seed = 42;
+            float popspa_rho = 0.0005f;
+            float popspa_erank_weight = 0.01f;
+            float popspa_thin_scale_weight = 1.0f;
+            float popspa_erank_epsilon = 1e-7f;
+            float popspa_means_lr = 1.6e-6f;
+            float popspa_scales_lr = 0.005f;
+            float popspa_opacities_lr = 0.05f;
+            float popspa_quaternions_lr = 0.001f;
+            float popspa_sh0_lr = 0.0025f;
+            float popspa_shn_lr = 0.000125f;
+            float popspa_ssim_weight = 0.2f;
 
             // Perf / profiling instruments (CLI-only; no env toggles)
             bool perf_bench = false;     // --perf-bench → write perf_bench.json
@@ -412,6 +440,7 @@ namespace lfs::core {
             void apply_step_scaling();
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] float color_variance_weight_at(int iteration) const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] float scale_reg_at(int iter) const;
             void resolve_mrnf_capacity_defaults();
@@ -449,6 +478,8 @@ namespace lfs::core {
         // The PLY of a splat:<file> spec, whose rendered coverage selects the evaluated pixels.
         [[nodiscard]] LFS_CORE_API std::optional<std::string_view> eval_mask_splat_file(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 6>> parse_eval_mask_box(std::string_view spec);
+        // Three finite numbers rx,ry,rz, as --cropbox-rotation takes them.
+        [[nodiscard]] LFS_CORE_API std::optional<std::array<float, 3>> parse_cropbox_rotation(std::string_view spec);
         [[nodiscard]] LFS_CORE_API std::string normalize_eval_mask(std::string_view spec);
         // The sets of an eval_mask_report list in order, the first being the headline set; empty for an empty list.
         [[nodiscard]] LFS_CORE_API lfs::Result<std::vector<EvalPixelSet>> parse_eval_pixel_sets(std::string_view list);
@@ -460,6 +491,8 @@ namespace lfs::core {
             bool print_cache_status = true;
             int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
             bool use_16bit_color = false;
+            // Training images only; evaluation and the GT view load the photos unchanged.
+            SharpenParams sharpen;
             nlohmann::json to_json() const;
             static LoadingParams from_json(const nlohmann::json& j);
         };
@@ -563,6 +596,13 @@ namespace lfs::core {
 
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
+
+            // Region of interest: an enabled crop box on the training model, min x, y, z then max x, y, z in the
+            // dataset's coordinates. --cropbox-loss-weight and --cropbox-lr-scale set how much the rest still counts.
+            std::optional<std::array<float, 6>> cropbox = std::nullopt;
+            // Turns the --cropbox box about its centre by X, Y, Z degrees about the dataset's axes, as Rx * Ry * Rz.
+            // Unset keeps the box axis-aligned with its corners stored as given.
+            std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;

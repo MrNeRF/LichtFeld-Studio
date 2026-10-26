@@ -2019,6 +2019,11 @@ namespace lfs::io::project {
                 derived_capabilities.set(CHUNK_BYTESHUFFLE_ZSTD_V1);
             }
             if (std::any_of(rows.begin(), rows.end(), [](const ChunkInfo& row) {
+                    return row.row_kind != RowKind::Tombstone && row.key.fourcc == FOURCC_COLV;
+                })) {
+                derived_capabilities.set(COLLISION_VOLUMES_V1);
+            }
+            if (std::any_of(rows.begin(), rows.end(), [](const ChunkInfo& row) {
                     return row.block_crc_table.has_value();
                 })) {
                 derived_capabilities.set(BLOCK_CRC32C_V1);
@@ -2741,7 +2746,7 @@ namespace lfs::io::project {
     CapabilitySet supported_reader_capabilities() {
         CapabilitySet result;
         for (std::uint8_t bit = INDEX_ZSTD_V1;
-             bit <= ENCODED_SCENE_ASSETS; ++bit) {
+             bit <= COLLISION_VOLUMES_V1; ++bit) {
             result.set(bit);
         }
         return result;

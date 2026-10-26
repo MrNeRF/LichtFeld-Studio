@@ -3494,12 +3494,16 @@ namespace lfs::python {
 
         m.def(
             "save_json_file_dialog",
-            [](const std::string& default_name) -> std::string {
-                auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
-                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            [](const std::string& default_name, bool with_overwrite_confirmation) -> nb::object {
+                bool confirmed = false;
+                const auto result = lfs::vis::gui::SaveJsonFileDialog(default_name, {}, &confirmed);
+                const auto path = lfs::core::path_to_utf8(result);
+                if (with_overwrite_confirmation)
+                    return nb::make_tuple(path, confirmed);
+                return nb::cast(path);
             },
-            nb::arg("default_name") = "config.json",
-            "Open a save file dialog for JSON files. Returns empty string if cancelled.");
+            nb::arg("default_name") = "config.json", nb::arg("with_overwrite_confirmation") = false,
+            "Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).");
 
         m.def(
             "save_png_file_dialog",
@@ -3735,6 +3739,61 @@ namespace lfs::python {
             "is_shift_down",
             []() { return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0; },
             "Check if Shift is currently held");
+
+        m.def(
+            "is_mouse_button_down",
+            [](const int button) {
+                constexpr std::array<int, 3> sdl_buttons{SDL_BUTTON_LEFT, SDL_BUTTON_RIGHT, SDL_BUTTON_MIDDLE};
+                if (button < 0 || button >= static_cast<int>(sdl_buttons.size()))
+                    throw nb::value_error("button must be 0 (left), 1 (right) or 2 (middle)");
+                return (SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON_MASK(sdl_buttons[button])) != 0;
+            },
+            nb::arg("button") = 0, "Check if a mouse button is held: 0 left, 1 right, 2 middle");
+
+        m.def(
+            "begin_value_drag",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller && controller->beginValueDrag();
+            },
+            "Hide and lock the pointer for a value drag from a UI event handler. Motion keeps "
+            "accumulating past the window edge; returns False when the pointer cannot be locked.");
+
+        m.def(
+            "take_value_drag_delta",
+            []() {
+                auto* const controller = vis::InputController::instance();
+                return controller ? controller->takeValueDragDelta() : 0.0f;
+            },
+            "Horizontal pointer motion in window points since the previous call during a value drag.");
+
+        m.def(
+            "value_drag_state",
+            []() -> std::string {
+                const auto* const controller = vis::InputController::instance();
+                if (controller && controller->isValueDragActive())
+                    return "active";
+                return controller && controller->isValueDragCancelled() ? "cancelled" : "idle";
+            },
+            "'active' while the value drag holds the pointer, 'cancelled' after Escape, the right "
+            "button or focus loss ended it, otherwise 'idle'.");
+
+        m.def(
+            "request_viewport_overlay_sync",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->requestViewportOverlaySync();
+            },
+            "Run the viewport overlay's document sync on the next frame. It does not wake the "
+            "frame loop; pair it with request_redraw when no input will arrive.");
+
+        m.def(
+            "end_value_drag",
+            []() {
+                if (auto* const controller = vis::InputController::instance())
+                    controller->endValueDrag();
+            },
+            "Release the value drag pointer lock and return the pointer to where the drag started.");
 
         // Localization
         m.def(
@@ -4367,7 +4426,7 @@ namespace lfs::python {
                 markProjectSessionChapterCommitted("VIEW");
             },
             nb::arg("shape"),
-            "Set the active crop tool shape: box or ellipsoid");
+            "Set the active crop tool shape: box, ellipsoid, or polygon");
 
         m.def(
             "get_crop_tool_shape",
@@ -4404,14 +4463,26 @@ namespace lfs::python {
             "apply_crop_tool",
             []() {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                    const auto shape = gui->gizmo().cropToolShape();
+                    if (shape == "ellipsoid") {
                         lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    } else if (shape == "polygon") {
+                        lfs::core::events::cmd::ApplyCropPolygon{}.emit();
                     } else {
                         lfs::core::events::cmd::ApplyCropBox{}.emit();
                     }
                 }
             },
             "Apply the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "start_crop_polygon",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().activateCropPolygonTool();
+                }
+            },
+            "Edit the selected splat's or point cloud's crop polygon, or start drawing one on a camera-facing plane");
 
         m.def(
             "can_apply_align",
@@ -4508,7 +4579,10 @@ namespace lfs::python {
             "fit_crop_tool",
             [](bool use_percentile) {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                    const auto shape = gui->gizmo().cropToolShape();
+                    if (shape == "polygon") {
+                        gui->gizmo().fitSelectedCropPolygon(use_percentile);
+                    } else if (shape == "ellipsoid") {
                         lfs::core::events::cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
                     } else {
                         lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = use_percentile}.emit();
@@ -4522,7 +4596,10 @@ namespace lfs::python {
             "reset_crop_tool",
             []() {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                    const auto shape = gui->gizmo().cropToolShape();
+                    if (shape == "polygon") {
+                        gui->gizmo().resetSelectedCropPolygon();
+                    } else if (shape == "ellipsoid") {
                         lfs::core::events::cmd::ResetEllipsoid{}.emit();
                     } else {
                         lfs::core::events::cmd::ResetCropBox{}.emit();
@@ -4539,6 +4616,22 @@ namespace lfs::python {
                 }
             },
             "Delete the active crop tool primitive and leave the crop tool");
+
+        m.def(
+            "toggle_crop_tool_inverse",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager())
+                    gui->gizmo().toggleSelectedCropInverse();
+            },
+            "Invert the selected crop polygon, crop box or ellipsoid, as the pie menu's Invert does");
+
+        m.def(
+            "get_crop_tool_inverse",
+            []() -> std::optional<bool> {
+                auto* const gui = lfs::python::get_gui_manager();
+                return gui ? gui->gizmo().selectedCropInverse() : std::nullopt;
+            },
+            "Whether the crop volume Invert acts on is inverted, or None without one");
 
         m.def(
             "fit_cropbox_to_scene",
@@ -5282,6 +5375,11 @@ namespace lfs::python {
             nb::arg("speed"), nb::arg("persist") = true,
             "Set the default WASD navigation speed (1-100)");
 
+        m.def("get_camera_browse_repeat", [] { return vis::UserPreferences::instance().cameraBrowseRepeat(); }, "Get whether held camera shortcuts repeat through dataset images");
+        m.def("set_camera_browse_repeat", [](bool enabled) { vis::UserPreferences::instance().setCameraBrowseRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts through dataset images");
+        m.def("get_camera_browse_repeat_rate", [] { return vis::UserPreferences::instance().cameraBrowseRepeatRate(); }, "Get camera image repeat rate in images per second");
+        m.def("set_camera_browse_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setCameraBrowseRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set camera image repeat rate (1-20 images per second)");
+
         m.def(
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
@@ -5796,6 +5894,9 @@ namespace lfs::python {
         };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
+        bridge.unload_panel_plugin = [](const char* panel_id) {
+            return panel_id && unload_panel_plugin(panel_id);
+        };
 
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);

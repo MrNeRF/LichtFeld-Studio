@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #include <process.h>
@@ -47,7 +48,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
-            return style == "classic" || style == "miner";
+            return style == "classic" || style == "miner" || style == "tessle";
         }
 
         [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
@@ -335,10 +336,10 @@ namespace lfs::vis {
                                     "scene_upscaler", "marketplace_view"})
                 (void)field<std::string>(values, key, {});
             for (const char* key : {"remember_camera_navigation", "remember_camera_view_snap",
-                                    "camera_view_snap", "new_project_align_grid",
+                                    "camera_view_snap", "new_project_align_grid", "camera_browse_repeat",
                                     "scene_graph_selection_markers", "marketplace_git_checkout"})
                 (void)field<bool>(values, key, false);
-            for (const char* key : {"zoom_speed", "navigation_speed", "viewport_toolbar_free_y"})
+            for (const char* key : {"zoom_speed", "navigation_speed", "camera_browse_repeat_rate", "viewport_toolbar_free_y"})
                 (void)field<float>(values, key, 0.0f);
             const auto scale = values.find("ui_scale");
             if (scale != values.end() && !scale->is_number() &&
@@ -364,6 +365,16 @@ namespace lfs::vis {
                 (void)field<bool>(*mcp, "expose_network", false);
                 (void)field<int>(*mcp, "port", 0);
                 (void)field<bool>(*mcp, "request_logging", false);
+            }
+        }
+
+        // Camera browsing preferences were first saved under GT comparison names.
+        void migrateRenamedKeysLocked() {
+            for (const auto& [from, to] : {std::pair{"gt_comparison_key_repeat", "camera_browse_repeat"},
+                                           std::pair{"gt_comparison_repeat_rate", "camera_browse_repeat_rate"}}) {
+                if (values.contains(from) && !values.contains(to))
+                    values[to] = values[from];
+                values.erase(from);
             }
         }
 
@@ -459,6 +470,7 @@ namespace lfs::vis {
                 values = std::move(parsed);
                 persisted_values = values;
                 input.close();
+                migrateRenamedKeysLocked();
                 logInvalidFieldsLocked();
                 const auto schema = values.find("schema_version");
                 if (schema != values.end() &&
@@ -527,6 +539,12 @@ namespace lfs::vis {
         values["show_grid"] = settings.show_grid;
         values["show_camera_frustums"] = settings.show_camera_frustums;
         values["desaturate_unselected"] = settings.desaturate_unselected;
+        values["selection_outline"] = settings.selection_outline;
+        values["selection_outline_opacity"] = settings.selection_outline_opacity;
+        values["selection_outline_width"] = settings.selection_outline_width;
+        values["selection_outline_threshold"] = settings.selection_outline_threshold;
+        values["selection_outline_holes"] = settings.selection_outline_holes;
+        values["selection_outline_color"] = {settings.selection_outline_color.r, settings.selection_outline_color.g, settings.selection_outline_color.b};
         values["desaturate_cropping"] = settings.desaturate_cropping;
         values["hide_outside_depth_box"] = settings.hide_outside_depth_box;
         values["axes_size"] = settings.axes_size;
@@ -566,6 +584,11 @@ namespace lfs::vis {
             if (!it->is_boolean())
                 return invalid("show_camera_frustums");
             candidate.show_camera_frustums = it->get<bool>();
+        }
+        if (const auto it = values.find("selection_outline"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("selection_outline");
+            candidate.selection_outline = it->get<bool>();
         }
         if (const auto it = values.find("desaturate_unselected"); it != values.end()) {
             if (!it->is_boolean())
@@ -646,6 +669,51 @@ namespace lfs::vis {
                 candidate.selection_color_center_marker[static_cast<int>(i)] = static_cast<float>(value);
             }
         }
+        if (const auto it = values.find("selection_outline_color"); it != values.end()) {
+            if (!it->is_array() || it->size() != 3)
+                return invalid("selection_outline_color");
+            for (size_t i = 0; i < 3; ++i) {
+                if (!(*it)[i].is_number())
+                    return invalid("selection_outline_color");
+                const double value = (*it)[i].get<double>();
+                if (!std::isfinite(value) || value < 0 || value > 1)
+                    return invalid("selection_outline_color");
+                candidate.selection_outline_color[static_cast<int>(i)] = static_cast<float>(value);
+            }
+        }
+        if (const auto it = values.find("selection_outline_opacity"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_opacity");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0 || value > 1)
+                return invalid("selection_outline_opacity");
+            candidate.selection_outline_opacity = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_width"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_width");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 1 || value > 12)
+                return invalid("selection_outline_width");
+            candidate.selection_outline_width = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_threshold"); it != values.end()) {
+            if (!it->is_number())
+                return invalid("selection_outline_threshold");
+            const double value = it->get<double>();
+            if (!std::isfinite(value) || value < 0.05 || value > 0.95)
+                return invalid("selection_outline_threshold");
+            candidate.selection_outline_threshold = static_cast<float>(value);
+        }
+
+        if (const auto it = values.find("selection_outline_holes"); it != values.end()) {
+            if (!it->is_boolean())
+                return invalid("selection_outline_holes");
+            candidate.selection_outline_holes = it->get<bool>();
+        }
+
         settings = std::move(candidate);
         return {};
     }
@@ -864,6 +932,30 @@ namespace lfs::vis {
             return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
         return kDefaultNavigationSpeed;
     }
+    void UserPreferences::setCameraBrowseRepeat(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["camera_browse_repeat"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::cameraBrowseRepeat() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return lfs::core::persisted_settings::field<bool>(impl_->values, "camera_browse_repeat", true);
+    }
+    void UserPreferences::setCameraBrowseRepeatRate(const float value, const bool persist) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["camera_browse_repeat_rate"] = std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
+        if (persist)
+            impl_->saveLocked();
+    }
+    float UserPreferences::cameraBrowseRepeatRate() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const float value = lfs::core::persisted_settings::field<float>(impl_->values, "camera_browse_repeat_rate", 5.0f);
+        return std::isfinite(value) ? std::clamp(value, 1.0f, 20.0f) : 5.0f;
+    }
     void UserPreferences::setLanguage(const std::string& value) {
         if (value.empty())
             return;
@@ -965,6 +1057,36 @@ namespace lfs::vis {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
         return lfs::core::persisted_settings::field<bool>(impl_->values, "remember_camera_view_snap", false);
+    }
+    void UserPreferences::setSplatDrag(const SplatDragPreferenceState& state) {
+        if ((state.format != "ply" && state.format != "spz") || !state.axes.valid())
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["splat_drag"] = {{"format", state.format}, {"sh_degree", std::clamp(state.sh_degree, 0, 3)}, {"up_axis", state.axes.up}};
+        impl_->saveLocked();
+    }
+    SplatDragPreferenceState UserPreferences::splatDrag() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        SplatDragPreferenceState state;
+        const auto it = impl_->values.find("splat_drag");
+        if (it == impl_->values.end() || !it->is_object())
+            return state;
+        using lfs::core::persisted_settings::field;
+        state.format = field<std::string>(*it, "format", "ply");
+        if (state.format != "ply" && state.format != "spz")
+            state.format = "ply";
+        state.sh_degree = std::clamp(field<int>(*it, "sh_degree", 3), 0, 3);
+        // Preserve the old checkbox for existing users, while fresh settings
+        // retain source axes unless the native drag recognizes Blender.
+        if (!it->contains("up_axis") && field<bool>(*it, "blender_axes", false))
+            state.axes = SplatDragAxes::blender();
+        else
+            state.axes = {field<int>(*it, "up_axis", -2)};
+        if (!state.axes.valid())
+            state.axes = {};
+        return state;
     }
     void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
         std::scoped_lock lock(impl_->mutex);
@@ -1416,6 +1538,24 @@ namespace lfs::vis {
     }
     std::filesystem::path projectLocationPreferenceRaw() {
         return UserPreferences::instance().projectLocationPreference();
+    }
+    std::filesystem::path resolvedProjectLocationPreference() {
+        const auto raw = projectLocationPreferenceRaw();
+        if (raw.empty())
+            return {};
+        const auto expanded = expandLeadingTilde(raw);
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(expanded, error);
+        return error || !expanded.is_absolute() ? std::filesystem::path{}
+                                                : absolute.lexically_normal();
+    }
+    lfs::Status probeProjectLocation(const std::filesystem::path& path) {
+        if (auto probed = validateWritableDirectory(
+                path, "project_location", "The project location",
+                ".lfs-project-write-probe-");
+            !probed)
+            return lfs::Status::failure(std::move(probed).error());
+        return {};
     }
     void clearProjectLocationPreference() {
         UserPreferences::instance().clearProjectLocation();

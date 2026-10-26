@@ -8,6 +8,7 @@
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
@@ -85,6 +86,102 @@ namespace lfs::training::mrnf_strategy {
         replace_parent_weights_kernel<<<blocks, threads, 0, s>>>(
             opacities, visibility, active_mask, trainable_mask, edge_guidance, output, N);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.replace_parent_weights");
+    }
+
+    __global__ void initialize_exchange_ranks_kernel(
+        int32_t* __restrict__ ranks,
+        int64_t* __restrict__ row_indices,
+        const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+        ranks[i] = 0;
+        row_indices[i] = static_cast<int64_t>(i);
+    }
+
+    __global__ void fused_inverse_exchange_ranks_kernel(
+        const int64_t* __restrict__ primary_order,
+        const int64_t* __restrict__ secondary_order,
+        int32_t* __restrict__ ranks,
+        const size_t N) {
+        const size_t position = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (position >= N)
+            return;
+        const int32_t rank = static_cast<int32_t>(position);
+        atomicMax(&ranks[primary_order[position]], rank);
+        if (secondary_order != nullptr)
+            atomicMax(&ranks[secondary_order[position]], rank);
+    }
+
+    __global__ void mask_ineligible_exchange_ranks_kernel(
+        const bool* __restrict__ eligible,
+        int32_t* __restrict__ ranks,
+        const size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < N && !eligible[i])
+            ranks[i] = INT_MAX;
+    }
+
+    void launch_fused_exchange_ranks(
+        const int64_t* primary_order,
+        const int64_t* secondary_order,
+        const bool* eligible,
+        int32_t* ranks,
+        int64_t* row_indices,
+        const size_t N,
+        void* stream) {
+        if (N == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        initialize_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(ranks, row_indices, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.initialize_exchange_ranks");
+        fused_inverse_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(
+            primary_order, secondary_order, ranks, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fused_inverse_exchange_ranks");
+        mask_ineligible_exchange_ranks_kernel<<<blocks, threads, 0, s>>>(eligible, ranks, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.mask_ineligible_exchange_ranks");
+    }
+
+    void launch_sort_exchange_ranks(
+        int32_t* ranks,
+        int64_t* row_indices,
+        const size_t N,
+        void* stream) {
+        if (N == 0)
+            return;
+        cudaStream_t s = resolve_stream(stream);
+        auto rank_ptr = thrust::device_pointer_cast(ranks);
+        auto row_ptr = thrust::device_pointer_cast(row_indices);
+        if (s) {
+            thrust::sort_by_key(thrust::cuda::par_nosync.on(s), rank_ptr, rank_ptr + N, row_ptr);
+        } else {
+            thrust::sort_by_key(thrust::cuda::par_nosync, rank_ptr, rank_ptr + N, row_ptr);
+        }
+    }
+
+    __global__ void fill_index_mask_kernel(
+        const int64_t* __restrict__ indices,
+        const size_t count,
+        bool* __restrict__ mask) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i < count)
+            mask[indices[i]] = true;
+    }
+
+    void launch_fill_index_mask(
+        const int64_t* indices,
+        const size_t count,
+        bool* mask,
+        void* stream) {
+        if (count == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((count + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        fill_index_mask_kernel<<<blocks, threads, 0, s>>>(indices, count, mask);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.fill_index_mask");
     }
 
     __global__ void mrnf_noise_injection_kernel(
@@ -461,7 +558,8 @@ namespace lfs::training::mrnf_strategy {
             return;
 
         const float w = weights[idx];
-        if (w <= 0.0f) {
+        // NaN fails this test too: a NaN key would sort first.
+        if (!(w > 0.0f)) {
             keys[idx] = -1e30f;
             return;
         }
@@ -610,13 +708,17 @@ namespace lfs::training::mrnf_strategy {
         if (compact_active) {
             auto indices_ptr = thrust::device_pointer_cast(d_indices);
             auto counting_begin = thrust::make_counting_iterator<uint32_t>(0);
-            thrust::copy_if(
+            const auto indices_end = thrust::copy_if(
                 thrust::cuda::par.on(s),
                 counting_begin,
                 counting_begin + static_cast<std::ptrdiff_t>(N),
                 weights_ptr,
                 indices_ptr,
                 positive_weight{});
+            // known_nnz must count with the same predicate: a larger count makes the keys read
+            // indices that were never written, a smaller one overruns the scratch.
+            LFS_ASSERT_MSG(static_cast<size_t>(indices_end - indices_ptr) == sort_count,
+                           "Gumbel known_nnz must equal the number of positive weights");
             gumbel_key_for_indices_kernel<<<blocks, threads, 0, s>>>(
                 weights, d_indices, d_keys, sort_count, seed);
             LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys_indices");

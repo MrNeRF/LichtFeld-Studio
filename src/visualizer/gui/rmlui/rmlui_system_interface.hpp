@@ -33,6 +33,9 @@ namespace lfs::vis::gui {
         NotAllowed,
     };
 
+    // Maps an RCSS cursor name to the cursor the GUI applies.
+    [[nodiscard]] LFS_VIS_API RmlCursorRequest rmlCursorRequestForName(const Rml::String& cursor_name);
+
     class LFS_VIS_API RmlSystemInterface final : public Rml::SystemInterface {
     public:
         explicit RmlSystemInterface(SDL_Window* window);
@@ -59,8 +62,6 @@ namespace lfs::vis::gui {
         void DeactivateKeyboard() override;
 
     private:
-        RmlCursorRequest mapCursorRequest(const Rml::String& cursor_name) const;
-
         SDL_Window* window_;
         bool saw_astral_text_ = false;
         const Rml::Context* current_context_ = nullptr;

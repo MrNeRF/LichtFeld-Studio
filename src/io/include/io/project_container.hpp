@@ -89,6 +89,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_SPLT = make_fourcc('S', 'P', 'L', 'T');
     inline constexpr Fourcc FOURCC_PCLD = make_fourcc('P', 'C', 'L', 'D');
     inline constexpr Fourcc FOURCC_MESH = make_fourcc('M', 'E', 'S', 'H');
+    inline constexpr Fourcc FOURCC_COLV = make_fourcc('C', 'O', 'L', 'V');
     inline constexpr Fourcc FOURCC_CKPT = make_fourcc('C', 'K', 'P', 'T');
     inline constexpr Fourcc FOURCC_PPIS = make_fourcc('P', 'P', 'I', 'S');
     inline constexpr Fourcc FOURCC_GUIL = make_fourcc('G', 'U', 'I', 'L');
@@ -148,6 +149,7 @@ namespace lfs::io::project {
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
         ENCODED_SCENE_ASSETS = 9,
+        COLLISION_VOLUMES_V1 = 10,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();

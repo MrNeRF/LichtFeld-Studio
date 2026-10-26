@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
 #include "licht_test_support.hpp"
@@ -453,7 +452,6 @@ namespace {
     TEST(ProjectLifecycleSettingsTest,
          ClearRecentProjectsEmptiesMenuInfoAndPersists) {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -514,14 +512,12 @@ namespace {
 
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
     }
 
     TEST(ProjectLifecycleSettingsTest,
          RemoveRecentProjectDropsSingleEntryAndPersists) {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -608,7 +604,6 @@ namespace {
 
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
     }
 

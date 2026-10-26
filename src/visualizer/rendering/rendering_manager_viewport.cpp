@@ -727,6 +727,52 @@ namespace lfs::vis {
             rasterization_scale, equirectangular);
     }
 
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderLightFieldViewRgb8(
+        SceneManager* scene_manager, const glm::mat3& rotation, const glm::vec3& position,
+        const int width, const int height, const float fov_degrees, const float principal_shift_x,
+        const float near_distance, const float far_distance) {
+        if (width <= 0 || height <= 0 || width > 2048 || height > 2048 ||
+            !std::isfinite(fov_degrees) || fov_degrees < 1.0f || fov_degrees > 120.0f ||
+            !std::isfinite(principal_shift_x) || !std::isfinite(near_distance) ||
+            !std::isfinite(far_distance) || near_distance < 0.0f || far_distance <= near_distance) {
+            return {};
+        }
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        auto state = scene_manager ? scene_manager->buildRenderState({.current_geometry = true}) : SceneRenderState{};
+        const auto* model = state.combined_model;
+        if (!hasRenderableGaussians(model))
+            return {};
+
+        auto settings = getSettings();
+        settings.scaling_modifier = 1.0f;
+        settings.depth_clip_enabled = false;
+        settings.orthographic = false;
+        settings.depth_view = false;
+        settings.point_cloud_mode = false;
+        settings.show_rings = false;
+        settings.show_center_markers = false;
+        settings.selection_outline = false;
+        settings.desaturate_unselected = false;
+        settings.depth_filter_enabled = true;
+        settings.hide_outside_depth_box = true;
+        settings.depth_filter_transform = lfs::geometry::EuclideanTransform(glm::quat_cast(rotation), position);
+        settings.depth_filter_min = glm::vec3(-1.0e9f, -1.0e9f, -far_distance);
+        settings.depth_filter_max = glm::vec3(1.0e9f, 1.0e9f, -near_distance);
+        const float focal = height / (2.0f * std::tan(glm::radians(fov_degrees) * 0.5f));
+        const lfs::rendering::CameraIntrinsics intrinsics{
+            .focal_x = focal,
+            .focal_y = focal,
+            .center_x = width * 0.5f + principal_shift_x,
+            .center_y = height * 0.5f};
+        auto image = renderPreviewImageWithState(
+            scene_manager, *model, std::move(state), rotation, position,
+            lfs::rendering::vFovToFocalLength(fov_degrees), width, height,
+            render_lock.has_value(), intrinsics, false, std::nullopt, std::nullopt,
+            PreviewImageReadback::UInt8Rgb, 1.0f, false, &settings, false);
+        releasePreviewImageResources();
+        return image;
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
                                                                                  const glm::mat3& rotation,
                                                                                  const glm::vec3& position,
@@ -1289,7 +1335,9 @@ namespace lfs::vis {
         std::optional<glm::vec3> background_color_override,
         const PreviewImageReadback readback,
         const float rasterization_scale,
-        const bool equirectangular) {
+        const bool equirectangular,
+        const RenderSettings* settings_override,
+        const bool gaussian_selection_visible) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
@@ -1313,7 +1361,8 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb, equirectangular);
+            readback != PreviewImageReadback::FloatRgb, equirectangular,
+            settings_override, gaussian_selection_visible);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
                 height > kMinPreviewSubdivisionHeight) {
@@ -1379,7 +1428,9 @@ namespace lfs::vis {
         std::optional<bool> transparent_background_override,
         const float rasterization_scale,
         const bool deterministic_export,
-        const bool equirectangular) {
+        const bool equirectangular,
+        const RenderSettings* settings_override,
+        const bool gaussian_selection_visible) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -1398,7 +1449,7 @@ namespace lfs::vis {
             scene_state.combined_model = &model;
         }
 
-        RenderSettings preview_settings = getSettings();
+        RenderSettings preview_settings = settings_override ? *settings_override : getSettings();
         preview_settings.focal_length_mm = std::clamp(
             focal_length_mm,
             lfs::rendering::MIN_FOCAL_LENGTH_MM,
@@ -1429,6 +1480,7 @@ namespace lfs::vis {
             .settings = preview_settings,
             .render_size = {width, height},
             .viewport_pos = {0, 0},
+            .gaussian_selection_visible = gaussian_selection_visible,
             .cursor_preview = {},
             .gizmo = {},
             .view_panels = {},

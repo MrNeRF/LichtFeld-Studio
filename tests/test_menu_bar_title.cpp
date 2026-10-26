@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "collision_fixture.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
@@ -11,6 +12,7 @@
 #include "ipc/view_context.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/render_pass.hpp"
+#include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
 #include <SDL3/SDL_keycode.h>
@@ -37,6 +39,9 @@ namespace lfs::vis::gui {
     // Model registration, resources, layout, updates and hit tests are production code.
     class RmlMenuBarTestAccess {
     public:
+        static void enterWalk(RmlMenuBar& bar) {
+            bar.dispatchToolbarAction("set_camera_navigation_mode", "walk");
+        }
         static void toggleProjection(RmlMenuBar& bar) {
             bar.dispatchToolbarAction("toggle_projection", "");
         }
@@ -128,6 +133,21 @@ namespace lfs::vis::gui {
             input.mouse_wheel = force_input ? 1.0f : 0.0f;
             bar.processInput(input);
         }
+        static void click(RmlMenuBar& bar, float x, float y) {
+            hover(bar, x, y, true);
+            SDL_Event event{};
+            event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.down = true;
+            event.button.x = x;
+            event.button.y = y;
+            bar.rml_manager_->dispatchInputEvent(event);
+            event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+            event.button.down = false;
+            bar.rml_manager_->dispatchInputEvent(event);
+        }
         static void outsideClick(RmlMenuBar& bar) {
             SDL_Event event{};
             event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
@@ -176,9 +196,16 @@ namespace lfs::vis::gui {
             bar.menu_items_ = doc->GetElementById("menu-items");
             bar.menu_toolbar_ = doc->GetElementById("menu-toolbar");
             bar.menu_window_controls_ = doc->GetElementById("menu-window-controls");
+            bar.dropdown_container_ = doc->GetElementById("dropdown-container");
+            bar.dropdown_popup_ = doc->GetElementById("dropdown-popup");
+            bar.dropdown_overlay_ = doc->GetElementById("dropdown-overlay");
             bar.project_title_container_ = doc->GetElementById("project-title");
             bar.project_title_el_ = doc->GetElementById("project-title-content");
             bar.body_el_ = doc->GetElementById("body");
+        }
+        static bool walkEnabled(RmlMenuBar& bar) {
+            bar.rebuildToolbarButtons();
+            return bar.camera_buttons_.back().enabled;
         }
         static bool accessVisible(const RmlMenuBar& bar) {
             return bar.body_el_ && bar.body_el_->IsClassSet("access-keys-visible");
@@ -369,6 +396,31 @@ namespace {
         lfs::vis::gui::RmlMenuBar bar_;
     };
 
+    TEST_F(MenuBarTitleTest, WalkRejectionDoesNotEscapeNativeDispatch) {
+        lfs::vis::input::InputBindings::setPersistenceEnabled(false);
+        lfs::vis::SceneManager manager;
+        lfs::vis::services().set(&manager);
+        Viewport viewport(200, 200);
+        lfs::vis::InputController controller(nullptr, viewport);
+        controller.initialize();
+        controller.setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Orbit);
+        EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
+        EXPECT_EQ(controller.walk_error, "No collision nodes are loaded");
+        const auto floor = manager.getScene().addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        manager.getScene().setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        manager.getScene().setNodeVisibility(floor, false);
+        EXPECT_TRUE(RmlMenuBarTestAccess::walkEnabled(bar_));
+        viewport.camera.t = {0, 20, 0};
+        EXPECT_NO_THROW(RmlMenuBarTestAccess::enterWalk(bar_));
+        for (int frame = 0; frame < 20; ++frame)
+            EXPECT_NO_THROW(RmlMenuBarTestAccess::frame(bar_));
+        EXPECT_EQ(controller.walk_error, "No Walk support below the camera");
+        EXPECT_EQ(controller.cameraNavigationMode(), lfs::vis::InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
+        lfs::vis::services().clear();
+        lfs::vis::input::InputBindings::setPersistenceEnabled(true);
+    }
+
     TEST_F(MenuBarTitleTest, ThirdCascadePreservesActionsAndStaysInsideViewport) {
         using Item = lfs::vis::gui::MenuItemDesc;
         using Type = Item::Type;
@@ -432,18 +484,20 @@ namespace {
             EXPECT_EQ(popup->GetDisplay(), Rml::Style::Display::None);
     }
 
-    // Fails if a menu with toggles keeps its shortcuts off the right edge, as a checkmark after them
-    // did, or if its checkmarks do not line up. Shortcuts end where they do in menus without toggles.
-    TEST_F(MenuBarTitleTest, ShortcutsEndAtTheEdgeBesideToggles) {
+    // Fails if the shortcuts of a menu do not form one left-aligned column at its right edge, so
+    // "Ctrl+A", "Ctrl+D" and "Ctrl+I" start at different places, or if a toggle's checkmark pushes
+    // the column off the edge or the checkmarks do not line up.
+    TEST_F(MenuBarTitleTest, ShortcutsFormOneColumnAtTheEdge) {
         using Item = lfs::vis::gui::MenuItemDesc;
         using Type = Item::Type;
         const std::vector<Item> items{
             {.type = Type::ShortcutItem, .label = "Hide UI", .shortcut = "F12", .callback_index = 1},
             {.type = Type::Toggle, .label = "Performance HUD", .shortcut = "F10", .callback_index = 2},
             {.type = Type::Toggle, .label = "Logging", .selected = true, .callback_index = 3},
-            {.type = Type::SubMenuBegin, .label = "Appearance"},
-            {.type = Type::Toggle, .label = "Grid", .shortcut = "G", .selected = true, .callback_index = 4},
-            {.type = Type::Operator, .label = "Home View", .operator_id = "view.home", .shortcut = "Shift+H", .callback_index = 5},
+            {.type = Type::SubMenuBegin, .label = "Select"},
+            {.type = Type::ShortcutItem, .label = "Select All", .shortcut = "Ctrl+A", .callback_index = 4},
+            {.type = Type::ShortcutItem, .label = "Deselect All", .shortcut = "Ctrl+D", .callback_index = 5},
+            {.type = Type::ShortcutItem, .label = "Invert Selection", .shortcut = "Ctrl+I", .callback_index = 6},
             {.type = Type::SubMenuEnd},
         };
         RmlMenuBarTestAccess::dropdown(bar_, items);
@@ -453,7 +507,9 @@ namespace {
         std::erase_if(submenus, [](Rml::Element* popup) { return popup->GetDisplay() == Rml::Style::Display::None; });
         ASSERT_EQ(submenus.size(), 1u);
         for (auto* popup : {el("dropdown-popup"), submenus.front()}) {
-            int shortcuts = 0;
+            std::vector<float> text_lefts;
+            float widest_right = 0.0f;
+            float content_right = 0.0f;
             std::vector<float> checkmark_lefts;
             Rml::ElementList rows;
             popup->GetElementsByClassName(rows, "menu-item");
@@ -461,8 +517,8 @@ namespace {
                 if (!row->IsVisible(true) || row->GetParentNode()->GetParentNode() != popup)
                     continue;
                 const auto& box = row->GetBox();
-                const float content_right = bounds(row).right - box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Right) -
-                                            box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right);
+                content_right = bounds(row).right - box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Right) -
+                                box.GetEdge(Rml::BoxArea::Border, Rml::BoxEdge::Right);
                 for (int i = 0; i < row->GetNumChildren(); ++i) {
                     auto* const child = row->GetChild(i);
                     if (!child->IsVisible())
@@ -473,16 +529,17 @@ namespace {
                     if (child->IsClassSet("checkmark"))
                         checkmark_lefts.push_back(bounds(child).left);
                     if (child->IsClassSet("shortcut") && !textContent(child).empty()) {
-                        ++shortcuts;
                         // A text node has no box width; its glyph run ends at start + string width.
-                        const float text_right = bounds(child->GetChild(0)).left +
-                                                 static_cast<float>(Rml::ElementUtilities::GetStringWidth(child, textContent(child)));
-                        EXPECT_NEAR(text_right, content_right, 1.0f) << textContent(child);
+                        const float text_left = bounds(child->GetChild(0)).left;
+                        text_lefts.push_back(text_left);
+                        widest_right = std::max(widest_right, text_left + static_cast<float>(Rml::ElementUtilities::GetStringWidth(child, textContent(child))));
                     }
                 }
             }
-            EXPECT_EQ(shortcuts, 2);
-            ASSERT_GE(checkmark_lefts.size(), 2u);
+            ASSERT_GE(text_lefts.size(), 2u);
+            for (const float left : text_lefts)
+                EXPECT_NEAR(left, text_lefts.front(), 0.5f);
+            EXPECT_NEAR(widest_right, content_right, 1.0f);
             for (const float left : checkmark_lefts)
                 EXPECT_NEAR(left, checkmark_lefts.front(), 0.5f);
         }
@@ -960,7 +1017,7 @@ namespace {
         EXPECT_FLOAT_EQ(bar_.barHeight(), 30);
     }
 
-    TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1100) {
+    TEST_F(MenuBarTitleTest, GermanToolsStayOnTheTitleRowAt1000) {
         auto* body = el("body");
         auto* portal = el("menu-portal-connection");
         Rml::Element* portal_label = nullptr;
@@ -976,12 +1033,12 @@ namespace {
             context_->Update();
         };
 
-        bar_.updateLabels({"Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht", "Hilfe"},
-                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateLabels({"Hilfe", "Datei", "Bearbeiten", "Auswahl", "Werkzeuge", "Ansicht"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         bar_.updateProjectDisplay("Untitled", "/projects/scene.licht", false);
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Nicht verbunden");
         RmlMenuBarTestAccess::fullToolbar(bar_);
-        layout_at(1100);
+        layout_at(1000);
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
         EXPECT_FLOAT_EQ(RmlMenuBarTestAccess::heightDp(bar_), 30);
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
@@ -997,10 +1054,10 @@ namespace {
         EXPECT_TRUE(portal_label->IsVisible());
         EXPECT_FLOAT_EQ(bounds(el("menu-toolbar")).top, 0);
 
-        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
-                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
-        layout_at(1100);
+        layout_at(1000);
         EXPECT_FALSE(body->IsClassSet("toolbar-squeeze"));
         EXPECT_FALSE(el("menu-toolbar")->IsClassSet("second-row"));
         EXPECT_TRUE(portal_label->IsVisible());
@@ -1074,8 +1131,8 @@ namespace {
     }
 
     TEST_F(MenuBarTitleTest, NarrowBarsKeepEveryMenuVisible) {
-        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
-                          {"file", "edit", "select", "tools", "view", "help"});
+        bar_.updateLabels({"Help", "File", "Edit", "Select", "Tools", "View"},
+                          {"lfs_plugins.help_menu.HelpMenu", "file", "edit", "select", "tools", "view"});
         RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
         for (float dp : {1.0f, 1.5f, 2.0f}) {
             // The narrowest window SDL allows, and a little wider.
@@ -1509,6 +1566,7 @@ namespace {
             Viewport viewport(32, 32);
             lfs::vis::InputController controller(nullptr, viewport);
             controller.initialize();
+            EXPECT_FALSE(RmlMenuBarTestAccess::walkEnabled(bar_));
             EXPECT_FALSE(RmlMenuBarTestAccess::keyEvent(bar_, lfs::vis::FrameInputEventKind::KeyDown, SDL_SCANCODE_LALT));
             EXPECT_FALSE(RmlMenuBarTestAccess::letterKey(bar_, SDLK_C, SDL_KMOD_LALT));
             EXPECT_FALSE(bar_.isOpen());
@@ -1583,10 +1641,67 @@ namespace {
         EXPECT_EQ(textContent(marks.front()), "F");
     }
 
+    TEST_F(MenuBarTitleTest, TheBrandLogoIsTheHelpMenu) {
+        bar_.updateLabels({"Help", "File", "Edit"},
+                          {"lfs_plugins.help_menu.HelpMenu", "lfs_plugins.file_menu.FileMenu",
+                           "lfs_plugins.edit_menu.EditMenu"});
+        context_->Update();
+        auto* const logo = el("menu-items")->GetChild(0);
+        ASSERT_NE(logo, nullptr);
+        EXPECT_TRUE(logo->IsClassSet("logo"));
+        auto* const image = logo->GetChild(0);
+        EXPECT_EQ(image->GetTagName(), "img");
+        // The logo is a full menu box: it holds the whole image and ends before File starts.
+        const auto box = bounds(logo);
+        const auto icon = bounds(image);
+        EXPECT_FLOAT_EQ(icon.right - icon.left, 20);
+        EXPECT_GT(icon.left, box.left);
+        EXPECT_LT(icon.right, box.right);
+        EXPECT_GE(bounds(el("menu-items")->GetChild(1)).left, box.right);
+        EXPECT_EQ(textContent(el("menu-items")), "FileEdit");
+        EXPECT_FALSE(RmlMenuBarTestAccess::letterKey(bar_, SDLK_H, SDL_KMOD_LALT));
+        EXPECT_FALSE(bar_.isOpen());
+    }
+
+    TEST_F(MenuBarTitleTest, TheBrandLogoOpensLikeEveryOtherMenu) {
+        bar_.updateLabels({"Help", "File", "Edit"},
+                          {"lfs_plugins.help_menu.HelpMenu", "lfs_plugins.file_menu.FileMenu",
+                           "lfs_plugins.edit_menu.EditMenu"});
+        context_->Update();
+        const auto center = [](const Rect& r) { return std::pair{(r.left + r.right) / 2, (r.top + r.bottom) / 2}; };
+        const auto logo = bounds(el("menu-items")->GetChild(0));
+        const auto file = bounds(el("menu-items")->GetChild(1));
+        const auto [logo_x, logo_y] = center(logo);
+        const auto [file_x, file_y] = center(file);
+
+        RmlMenuBarTestAccess::click(bar_, logo_x, logo_y);
+        ASSERT_TRUE(bar_.isOpen());
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        EXPECT_EQ(RmlMenuBarTestAccess::activeLabel(bar_), 0);
+        EXPECT_NEAR(bounds(el("dropdown-popup")).left, logo.left, 0.5f);
+        EXPECT_NEAR(bounds(el("dropdown-popup")).top, logo.bottom, 0.5f);
+
+        RmlMenuBarTestAccess::hover(bar_, file_x, file_y, true);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
+        RmlMenuBarTestAccess::hover(bar_, logo_x, logo_y, true);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::click(bar_, logo_x, logo_y);
+        EXPECT_FALSE(bar_.isOpen());
+
+        RmlMenuBarTestAccess::click(bar_, file_x, file_y);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_LEFT);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 0);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_RIGHT);
+        EXPECT_EQ(RmlMenuBarTestAccess::menuIndex(bar_), 1);
+        RmlMenuBarTestAccess::key(bar_, SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(bar_.isOpen());
+    }
+
     TEST(MenuAccessKeyLocales, LettersAreUniqueAndNotAltBound) {
         const auto locales = std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales";
         const auto profile = lfs::vis::input::InputBindings::createDefaultProfile();
-        const char* ids[] = {"file", "edit", "select", "tools", "view", "help"};
+        const char* ids[] = {"file", "edit", "select", "tools", "view"};
         for (const auto& entry : std::filesystem::directory_iterator(locales)) {
             if (entry.path().extension() != ".json")
                 continue;

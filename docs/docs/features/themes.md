@@ -11,7 +11,7 @@ The same choices are available from **View → Theme**. The menu label includes 
 
 ## Built-in appearance families
 
-Every family can provide a dark variant, a light variant, or both. **LichtFeld** keeps the familiar application appearance, while **Signal** is the more expressive built-in family: it uses layered blue/violet surfaces, gradient section chrome, stronger panel separation, and translucent viewport controls. Signal exposes the concise variant names **Night** and **Day** while still participating in semantic dark/light selection and automatic system matching.
+Every family can provide a dark variant, a light variant, or both. **LichtFeld** keeps the familiar application appearance, while **Signal** is the more expressive built-in family: it uses layered blue/violet surfaces, gradient section chrome, stronger panel separation, and translucent viewport controls. Signal exposes the concise variant names **Night** and **Day** while still participating in semantic dark/light selection and automatic system matching. **Graphite** is a flat, dark-only family with neutral graphite surfaces and a single blue accent reserved for active tools, modes, and selection.
 
 Gradient definitions are optional. Families that do not provide them remain valid and receive palette-derived flat fallbacks.
 

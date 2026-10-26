@@ -268,14 +268,15 @@ body {
     margin-bottom: 3dp;
 }
 
+/* Four 27dp buttons with 3dp gaps (117dp), centered under the 104dp axis widget. */
 .viewport-gizmo-controls {
     position: absolute;
     top: 117dp;
-    right: 10dp;
+    right: 3.5dp;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 104dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: none;
     z-index: 8;
@@ -290,7 +291,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    width: 104dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: auto;
 }
@@ -1152,7 +1153,8 @@ body {
     text-align: center;
 }
 
-.viewport-transform-axis > .number-input {
+.viewport-transform-axis > .number-input,
+.transform-drag-field > .number-input {
     width: 64dp;
     min-width: 64dp;
     height: 22dp;
@@ -1179,7 +1181,8 @@ body {
     min-width: 8dp;
 }
 
-#transform-block .viewport-transform-axis > .number-input {
+#transform-block .viewport-transform-axis > .number-input,
+#transform-block .transform-drag-field > .number-input {
     width: 58dp;
     min-width: 58dp;
     height: 22dp;
@@ -1189,6 +1192,25 @@ body {
 #transform-block .viewport-transform-axis > .num-step-btn {
     width: 20dp;
     min-width: 20dp;
+}
+
+.transform-drag-field {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.transform-drag-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    cursor: ew-resize;
+}
+
+.transform-drag-handle.hidden,
+.transform-drag-field.is-editing > .transform-drag-handle {
+    display: none;
 }
 
 .viewport-transform-axis--split {
@@ -2220,4 +2242,18 @@ body {
     flex-shrink: 1;
     justify-content: center;
     row-gap: 4dp;
+}
+
+.comparison-name {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 4dp 8dp;
+    border-radius: 4dp;
+    background-color: rgba(20, 23, 28, 160);
+    color: rgba(255, 255, 255, 210);
+    font-size: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
 }

@@ -1411,7 +1411,7 @@ namespace lfs::vis::gui {
 
     bool RmlUIManager::registerInput(Rml::Context* context, const PanelInputState& input,
                                      std::function<void(const PanelInputState&)> handler, const bool exclusive,
-                                     std::function<bool(float, float)> pointer_blocker) {
+                                     std::function<bool(float, float)> pointer_blocker, InputInterceptor interceptor) {
         if (dispatching_input_)
             return false;
         if (!context_ids_.contains(context))
@@ -1424,6 +1424,7 @@ namespace lfs::vis::gui {
         if (!contextById(context_id))
             return true;
         registered.pointer_blocker = std::move(pointer_blocker);
+        registered.interceptor = std::move(interceptor);
         auto& passive = registered.input;
         const bool pointer_owned = std::ranges::contains(registered.pointer_presses, PointerPressState::Accepted);
         if (!pointer_owned) {
@@ -1633,6 +1634,50 @@ namespace lfs::vis::gui {
                 for (auto& button : single.mouse_button_events) {
                     input_mouse_down_[button.button] = button.down;
                 }
+            }
+        }
+        // Compound controls can reserve a native wheel/key gesture before a
+        // focused child or another context consumes it. Use current coordinates
+        // for wheel input and the context's last pointer position for keys.
+        if (event.type == SDL_EVENT_MOUSE_WHEEL || event.type == SDL_EVENT_KEY_DOWN) {
+            std::vector<uint64_t> interceptors;
+            for (const auto& [context, handler] : input_handlers_) {
+                if (contextWindow(context) == dispatch_window && handler.enabled && handler.interceptor &&
+                    (handler.persistent || handler.frame == input_frame_))
+                    interceptors.push_back(context_ids_.at(context));
+            }
+            std::ranges::sort(interceptors, [&](auto a, auto b) {
+                return tracked_context_frames_[contextById(a)].order > tracked_context_frames_[contextById(b)].order;
+            });
+            for (const auto id : interceptors) {
+                auto* context = contextById(id);
+                const auto it = input_handlers_.find(context);
+                if (it == input_handlers_.end())
+                    continue;
+                const auto owner = input_handlers_.find(keyboard_context_);
+                if (owner != input_handlers_.end() && owner->second.enabled && owner->second.exclusive && keyboard_context_ != context)
+                    continue;
+                PanelInputState reserved = single;
+                if (!pointer) {
+                    reserved.mouse_x = it->second.input.mouse_x;
+                    reserved.mouse_y = it->second.input.mouse_y;
+                }
+                const auto mods = key ? event.key.mod : SDL_GetModState();
+                reserved.key_ctrl = mods & SDL_KMOD_CTRL;
+                reserved.key_shift = mods & SDL_KMOD_SHIFT;
+                reserved.key_alt = mods & SDL_KMOD_ALT;
+                reserved.key_super = mods & SDL_KMOD_GUI;
+                const auto intercept = it->second.interceptor;
+                dispatching_input_ = true;
+                const bool consumed = intercept(reserved);
+                dispatching_input_ = false;
+                if (!consumed)
+                    continue;
+                if (key && !event.key.repeat)
+                    key_owners_[event.key.scancode] = {contextById(id), {}, true};
+                result.consumed = true;
+                syncTextInput();
+                return result;
             }
         }
         auto invoke = [&](const uint64_t id) {

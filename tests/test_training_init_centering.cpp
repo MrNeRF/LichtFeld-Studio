@@ -231,6 +231,48 @@ namespace {
         check_positions((**prepared).model->means(), init_points, glm::vec3{12, 22, -40}, scene);
     }
 
+    // A transient training model is only shown: training starts from the
+    // dataset, and the new model takes over the training binding.
+    TEST_F(TrainingInitCentering, TransientTrainingModelIsNotTrainedFurther) {
+        param::TrainingParameters params;
+        params.dataset.data_path = root;
+        params.dataset.centralize_dataset = "off";
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 100;
+        Scene scene;
+        const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+        ASSERT_TRUE(loaded) << loaded.error();
+        auto preview = lfs::training::prepareTrainingModel(params, scene);
+        ASSERT_TRUE(preview) << preview.error();
+        ASSERT_TRUE(preview->has_value());
+        ASSERT_NE(scene.addSplat("Preview", std::move((**preview).model)), NULL_NODE);
+        scene.setTrainingModelNode("Preview");
+        auto reused = lfs::training::prepareTrainingModel(params, scene);
+        ASSERT_TRUE(reused) << reused.error();
+        EXPECT_FALSE(reused->has_value());
+
+        scene.getMutableNode("Preview")->transient = true;
+        for (const bool captured : {false, true}) {
+            SCOPED_TRACE(captured);
+            const auto capture = lfs::training::captureTrainingModelGraph(scene);
+            EXPECT_EQ(capture.training_model, nullptr);
+            auto prepared = lfs::training::prepareTrainingModel(params, scene, {}, captured ? &capture : nullptr);
+            ASSERT_TRUE(prepared) << prepared.error();
+            ASSERT_TRUE(prepared->has_value());
+            check_positions((**prepared).model->means(), dataset_points, glm::vec3{0}, scene);
+            if (captured) {
+                const auto installed = lfs::training::installTrainingModel(scene, std::move(**prepared));
+                ASSERT_TRUE(installed) << installed.error();
+            }
+        }
+        const auto* const model = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+        ASSERT_NE(model, nullptr);
+        EXPECT_NE(model->name, "Preview");
+        EXPECT_FALSE(model->transient);
+        ASSERT_NE(scene.getNode("Preview"), nullptr);
+        EXPECT_TRUE(scene.getNode("Preview")->transient);
+    }
+
     void check_random_positions(const Tensor& positions, const int count, const float extent) {
         ASSERT_EQ(positions.size(0), static_cast<size_t>(count));
         const auto cpu = positions.cpu().contiguous();

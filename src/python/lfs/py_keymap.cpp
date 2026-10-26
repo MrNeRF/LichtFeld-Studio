@@ -195,7 +195,14 @@ namespace lfs::python {
             .value("ASSET_GALLERY_COPY_LINK", Action::ASSET_GALLERY_COPY_LINK)
             .value("ASSET_REFRESH", Action::ASSET_REFRESH)
             .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
-            .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE);
+            .value("NEXT_SIDEBAR_CATEGORY", Action::NEXT_SIDEBAR_CATEGORY)
+            .value("PREVIOUS_SIDEBAR_CATEGORY", Action::PREVIOUS_SIDEBAR_CATEGORY)
+            .value("REMOVE_LAST_POINT", Action::REMOVE_LAST_POINT)
+            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT)
+            .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
+            .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX)
+            .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE)
+            .value("EXIT_WALK", Action::EXIT_WALK);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
@@ -205,7 +212,8 @@ namespace lfs::python {
             .value("ROTATE", ToolMode::ROTATE)
             .value("SCALE", ToolMode::SCALE)
             .value("ALIGN", ToolMode::ALIGN)
-            .value("CROP_BOX", ToolMode::CROP_BOX);
+            .value("CROP_BOX", ToolMode::CROP_BOX)
+            .value("WALK", ToolMode::WALK);
 
         // Expose Modifier enum
         nb::enum_<Modifier>(keymap, "Modifier")

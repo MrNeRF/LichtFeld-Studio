@@ -2985,7 +2985,7 @@ namespace lfs::core {
                 } else {
                     auto nn_dist = compute_mean_neighbor_distances(means_).clamp_min(1e-7f);
                     std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                    scaling_.copy_from(nn_dist.sqrt()
+                    scaling_.copy_from(nn_dist
                                            .mul(params.optimization.init_scaling)
                                            .log()
                                            .unsqueeze(-1)
@@ -3022,7 +3022,7 @@ namespace lfs::core {
                 } else {
                     auto nn_dist = compute_mean_neighbor_distances(means_temp).clamp_min(1e-7f);
                     std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                    scaling_temp = nn_dist.sqrt()
+                    scaling_temp = nn_dist
                                        .mul(params.optimization.init_scaling)
                                        .log()
                                        .unsqueeze(-1)
@@ -3169,7 +3169,7 @@ namespace lfs::core {
             n,
             rest,
             stream);
-        LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "sh_value quant codec device barrier");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "sh_value quant codec stream barrier");
 
         shN = std::move(u16);
         shN_value_bounds() = std::move(bounds);

@@ -6,10 +6,16 @@ import math
 
 import lichtfeld as lf
 from . import rml_widgets as w
+from .default_reset import LabelDefaultReset
 
 DEFAULTS = {
     "show_coord_axes": False, "show_pivot": False, "show_grid": True,
-    "show_camera_frustums": False, "desaturate_unselected": False,
+    "show_camera_frustums": False, "desaturate_unselected": False, "selection_outline": False,
+    "selection_outline_color": [0.0, 0.604, 0.733],
+    "selection_outline_opacity": 1.0,
+    "selection_outline_width": 2.0,
+    "selection_outline_threshold": 0.5,
+    "selection_outline_holes": True,
     "desaturate_cropping": False, "hide_outside_depth_box": False,
     "axes_size": 2.0, "grid_opacity": 0.5, "camera_frustum_scale": 0.25,
     "selection_color_preview": [0.0, 0.871, 0.298],
@@ -23,7 +29,7 @@ PICKER_CHANNELS = ("default_picker_r", "default_picker_g", "default_picker_b")
 def swatch_binding(prop):
     return f"default_{prop}_swatch"
 
-RANGES = {"axes_size": (0.5, 10), "grid_opacity": (0, 1),
+RANGES = {"selection_outline_opacity": (0, 1), "selection_outline_width": (1, 12), "selection_outline_threshold": (0.05, 0.95), "axes_size": (0.5, 10), "grid_opacity": (0, 1),
           "camera_frustum_scale": (0.01, 10), "lod_page_pool_splats": (0, 100_000_000),
           "lod_pool_vram_fraction": (0.05, 0.9)}
 
@@ -80,6 +86,7 @@ class RenderingDefaultsSection:
         self._reveal_picker = False
         self._doc = None
         self._escape_revert = w.EscapeRevertController()
+        self._default_reset = LabelDefaultReset(lambda prop: DEFAULTS.get(prop), self._apply_reset)
 
     def bind(self, model):
         for prop, default in DEFAULTS.items():
@@ -110,6 +117,7 @@ class RenderingDefaultsSection:
         self._handle = model.get_handle()
 
     def mount(self, doc):
+        self._default_reset.mount(doc)
         self._doc = doc
         for element in doc.query_selector_all('input[type="text"]'):
             prop = element.get_attribute("data-value", "")
@@ -175,11 +183,20 @@ class RenderingDefaultsSection:
         if prop == self._color_editing:
             self._dirty_picker()
 
+    def _apply_reset(self, prop, value):
+        self._discard(prop)
+        self._set(prop, value)
+        return not self._error
+
+    def unmount(self):
+        self._default_reset.unmount()
+        self._doc = None
+
     def _set(self, prop, value):
         try:
             default = DEFAULTS[prop]
             if isinstance(default, list):
-                value = w.hex_to_color(str(value))
+                value = value if isinstance(value, (tuple, list)) else w.hex_to_color(str(value))
                 if value is None:
                     raise ValueError("Invalid color")
                 value = list(w.normalize_color(value))

@@ -3,7 +3,6 @@
 
 #include "core/cuda/selection_ops.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -259,7 +258,6 @@ class SelectionServiceInteractionsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -293,7 +291,6 @@ protected:
 
     void TearDown() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         rendering_manager_.reset();
         scene_manager_.reset();
@@ -1034,6 +1031,30 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillApplies
     // only contains the origin point of the first node.
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 0}));
     EXPECT_TRUE(scene_manager_->getScene().hasPreparedCombinedModel());
+}
+
+TEST_F(SelectionServiceInteractionsTest, SelectAllFilteredKeepsGaussiansInsideTheCropPolygon) {
+    auto& scene = scene_manager_->getScene();
+    // Concave L; the frame puts the second point in its notch (1..2, 1..2).
+    lfs::core::CropPolygonData data;
+    data.vertices = {{-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 2.0f}, {-2.0f, 2.0f}};
+    data.half_depth = 1.0f;
+    const auto polygon = scene.addCropPolygon("test_crop_polygon", scene.getNodeIdByName("test"), data,
+                                              glm::translate(glm::mat4(1.0f), glm::vec3(-0.5f, -1.5f, 0.0f)));
+    ASSERT_NE(polygon, lfs::core::NULL_NODE);
+
+    auto settings = rendering_manager_->getSettings();
+    settings.crop_filter_for_selection = true;
+    rendering_manager_->updateSettings(settings);
+
+    for (const bool inverse : {false, true}) {
+        SCOPED_TRACE(inverse ? "inverse" : "inside");
+        scene.getCropPolygonData(polygon)->inverse = inverse;
+        const auto result = service_->selectAllFiltered();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(selection_values(*scene_manager_),
+                  inverse ? (std::vector<uint8_t>{0, 1}) : (std::vector<uint8_t>{1, 0}));
+    }
 }
 
 TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {

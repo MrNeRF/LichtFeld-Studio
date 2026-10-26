@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/crop_polygon.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_codecs.hpp"
 #include "core/image_io.hpp"
@@ -534,6 +535,27 @@ namespace lfs::rendering {
                 deleted_mask_device = deleted_mask_cuda.ptr<bool>();
             }
 
+            // A mask sized for another point count is stale; draw the points without it.
+            const auto prepare_overlay_mask = [&](const Tensor* source) {
+                if (!source || !source->is_valid() || source->numel() != positions_source.size(0))
+                    return Tensor{};
+                Tensor result = source->to(lfs::core::DataType::UInt8);
+                if (result.device() != lfs::core::Device::CUDA)
+                    result = result.cuda();
+                return result.contiguous();
+            };
+            Tensor selection_cuda = prepare_overlay_mask(request.overlay.selection_mask.get());
+            Tensor preview_cuda = prepare_overlay_mask(request.overlay.transient_mask.mask);
+            Tensor selection_colors_cuda;
+            if (selection_cuda.is_valid() || preview_cuda.is_valid()) {
+                std::vector<float> colors;
+                colors.reserve(kSelectionColorTableCount * 4);
+                for (const auto& color : request.overlay.selection_colors)
+                    colors.insert(colors.end(), {color.r, color.g, color.b, color.a});
+                selection_colors_cuda = Tensor::from_vector(
+                    colors, {kSelectionColorTableCount, size_t{4}}, lfs::core::Device::CUDA);
+            }
+
             const glm::mat4 view = request.frame_view.getViewMatrix();
             const glm::ivec2 camera_size = request.frame_view.cameraSize();
             const glm::mat4 projection = createProjectionMatrix(
@@ -564,6 +586,11 @@ namespace lfs::rendering {
             params.transform_indices = transform_indices_ptr;
             params.visibility_mask = visibility_device;
             params.deleted_mask = deleted_mask_device;
+            params.selection_mask = selection_cuda.is_valid() ? selection_cuda.ptr<std::uint8_t>() : nullptr;
+            params.preview_mask = preview_cuda.is_valid() ? preview_cuda.ptr<std::uint8_t>() : nullptr;
+            params.selection_colors = selection_colors_cuda.is_valid() ? selection_colors_cuda.ptr<float>() : nullptr;
+            params.preview_additive = request.overlay.transient_mask.additive;
+            lfs::core::pin_operands({&selection_cuda, &preview_cuda, &selection_colors_cuda});
             params.n_points = static_cast<std::size_t>(positions_source.size(0));
             params.n_transforms = static_cast<int>(transforms.size());
             params.n_visibility = static_cast<int>(request.scene.node_visibility_mask.size());
@@ -589,6 +616,21 @@ namespace lfs::rendering {
                 params.crop_ellipsoid.radii[2] = ellipsoid.radii.z;
                 params.crop_ellipsoid.inverse = request.filters.crop_inverse;
                 params.crop_ellipsoid.desaturate = request.filters.crop_desaturate;
+            }
+            static_assert(pcraster::kMaxCropPolygonVertices == lfs::core::crop_polygon::kMaxVertices);
+            const auto& polygon = request.filters.crop_polygon;
+            params.has_crop_polygon = polygon && polygon->vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
+                                      polygon->vertices.size() <= lfs::core::crop_polygon::kMaxVertices;
+            if (params.has_crop_polygon) {
+                std::copy_n(glm::value_ptr(polygon->transform), 16, params.crop_polygon.to_local);
+                for (size_t i = 0; i < polygon->vertices.size(); ++i) {
+                    params.crop_polygon.vertices[2 * i] = polygon->vertices[i].x;
+                    params.crop_polygon.vertices[2 * i + 1] = polygon->vertices[i].y;
+                }
+                params.crop_polygon.count = static_cast<int>(polygon->vertices.size());
+                params.crop_polygon.half_depth = polygon->half_depth;
+                params.crop_polygon.inverse = request.filters.crop_inverse;
+                params.crop_polygon.desaturate = request.filters.crop_desaturate;
             }
             std::copy_n(glm::value_ptr(view), 16, params.view);
             std::copy_n(glm::value_ptr(view_proj), 16, params.view_proj);

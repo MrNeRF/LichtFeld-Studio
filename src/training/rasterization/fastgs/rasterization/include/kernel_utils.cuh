@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/cuda/sigmoid.cuh"
 #include "core/sh_value_codec.cuh"
 #include "fused_adam_types.h"
 #include "helper_math.h"
@@ -453,6 +454,13 @@ namespace fast_lfs::rasterization::kernels {
         const float beta1,
         const float beta2,
         const float eps) {
+        if (param.gradient_out != nullptr) {
+            if (primitive_idx < static_cast<uint>(param.n_primitives)) {
+                for (uint i = 0; i < row_elements; ++i)
+                    param.gradient_out[primitive_idx * row_elements + i] += grads[i];
+            }
+            return;
+        }
         if (param.joint_bits == 16) {
             adam_step_row_joint<16>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
             return;
@@ -514,19 +522,9 @@ namespace fast_lfs::rasterization::kernels {
         const uint element_idx) {
         float grad = 0.0f;
         if (fused_adam.opacity_reg_weight > 0.0f && param.n_elements > 0) {
-            const float opa = sigmoid(param.param[element_idx]);
-            grad += fused_adam.opacity_reg_weight * opa * (1.0f - opa) /
+            const float derivative = lfs::core::sigmoid_derivative_from_logit(param.param[element_idx]);
+            grad += fused_adam.opacity_reg_weight * derivative /
                     static_cast<float>(param.n_elements);
-        }
-        if (fused_adam.sparsity_opa_sigmoid != nullptr &&
-            fused_adam.sparsity_z != nullptr &&
-            fused_adam.sparsity_u != nullptr &&
-            element_idx < static_cast<uint>(fused_adam.sparsity_n)) {
-            const float opa = fused_adam.sparsity_opa_sigmoid[element_idx];
-            grad += fused_adam.sparsity_rho *
-                    (opa - fused_adam.sparsity_z[element_idx] + fused_adam.sparsity_u[element_idx]) *
-                    opa * (1.0f - opa) *
-                    fused_adam.sparsity_grad_loss;
         }
         return grad;
     }
@@ -1073,6 +1071,19 @@ namespace fast_lfs::rasterization::kernels {
         const bool compute_sh_grads,
         const uint colour_reg_mask = 7u) {
         const FusedAdamParam& p = fused_adam.shN;
+        if (p.gradient_out != nullptr) {
+            if (primitive_idx < static_cast<uint>(p.n_primitives)) {
+                constexpr uint n_slots = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                             : 3u;
+                const ShNGradFromColor<ACTIVE_SH_BASES> source(mean3d, cam_position, grad_color, compute_sh_grads);
+                auto* out = reinterpret_cast<float4*>(p.gradient_out);
+                for (uint k = 0; k < sh_layout_slots; ++k) {
+                    const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+                    out[slot] += source(primitive_idx, k, slot, k < n_slots);
+                }
+            }
+            return;
+        }
         if (p.joint_bits == 8) {
             apply_shN_grads_packed_joint<ACTIVE_SH_BASES, SEPT_REGULARIZERS>(
                 fused_adam, primitive_idx, sh_layout_slots,

@@ -557,7 +557,8 @@ namespace {
         params.ppisp_use_controller = true;
         params.iterations = 10'000;
         params.enable_sparsity = true;
-        params.sparsify_steps = 15'000;
+        params.popspa_sparsify_steps = 10'000;
+        params.popspa_refine_steps = 5'000;
 
         EXPECT_EQ(params.resolved_total_iterations(), 25'000);
         EXPECT_EQ(params.resolved_ppisp_controller_activation_step(params.resolved_total_iterations()), 20'000);
@@ -664,6 +665,20 @@ namespace {
         EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
         params.cropbox_loss_weight = 1.1f;
         EXPECT_NE(params.validate().find("cropbox_loss_weight"), std::string::npos);
+    }
+
+    // Catches a short schedule (e.g. --iter 30) rounding an interval to zero, which validation rejects.
+    TEST(ParameterValidationTest, ShortScheduleKeepsIntervalsAtLeastOneStep) {
+        for (auto params : {lfs::core::param::OptimizationParameters::mcmc_defaults(),
+                            lfs::core::param::OptimizationParameters::mrnf_defaults(),
+                            lfs::core::param::OptimizationParameters::igs_plus_defaults()}) {
+            params.scale_steps(3.0f / static_cast<float>(params.iterations));
+            EXPECT_EQ(params.iterations, 3u);
+            EXPECT_EQ(params.refine_every, 1u);
+            EXPECT_EQ(params.reset_every, 1u);
+            EXPECT_EQ(params.sh_degree_interval, 1u);
+            EXPECT_TRUE(params.validate().empty()) << params.validate();
+        }
     }
 
     TEST(ParameterValidationTest, CropBoxLrScaleJsonIsBackwardCompatible) {

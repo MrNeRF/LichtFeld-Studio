@@ -202,11 +202,12 @@ namespace lfs::vis::gui {
     }
 
     std::optional<double> RmlModalOverlay::secondsUntilNextUpdate() const {
-        if (active_ && next_update_at_)
-            return std::max(0.0, std::chrono::duration<double>(
-                                     *next_update_at_ - std::chrono::steady_clock::now())
-                                     .count());
-        return std::nullopt;
+        if (!active_)
+            return std::nullopt;
+        auto deadline = next_update_at_;
+        if (const auto tooltip_deadline = tooltip_.revealDeadline(); tooltip_deadline && (!deadline || *tooltip_deadline < *deadline))
+            deadline = tooltip_deadline;
+        return deadline ? std::optional(std::max(0.0, std::chrono::duration<double>(*deadline - std::chrono::steady_clock::now()).count())) : std::nullopt;
     }
 
     std::string RmlModalOverlay::animationDemandDescription() const {
@@ -422,6 +423,8 @@ namespace lfs::vis::gui {
             return false;
         }
         if (body_rml) {
+            resetTooltip();
+            last_mouse_valid_ = false;
             text_input_revert_.clear();
             active_->body_rml = *body_rml;
             el_content_->SetInnerRML(*body_rml);
@@ -478,6 +481,7 @@ namespace lfs::vis::gui {
             result.button_label = button_label;
 
             auto on_result = std::move(active_->on_result);
+            resetTooltip();
             active_.reset();
             lfs::python::request_redraw();
             rml_manager_->deactivateInput(rml_context_);
@@ -531,6 +535,7 @@ namespace lfs::vis::gui {
         el_dialog_->SetProperty("display", "none");
 
         auto on_cancel = std::move(active_->on_cancel);
+        resetTooltip();
         active_.reset();
         lfs::python::request_redraw();
         rml_manager_->deactivateInput(rml_context_);
@@ -543,10 +548,24 @@ namespace lfs::vis::gui {
         activatePending();
     }
 
+    void RmlModalOverlay::resetTooltip() {
+        tooltip_.setHover({}, nullptr);
+        render_needed_ |= tooltip_.apply(document_ ? document_->GetElementById("body") : nullptr,
+                                         last_mouse_x_, last_mouse_y_, width_, height_);
+        tooltip_suppressed_target_ = nullptr;
+    }
+
     void RmlModalOverlay::bindTextInputRevert() {
         text_input_revert_.bind(el_input_);
         rml_input::forEachTextEditableElement(el_content_, [this](Rml::Element& element) {
-            text_input_revert_.bind(&element);
+            text_input_revert_.bind(&element, [this](Rml::Element&) {
+                // Escape restores the control without a native Change event.
+                // Keep a keyed form's draft and validation in sync as well.
+                if (active_ && active_->on_change) {
+                    auto callback = active_->on_change;
+                    callback(collectFormValues());
+                }
+            });
         });
     }
 
@@ -587,6 +606,30 @@ namespace lfs::vis::gui {
         if (input.mouse_released[0]) {
             render_needed_ = true;
             rml_context_->ProcessMouseButtonUp(0, mods);
+        }
+
+        if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
+            rml_context_->ProcessMouseWheel(Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
+            render_needed_ = true;
+        }
+        auto* hover = rml_context_->GetHoverElement();
+        const bool interacting = input.mouse_down[0] ||
+                                 input.mouse_clicked[0] || input.mouse_released[0] ||
+                                 !input.input_events.empty();
+        auto* tooltip_target = hover;
+        while (tooltip_target && tooltip_target->GetAttribute<Rml::String>("data-tooltip", "").empty() &&
+               tooltip_target->GetAttribute<Rml::String>("title", "").empty())
+            tooltip_target = tooltip_target->GetParentNode();
+        if (interacting) {
+            resetTooltip();
+            tooltip_suppressed_target_ = tooltip_target;
+        } else {
+            if (tooltip_target != tooltip_suppressed_target_)
+                tooltip_suppressed_target_ = nullptr;
+            if (tooltip_target && tooltip_target == tooltip_suppressed_target_)
+                tooltip_.setHover({}, nullptr);
+            else
+                tooltip_.setHover(resolveRmlTooltip(hover), tooltip_target);
         }
 
         auto* const text_input_handler =
@@ -697,6 +740,10 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (tooltip_.apply(document_ ? document_->GetElementById("body") : nullptr, last_mouse_x_, last_mouse_y_, w, h)) {
+            rml_context_->Update();
+            needs_update = true;
+        }
         if (needs_update || position_changed) {
             next_update_at_.reset();
             const double delay = rml_context_->GetNextUpdateDelay();

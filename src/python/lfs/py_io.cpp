@@ -5,6 +5,7 @@
 #include "py_io.hpp"
 #include "py_cameras.hpp"
 #include "py_error.hpp"
+#include "py_operation_callbacks.hpp"
 #include "py_scene.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
@@ -23,6 +24,8 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
+#include "io/atomic_output.hpp"
+#include "io/collision_export.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
@@ -36,6 +39,7 @@
 #include "training/dataset.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -166,49 +170,6 @@ namespace lfs::python {
                 .detection = site,
             }));
         }
-
-        // Native operations copy these callbacks while the GIL is released.
-        // Share the Python handle so those copies only change C++ reference counts.
-        struct PyProgressCallback {
-            std::shared_ptr<nb::object> callback;
-            bool present;
-
-            explicit PyProgressCallback(nb::object value)
-                : callback(std::make_shared<nb::object>(std::move(value))),
-                  present(*callback && !callback->is_none()) {}
-
-            void operator()(float progress, const std::string& message) const {
-                nb::gil_scoped_acquire gil;
-                if (!present)
-                    return;
-                try {
-                    (*callback)(progress, message);
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Python progress callback error: {}", e.what());
-                }
-            }
-        };
-
-        struct PyCancelCallback {
-            std::shared_ptr<nb::object> callback;
-            bool present;
-
-            explicit PyCancelCallback(nb::object value)
-                : callback(std::make_shared<nb::object>(std::move(value))),
-                  present(*callback && !callback->is_none()) {}
-
-            bool operator()() const {
-                nb::gil_scoped_acquire gil;
-                if (!present)
-                    return false;
-                try {
-                    return nb::cast<bool>((*callback)());
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Python cancellation callback error: {}", e.what());
-                    return true;
-                }
-            }
-        };
 
         struct PyExportProgressCallback {
             std::shared_ptr<nb::object> callback;
@@ -364,6 +325,49 @@ namespace lfs::python {
 
     void register_io(nb::module_& m) {
         namespace project = io::project;
+        nb::class_<core::CollisionSettings>(m, "VoxelSettings")
+            .def(nb::init<>())
+            .def_rw("voxel_size", &core::CollisionSettings::voxel_size)
+            .def_rw("opacity", &core::CollisionSettings::opacity)
+            .def_rw("max_gaussian_area", &core::CollisionSettings::max_gaussian_area)
+            .def_rw("auto_resolution", &core::CollisionSettings::auto_resolution)
+            .def_rw("cleanup", &core::CollisionSettings::cleanup);
+        nb::class_<core::CollisionVolume>(m, "VoxelVolume")
+            .def_prop_ro("occupied_count", [](const core::CollisionVolume& v) { return v.occupied_count; })
+            .def_prop_ro("voxel_size", [](const core::CollisionVolume& v) { return v.settings.voxel_size; });
+        m.def(
+            "generate_voxels",
+            [](const LogicalPath& path, core::CollisionSettings settings, nb::object progress) {
+                PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
+                nb::gil_scoped_release release;
+                auto source = io::loadCollisionSource(path, {}, io::scale_export_progress(report, 0, .2f));
+                return core::generateCollision(source, settings, {}, io::scale_export_progress(report, .2f, 1));
+            },
+            nb::arg("path"), nb::arg("settings") = core::CollisionSettings{}, nb::arg("progress") = nb::none(),
+            "Generate owned full-detail occupancy from a splat file; callback False cancels.");
+        m.def(
+            "save_voxels",
+            [](const core::CollisionVolume& volume, const LogicalPath& path, bool overwrite,
+               const std::vector<float>& matrix, nb::object progress) {
+                glm::mat4 transform(1);
+                if (!matrix.empty()) {
+                    if (matrix.size() != 16)
+                        throw_invalid_io_argument("transform must contain 16 column-major affine matrix values");
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 4; ++r)
+                            transform[c][r] = matrix[c * 4 + r];
+                }
+                auto binary = std::filesystem::path(path);
+                binary.replace_extension(".bin");
+                if (!overwrite && (core::native_fs::exists(path) || core::native_fs::exists(binary)))
+                    throw_invalid_io_argument("Voxel pair already exists; approve replacement with overwrite=True");
+                PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
+                nb::gil_scoped_release release;
+                io::exportCollision(volume, path, transform, {}, report);
+            },
+            nb::arg("volume"), nb::arg("path"), nb::arg("overwrite") = false,
+            nb::arg("transform") = std::vector<float>{}, nb::arg("progress") = nb::none(),
+            "Save a SuperSplat v1.1 voxel pair, baking a captured data-world transform.");
         m.def("native_path", [](const std::filesystem::path& path, const bool force_extended) { return core::path_to_utf8(core::native_fs::native_path(path, force_extended)); }, nb::arg("path"), nb::arg("force_extended") = false, "Return a filename for filesystem I/O, including extended Windows paths. "
                                                                                                                                                                                                                                       "Use force_extended for recursive operations. Keep the original path for UI, JSON and external commands.");
 
@@ -910,12 +914,8 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 result = project::compact_project_file(
                     path,
-                    progress_callback.present
-                        ? project::ProjectOperationProgress(progress_callback)
-                        : project::ProjectOperationProgress{},
-                    cancel_callback.present
-                        ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{});
+                    progress_callback.operation(),
+                    cancel_callback.operation());
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
@@ -925,8 +925,8 @@ namespace lfs::python {
             PyCancelCallback cancel_callback{std::move(cancel)};
             nb::gil_scoped_release release;
             return unwrap(project::clean_project_file(path, destination, expected,
-                progress_callback.present ? project::ProjectOperationProgress(progress_callback) : project::ProjectOperationProgress{},
-                cancel_callback.present ? project::ProjectOperationCancel(cancel_callback) : project::ProjectOperationCancel{})); }, nb::arg("path"), nb::arg("destination") = "", nb::arg("expected_commit") = "", nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+                progress_callback.operation(),
+                cancel_callback.operation())); }, nb::arg("path"), nb::arg("destination") = "", nb::arg("expected_commit") = "", nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
         m.def("plan_reduce_size", [](const LogicalPath& path) {
             std::optional<lfs::Result<project::ProjectReducePlan>> result;
@@ -963,12 +963,8 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 result = project::reduce_size(
                     path, drop_unbound_checkpoints, drop_embedded_dataset,
-                    progress_callback.present
-                        ? project::ProjectOperationProgress(progress_callback)
-                        : project::ProjectOperationProgress{},
-                    cancel_callback.present
-                        ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{}, selection);
+                    progress_callback.operation(),
+                    cancel_callback.operation(), selection);
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("options") = nb::dict(), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
@@ -980,12 +976,8 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 result = project::embed_dataset_file(
                     path,
-                    progress_callback.present
-                        ? project::ProjectOperationProgress(progress_callback)
-                        : project::ProjectOperationProgress{},
-                    cancel_callback.present
-                        ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{});
+                    progress_callback.operation(),
+                    cancel_callback.operation());
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
@@ -1011,12 +1003,8 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 result = project::export_project_as(
                     path, export_format, destination,
-                    progress_callback.present
-                        ? project::ProjectOperationProgress(progress_callback)
-                        : project::ProjectOperationProgress{},
-                    cancel_callback.present
-                        ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{});
+                    progress_callback.operation(),
+                    cancel_callback.operation());
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("format"), nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
@@ -1037,12 +1025,8 @@ namespace lfs::python {
                 nb::gil_scoped_release release;
                 result = project::verify_project_file(
                     path,
-                    progress_callback.present
-                        ? project::ProjectOperationProgress(progress_callback)
-                        : project::ProjectOperationProgress{},
-                    cancel_callback.present
-                        ? project::ProjectOperationCancel(cancel_callback)
-                        : project::ProjectOperationCancel{});
+                    progress_callback.operation(),
+                    cancel_callback.operation());
             }
             return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
 
@@ -1533,12 +1517,35 @@ namespace lfs::python {
         m.def(
             "export_html",
             [](const PySplatData& data, const LogicalPath& path, int kmeans_iterations, nb::object progress,
-               bool include_provenance) {
+               bool include_provenance, nb::object background_color) {
                 io::HtmlExportOptions options;
                 options.output_path = path;
                 options.kmeans_iterations = kmeans_iterations;
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
+                if (background_color && !background_color.is_none()) {
+                    if (!nb::isinstance<nb::sequence>(background_color) ||
+                        nb::isinstance<nb::str>(background_color) ||
+                        nb::isinstance<nb::bytes>(background_color)) {
+                        throw nb::type_error("background_color must be a sequence of 3 floats");
+                    }
+                    auto seq = nb::cast<nb::sequence>(background_color);
+                    if (nb::len(seq) != 3) {
+                        throw nb::value_error("background_color must contain exactly 3 elements");
+                    }
+                    float r = 0.0f, g = 0.0f, b = 0.0f;
+                    try {
+                        r = nb::cast<float>(seq[0]);
+                        g = nb::cast<float>(seq[1]);
+                        b = nb::cast<float>(seq[2]);
+                    } catch (...) {
+                        throw nb::type_error("background_color elements must be numbers");
+                    }
+                    if (!std::isfinite(r) || !std::isfinite(g) || !std::isfinite(b)) {
+                        throw nb::value_error("background_color elements must be finite numbers");
+                    }
+                    options.background_color = glm::vec3(r, g, b);
+                }
 
                 if (progress && !progress.is_none()) {
                     PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -1555,7 +1562,7 @@ namespace lfs::python {
                     throw_io_error(result.error(), "Failed to export HTML");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
-            nb::arg("include_provenance") = true,
+            nb::arg("include_provenance") = true, nb::arg("background_color") = nb::none(),
             "Export splat data as self-contained HTML viewer. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 

@@ -371,6 +371,18 @@ namespace lfs::vis::project {
         }
 
         template <typename Owner>
+        JsonField<Owner> optional_vec3_field(const std::string_view name, glm::vec3 Owner::*member) {
+            return {.name = name,
+                    .write = [member](const Owner& source) { return vec3_json(source.*member); },
+                    .read = [member](const Json& json, Owner& destination, const std::string_view prefix, const std::string_view field) {
+                        if (!json.contains(field)) return lfs::Result<void>{};
+                        auto value = required_vec3(json, field, prefix);
+                        if (!value) return lfs::Status::failure(std::move(value).error());
+                        destination.*member = *value;
+                        return lfs::Result<void>{}; }};
+        }
+
+        template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
             glm::vec3 Owner::*member) {
@@ -632,6 +644,12 @@ namespace lfs::vis::project {
                 required_field("use_crop_box", &RenderSettings::use_crop_box),
                 required_field("show_ellipsoid", &RenderSettings::show_ellipsoid),
                 required_field("use_ellipsoid", &RenderSettings::use_ellipsoid),
+                optional_field("selection_outline", &RenderSettings::selection_outline),
+                optional_field("selection_outline_opacity", &RenderSettings::selection_outline_opacity),
+                optional_field("selection_outline_width", &RenderSettings::selection_outline_width),
+                optional_field("selection_outline_threshold", &RenderSettings::selection_outline_threshold),
+                optional_field("selection_outline_holes", &RenderSettings::selection_outline_holes),
+                optional_vec3_field("selection_outline_color", &RenderSettings::selection_outline_color),
                 required_field("desaturate_unselected", &RenderSettings::desaturate_unselected),
                 required_field("desaturate_cropping", &RenderSettings::desaturate_cropping),
                 required_field("hide_outside_depth_box", &RenderSettings::hide_outside_depth_box),
@@ -683,6 +701,8 @@ namespace lfs::vis::project {
                 optional_field("color_exposure", &RenderSettings::color_exposure),
                 optional_field("color_tonemapping", &RenderSettings::color_tonemapping),
                 optional_field("splat_render_profile", &RenderSettings::splat_render_profile),
+                optional_field("transparency_mode", &RenderSettings::transparency_mode),
+                optional_field("stochastic_max_frames", &RenderSettings::stochastic_max_frames),
                 required_field("environment_exposure", &RenderSettings::environment_exposure),
                 required_field("environment_rotation_degrees", &RenderSettings::environment_rotation_degrees),
                 required_field("show_coord_axes", &RenderSettings::show_coord_axes),
@@ -712,6 +732,7 @@ namespace lfs::vis::project {
                     }),
                 required_field("show_grid", &RenderSettings::show_grid),
                 required_field("grid_plane", &RenderSettings::grid_plane),
+                optional_field("collision_preview_opacity", &RenderSettings::collision_preview_opacity),
                 required_field("grid_opacity", &RenderSettings::grid_opacity),
                 required_field("point_cloud_mode", &RenderSettings::point_cloud_mode),
                 required_field("voxel_size", &RenderSettings::voxel_size),
@@ -935,6 +956,10 @@ namespace lfs::vis::project {
             !status) {
             return std::move(status).error();
         }
+        // Earlier outline projects shared the center-marker color. Preserve
+        // their appearance while new projects save an independent color.
+        if (!json.contains("selection_outline_color"))
+            settings.selection_outline_color = settings.selection_color_center_marker;
         enforceProjectionBackend(settings, true);
         settings.gut =
             lfs::rendering::isGutBackend(
@@ -1995,6 +2020,7 @@ namespace lfs::vis::project {
                  }),
                  std::string(lfs::rendering::gaussianRasterBackendId(RenderSettings{}.raster_backend))},
                 {"VIEW", "render_settings.camera_metrics_mode", integers({0, 1, 2}), static_cast<int>(Metrics::Off)},
+                {"VIEW", "render_settings.transparency_mode", integers({0, 1, 2}), 0},
                 {"VIEW", "render_settings.ppisp_mode", integers({0, 1}), static_cast<int>(PPISP::AUTO)},
                 {"VIEW", "render_settings.environment_mode", integers({0, 1}), static_cast<int>(Environment::SolidColor)},
                 {"VIEW", "render_settings.split_view_mode", integers({0, 1, 2, 3}), static_cast<int>(SplitViewMode::Disabled)},
@@ -2019,7 +2045,7 @@ namespace lfs::vis::project {
                 {"VIEW", "tools.transform_space", strings({"local", "world"}), "local"},
                 {"VIEW", "tools.pivot_mode", strings({"origin", "bounds_center"}), "origin"},
                 {"VIEW", "tools.multi_transform_mode", strings({"selection", "individual"}), "selection"},
-                {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid"}), "box"},
+                {"VIEW", "tools.crop_shape", strings({"box", "ellipsoid", "polygon"}), "box"},
                 {"VIEW", "tools.crop_operation", strings({"translate", "rotate", "scale"}), "translate"},
                 {"SEQR", "loop_mode", strings({"once", "loop", "ping_pong"}), "once"},
                 {"SEQR", "preferences.preset", string_parser([](const std::string_view value) {

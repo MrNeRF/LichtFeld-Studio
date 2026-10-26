@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -208,9 +209,12 @@ namespace lfs::io {
             void* cuda_stream = nullptr);
 
         /**
-         * @brief Check if nvImageCodec is available and working
+         * @brief Check if nvImageCodec decodes JPEG on this system
          */
         static bool is_available();
+
+        /// The JPEG decoder this process uses, for run records.
+        [[nodiscard]] static std::string_view jpeg_decoder();
 
     private:
         struct Impl;

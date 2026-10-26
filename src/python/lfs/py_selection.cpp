@@ -412,7 +412,7 @@ namespace lfs::python {
                 rm->updateSettings(settings);
                 lfs::python::markProjectSessionChapterCommitted("VIEW");
             },
-            nb::arg("enabled"), "Enable/disable crop box filtering for selection");
+            nb::arg("enabled"), "Enable/disable crop volume filtering for selection");
 
         sel.def(
             "apply_crop_filter", []() {
@@ -421,7 +421,7 @@ namespace lfs::python {
                     return;
                 ss->applyCropFilterToStroke();
             },
-            "Apply crop box filter to current stroke selection");
+            "Apply the crop volume filter to the current stroke selection");
 
         // ─────────────────────────────────────────────────────────────────────
         // VIEWPORT & COORDINATES

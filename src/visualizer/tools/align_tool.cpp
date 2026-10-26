@@ -7,6 +7,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
+#include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "internal/viewport.hpp"
 #include "operator/operator_registry.hpp"
@@ -115,6 +116,12 @@ namespace lfs::vis::tools {
 
         [[nodiscard]] lfs::rendering::OverlayColor toOverlay(const auto& c, float alpha) {
             return {c.x, c.y, c.z, alpha};
+        }
+
+        [[nodiscard]] std::string alignShortcut(const input::Action action) {
+            const auto* const controller = InputController::instance();
+            return controller ? controller->getBindings().getLocalizedTriggerDescription(action, input::ToolMode::ALIGN)
+                              : std::string{};
         }
 
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
@@ -500,10 +507,14 @@ namespace lfs::vis::tools {
         const float padding = 10.0f * ui_scale;
         const float max_width = std::max(40.0f, std::min(560.0f * ui_scale,
                                                          panel_proj.info.width - (info_x - panel_proj.info.x) - 2.0f * padding));
-        const char* hint_key = services().getAlignPreviewEnabled() ? "align.hint_preview"
-                               : in_review                         ? lichtfeld::Strings::Align::HINT_REVIEW
-                                                                   : lichtfeld::Strings::Align::HINT_PICKING;
-        const auto lines = wrapHint(*overlay, LOC(hint_key), hud_size, max_width);
+        const auto cancel_key = alignShortcut(input::Action::CANCEL_POLYGON);
+        const auto hint = services().getAlignPreviewEnabled()
+                              ? LOCF("align.hint_preview", cancel_key)
+                          : in_review ? LOCF(lichtfeld::Strings::Align::HINT_REVIEW, cancel_key)
+                                      : LOCF(lichtfeld::Strings::Align::HINT_PICKING,
+                                             alignShortcut(input::Action::DELETE_SELECTED),
+                                             alignShortcut(input::Action::REMOVE_LAST_POINT), cancel_key);
+        const auto lines = wrapHint(*overlay, hint, hud_size, max_width);
         const auto option_lines = in_review
                                       ? wrapHint(*overlay, LOC(services().getAlignEdgeToAxisEnabled() ? "align.edge_on_help" : "align.edge_off_help"), hud_size, max_width)
                                       : std::vector<std::string>{};

@@ -8,6 +8,7 @@
 # ============================================================================
 
 set(LFS_CORE_CUDA_SOURCES
+    collision_voxelization.cu
     memory_arena.cu
     exportable_storage.cpp
     lanczos_resize/lanczos_resize.cu

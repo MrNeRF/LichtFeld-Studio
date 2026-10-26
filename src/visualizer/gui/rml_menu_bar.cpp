@@ -24,6 +24,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
@@ -130,8 +131,8 @@ namespace lfs::vis::gui {
             return width;
         }
 
-        // Gives the shortcut cells of one popup the widest shortcut's width. The text is
-        // right-aligned, so shortcuts end at the popup edge and the checkmarks before them line up.
+        // Gives the shortcut cells of one popup the widest shortcut's width, so the shortcuts form
+        // one left-aligned column at the popup edge and the checkmarks before them line up.
         bool shareShortcutWidth(Rml::Element* popup) {
             Rml::ElementList rows;
             collectDirectMenuRows(popup, rows);
@@ -618,8 +619,6 @@ namespace lfs::vis::gui {
                 return "tools";
             if (idname == "lfs_plugins.view_menu.ViewMenu")
                 return "view";
-            if (idname == "lfs_plugins.help_menu.HelpMenu")
-                return "help";
             return nullptr;
         }
 
@@ -696,6 +695,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("label", &MenuLabelView::label);
             handle.RegisterMember("access", &MenuLabelView::access);
             handle.RegisterMember("active", &MenuLabelView::active);
+            handle.RegisterMember("logo", &MenuLabelView::logo);
         }
         if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
             handle.RegisterMember("index", &MenuDropdownLeafView::index);
@@ -784,9 +784,11 @@ namespace lfs::vis::gui {
             handle.RegisterMember("tooltip_key", &MenuToolbarButtonView::tooltip_key);
             handle.RegisterMember("tooltip_text", &MenuToolbarButtonView::tooltip_text);
             handle.RegisterMember("selected", &MenuToolbarButtonView::selected);
+            handle.RegisterMember("enabled", &MenuToolbarButtonView::enabled);
         }
         ctor.RegisterArray<std::vector<MenuToolbarButtonView>>();
         ctor.Bind("menu_labels", &menu_labels_);
+        ctor.Bind("brand_logo_src", &brand_logo_src_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_render_buttons", &render_buttons_);
@@ -836,7 +838,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -875,7 +876,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -925,7 +925,6 @@ namespace lfs::vis::gui {
         dropdown_container_ = nullptr;
         dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
-        brand_logo_ = nullptr;
         project_title_container_ = nullptr;
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
@@ -968,7 +967,6 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
-        brand_logo_ = document_->GetElementById("brand-logo");
         project_title_container_ = document_->GetElementById("project-title");
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
@@ -1046,10 +1044,13 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         menu_labels_.reserve(current_labels_.size());
         for (size_t i = 0; i < current_labels_.size(); ++i) {
+            // Help has no label of its own: the brand logo is its entry.
+            const bool logo = current_idnames_[i] == "lfs_plugins.help_menu.HelpMenu";
             menu_labels_.push_back(MenuLabelView{
                 .index = static_cast<int>(i),
-                .label = current_labels_[i],
+                .label = logo ? std::string{} : current_labels_[i],
                 .active = static_cast<int>(i) == active_index_,
+                .logo = logo,
             });
         }
         assignTopLevelAccessKeys(menu_labels_, current_idnames_);
@@ -1327,7 +1328,7 @@ namespace lfs::vis::gui {
         } else {
             if (hovered_toolbar_btn) {
                 wants_input_ = true;
-                if (input.mouse_clicked[0]) {
+                if (input.mouse_clicked[0] && !hovered_toolbar_btn->IsClassSet("disabled")) {
                     dispatchToolbarAction(
                         hovered_toolbar_btn->GetAttribute<Rml::String>("data-action", ""),
                         hovered_toolbar_btn->GetAttribute<Rml::String>("data-value", ""));
@@ -1995,6 +1996,7 @@ namespace lfs::vis::gui {
                 localization.get("toolbar.free_orbit_camera"),
                 localization.get("toolbar.fly_camera"),
                 localization.get("toolbar.drone_camera"),
+                localization.get("collision.walk"),
             };
             navigation_tooltip_language_generation_ = language_generation;
             has_navigation_tooltip_language_generation_ = true;
@@ -2012,6 +2014,7 @@ namespace lfs::vis::gui {
                 {NavMode::Trackball, "world", 1},
                 {NavMode::FPV, "camera-fpv", 2},
                 {NavMode::Drone, "drone", 3},
+                {NavMode::Walk, "walk", 4},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
@@ -2019,6 +2022,11 @@ namespace lfs::vis::gui {
                 camera_buttons.push_back(make("menu-camera-" + name, "set_camera_navigation_mode", name,
                                               spec.icon, "", navigation_tooltips_[spec.tooltip_index],
                                               mode == spec.mode));
+                if (spec.mode == NavMode::Walk) {
+                    const auto* manager = services().sceneOrNull();
+                    camera_buttons.back().enabled = manager && std::ranges::any_of(manager->getScene().getNodes(),
+                                                                                   [](const auto* node) { return node && bool(node->collision); });
+                }
             }
         }
 
@@ -2033,11 +2041,11 @@ namespace lfs::vis::gui {
             else if (settings.show_center_markers)
                 active_mode = "centers";
 
-            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
+            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "splats",
                                           "toolbar.splat_rendering", "Splat Rendering",
                                           active_mode == "splats"));
             render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
-                                          "dots-diagonal", "toolbar.point_cloud", "Point Cloud",
+                                          "points", "toolbar.point_cloud", "Point Cloud",
                                           active_mode == "points"));
             render_buttons.push_back(make("menu-render-rings", "set_render_mode", "rings", "ring",
                                           "toolbar.gaussian_rings", "Gaussian Rings",
@@ -2048,7 +2056,7 @@ namespace lfs::vis::gui {
 
             const bool ortho = settings.orthographic;
             projection_buttons.push_back(make("menu-projection", "toggle_projection", "",
-                                              ortho ? "box" : "perspective",
+                                              ortho ? "orthographic" : "perspective",
                                               ortho ? "toolbar.orthographic" : "toolbar.perspective",
                                               ortho ? "Orthographic" : "Perspective", ortho));
             projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
@@ -2057,7 +2065,7 @@ namespace lfs::vis::gui {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "magnet",
                                               "", "Snap Axis Views", view_snap));
         }
 
@@ -2187,7 +2195,8 @@ namespace lfs::vis::gui {
             if (!ic)
                 return;
             if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
-                ic->setCameraNavigationMode(*mode);
+                if (!ic->setCameraNavigationMode(*mode))
+                    return;
                 if (auto* const viewer = lfs::python::get_visualizer()) {
                     viewer->projectMarkSessionChapterCommitted("VIEW");
                 }
@@ -2620,12 +2629,8 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
 
-        if (brand_logo_) {
-            const auto logo_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
-            brand_logo_->SetAttribute("src", rml_theme::pathToRmlImageSource(logo_path));
-            brand_logo_->SetProperty("width", "20dp");
-            brand_logo_->SetProperty("height", "20dp");
-        }
+        brand_logo_src_ = rml_theme::pathToRmlImageSource(lfs::vis::getAssetPath("lichtfeld-icon.png"));
+        menu_model_.DirtyVariable("brand_logo_src");
         return true;
     }
 

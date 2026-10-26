@@ -52,10 +52,14 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
+            OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
+            OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
             OptimizationCliBinding{"--densify-structure-weight", "densify_structure_weight", Float},
+            OptimizationCliBinding{"--color-variance-weight", "color_variance_weight", Float},
+            OptimizationCliBinding{"--color-variance-warmup-iters", "color_variance_warmup_iters", Integer},
             OptimizationCliBinding{"--opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool},
             OptimizationCliBinding{"--no-opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool, true},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
@@ -89,9 +93,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-holdout-appearance", "ppisp_holdout_appearance", Enum},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
-            OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
-            OptimizationCliBinding{"--init-rho", "init_rho", Float},
-            OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
+            OptimizationCliBinding{"--popspa-target-count", "popspa_target_count", Integer},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
@@ -711,6 +713,7 @@ namespace {
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
+                "voxelize -- Generate a .voxel.json/.voxel.bin collision pair\n"
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
@@ -798,12 +801,18 @@ namespace {
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
+            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
+            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
+            ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
+            ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
             ::args::ValueFlag<float> densify_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--densify-structure-weight"), {"densify-structure-weight"});
+            ::args::ValueFlag<float> color_variance_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--color-variance-weight"), {"color-variance-weight"});
+            ::args::ValueFlag<int> color_variance_warmup_iters(training_group, "iterations", lfs::core::args::optimization_cli_help("--color-variance-warmup-iters"), {"color-variance-warmup-iters"});
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::core::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::core::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
@@ -852,6 +861,16 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
+            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images once as they are loaded and cached, 0 to 5: 0 = off, 0.25-0.5 = subtle, 1 = strong. Only brightness is sharpened; evaluation and the GT view keep the original photos (default: 0)", {"sharpen-amount"});
+            ::args::MapFlag<std::string, lfs::core::SharpenKernel> sharpen_kernel(dataset_group, "kernel",
+                                                                                  "Sharpening filter used when --sharpen-amount is above 0: usm = unsharp mask with --sharpen-radius; laplacian4 / laplacian8 = 3x3 kernel over the 4 or 8 neighbours, much stronger per amount (default: usm)",
+                                                                                  {"sharpen-kernel"},
+                                                                                  std::unordered_map<std::string, lfs::core::SharpenKernel>{
+                                                                                      {"usm", lfs::core::SharpenKernel::Usm},
+                                                                                      {"laplacian4", lfs::core::SharpenKernel::Laplacian4},
+                                                                                      {"laplacian8", lfs::core::SharpenKernel::Laplacian8}});
+            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Unsharp mask blur radius (Gaussian sigma) in pixels of the resized training image, 0.3 to 10: small values sharpen fine detail, large values broader edges; usm only (default: 1)", {"sharpen-radius"});
+            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave brightness differences below this value (0 to 1) unsharpened so flat areas and noise stay untouched; 0.01-0.02 suits noisy photos (default: 0)", {"sharpen-threshold"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
@@ -895,10 +914,8 @@ namespace {
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
+            ::args::ValueFlag<int> popspa_target_count(sparsity_group, "popspa_target_count", lfs::core::args::optimization_cli_help("--popspa-target-count"), {"popspa-target-count"});
             ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
-            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
-            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::core::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
 
             // =============================================================================
             // RENDERING OPTIONS
@@ -1271,6 +1288,29 @@ namespace {
                 }
             }
 
+            if (cropbox) {
+                const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(cropbox));
+                if (!box)
+                    return std::unexpected(std::format(
+                        "Invalid --cropbox '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
+                        ::args::get(cropbox)));
+                params.cropbox = *box;
+            }
+            if (cropbox_rotation) {
+                if (!params.cropbox)
+                    return std::unexpected("--cropbox-rotation turns the --cropbox box about its centre: it needs --cropbox");
+                const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(cropbox_rotation));
+                if (!rotation)
+                    return std::unexpected(std::format(
+                        "Invalid --cropbox-rotation '{}'. A rotation needs three finite numbers rx,ry,rz in degrees",
+                        ::args::get(cropbox_rotation)));
+                params.cropbox_rotation = *rotation;
+            }
+            if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
+                return std::unexpected(
+                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                    "it needs --cropbox, or a resumed project that has a crop box");
+
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {
                 return std::unexpected(add_splat_freeze.error());
@@ -1442,6 +1482,8 @@ namespace {
                     return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
+            if (color_variance_warmup_iters && ::args::get(color_variance_warmup_iters) < 0)
+                return std::unexpected("ERROR: --color-variance-warmup-iters must be >= 0");
 
             // Validate min_opacity (0.0-1.0)
             if (min_opacity) {
@@ -1456,14 +1498,6 @@ namespace {
                 int pts = ::args::get(init_num_pts);
                 if (pts <= 0) {
                     return std::unexpected("ERROR: --init-num-pts must be greater than 0");
-                }
-            }
-
-            // Validate prune_ratio (0.0-1.0)
-            if (prune_ratio) {
-                float ratio = ::args::get(prune_ratio);
-                if (ratio < 0.0f || ratio > 1.0f) {
-                    return std::unexpected("ERROR: --prune-ratio must be between 0.0 and 1.0");
                 }
             }
 
@@ -1533,6 +1567,10 @@ namespace {
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
+                                        sharpen_kernel_val = cli_option_present({"--sharpen-kernel"}) ? std::optional<lfs::core::SharpenKernel>(::args::get(sharpen_kernel)) : std::optional<lfs::core::SharpenKernel>(),
+                                        sharpen_amount_val = cli_option_present({"--sharpen-amount"}) ? std::optional<float>(::args::get(sharpen_amount)) : std::optional<float>(),
+                                        sharpen_radius_val = cli_option_present({"--sharpen-radius"}) ? std::optional<float>(::args::get(sharpen_radius)) : std::optional<float>(),
+                                        sharpen_threshold_val = cli_option_present({"--sharpen-threshold"}) ? std::optional<float>(::args::get(sharpen_threshold)) : std::optional<float>(),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
                                         tcp_connection_flag = bool(tcp_connection),
@@ -1544,6 +1582,8 @@ namespace {
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
                                         densify_structure_weight_val = cli_option_present({"--densify-structure-weight"}) ? std::optional<float>(::args::get(densify_structure_weight)) : std::optional<float>(),
+                                        color_variance_weight_val = cli_option_present({"--color-variance-weight"}) ? std::optional<float>(::args::get(color_variance_weight)) : std::optional<float>(),
+                                        color_variance_warmup_iters_val = cli_option_present({"--color-variance-warmup-iters"}) ? std::optional<int>(::args::get(color_variance_warmup_iters)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
@@ -1552,6 +1592,7 @@ namespace {
                                         eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
+                                        cropbox_growth_inside_val = cli_option_present({"--cropbox-growth-inside"}) ? std::optional<float>(::args::get(cropbox_growth_inside)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
                                         init_mesh_resolution_val = cli_option_present({"--init-mesh-resolution"}) ? std::optional<int>(::args::get(init_mesh_resolution)) : std::optional<int>(),
@@ -1559,9 +1600,7 @@ namespace {
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
                                         // Sparsity parameters
-                                        sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
-                                        init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
-                                        prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        popspa_target_count_val = cli_option_present({"--popspa-target-count"}) ? std::optional<int>(::args::get(popspa_target_count)) : std::optional<int>(),
                                         // Perf / profiling
                                         perf_bench_flag = bool(perf_bench),
                                         perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
@@ -1587,6 +1626,7 @@ namespace {
                                         use_exposure_correction_flag = bool(use_exposure_correction),
                                         no_exposure_correction_flag = bool(no_exposure_correction),
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
+                                        crop_flag = bool(crop),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
@@ -1689,6 +1729,7 @@ namespace {
                 params.cli_step_values_set = iterations_val.has_value() ||
                                              sh_degree_interval_val.has_value() ||
                                              morton_reorder_interval_val.has_value() ||
+                                             color_variance_warmup_iters_val.has_value() ||
                                              (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
@@ -1700,6 +1741,13 @@ namespace {
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
+                setVal(sharpen_kernel_val, ds.loading_params.sharpen.kernel);
+                setVal(sharpen_amount_val, ds.loading_params.sharpen.amount);
+                setVal(sharpen_radius_val, ds.loading_params.sharpen.radius);
+                setVal(sharpen_threshold_val, ds.loading_params.sharpen.threshold);
+                if (sharpen_radius_val && ds.loading_params.sharpen.kernel != lfs::core::SharpenKernel::Usm)
+                    LOG_WARN("--sharpen-radius only applies to the usm kernel; {} ignores it",
+                             lfs::core::sharpen_kernel_name(ds.loading_params.sharpen.kernel));
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
                 setVal(tcp_broadcast_connection_port_val, svs.tcp_broadcast_connection_port);
@@ -1710,8 +1758,13 @@ namespace {
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
                 setVal(densify_structure_weight_val, opt.densify_structure_weight);
+                setVal(color_variance_weight_val, opt.color_variance_weight);
+                if (color_variance_warmup_iters_val)
+                    opt.color_variance_warmup_iters = static_cast<size_t>(*color_variance_warmup_iters_val);
                 if (opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = true;
+                if (crop_flag)
+                    opt.crop_to_cropbox = true;
                 if (no_opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = false;
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
@@ -1722,6 +1775,7 @@ namespace {
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
                 setVal(cropbox_loss_weight_val, opt.cropbox_loss_weight);
+                setVal(cropbox_growth_inside_val, opt.cropbox_growth_inside);
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
                 setVal(init_mesh_resolution_val, opt.init_mesh_resolution);
@@ -1740,9 +1794,7 @@ namespace {
                 }
 
                 // Sparsity parameters
-                setVal(sparsify_steps_val, opt.sparsify_steps);
-                setVal(init_rho_val, opt.init_rho);
-                setVal(prune_ratio_val, opt.prune_ratio);
+                setVal(popspa_target_count_val, opt.popspa_target_count);
 
                 // Perf / profiling
                 setFlag(perf_bench_flag, opt.perf_bench);
@@ -1867,6 +1919,8 @@ namespace {
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
                 note_opt("densify_structure_weight", densify_structure_weight_val.has_value());
+                note_opt("color_variance_weight", color_variance_weight_val.has_value());
+                note_opt("color_variance_warmup_iters", color_variance_warmup_iters_val.has_value());
                 note_opt("opacity_decay_rendered_only", opacity_decay_rendered_only_flag || no_opacity_decay_rendered_only_flag);
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
@@ -1875,13 +1929,13 @@ namespace {
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("cropbox_growth_inside", cropbox_growth_inside_val.has_value());
+                note_opt("crop_to_cropbox", crop_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
-                note_opt("sparsify_steps", sparsify_steps_val.has_value());
-                note_opt("init_rho", init_rho_val.has_value());
-                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("popspa_target_count", popspa_target_count_val.has_value());
                 note_opt("perf_bench", perf_bench_flag);
                 note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
                 note_opt("profile_start_iter", profile_start_val.has_value());
@@ -1952,7 +2006,9 @@ namespace {
                             params.overrides.optimization_json, cli_opt.dump());
                     }
                 }
-                if (!ds_keys.empty()) {
+                const bool sharpen_given = sharpen_kernel_val || sharpen_amount_val || sharpen_radius_val ||
+                                           sharpen_threshold_val;
+                if (!ds_keys.empty() || sharpen_given) {
                     const auto serialized = ds.to_json();
                     nlohmann::json cli_ds;
                     for (const char* key : ds_keys) {
@@ -1965,6 +2021,15 @@ namespace {
                         cli_ds["loading_params"]["use_cpu_memory"] = false;
                     if (use_16bit_flag)
                         cli_ds["loading_params"]["use_16bit_color"] = true;
+                    const auto& loading = serialized["loading_params"];
+                    if (sharpen_kernel_val)
+                        cli_ds["loading_params"]["sharpen_kernel"] = loading["sharpen_kernel"];
+                    if (sharpen_amount_val)
+                        cli_ds["loading_params"]["sharpen_amount"] = loading["sharpen_amount"];
+                    if (sharpen_radius_val)
+                        cli_ds["loading_params"]["sharpen_radius"] = loading["sharpen_radius"];
+                    if (sharpen_threshold_val)
+                        cli_ds["loading_params"]["sharpen_threshold"] = loading["sharpen_threshold"];
                     if (!cli_ds.empty()) {
                         lfs::core::param::merge_explicit_json_overlay(
                             params.overrides.dataset_json, cli_ds.dump());
@@ -3050,7 +3115,61 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return WarmupMode{};
         }
 
-        if (arg1 == "convert") {
+        if (arg1 == "voxelize") {
+            ::args::ArgumentParser parser("Generate a .voxel.json/.voxel.bin collision pair.",
+                                          "Scene-unit distances, squared scene-unit areas. Connected filtering, fill/carve and surfaces are deferred.");
+            parser.Prog(std::string(argv[0]) + " voxelize");
+            ::args::HelpFlag help(parser, "help", "Display help", {'h', "help"});
+            ::args::Positional<std::string> input(parser, "input", "Gaussian splat file or SOG/SSOG folder");
+            ::args::Positional<std::string> output(parser, "output", "Output .voxel.json");
+            ::args::ValueFlag<std::string> out(parser, "path", "Output .voxel.json", {'o', "output"});
+            ::args::ValueFlag<float> size(parser, "size", "Cell edge (default 0.05)", {"voxel-size"});
+            ::args::ValueFlag<float> opacity(parser, "opacity", "Accumulated opacity threshold [0,1)", {"voxel-opacity"});
+            ::args::ValueFlag<float> area(parser, "area", "Maximum Gaussian area; 0 automatic", {"max-gaussian-area"});
+            ::args::ValueFlag<std::string> filter(parser, "filter", "cleanup (default) or none", {"filter"});
+            ::args::Flag automatic(parser, "auto", "Scale-relative automatic resolution", {"auto"});
+            ::args::Flag overwrite(parser, "overwrite", "Replace BOTH output files", {'y', "overwrite"});
+            LogLevelFlag log_level(parser);
+            try {
+                parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+            } catch (const ::args::Help&) {
+                std::print("{}", parser.Help());
+                return HelpMode{};
+            } catch (const ::args::ParseError& e) {
+                return std::unexpected(std::format("{}\n{}", e.what(), parser.Help()));
+            }
+            if (!input || (!output && !out) || (output && out))
+                return std::unexpected("Provide input and one output path, positionally or with --output");
+            if (automatic && size)
+                return std::unexpected("--auto and --voxel-size are mutually exclusive");
+            VoxelizeMode mode;
+            mode.input_path = absolute_input_path(::args::get(input));
+            mode.output_path = absolute_input_path(out ? ::args::get(out) : ::args::get(output));
+            if (!native_fs::exists(mode.input_path))
+                return std::unexpected("Input not found: " + path_to_utf8(mode.input_path));
+            if (!path_to_utf8(mode.output_path.filename()).ends_with(".voxel.json"))
+                return std::unexpected("Output must end in .voxel.json");
+            if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
+                return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
+            mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
+            mode.settings.auto_resolution = automatic;
+            if (size)
+                mode.settings.voxel_size = ::args::get(size);
+            if (opacity)
+                mode.settings.opacity = ::args::get(opacity);
+            if (area)
+                mode.settings.max_gaussian_area = ::args::get(area);
+            try {
+                mode.settings.validate();
+            } catch (const std::exception& e) {
+                return std::unexpected(e.what());
+            }
+            std::string error;
+            if (!log_level.apply(error))
+                return std::unexpected(error);
+            mode.overwrite = overwrite;
+            return mode;
+        } else if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
         } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
             std::string err;

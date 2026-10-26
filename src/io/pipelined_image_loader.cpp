@@ -15,6 +15,7 @@
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "cuda/image_sharpen.hpp"
 #include "cuda/masked_image_fill.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -32,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <format>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -436,7 +438,8 @@ namespace lfs::io {
         }
 
         [[nodiscard]] bool load_params_need_processing(const LoadParams& params) {
-            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
+            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr ||
+                   params.sharpen.enabled();
         }
 
         [[nodiscard]] bool decodes_float(const std::filesystem::path& path, const LoadParams& params) {
@@ -580,6 +583,24 @@ namespace lfs::io {
                 throw std::runtime_error(std::string("undistortion failed: ") + cudaGetErrorString(status));
         }
 
+        // Runs after resize and undistortion so caches store the sharpened image.
+        void apply_requested_sharpen(lfs::core::Tensor& tensor, const LoadParams& params) {
+            if (params.sharpen.enabled())
+                tensor = sharpen_image(tensor, params.sharpen, !params.decode_float,
+                                       static_cast<cudaStream_t>(params.cuda_stream));
+        }
+
+        // Radius only changes the usm result.
+        std::string sharpen_cache_suffix(const lfs::core::SharpenParams& sharpen) {
+            if (!sharpen.enabled())
+                return {};
+            auto suffix = std::format("_sharpen_{}_a{}_t{}", lfs::core::sharpen_kernel_name(sharpen.kernel),
+                                      sharpen.amount, sharpen.threshold);
+            if (sharpen.kernel == lfs::core::SharpenKernel::Usm)
+                suffix += std::format("_r{}", sharpen.radius);
+            return suffix;
+        }
+
         lfs::core::Tensor process_mask(lfs::core::Tensor mask, const float threshold) {
             if (!mask.is_valid())
                 return {};
@@ -645,8 +666,10 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0)
                 return {};
 
-            if (apply_processing)
+            if (apply_processing) {
                 apply_requested_undistort(tensor, params);
+                apply_requested_sharpen(tensor, params);
+            }
 
             return tensor;
         }
@@ -949,9 +972,17 @@ namespace lfs::io {
 
     lfs::Result<LoaderCompletion> PipelinedImageLoader::get_completion() {
         try {
-            const auto sequence_id = output_queue_.pop();
-            if (auto completion = take_completion(sequence_id)) {
-                return std::move(*completion);
+            for (;;) {
+                const auto sequence_id = output_queue_.pop();
+                if (auto completion = take_completion(sequence_id)) {
+                    return std::move(*completion);
+                }
+                // clear() wakes workers blocked on a full output queue; their
+                // old-generation tokens land after the ledger was emptied. Skip them.
+                if (loader_generation_.load(std::memory_order_acquire) > 0) {
+                    continue;
+                }
+                break;
             }
             return lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Internal,
@@ -971,20 +1002,26 @@ namespace lfs::io {
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
-        const auto sequence_id = output_queue_.try_pop();
-        if (!sequence_id) {
-            return std::nullopt;
+        while (const auto sequence_id = output_queue_.try_pop()) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
         const std::chrono::milliseconds timeout) {
-        const auto sequence_id = output_queue_.try_pop_for(timeout);
-        if (!sequence_id) {
-            return std::nullopt;
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (const auto sequence_id = output_queue_.try_pop_for(
+                   std::max(std::chrono::milliseconds(0),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                deadline - std::chrono::steady_clock::now())))) {
+            if (auto completion = take_completion(*sequence_id)) {
+                return completion;
+            }
         }
-        return take_completion(*sequence_id);
+        return std::nullopt;
     }
 
     size_t PipelinedImageLoader::ready_count() const {
@@ -1277,6 +1314,7 @@ namespace lfs::io {
         }
 
         apply_requested_undistort(decoded, params);
+        apply_requested_sharpen(decoded, params);
         return decoded;
     }
 
@@ -1344,14 +1382,14 @@ namespace lfs::io {
                 << undistort_cache_hash(params, decodes_16bit(params), 0x726762ULL);
             if (params.decode_float)
                 key << "_f32";
-            return key.str();
+            return key.str() + sharpen_cache_suffix(params.sharpen);
         }
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (decodes_16bit(params))
             key += "_16b";
         if (params.decode_float)
             key += "_f32";
-        return key;
+        return key + sharpen_cache_suffix(params.sharpen);
     }
 
     std::string PipelinedImageLoader::make_mask_cache_key(
@@ -1547,6 +1585,9 @@ namespace lfs::io {
                                                    const PrefetchedImage& item,
                                                    const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
+        // Cache hits go to the hot queue, which only the GPU decode thread drains.
+        if (!is_nvcodec_available())
+            return;
         if (kind != SidecarCacheFormat::DepthFloat && !jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
         }
@@ -2456,8 +2497,10 @@ namespace lfs::io {
             std::optional<PrefetchedImage> cold_rgb;
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
+                // Only the GPU decode thread drains the hot queue; without it every image decodes on the CPU.
+                const bool gpu_decode = is_nvcodec_available();
 
-                if (auto cached = load_cached_jpeg_blob(result.cache_key)) {
+                if (auto cached = gpu_decode ? load_cached_jpeg_blob(result.cache_key) : nullptr) {
                     result.jpeg_data = std::move(cached);
                     result.is_cache_hit = true;
                     result.needs_processing = false;
@@ -2474,7 +2517,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing && gpu_decode) {
                         // An unchanged JPEG is already a usable encoded cache
                         // entry. Avoid a decode/re-encode and its quality loss.
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
@@ -2861,6 +2904,7 @@ namespace lfs::io {
 
                             if (decode_from_base_cache) {
                                 apply_requested_undistort(tensor, batch[i].params);
+                                apply_requested_sharpen(tensor, batch[i].params);
                                 write_derived_cache(*nvcodec, tensor, batch[i].cache_key,
                                                     batch[i].params.cuda_stream, batch[i].params);
                             }
@@ -3019,6 +3063,7 @@ namespace lfs::io {
                         const UndistortSlotGuard slot;
                         alpha = lfs::core::undistort_mask_area(alpha, scaled, nullptr);
                     }
+                    apply_requested_sharpen(rgb, item.params);
 
                     // Later epochs read alpha back from its 16-bit cache: put the first load on the same grid.
                     {
@@ -3462,6 +3507,7 @@ namespace lfs::io {
                     }
 
                     apply_requested_undistort(decoded, item.params);
+                    apply_requested_sharpen(decoded, item.params);
 
                     if (is_nvcodec_available()) {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, nullptr, item.params);
@@ -3486,6 +3532,7 @@ namespace lfs::io {
                     try {
                         auto decoded = decode_file_on_cpu(item.path, item.params);
                         apply_requested_undistort(decoded, item.params);
+                        apply_requested_sharpen(decoded, item.params);
                         {
                             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                             if (auto it = pending_pairs_.find(item.sequence_id);

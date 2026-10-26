@@ -11,6 +11,7 @@
 #include <istream>
 #include <memory>
 #include <ostream>
+#include <utility>
 
 namespace lfs::io {
     class PipelinedImageLoader;
@@ -82,6 +83,11 @@ namespace lfs::training {
         // view before adding it to its refine window.
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
+
+        virtual std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int /*iter*/) {
+            return {};
+        }
+        virtual void on_impact_accumulated(int /*iter*/) {}
     };
 
     class ICheckpointStateAdopter {

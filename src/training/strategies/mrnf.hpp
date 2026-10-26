@@ -23,6 +23,13 @@ namespace lfs::training::sh_value {
 }
 
 class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
+class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
+class MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
+class MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
+class MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
+class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 class MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -40,6 +47,8 @@ class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test
 class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
+class CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
+class CropDampingStrategyTest_RoiGrowthSplitCountsOnlySelectableWeights_Test;
 class MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
 class MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
 class MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
@@ -102,6 +111,8 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> get_training_dataset() const override { return _views; }
         lfs::core::Tensor edge_score_scratch(int iter) override;
         void on_edge_score_accumulated(int iter) override;
+        std::pair<lfs::core::Tensor, lfs::core::Tensor> impact_scratch(int iter) override;
+        void on_impact_accumulated(int iter) override;
 
     private:
         friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
@@ -122,6 +133,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
         friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
         friend class ::CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
+        friend class ::CropDampingStrategyTest_RoiGrowthShareSplitsPicksAndSpillsLeftovers_Test;
+        friend class ::CropDampingStrategyTest_RoiGrowthSplitCountsOnlySelectableWeights_Test;
         friend class ::MRNFStrategyTest_CompactSplatsCorrectAndPeakBelowThreeX_Test;
         friend class ::MRNFStrategyTest_CompactSplatsFusedPathLeavesGradsEmpty_Test;
         friend class ::MRNFStrategyTest_ApplyDecaySkipsFrozenRows_Test;
@@ -130,10 +143,48 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
         friend class ::MRNFStrategyTest_PerSplatMeanStepScalesWithExtentAndClamps_Test;
         friend class ::MRNFStrategyTest_LateLrAnnealDecaysOpacityAndColorAfterGrowth_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
+        friend class ::MRNFStrategyTest_RemoveGaussiansKeepsGrowthExchangeStateAligned_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeFallsBackToCoverageWithoutImpact_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeMatchesDemandWithoutDeletingParents_Test;
+        friend class ::MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 
         void clear_rendered_support(const lfs::core::Tensor& indices);
+        // Frees rows the way refine() prunes them: free mask, deleted mask, zero
+        // quaternion (early exit in preprocessing) and fresh optimizer state.
+        void soft_delete_rows(const lfs::core::Tensor& indices);
+
+        // Growth exchange preserves splats with high removal impact. Rasterizers without
+        // impact output use coverage as the single protection score.
+        [[nodiscard]] bool growth_exchange_active(int iter) const;
+        [[nodiscard]] float exchange_importance_decay() const;
+        [[nodiscard]] int exchange_warmup_windows() const;
+        [[nodiscard]] size_t exchange_quota(int iter, size_t active) const;
+        void reset_exchange_state();
+        void reset_exchange_window_outputs();
+        void update_exchange_importance();
+        [[nodiscard]] lfs::core::Tensor select_exchange_victims(
+            size_t count,
+            const lfs::core::Tensor& excluded = {});
+        // Marks rows filled by growth as newborn: no importance yet and not ranked until a
+        // full pass over the training views has scored them.
+        void record_exchange_births(const lfs::core::Tensor& split_parents = {});
         void refine(int iter);
-        void grow_and_split(int iter, int pruned_count);
+        struct GrowthResult {
+            lfs::core::Tensor split_indices;
+            lfs::core::Tensor exchange_victim_indices;
+            int replacement_count = 0;
+            int growth_count = 0;
+            size_t exchange_victims = 0;
+        };
+        // refine_candidates defaults to compute_refine_candidates().
+        GrowthResult grow_and_split(
+            int iter,
+            int pruned_count,
+            lfs::core::Tensor refine_candidates = {},
+            size_t exchange_quota = 0);
         // Splits the given parents and places their children (free slots first,
         // then appended rows) in chunks of at most chunk_rows children.
         // Returns {children placed in free slots, children appended}.
@@ -160,6 +211,12 @@ namespace lfs::training {
         void publish_mean_step_far_mask();
         void ensure_mean_step_far_mask();
         [[nodiscard]] size_t densification_row_count() const;
+        // Gumbel top-k picks split between the crop box ROI and the rest by the growth share.
+        [[nodiscard]] lfs::core::Tensor sample_with_roi_share(
+            const lfs::core::Tensor& weights,
+            int k,
+            uint64_t seed,
+            size_t known_nnz);
         [[nodiscard]] lfs::core::Tensor sample_gumbel_topk(
             const lfs::core::Tensor& weights,
             int k,
@@ -216,6 +273,17 @@ namespace lfs::training {
         bool _camera_hull_valid = false;
         lfs::core::Tensor _free_mask;
         bool _topology_frozen = false;
+
+        // Growth exchange state; transient (rebuilt after a resume).
+        lfs::core::Tensor _exchange_importance_sum;     // [N] leaky max of impact sum or coverage fallback
+        lfs::core::Tensor _exchange_importance_peak;    // [N] leaky max of impact peak; invalid for fallback
+        lfs::core::Tensor _exchange_birth;              // [N] window in which the row was last filled
+        lfs::core::Tensor _exchange_window_impact_sum;  // [N] window removal-impact sum
+        lfs::core::Tensor _exchange_window_impact_peak; // [N] window removal-impact peak
+        lfs::core::Tensor _exchange_free_before_growth; // free slots right before growth
+        int _exchange_windows = 0;                      // windows in the current importance memory
+        bool _exchange_impact_written = false;
+        int _exchange_first_iter = -1;
 
         DensifyNScratch _densify_n_scratch;
         GumbelTopKScratch _gumbel_scratch;

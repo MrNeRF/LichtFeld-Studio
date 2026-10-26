@@ -21,15 +21,19 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/html_viewer_export.hpp"
 #include "gui/import_error.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/collision_export.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/video/video_export_schedule.hpp"
+#include "operation/undo_entry.hpp"
+#include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -224,16 +228,11 @@ namespace lfs::vis::gui {
             });
         }
 
-        for (const auto* node : scene.getNodes()) {
-            if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
-                !scene.isNodeEffectivelyVisible(node->id)) {
-                continue;
-            }
+        if (const auto* node = scene.getDatasetPointCloudNode();
+            node && scene.isNodeEffectivelyVisible(node->id)) {
             snapshot.point_cloud = node->point_cloud;
             snapshot.point_cloud_transform = scene.getWorldTransform(node->id);
-            break;
         }
-
         // If no live POINTCLOUD node exists (e.g. the splat model replaced it
         // once training started), the export will fall through to the source
         // COLMAP points3D file. Those points are in the original COLMAP frame
@@ -435,6 +434,25 @@ namespace lfs::vis::gui {
         return &*snapshot.active_ellipsoid;
     }
 
+    [[nodiscard]] const VideoExportCropPolygonSnapshot* activeVideoExportPointCloudCropPolygon(
+        const VideoExportSceneSnapshot& snapshot) {
+        if (snapshot.selected_crop_polygon_index >= 0) {
+            const auto& selected = snapshot.crop_polygons[static_cast<size_t>(snapshot.selected_crop_polygon_index)];
+            if (selected.data.enabled)
+                return &selected;
+        }
+
+        const VideoExportCropPolygonSnapshot* single = nullptr;
+        for (const auto& polygon : snapshot.crop_polygons) {
+            if (!polygon.data.enabled)
+                continue;
+            if (single)
+                return nullptr;
+            single = &polygon;
+        }
+        return single;
+    }
+
     void applyVideoExportPointCloudFilters(rendering::PointCloudFilterState& filters,
                                            const VideoExportSceneSnapshot& snapshot,
                                            const RenderSettings& render_settings) {
@@ -455,6 +473,18 @@ namespace lfs::vis::gui {
                 .transform = glm::inverse(el->world_transform)};
             filters.crop_box.reset();
             filters.crop_inverse = el->data.inverse;
+            filters.crop_desaturate = render_settings.desaturate_cropping;
+            return;
+        }
+
+        if (const auto* const polygon = activeVideoExportPointCloudCropPolygon(snapshot)) {
+            filters.crop_polygon = rendering::CropPolygon{
+                .vertices = polygon->data.vertices,
+                .half_depth = polygon->data.half_depth,
+                .transform = glm::inverse(polygon->world_transform)};
+            filters.crop_box.reset();
+            filters.crop_ellipsoid.reset();
+            filters.crop_inverse = polygon->data.inverse;
             filters.crop_desaturate = render_settings.desaturate_cropping;
         }
     }
@@ -514,6 +544,20 @@ namespace lfs::vis::gui {
                 .world_transform = el.world_transform,
                 .local_transform = glm::mat4(1.0f),
                 .effectively_visible = true,
+            });
+        }
+
+        state.crop_polygons.reserve(snapshot.crop_polygons.size());
+        for (const auto& polygon : snapshot.crop_polygons) {
+            state.crop_polygons.push_back(lfs::core::Scene::RenderableCropPolygon{
+                .node_id = polygon.node_id,
+                .parent_splat_id = polygon.parent_splat_id,
+                .parent_node_index = polygon.parent_node_index,
+                .data = &polygon.data,
+                .world_transform = polygon.world_transform,
+                .local_transform = glm::mat4(1.0f),
+                .effectively_visible = true,
+                .parent_effectively_visible = true,
             });
         }
         return state;
@@ -909,6 +953,9 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        cancelCollision();
+        collision_thread_.reset();
+        pollCollision();
         if (auto* loader = viewer_->getDataLoader())
             loader->cancelPendingImports();
         if (isExporting())
@@ -1008,6 +1055,7 @@ namespace lfs::vis::gui {
             splat_load_state_.requests.clear();
             splat_load_state_.loaded_count = 0;
             splat_load_state_.failed_count = 0;
+            splat_load_state_.imported_nodes.clear();
             splat_load_state_.failures.clear();
             splat_load_state_.attachment_pending = false;
             splat_load_state_.consolidation_pending = false;
@@ -1338,6 +1386,7 @@ namespace lfs::vis::gui {
                          completion.stage_elapsed.count() + attach_elapsed.count());
                 ++splat_load_state_.loaded_count;
                 counted_as_loaded = true;
+                splat_load_state_.imported_nodes.push_back(imported_uuid);
                 if (splat_load_state_.validate_batch) {
                     splat_load_state_.pending_render_request = completion.request;
                     splat_load_state_.pending_render_node = imported_uuid;
@@ -1455,10 +1504,18 @@ namespace lfs::vis::gui {
         if (scene_manager)
             scene_manager->getScene().setImportValidation(false);
         const bool success = splat_load_state_.loaded_count > 0;
+        // Count only the imported nodes: other nodes and their soft-deleted rows are not part of it.
+        size_t imported_points = 0;
+        if (scene_manager) {
+            for (const auto& uuid : splat_load_state_.imported_nodes) {
+                if (const auto* node = scene_manager->getScene().getNodeByUuid(uuid))
+                    imported_points += node->gaussian_count.load(std::memory_order_acquire);
+            }
+        }
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.success = success;
-            import_state_.num_points = scene_manager ? scene_manager->getScene().getTotalGaussianCount() : 0;
+            import_state_.num_points = imported_points;
             import_state_.completion_time = std::chrono::steady_clock::now();
         }
         if (success) {
@@ -1490,6 +1547,7 @@ namespace lfs::vis::gui {
                 return;
             ++splat_simplify_scene_epoch_;
             ++gallery_scene_epoch_;
+            cancelCollision();
             if (auto* loader = viewer_->getDataLoader())
                 loader->cancelPendingImports();
             // Dataset application also clears the scene. Cancel splat staging,
@@ -1691,6 +1749,7 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::pollImportCompletion() {
+        pollCollision();
         if (import_cancel_pending_) {
             cancelImport(false);
             if (import_cancel_pending_)
@@ -1706,7 +1765,8 @@ namespace lfs::vis::gui {
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
         if (import_cancel_pending_)
             return importWorkersFinished();
-        return splat_load_state_.pending_render_request.has_value() ||
+        return collision_pending_.load(std::memory_order_acquire) ||
+               splat_load_state_.pending_render_request.has_value() ||
                (viewer_->getDataLoader() && viewer_->getDataLoader()->hasPendingImports()) ||
                import_state_.load_complete.load(std::memory_order_acquire) ||
                splat_load_state_.worker_complete.load(std::memory_order_acquire) ||
@@ -1798,6 +1858,8 @@ namespace lfs::vis::gui {
         }
 
         const auto& scene = scene_manager->getScene();
+        const auto* const trainer_manager = scene_manager->getTrainerManager();
+        const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
         std::vector<ExportSplatSource> splats;
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
@@ -1810,7 +1872,8 @@ namespace lfs::vis::gui {
                 }
                 splats.push_back(ExportSplatSource{
                     .data = node->model.get(),
-                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
+                    .transform = scene_coords::nodeDataWorldTransform(scene, node->id),
+                    .crop = node->uuid == scene.getTrainingModelNodeUuid() ? export_crop : std::nullopt});
             }
         }
         if (splats.empty()) {
@@ -1823,6 +1886,8 @@ namespace lfs::vis::gui {
         auto provenance = include_provenance ? make_gui_export_stamp(*scene_manager)
                                              : core::make_minimal_provenance_stamp();
 
+        const auto background_color = resolve_html_export_background_color();
+
         startAsyncExport(format,
                          path,
                          std::move(splats),
@@ -1832,7 +1897,8 @@ namespace lfs::vis::gui {
                          rad_flip_y,
                          rad_streamable,
                          spz_version,
-                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
+                         std::move(provenance), lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations,
+                         background_color);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -2113,7 +2179,8 @@ namespace lfs::vis::gui {
                                             bool rad_streamable,
                                             int spz_version,
                                             core::ProvenanceStamp provenance,
-                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+                                            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                            std::optional<glm::vec3> background_color) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
@@ -2156,7 +2223,7 @@ namespace lfs::vis::gui {
              rad_flip_y,
              rad_streamable,
              spz_version,
-             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations](
+             provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations, background_color](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 jobs_.work(job);
@@ -2208,10 +2275,20 @@ namespace lfs::vis::gui {
                     if (!cancelled) {
                         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> merge_inputs;
                         merge_inputs.reserve(splats.size());
+                        // Cropped copies; the scene model stays whole so a stopped run can resume.
+                        std::deque<lfs::core::SplatData> cropped;
                         for (const auto& source : splats) {
-                            if (source.data) {
-                                merge_inputs.emplace_back(source.data, source.transform);
+                            if (!source.data)
+                                continue;
+                            const lfs::core::SplatData* data = source.data;
+                            if (source.crop) {
+                                if (auto kept = lfs::training::crop_copy_to_training_cropbox(*data, *source.crop)) {
+                                    if (kept->size() == 0)
+                                        continue;
+                                    data = &cropped.emplace_back(std::move(*kept));
+                                }
                             }
+                            merge_inputs.emplace_back(data, source.transform);
                         }
 
                         const auto storage_mode = borrow_single_identity
@@ -2312,7 +2389,8 @@ namespace lfs::vis::gui {
                                 .output_path = path,
                                 .kmeans_iterations = 10,
                                 .progress_callback = update_progress,
-                                .provenance = provenance};
+                                .provenance = provenance,
+                                .background_color = background_color};
                             if (auto result = lfs::io::export_html(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -2437,9 +2515,52 @@ namespace lfs::vis::gui {
         jobs_.requestCancel(
             export_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
         publishExportState();
+        if (drag_export_cancel_)
+            drag_export_cancel_();
         if (export_state_.thread && export_state_.thread->joinable()) {
             export_state_.thread->request_stop();
         }
+    }
+
+    bool AsyncTaskManager::beginDragExport(ExportFormat format, std::function<void()> cancel) {
+        if (isExporting() || !beginJob(export_state_.job, JobType::Export, LOC("export.exporting")))
+            return false;
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.path.clear();
+            export_state_.commit_uuid.clear();
+        }
+        drag_export_cancel_ = std::move(cancel);
+        publishExportState();
+        return true;
+    }
+
+    std::function<void()> AsyncTaskManager::dragExportWorkerStart() const {
+        return [registry = &jobs_, job = export_state_.job, started = std::make_shared<std::atomic<bool>>(false)] {
+            if (!started->exchange(true))
+                registry->work(job);
+        };
+    }
+
+    void AsyncTaskManager::reportDragExport(float progress, std::string stage) {
+        if (!drag_export_cancel_)
+            return;
+        jobs_.report(export_state_.job, progress, std::move(stage));
+        publishExportState();
+    }
+
+    void AsyncTaskManager::finishDragExport(bool cancelled, std::string error) {
+        if (!drag_export_cancel_)
+            return;
+        drag_export_cancel_ = {};
+        if (cancelled)
+            jobs_.canceled(export_state_.job);
+        else if (!error.empty())
+            jobs_.failed(export_state_.job, std::move(error));
+        else
+            jobs_.completed(export_state_.job);
+        publishExportState();
     }
 
     void AsyncTaskManager::publishExportFailureState(const ExportFormat format,
@@ -2479,7 +2600,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             state.format = exportProgressFormatName(export_state_.format);
             state.path = lfs::core::path_to_utf8(export_state_.path);
-            if (state.outcome == "completed" && state.error.empty()) {
+            if (state.outcome == "completed" && state.error.empty() && !export_state_.path.empty()) {
                 warn_for_extension = core::scene_export_path_status(export_state_.format, export_state_.path) == core::SceneExportPathStatus::Warn;
                 format_name = core::scene_export_format_name(export_state_.format);
             }
@@ -3620,6 +3741,183 @@ namespace lfs::vis::gui {
             .emit();
 
         LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
+    }
+
+    void AsyncTaskManager::cancelCollision() {
+        if (const auto state = collisionJob(); state && state->running()) {
+            jobs_.requestCancel(collision_job_);
+            if (collision_thread_)
+                collision_thread_->request_stop();
+            publishCollisionState();
+        }
+    }
+
+    void AsyncTaskManager::publishCollisionState(const bool force) {
+        AppStore::TaskProgressState state;
+        if (const auto job = collisionJob()) {
+            state.active = job->running();
+            state.progress = job->progress;
+            state.stage = job->stage;
+            state.error = job->error;
+        }
+        auto& store = app_store();
+        const bool changed = store.collision_state.set(std::move(state));
+        if (force && !changed)
+            store.store().enqueue_dirty(store.collision_state.field_id());
+        if (changed || force)
+            wakeMainThreadForAsyncWork();
+    }
+
+    float AsyncTaskManager::collisionResolvedSize() const {
+        const auto* manager = viewer_->getSceneManager();
+        if (!manager || !collision_source_ || manager->getSelectedNodeIds().size() != 1 ||
+            !viewer_->project_lifecycle_ || collision_epoch_ != viewer_->project_lifecycle_->documentEpoch())
+            return 0;
+        const auto& scene = manager->getScene();
+        const auto source = scene.collisionSourceIdentity(manager->getSelectedNodeIds().front());
+        return source == collision_source_ ? collision_resolved_size_.load() : 0;
+    }
+
+    void AsyncTaskManager::startCollision(core::CollisionSettings settings) {
+        if (!viewer_->isOnViewerThread())
+            throw std::logic_error("Collision capture requires the viewer thread");
+        settings.validate();
+        if (const auto state = collisionJob(); state && state->running())
+            throw std::runtime_error("A collision job is already running");
+        auto* manager = viewer_->getSceneManager();
+        if (!manager)
+            throw std::runtime_error("No scene manager");
+        const auto selected = manager->getSelectedNodeIds();
+        if (selected.size() != 1)
+            throw std::runtime_error("Select exactly one splat node to voxelize");
+        core::Scene::CollisionSourceIdentity identity;
+        auto sources = manager->getScene().captureCollisionSources(selected.front(), &identity);
+        collision_source_ = identity;
+        collision_settings_ = settings;
+        collision_resolved_size_ = 0;
+        launchCollision([this, settings, sources = std::move(sources)](std::stop_token stop, const core::ProgressCallback& progress) {
+            collision_result_ = std::make_shared<const core::CollisionVolume>(core::generateCollision(
+                sources.front(), settings, stop, progress, [this](float size) {
+                    collision_resolved_size_ = size;
+                    publishCollisionState(true);
+                    publish_viewport_toolbar_generation();
+                }));
+            return false;
+        });
+    }
+
+    void AsyncTaskManager::startCollisionExport(core::Uuid uuid, const std::filesystem::path& path) {
+        if (!viewer_->isOnViewerThread())
+            throw std::logic_error("Collision export capture requires the viewer thread");
+        if (const auto state = collisionJob(); state && state->running())
+            throw std::runtime_error("A collision job is already running");
+        auto* manager = viewer_->getSceneManager();
+        const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
+        if (!node || node->type != core::NodeType::COLLISION || !node->collision)
+            throw std::runtime_error("The export target is not a collision node");
+        auto volume = node->collision;
+        const auto transform = manager->getScene().getWorldTransform(node->id);
+        launchCollision([volume, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
+            io::exportCollision(*volume, path, transform, stop, progress);
+            return true; // Publication wins a cancellation arriving after installation.
+        });
+    }
+
+    void AsyncTaskManager::launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work) {
+        collision_thread_.reset();
+        if (!beginJob(collision_job_, JobType::Collision, "Preparing collision"))
+            throw std::runtime_error("Cannot start collision job");
+        collision_result_.reset();
+        collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();
+        publishCollisionState(true);
+        const auto job = collision_job_;
+        try {
+            collision_thread_.emplace([this, job, work = std::move(work)](std::stop_token stop) {
+                jobs_.work(job);
+                publishCollisionState(true);
+                std::string error;
+                bool published = false, canceled = false;
+                try {
+                    published = work(stop, [this, job](float value, const std::string& stage) {
+                        jobs_.report(job, value, stage);
+                        publishCollisionState();
+                        return !jobs_.cancelRequested(job);
+                    });
+                } catch (const core::OperationCancelled&) {
+                    canceled = true;
+                } catch (const std::exception& e) {
+                    error = e.what();
+                    LOG_ERROR("Collision operation failed: {}", error);
+                }
+                jobs_.finishWork(job, !published && error.empty() && (canceled || stop.stop_requested() || jobs_.cancelRequested(job)),
+                                 error, std::nullopt, std::nullopt, published);
+                publishCollisionState(true);
+                collision_pending_.store(true, std::memory_order_release);
+                wakeMainThreadForAsyncWork();
+            });
+        } catch (const std::exception& e) {
+            LOG_ERROR("Cannot launch collision worker: {}", e.what());
+            jobs_.failed(job, e.what());
+            publishCollisionState(true);
+            throw;
+        }
+    }
+
+    void AsyncTaskManager::pollCollision() {
+        if (!collision_pending_.exchange(false, std::memory_order_acq_rel))
+            return;
+        collision_thread_.reset();
+        const auto state = collisionJob();
+        if (!state)
+            return;
+        auto result = std::move(collision_result_);
+        if (state->worker_canceled || (result && (jobs_.cancelRequested(collision_job_) ||
+                                                  !viewer_->project_lifecycle_ ||
+                                                  collision_epoch_ != viewer_->project_lifecycle_->documentEpoch()))) {
+            jobs_.canceled(collision_job_);
+        } else if (!state->error.empty()) {
+            LOG_ERROR("Collision job failed: {}", state->error);
+            jobs_.failed(collision_job_, state->error);
+        } else {
+            try {
+                if (result) {
+                    auto* scene_manager = viewer_->getSceneManager();
+                    if (!scene_manager || !collision_source_)
+                        throw std::runtime_error(LOC("collision.source_unavailable"));
+                    auto& manager = *scene_manager;
+                    auto& scene = manager.getScene();
+                    std::optional<std::shared_lock<std::shared_mutex>> lock;
+                    if (auto* mutex = scene.liveModelMutex(); mutex && core::Scene::live_model_lock_depth() == 0)
+                        lock.emplace(*mutex);
+                    scene.noteLiveModelLockAcquired();
+                    const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
+                    if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
+                        throw std::runtime_error(LOC("collision.source_changed"));
+                    const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
+                    auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
+                    const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
+                    if (id == core::NULL_NODE)
+                        throw std::runtime_error("Cannot add collision node");
+                    bool installed = false;
+                    const ScopeExit rollback([&] {
+                        if (!installed)
+                            scene.removeNodeById(id);
+                    });
+                    // The owned grid is world-space; keep its initial world frame
+                    // while inheriting subsequent source/ancestor edits.
+                    scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
+                    op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                        manager, "Generate collision", std::move(before),
+                        op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
+                    installed = true;
+                }
+                jobs_.completed(collision_job_);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Collision completion failed: {}", e.what());
+                jobs_.failed(collision_job_, e.what());
+            }
+        }
+        publishCollisionState(true);
     }
 
     void AsyncTaskManager::startSplatSimplify(const std::string& source_name,

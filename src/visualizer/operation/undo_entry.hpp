@@ -401,6 +401,39 @@ namespace lfs::vis::op {
         bool use_after_ = false;
     };
 
+    // Crop tool edits of a polygon: its transform, or its outline from the vertex handles.
+    class LFS_VIS_API CropPolygonUndoEntry : public UndoEntry {
+    public:
+        CropPolygonUndoEntry(SceneManager& scene,
+                             std::string node_name,
+                             lfs::core::CropPolygonData before,
+                             glm::mat4 transform_before,
+                             bool show_before);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] bool hasChanges() const;
+        [[nodiscard]] std::string name() const override { return "crop_polygon.transform"; }
+        [[nodiscard]] UndoMetadata metadata() const override;
+        [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
+
+    private:
+        void captureAfter();
+        void apply(const lfs::core::CropPolygonData& data, const glm::mat4& transform, bool show);
+
+        SceneManager& scene_;
+        std::string node_name_;
+        lfs::core::Uuid node_uuid_;
+        SceneTopologyProof expected_topology_;
+        lfs::core::CropPolygonData before_;
+        lfs::core::CropPolygonData after_;
+        glm::mat4 transform_before_;
+        glm::mat4 transform_after_;
+        bool show_before_ = false;
+        bool show_after_ = false;
+    };
+
     class LFS_VIS_API PropertyChangeUndoEntry : public UndoEntry {
     public:
         PropertyChangeUndoEntry(std::string property_path,
@@ -488,6 +521,8 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
+        bool transient = false;
         lfs::core::PayloadHydrationState payload_hydration =
             lfs::core::PayloadHydrationState::NotApplicable;
         size_t gaussian_count = 0;
@@ -501,8 +536,10 @@ namespace lfs::vis::op {
         std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
         std::unique_ptr<lfs::core::EllipsoidData> ellipsoid;
+        std::unique_ptr<lfs::core::CropPolygonData> crop_polygon;
         std::unique_ptr<lfs::core::KeyframeData> keyframe;
         std::optional<SceneGraphCameraSnapshot> camera;
         std::vector<SceneGraphNodeSnapshot> children;
@@ -535,6 +572,7 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         std::optional<std::filesystem::path> source_path;
         int order_index = -1;
     };
@@ -546,6 +584,7 @@ namespace lfs::vis::op {
 
     struct PendingHydratedPayload {
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         const void* storage_identity = nullptr;
     };
 

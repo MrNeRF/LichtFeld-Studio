@@ -27,6 +27,13 @@ from . import (
     ui as ui,
     undo as undo
 )
+from .scene import (
+    cancel_collision as cancel_collision,
+    export_collision as export_collision,
+    generate_collision as generate_collision,
+    get_collision_state as get_collision_state,
+    set_walk_settings as set_walk_settings
+)
 
 
 class Error(RuntimeError):
@@ -329,6 +336,11 @@ def project_cancel_cleanup() -> None: ...
 def project_clean(destination: str = '', expected_commit: str = '') -> bool:
     """
     Clean the active saved project in the background, preserving its current resume point
+    """
+
+def project_write_training_copy(destination: str, progress: object | None = None, cancel: object | None = None) -> io.DatasetEmbedResult:
+    """
+    Write a new untrained project from the pending parameters with the loaded dataset embedded; it blocks, so call it off the UI thread
     """
 
 def project_is_dirty() -> bool:
@@ -1537,6 +1549,29 @@ def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: in
         CPU uint8 Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available
     """
 
+def render_lightfield_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, shift_x: float = 0.0, near_distance: float = 0.0, far_distance: float = 100000.0) -> Tensor | None:
+    """
+    Render a parallel off-axis perspective view for light-field quilts.
+
+    rotation is a [3, 3] camera-to-world rotation and translation is a [3] world
+    position, using the visualizer camera convention. fov is vertical degrees
+    (default: 60).
+    shift_x offsets the principal point horizontally in pixels; positive values
+    move the principal point right. near_distance and far_distance clip Gaussian
+    centers by camera-space forward distance, not the tails of individual splats.
+
+    Selection highlights are hidden. Projection, clipping, splat scale and editor
+    visualization overrides are local to this render; the viewport settings and
+    model are not changed. Other current render settings, such as background and
+    appearance, are retained. Rendering is dispatched to the viewer thread when
+    necessary.
+
+    Returns a CPU uint8 Tensor [H, W, 3] RGB image, or None when there is no renderable
+    scene, arguments are invalid, or rendering fails. Width and height must be
+    1-2048, fov must be 1-120, shift_x must be finite, and clipping distances must
+    be finite with 0 <= near_distance < far_distance.
+    """
+
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.
@@ -2067,6 +2102,9 @@ class OptimizationParams:
     def get(self, name: str) -> object:
         """Get property value by name"""
 
+    def builtin_default(self, name: str) -> object:
+        """Get the built-in default for the active method and step scaling"""
+
     def set(self, name: str, value: object) -> None:
         """Set property value by name"""
 
@@ -2164,11 +2202,34 @@ class OptimizationParams:
     def cropbox_loss_weight(self, arg: float, /) -> None: ...
 
     @property
+    def cropbox_growth_inside(self) -> float:
+        """Share of new splats placed inside the active crop box"""
+
+    @cropbox_growth_inside.setter
+    def cropbox_growth_inside(self, arg: float, /) -> None: ...
+
+    @property
     def lambda_dssim(self) -> float:
         """Weight for structural similarity loss"""
 
     @lambda_dssim.setter
     def lambda_dssim(self, arg: float, /) -> None: ...
+
+    @property
+    def color_variance_weight(self) -> float:
+        """
+        Reduces noise in stochastic rendering by aligning visible splat colors; 0 disables
+        """
+
+    @color_variance_weight.setter
+    def color_variance_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def color_variance_warmup_iters(self) -> int:
+        """Completed training iterations before color variance starts"""
+
+    @color_variance_warmup_iters.setter
+    def color_variance_warmup_iters(self, arg: int, /) -> None: ...
 
     @property
     def sh_degree(self) -> int:
@@ -2311,10 +2372,112 @@ class OptimizationParams:
 
     @property
     def enable_sparsity(self) -> bool:
-        """Enable sparsity optimization"""
+        """Run POPSpa sparsification after training"""
 
     @enable_sparsity.setter
     def enable_sparsity(self, arg: bool, /) -> None: ...
+
+    @property
+    def popspa_target_count(self) -> int: ...
+
+    @popspa_target_count.setter
+    def popspa_target_count(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_first_prune_count(self) -> int: ...
+
+    @popspa_first_prune_count.setter
+    def popspa_first_prune_count(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_sparsify_steps(self) -> int: ...
+
+    @popspa_sparsify_steps.setter
+    def popspa_sparsify_steps(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_refine_steps(self) -> int: ...
+
+    @popspa_refine_steps.setter
+    def popspa_refine_steps(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_projection_interval(self) -> int: ...
+
+    @popspa_projection_interval.setter
+    def popspa_projection_interval(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_seed(self) -> int: ...
+
+    @popspa_seed.setter
+    def popspa_seed(self, arg: int, /) -> None: ...
+
+    @property
+    def popspa_rho(self) -> float: ...
+
+    @popspa_rho.setter
+    def popspa_rho(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_erank_weight(self) -> float: ...
+
+    @popspa_erank_weight.setter
+    def popspa_erank_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_thin_scale_weight(self) -> float: ...
+
+    @popspa_thin_scale_weight.setter
+    def popspa_thin_scale_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_erank_epsilon(self) -> float: ...
+
+    @popspa_erank_epsilon.setter
+    def popspa_erank_epsilon(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_means_lr(self) -> float: ...
+
+    @popspa_means_lr.setter
+    def popspa_means_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_scales_lr(self) -> float: ...
+
+    @popspa_scales_lr.setter
+    def popspa_scales_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_opacities_lr(self) -> float: ...
+
+    @popspa_opacities_lr.setter
+    def popspa_opacities_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_quaternions_lr(self) -> float: ...
+
+    @popspa_quaternions_lr.setter
+    def popspa_quaternions_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_sh0_lr(self) -> float: ...
+
+    @popspa_sh0_lr.setter
+    def popspa_sh0_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_shn_lr(self) -> float: ...
+
+    @popspa_shn_lr.setter
+    def popspa_shn_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def popspa_ssim_weight(self) -> float: ...
+
+    @popspa_ssim_weight.setter
+    def popspa_ssim_weight(self, arg: float, /) -> None: ...
 
     @property
     def mip_filter(self) -> bool:
@@ -2669,6 +2832,34 @@ class DatasetParams:
     def use_16bit_color(self, arg: bool, /) -> None: ...
 
     @property
+    def sharpen_kernel(self) -> str:
+        """Training image sharpening filter: 'usm', 'laplacian4' or 'laplacian8'"""
+
+    @sharpen_kernel.setter
+    def sharpen_kernel(self, arg: str, /) -> None: ...
+
+    @property
+    def sharpen_amount(self) -> float:
+        """Strength of training image sharpening, 0 to 5; 0 turns it off"""
+
+    @sharpen_amount.setter
+    def sharpen_amount(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_radius(self) -> float:
+        """Blur sigma of the usm kernel in pixels of the resized image, 0.3 to 10"""
+
+    @sharpen_radius.setter
+    def sharpen_radius(self, arg: float, /) -> None: ...
+
+    @property
+    def sharpen_threshold(self) -> float:
+        """Luma differences below this value (0 to 1) stay unsharpened"""
+
+    @sharpen_threshold.setter
+    def sharpen_threshold(self, arg: float, /) -> None: ...
+
+    @property
     def centralize_dataset(self) -> str:
         """
         Dataset centralization mode used for the last load: 'off', 'by_pointcloud', 'by_cameras'
@@ -2793,8 +2984,10 @@ def build_splat_lod_hierarchy(source: object | None = None, ratio: float = 0.5, 
     Build a script-side multi-level LOD hierarchy from SplatData or a scene node.
     """
 
-def detect_dataset_info(path: str) -> DatasetInfo:
-    """Detect dataset information from a directory path"""
+def detect_dataset_info(path: str, images_path: str | None = None) -> DatasetInfo:
+    """
+    Detect dataset information from a directory path; images_path replaces the detected images folder
+    """
 
 def is_dataset_path(path: str) -> bool:
     """Check whether a path can be treated as a dataset source"""

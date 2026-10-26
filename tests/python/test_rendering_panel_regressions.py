@@ -88,6 +88,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_navigation_up_axis = lambda: "legacy_y"
     lf_stub.set_navigation_up_axis = lambda *_args, **_kwargs: None
     lf_stub.get_render_settings = lambda: SimpleNamespace()
+    lf_stub.get_collision_state = lambda: {"walk_settings": (1.7, .25, .3, 2.)}
     lf_stub.get_current_view = lambda: SimpleNamespace(width=1920, height=1080)
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -245,6 +246,27 @@ def test_rendering_panel_noop_property_binding_does_not_mark_view_dirty(renderin
     assert marks == ["VIEW"]
 
 
+def test_selection_outline_checkbox_commits_view_only_on_change(rendering_panel_module):
+    module = rendering_panel_module
+    marks = []
+    settings = _RenderSettingsStub(selection_outline=False)
+    module.lf.get_render_settings = lambda: settings
+    module.lf.ui.mark_project_session_chapter_committed = marks.append
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+    panel.on_bind_model(_BindingContextStub(model))
+    getter, setter = model.bindings["selection_outline"]
+    assert getter() is False
+    setter(True)
+    assert settings.selection_outline is True
+    assert marks == ["VIEW"]
+    setter(True)
+    assert marks == ["VIEW"]
+    setter(False)
+    assert settings.selection_outline is False
+    assert marks == ["VIEW", "VIEW"]
+
+
 def test_rendering_panel_color_text_marks_view_dirty_on_commit(rendering_panel_module):
     module = rendering_panel_module
     marks = []
@@ -338,24 +360,46 @@ def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_pane
     assert model.handle.dirty_fields == ["raster_backend", "equirectangular", "show_fov_controls"]
 
 
-def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_module):
+@pytest.mark.parametrize("field", ("scene_generation", "collision_state", "viewport_toolbar_generation"))
+def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_module, field):
     module = rendering_panel_module
     model = _BindingModelStub()
     panel = module.RenderingPanel()
 
     assert module.RenderingPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in module.RenderingPanel.__dict__
 
     panel.on_bind_model(_BindingContextStub(model))
     panel._subscribe_reactive_state()
     model.handle.dirty_fields.clear()
 
-    module.RuntimeState.scene_generation.value = (
-        module.RuntimeState.scene_generation.value + 1
-    )
-
+    signal = getattr(module.RuntimeState, field)
+    value = {"active": True, "progress": .5} if field == "collision_state" else signal.value + 1
+    signal.value = value
     assert model.handle.dirty_fields == ["__all__"]
+    model.handle.dirty_fields.clear()
+    signal.value = value
+    assert not model.handle.dirty_fields
     panel._unsubscribe_reactive_state()
+
+
+def test_collision_popup_is_dirty_driven_and_reopens_current_model(rendering_panel_module, monkeypatch):
+    from lfs_plugins import collision_panel, collision_rendering
+    from lfs_plugins.panels import PANEL_SPECS
+    panel = collision_panel.CollisionPanel()
+    model = _BindingModelStub()
+    panel.on_bind_model(_BindingContextStub(model))
+    monkeypatch.setattr(collision_rendering.lf, "get_collision_state", lambda: {"has_collision": True}, raising=False)
+    monkeypatch.setattr(collision_rendering.lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
+    assert PANEL_SPECS["collision"].update_policy == "dirty"
+    assert panel.on_update(None)
+    model.handle.dirty_fields.clear()
+    assert panel.on_update(None) is False
+    assert not model.handle.dirty_fields
+    for export in (True, False):
+        collision_rendering.open_collision(export=export)
+        assert model.handle.dirty_fields and model.func_bindings["export_mode"]() is export
+    panel.on_unmount(SimpleNamespace(remove_data_model=lambda *_: None))
+    assert collision_rendering.CollisionRendering.popup_handle is None
 
 
 def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):
@@ -603,3 +647,151 @@ def test_selection_group_color_picker_stays_inside_panel(rendering_panel_module)
     panel._open_picker(_PickerEvent(300, 40))
     assert popup.props["top"] == "42px"
     assert popup.props["left"] == "90px"
+
+
+@pytest.mark.parametrize("prop,value", [("axes_size", 2.0), ("show_grid", True),
+    ("mesh_shadow_resolution", "2048"), ("lod_max_splats", 0),
+    ("selection_outline", False), ("selection_outline_color", [0.0, .604, .733]),
+    ("selection_outline_opacity", 1.0), ("selection_outline_width", 2.0),
+    ("selection_outline_threshold", .5), ("selection_outline_holes", True)])
+def test_label_reset_uses_registry_defaults_and_commits(rendering_panel_module, monkeypatch, prop, value):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(**{prop: 99})
+    settings.prop_info = lambda key: {"builtin_default": value, "readonly": False}
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default(prop) == value
+    assert panel._apply_reset(prop, value)
+    assert getattr(settings, prop) == value
+
+
+def test_render_labels_never_reset_paths_or_unregistered_properties(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {"default": ""})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    panel = module.RenderingPanel()
+    assert panel._reset_default("environment_map_path") is None
+    assert panel._reset_default("delete") is None
+
+
+@pytest.mark.parametrize("info", [
+    {"default": 2, "type": "enum"},
+    {"default": 2, "builtin_default": None, "type": "enum"},
+    {"builtin_default": "3dgs", "readonly": True},
+])
+def test_label_reset_requires_a_resolved_editable_default(rendering_panel_module, monkeypatch, info):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: info)
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") is None
+
+
+def test_label_reset_uses_resolved_enum_identifier(rendering_panel_module, monkeypatch):
+    module = rendering_panel_module
+    settings = _RenderSettingsStub(prop_info=lambda key: {
+        "type": "enum", "default": 2, "builtin_default": "3dgs", "default_identifier": "3dgs"})
+    monkeypatch.setattr(module.lf, "get_render_settings", lambda: settings)
+    assert module.RenderingPanel()._reset_default("raster_backend") == "3dgs"
+
+
+@pytest.mark.parametrize("prop,value", [
+    ("selection_outline_opacity", .4),
+    ("selection_outline_width", 1.5),
+    ("selection_outline_threshold", .7),
+])
+def test_outline_appearance_commits_view_settings(rendering_panel_module, prop, value):
+    module = rendering_panel_module
+    writes, commits = [], []
+    module.lf.ui.mark_project_session_chapter_committed = commits.append
+    module.lf.get_render_settings = lambda: SimpleNamespace(
+        _set_without_session_dirty=lambda name, value: writes.append((name, value)))
+    panel = module.RenderingPanel()
+    panel._set_scrub_value(prop, value)
+    assert writes == [(prop, value)]
+    assert commits == []
+    panel._scrub_fields._commit_value(prop, value)
+    assert commits == ["VIEW"]
+
+
+def test_outline_controls_reuse_color_picker_and_conditional_container(rendering_panel_module):
+    from xml.etree import ElementTree as ET
+    root = Path(__file__).parents[2]
+    props = {"selection_outline_color", "selection_outline_opacity", "selection_outline_width",
+             "selection_outline_threshold", "selection_outline_holes"}
+    module = rendering_panel_module
+    assert "selection_outline_color" in module.COLOR_PROPS
+    assert "selection_outline_holes" in module.BOOL_PROPS
+    for filename, condition, prefix in (("rendering.rml", "selection_outline", ""),
+                                         ("preferences.rml", "default_selection_outline", "default_")):
+        doc = ET.parse(root / "src/visualizer/gui/rmlui/resources" / filename)
+        container = next(node for node in doc.iter() if node.get("data-if") == condition)
+        bindings = {node.get("data-value", node.get("data-checked", "")) for node in container.iter()}
+        for prop in props:
+            assert prefix + prop + ("_hex" if prop.endswith("_color") and not prefix else "") in bindings
+
+
+def test_outline_defaults_validate_and_save_only_committed_values(rendering_panel_module, monkeypatch):
+    import json
+    module = import_module("lfs_plugins.rendering_defaults")
+    monkeypatch.setattr(module, "lf", rendering_panel_module.lf)
+    saved, patches = {}, []
+    module.lf.ui.get_rendering_defaults_json = lambda: json.dumps(saved)
+    def persist(text):
+        patch = json.loads(text)
+        patches.append(patch)
+        saved.update(patch)
+    module.lf.ui.set_rendering_defaults_json = persist
+    section = module.RenderingDefaultsSection()
+    model = _BindingModelStub()
+    section.bind(model)
+    get, set_value = model.bindings["default_selection_outline_opacity"]
+    set_value("0.25")
+    assert patches == []
+    section._commit("selection_outline_opacity")
+    assert patches == [{"selection_outline_opacity": .25}]
+    section._set("selection_outline_opacity", "NaN")
+    section._set("selection_outline_width", "13")
+    assert len(patches) == 1
+    section._set("selection_outline_width", "12")
+    assert patches[-1] == {"selection_outline_width": 12}
+    section._set("selection_outline_color", "#336699")
+    assert saved["selection_outline_color"] == pytest.approx([.2, .4, .6])
+
+
+def test_outline_patterns_are_not_exposed(rendering_panel_module):
+    module = rendering_panel_module
+    assert "selection_outline_style" not in module.SELECT_PROPS
+    for name in ("rendering.rml", "preferences.rml"):
+        text = (Path(__file__).resolve().parents[2] / "src/visualizer/gui/rmlui/resources" / name).read_text()
+        assert "selection_outline_style" not in text
+        assert "selection_outline_dashed" not in text
+        assert "selection_outline_dotted" not in text
+
+
+@pytest.mark.parametrize("prop,edited,default", [
+    ("selection_outline", True, False),
+    ("selection_outline_color", [.1, .2, .3], [0., .604, .733]),
+    ("selection_outline_opacity", .3, 1.),
+    ("selection_outline_width", 9., 2.),
+    ("selection_outline_threshold", .8, .5),
+    ("selection_outline_holes", False, True),
+])
+def test_outline_new_project_defaults_reset_without_applying_to_scene(
+        rendering_panel_module, monkeypatch, prop, edited, default):
+    import json
+    module = import_module("lfs_plugins.rendering_defaults")
+    monkeypatch.setattr(module, "lf", rendering_panel_module.lf)
+    saved = {prop: edited}
+    monkeypatch.setattr(module.lf.ui, "get_rendering_defaults_json", lambda: json.dumps(saved), raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_rendering_defaults_json",
+                        lambda text: saved.update(json.loads(text)), raising=False)
+    def unexpected_scene_access():
+        raise AssertionError("Resetting new-project defaults must not access the active scene")
+    monkeypatch.setattr(module.lf, "get_render_settings", unexpected_scene_access)
+    section = module.RenderingDefaultsSection()
+    section._text[prop] = "stale draft"
+    value = section._default_reset._default_value(prop)
+    assert value == default
+    assert section._default_reset._apply_value(prop, value)
+    assert prop not in section._text
+    assert saved[prop] == pytest.approx(default)

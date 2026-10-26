@@ -82,6 +82,12 @@ namespace lfs::vis {
         bool use_crop_box = false;
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
+        bool selection_outline = false;
+        float selection_outline_opacity = 1.0f;
+        float selection_outline_width = 2.0f;
+        float selection_outline_threshold = 0.5f;
+        bool selection_outline_holes = true;
+        std::array<float, 3> selection_outline_color{0.0f, 0.604f, 0.733f};
         bool desaturate_unselected = false;
         bool desaturate_cropping = false;
         bool hide_outside_depth_box = false;
@@ -102,6 +108,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
         bool point_cloud_mode = false;
         float voxel_size = 0.01f;
         bool show_rings = false;
@@ -117,6 +124,8 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
         int raster_backend = 2;
+        int transparency_mode = 0;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

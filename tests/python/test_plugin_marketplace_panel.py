@@ -1242,3 +1242,36 @@ def test_panel_layout_buttons_save_preferences_and_follow_external_changes(plugi
     panel.reload_marketplace_preferences()
     assert functions["view_is_card"]()
     assert writes == ["card", "list"]
+
+
+def test_build_card_record_uses_status_restart_required_translation(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    state.translations["plugin_manager.status"] = "Status"
+    state.translations["plugin_manager.status_restart_required"] = "restart required (translated)"
+
+    entry = module.MarketplacePluginEntry(
+        source_url="",
+        github_url="",
+        owner="owner",
+        repo="repo",
+        name="test_plugin",
+        description="Desc",
+    )
+
+    mock_mgr = SimpleNamespace(
+        is_restart_required=lambda name: True,
+        get_state=lambda name: module.PluginState.ACTIVE,
+    )
+
+    record = panel._build_card_record(
+        entry=entry,
+        card_id="test_card",
+        mgr=mock_mgr,
+        installed_lookup={"test_plugin": "test_plugin"},
+        installed_versions={},
+        installed_names={"test_plugin"},
+    )
+    assert record["status_text"] == "Status: restart required (translated)"
+    assert record["status_class"] == "status-warning"
+

@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <nfd.h>
 
@@ -71,4 +72,22 @@ TEST(NativeSaveDialogTest, CancelDoesNotCreateADestination) {
     dialog_result = NFD_CANCEL;
     EXPECT_TRUE(lfs::vis::gui::SavePlyFileDialog("cloud-context").empty());
     dialog_result = NFD_OKAY;
+}
+
+TEST(NativeSaveDialogTest, JsonApprovalDoesNotCoverAnAppendedSuffix) {
+    const auto path = std::filesystem::temp_directory_path() / "lfs-collision-dialog-test.json";
+    std::ofstream(path).put('x');
+    bool confirmed = false;
+    selected_path = path.string();
+    EXPECT_EQ(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed), path);
+    EXPECT_TRUE(confirmed);
+    selected_path = (path.parent_path() / path.stem()).string();
+    EXPECT_FALSE(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed).empty());
+    EXPECT_FALSE(confirmed);
+    dialog_result = NFD_CANCEL;
+    confirmed = true;
+    EXPECT_TRUE(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed).empty());
+    EXPECT_FALSE(confirmed);
+    dialog_result = NFD_OKAY;
+    std::filesystem::remove(selected_path + ".json");
 }

@@ -18,6 +18,8 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "gui/status_bar_progress.hpp"
+#include "gui/status_bar_tessle.hpp"
 #include "gui/status_bar_training.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
@@ -37,6 +39,7 @@
 #include <RmlUi/Core/FontEngineInterface.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_video.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -160,89 +163,6 @@ namespace lfs::vis::gui {
             const float own_width =
                 children_width > 0.0f ? children_width : element->GetBox().GetSize().x;
             return own_width + overflow_width;
-        }
-
-        struct ProgressMarkerRenderState {
-            bool dragging = false;
-            bool adding = false;
-            size_t original_step = 0;
-            size_t preview_step = 0;
-            size_t hover_step = 0;
-        };
-
-        void appendProgressMarkerRml(std::string& markers,
-                                     const size_t step,
-                                     const int total_iterations,
-                                     const bool past,
-                                     const bool hovered,
-                                     const bool preview,
-                                     const bool miner) {
-            const float left_pct = std::clamp(
-                100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
-                0.5f,
-                99.5f);
-
-            std::string classes = "progress-marker";
-            if (past)
-                classes += " is-past";
-            if (hovered)
-                classes += " is-hovered";
-            if (preview)
-                classes += " is-preview";
-
-            if (miner) {
-                markers += std::format(
-                    "<img class=\"{}\" src=\"../icon/mining/{}\" style=\"left:{:.3f}%;\"/>",
-                    classes,
-                    past ? "gem-collected.png" : "gem.png",
-                    left_pct);
-            } else {
-                markers += std::format(
-                    "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
-                    classes,
-                    left_pct);
-            }
-        }
-
-        std::string buildProgressMarkersRml(std::vector<size_t> save_steps,
-                                            const int total_iterations,
-                                            const int current_iteration,
-                                            const ProgressMarkerRenderState& state,
-                                            const bool miner) {
-            if (total_iterations <= 0)
-                return {};
-
-            std::ranges::sort(save_steps);
-            save_steps.erase(std::ranges::unique(save_steps).begin(), save_steps.end());
-
-            std::string markers;
-            markers.reserve((save_steps.size() + 1) * 136);
-            for (const size_t save_step : save_steps) {
-                if (save_step == 0 || save_step > static_cast<size_t>(total_iterations))
-                    continue;
-                if (state.dragging && !state.adding && save_step == state.original_step)
-                    continue;
-
-                appendProgressMarkerRml(markers,
-                                        save_step,
-                                        total_iterations,
-                                        save_step <= static_cast<size_t>(std::max(0, current_iteration)),
-                                        !state.dragging && save_step == state.hover_step,
-                                        false,
-                                        miner);
-            }
-
-            if (state.dragging && state.preview_step > 0 &&
-                state.preview_step <= static_cast<size_t>(total_iterations)) {
-                appendProgressMarkerRml(markers,
-                                        state.preview_step,
-                                        total_iterations,
-                                        false,
-                                        true,
-                                        true,
-                                        miner);
-            }
-            return markers;
         }
 
         struct FramebufferBlitRect {
@@ -385,6 +305,9 @@ namespace lfs::vis::gui {
         ctor.Bind("mode_color", &model_.mode_color);
         ctor.Bind("show_training", &model_.show_training);
         ctor.Bind("progress_miner", &model_.progress_miner);
+        ctor.Bind("progress_tessle", &model_.progress_tessle);
+        ctor.Bind("tessle_left", &model_.tessle_left);
+        ctor.Bind("tessle_sprite", &model_.tessle_sprite);
         ctor.Bind("miner_raised", &model_.miner_raised);
         ctor.Bind("miner_step_a", &model_.miner_step_a);
         ctor.Bind("miner_strike", &model_.miner_strike);
@@ -1309,23 +1232,28 @@ namespace lfs::vis::gui {
         setModelString("mode_color", model_.mode_color, std::move(mode_color));
 
         // Training section
-        bool show_training = content_type == SceneManager::ContentType::Dataset &&
-                             (training_state == TrainingState::Running ||
-                              training_state == TrainingState::Paused);
-        setModelBool("show_training", model_.show_training, show_training);
         if (progress_style_checked_at_ == std::chrono::steady_clock::time_point{} ||
             now - progress_style_checked_at_ >= std::chrono::seconds(1)) {
             progress_style_checked_at_ = now;
-            progress_miner_pref_ = loadProgressBarStylePreference() == "miner";
+            const auto style = loadProgressBarStylePreference();
+            setModelBool("progress_miner", model_.progress_miner, style == "miner");
+            setModelBool("progress_tessle", model_.progress_tessle, style == "tessle");
         }
-        setModelBool("progress_miner", model_.progress_miner, progress_miner_pref_);
+        // Keep the completed progress display consistent across all styles.
+        const bool completed = tm &&
+                               training_state == TrainingState::Finished &&
+                               tm->getStateMachine().getFinishReason() == FinishReason::Completed;
+        const bool show_training = content_type == SceneManager::ContentType::Dataset &&
+                                   (training_state == TrainingState::Running ||
+                                    training_state == TrainingState::Paused || completed);
+        setModelBool("show_training", model_.show_training, show_training);
         const bool running = training_state == TrainingState::Running;
         const auto animation_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         const auto swing_phase_ms = animation_ms % 550;
         const bool strike_phase = running && swing_phase_ms >= 350;
         const int walk_phase = static_cast<int>((animation_ms / 275) % 4);
-        const bool miner_running = progress_miner_pref_ && show_training && running;
+        const bool miner_running = model_.progress_miner && show_training && running;
         setModelBool("miner_raised", model_.miner_raised,
                      miner_running && !strike_phase && walk_phase != 0 && walk_phase != 2);
         setModelBool("miner_step_a", model_.miner_step_a,
@@ -1373,20 +1301,29 @@ namespace lfs::vis::gui {
                         text_width_dp = measured_width_dp;
                 }
             }
-            const float text_left_dp = progress_miner_pref_
-                                           ? mining::miningProgressTextLeftDp(progress * bar_dp, bar_dp,
-                                                                              text_width_dp)
-                                           : 0.0f;
-            setModelString("progress_text_left", model_.progress_text_left,
-                           std::format("{:.2f}dp", text_left_dp));
-
-            if (progress_miner_pref_) {
+            float text_left_dp = 0.0f;
+            if (model_.progress_tessle) {
+                const auto frame = tessle::buildFrame(progress, bar_dp, static_cast<int64_t>(elapsed * 1000.0f));
+                // Prefer the cleared trail, leaving the leaves ahead unobstructed.
+                const float desired = frame.left_dp >= text_width_dp + 8.0f
+                                          ? frame.left_dp - text_width_dp - 8.0f
+                                          : frame.left_dp + 18.0f;
+                text_left_dp = std::clamp(desired, 0.0f, std::max(0.0f, bar_dp - text_width_dp - 6.0f));
+                setModelString("tessle_left", model_.tessle_left, std::format("{:.2f}dp", frame.left_dp));
+                setModelString("tessle_sprite", model_.tessle_sprite, frame.sprite);
+                setProgressWallRml(frame.scenery_rml);
+                setProgressDebrisRml("");
+                mining_scene_ = {};
+            } else if (model_.progress_miner) {
+                text_left_dp = mining::miningProgressTextLeftDp(progress * bar_dp, bar_dp, text_width_dp);
                 updateMiningScene(progress, now, training_state == TrainingState::Paused);
             } else {
                 setProgressWallRml("");
                 setProgressDebrisRml("");
                 mining_scene_ = {};
             }
+            setModelString("progress_text_left", model_.progress_text_left,
+                           std::format("{:.2f}dp", text_left_dp));
             const ProgressMarkerRenderState marker_state{
                 .dragging = save_step_interaction_.dragging,
                 .adding = save_step_interaction_.adding,
@@ -1394,8 +1331,10 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
-                                                          progress_miner_pref_));
+            const auto marker_style = model_.progress_tessle  ? ProgressMarkerStyle::Tessle
+                                      : model_.progress_miner ? ProgressMarkerStyle::Miner
+                                                              : ProgressMarkerStyle::Classic;
+            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state, marker_style));
             setModelString("step_value", model_.step_value, std::format("{}/{}", lfs::core::format_count(cur), lfs::core::format_count(total)));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
@@ -1437,7 +1376,7 @@ namespace lfs::vis::gui {
             setModelString("eta_value", model_.eta_value, "");
         }
 
-        const bool miner_smoke = progress_miner_pref_ && show_training &&
+        const bool miner_smoke = model_.progress_miner && show_training &&
                                  training_state == TrainingState::Paused &&
                                  mining_scene_.pause_started !=
                                      std::chrono::steady_clock::time_point{};
@@ -1486,7 +1425,9 @@ namespace lfs::vis::gui {
             split_enabled = split_info_cache_.enabled;
             if (split_enabled) {
                 split_mode_rml = split_info_cache_.mode_label;
-                split_detail_rml = split_info_cache_.detail_label;
+                // Model names are already shown inside their comparison panels.
+                if (!splitViewUsesPLYComparison(rm->getSettings().split_view_mode))
+                    split_detail_rml = split_info_cache_.detail_label;
             }
         }
         setModelBool("show_split", model_.show_split, split_enabled);
@@ -1608,16 +1549,14 @@ namespace lfs::vis::gui {
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
-        // A paused trainer has a static progress display. Keep the miner's
-        // periodic refresh armed only while its particles actually advance.
-        const bool miner_visible = progress_miner_pref_ && show_training &&
-                                   training_state == TrainingState::Running;
+        // Freeze themed progress animations while training is paused.
+        const bool progress_animation_visible = (model_.progress_miner || model_.progress_tessle) && show_training &&
+                                                training_state == TrainingState::Running;
         model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
-                                  miner_visible;
+                                  progress_animation_visible;
         animation_active_ = model_animation_active_ || rml_animation_active_;
-        next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
+        next_refresh_at_ = now + (progress_animation_visible
                                       ? kBusyRefreshInterval
-                                  : miner_visible           ? kMiningRefreshInterval
                                   : model_animation_active_ ? kAnimatedRefreshInterval
                                   : ctx.is_training         ? kBusyRefreshInterval
                                                             : kIdleRefreshInterval);

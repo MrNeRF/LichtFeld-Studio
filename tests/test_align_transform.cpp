@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
@@ -39,7 +38,6 @@ namespace lfs::vis {
         void TearDown() override {
             setHome(old_home_.value_or(""));
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
         static void setHome(const std::string& home) {
 #ifdef _WIN32
@@ -129,7 +127,6 @@ namespace {
             ~EventGuard() { clear(); }
             static void clear() {
                 lfs::event::EventBridge::instance().clear_all();
-                lfs::core::event::bus().clear_all();
             }
         } event_guard;
         Viewport viewport(640, 480);
@@ -498,13 +495,31 @@ namespace lfs::vis::op {
             context_.reset();
             manager_.reset();
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
         }
 
         OperatorResult action(Services::AlignUiAction action) {
             services().requestAlignUiAction(action);
             OperatorProperties properties;
             return operation_.modal(*context_, properties);
+        }
+
+        OperatorResult send(ModalEvent event) {
+            context_->setModalEvent(event);
+            OperatorProperties properties;
+            return operation_.modal(*context_, properties);
+        }
+
+        OperatorResult key(const int key) {
+            return send({.type = ModalEvent::Type::KEY, .data = KeyEvent{key, 0, input::ACTION_PRESS, 0}});
+        }
+
+        OperatorResult bound(const input::Action bound_action) {
+            return send({.type = ModalEvent::Type::ACTION, .data = ActionEvent{.action = bound_action}});
+        }
+
+        void selectPoint(const int index) {
+            operation_.selected_point_ = index;
+            operation_.syncPickedPointsToServices();
         }
 
         glm::mat4 transform() const { return manager_->getScene().getNode("target")->transform(); }
@@ -624,6 +639,33 @@ namespace lfs::vis::op {
         EXPECT_EQ(undoHistory().undoCount(), 1u);
         EXPECT_TRUE(undoHistory().undo().success);
         EXPECT_EQ(transform(), original);
+    }
+
+    TEST_F(AlignPreviewTest, PointControlsFollowTheKeyMap) {
+        const auto original = transform();
+        for (const int fixed_key : {input::KEY_BACKSPACE, input::KEY_DELETE, input::KEY_ENTER,
+                                    input::KEY_KP_ENTER, input::KEY_ESCAPE}) {
+            EXPECT_EQ(key(fixed_key), OperatorResult::PASS_THROUGH) << fixed_key;
+        }
+        EXPECT_EQ(services().getAlignPickedPoints().size(), 3u);
+        EXPECT_EQ(transform(), original);
+
+        selectPoint(0);
+        EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().getAlignPickedPoints().size(), 2u);
+        EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().getAlignPickedPoints().size(), 1u);
+        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(bound(input::Action::CANCEL_POLYGON), OperatorResult::CANCELLED);
+        EXPECT_EQ(transform(), original);
+    }
+
+    TEST_F(AlignPreviewTest, BoundApplyCommitsOneUndoStep) {
+        const auto original = transform();
+        EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::FINISHED);
+        EXPECT_NE(transform(), original);
+        EXPECT_EQ(undoHistory().undoCount(), 1u);
     }
 
     TEST_F(AlignPreviewTest, ApplyCommitsOneUndoStepMatchingThePreview) {

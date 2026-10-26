@@ -29,6 +29,7 @@
 #include "py_mcp.hpp"
 #include "py_mesh.hpp"
 #include "py_mesh2splat.hpp"
+#include "py_operation_callbacks.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -71,6 +72,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/project_operations.hpp"
 #include "io/project_recovery.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
@@ -362,6 +364,20 @@ namespace {
                 // Polling settles completed writes and mutates the session.
                 return viewer.projectPollWrite();
             },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<lfs::vis::ProjectTrainingSource> post_training_source_to_viewer(
+        lfs::vis::Visualizer& viewer) {
+        const lfs::core::TaskContext context{
+            .name = "python.project_training_source",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<lfs::vis::ProjectTrainingSource>(
+            viewer, context,
+            [&viewer] { return viewer.projectTrainingSource(); },
             python_viewer_shutdown_error());
     }
 
@@ -1618,6 +1634,31 @@ NB_MODULE(lichtfeld, m) {
         if (!error.empty())
             throw std::runtime_error(error);
         return true; }, nb::arg("destination") = "", nb::arg("expected_commit") = "", "Clean the active saved project in the background, preserving its current resume point");
+    m.def(
+        "project_write_training_copy",
+        [](const std::string& destination, nb::object progress, nb::object cancel) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error("The viewer is not running.");
+            }
+            lfs::python::PyProgressCallback progress_callback{std::move(progress)};
+            lfs::python::PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<lfs::io::project::DatasetEmbedResult>> result;
+            {
+                nb::gil_scoped_release release;
+                auto source = post_training_source_to_viewer(*viewer);
+                if (!source) {
+                    result.emplace(std::move(source).error());
+                } else {
+                    result.emplace(lfs::io::project::write_training_project(
+                        lfs::core::utf8_to_path(destination), std::move(source->parameters), source->dataset_root,
+                        source->initialization, progress_callback.operation(), cancel_callback.operation()));
+                }
+            }
+            return lfs::python::unwrap(std::move(*result));
+        },
+        nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none(),
+        "Write a new untrained project from the pending parameters with the loaded dataset embedded; it blocks, so call it off the UI thread");
     m.def(
         "project_is_dirty", []() {
             auto* const viewer =
@@ -2988,7 +3029,8 @@ NB_MODULE(lichtfeld, m) {
                     "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
             }
             const auto before = controller->cameraNavigationMode();
-            controller->setCameraNavigationMode(*parsed);
+            if (!controller->setCameraNavigationMode(*parsed))
+                throw std::runtime_error(controller->walk_error);
             if (markViewSettingIfChanged(before, controller->cameraNavigationMode())) {
                 lfs::vis::saveCameraNavigationPreference(
                     lfs::vis::InputController::cameraNavigationModeName(*parsed));
@@ -3327,6 +3369,8 @@ NB_MODULE(lichtfeld, m) {
     auto scene_module = m.def_submodule("scene", "Scene graph API");
     lfs::python::register_splat_data(scene_module);
     lfs::python::register_scene(scene_module);
+    for (const auto* name : {"generate_collision", "export_collision", "cancel_collision", "get_collision_state", "set_walk_settings"})
+        m.attr(name) = scene_module.attr(name);
     lfs::python::register_cameras(scene_module);
 
     auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
@@ -3635,6 +3679,7 @@ NB_MODULE(lichtfeld, m) {
                     case lfs::core::NodeType::PLY_SEQUENCE: type_name = "PLY_SEQUENCE"; break;
                     case lfs::core::NodeType::CROPBOX: type_name = "CROPBOX"; break;
                     case lfs::core::NodeType::ELLIPSOID: type_name = "ELLIPSOID"; break;
+                    case lfs::core::NodeType::CROP_POLYGON: type_name = "CROP_POLYGON"; break;
                     case lfs::core::NodeType::DATASET: type_name = "DATASET"; break;
                     case lfs::core::NodeType::CAMERA_GROUP: type_name = "CAMERA_GROUP"; break;
                     case lfs::core::NodeType::CAMERA: type_name = "CAMERA"; break;
@@ -3926,12 +3971,14 @@ Example:
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) {
+        [](const std::string& path, const std::optional<std::string>& images_path) {
             const auto native_path = python_utf8_path(path);
+            const auto native_images = images_path ? python_utf8_path(*images_path) : std::filesystem::path{};
             nb::gil_scoped_release release;
-            return lfs::io::detect_dataset_info(native_path);
+            return lfs::io::detect_dataset_info(native_path, native_images);
         },
-        nb::arg("path"), "Detect dataset information from a directory path");
+        nb::arg("path"), nb::arg("images_path") = nb::none(),
+        "Detect dataset information from a directory path; images_path replaces the detected images folder");
     m.def(
         "is_dataset_path",
         [](const std::string& path) {
