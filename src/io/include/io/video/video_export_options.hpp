@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/provenance.hpp"
+#include "video_frame_geometry.hpp"
 
 #include <climits>
 #include <cstddef>
@@ -70,6 +71,13 @@ namespace lfs::io::video {
         int crf = 18;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
         bool spherical_video = false;
+        int framerate_denominator = 1;
+        // Optional camera aspect terms. Zero retains legacy output-sized input.
+        // Otherwise writeFrameGpu receives videoCameraRenderSize(...), and the
+        // encoder fits that camera image into width/height without changing FOV.
+        int camera_width = 0;
+        int camera_height = 0;
+        VideoFrameFit framing = VideoFrameFit::FIT;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
@@ -78,8 +86,14 @@ namespace lfs::io::video {
             return std::unexpected("Video width and height must be positive");
         if ((options.width & 1) != 0 || (options.height & 1) != 0)
             return std::unexpected("YUV420 video width and height must be even");
-        if (options.framerate <= 0 || options.framerate > 1000)
+        if (options.framerate_denominator <= 0 || options.framerate < options.framerate_denominator ||
+            static_cast<int64_t>(options.framerate) > 1000LL * options.framerate_denominator)
             return std::unexpected("Video framerate must be between 1 and 1000");
+        if ((options.camera_width != 0 || options.camera_height != 0) &&
+            (options.camera_width < 1 || options.camera_width > 8192 || options.camera_height < 1 || options.camera_height > 8192))
+            return std::unexpected("Invalid camera aspect ratio");
+        if (options.framing < VideoFrameFit::FIT || options.framing > VideoFrameFit::STRETCH)
+            return std::unexpected("Invalid video framing options");
         if (options.crf < 0 || options.crf > 51)
             return std::unexpected("Video CRF must be between 0 and 51");
 

@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/uuid.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/session_chapters.hpp"
+#include <algorithm>
+#include <gtest/gtest.h>
+#include <ranges>
 
 #include <array>
 #include <atomic>
@@ -316,3 +320,35 @@ namespace lfs::test::licht {
     byte_values(std::initializer_list<std::uint8_t> values);
 
 } // namespace lfs::test::licht
+
+namespace collision_test {
+    using namespace lfs::core;
+    template <class F>
+    void expectError(F&& action, std::string_view key) {
+        try {
+            action();
+            FAIL() << "Collision error was not thrown";
+        } catch (const lfs::Exception& error) {
+            EXPECT_EQ(collisionErrorField(error.error(), "message_key"), key);
+        }
+    }
+    inline auto cells(glm::ivec3 dimensions) {
+        return std::views::iota(0, dimensions.x * dimensions.y * dimensions.z) |
+               std::views::transform([dimensions](int i) {
+                   return glm::ivec3(i % dimensions.x, (i / dimensions.x) % dimensions.y, i / (dimensions.x * dimensions.y));
+               });
+    }
+    inline std::shared_ptr<const CollisionVolume> box(glm::vec3 origin, glm::ivec3 dimensions, float size = 1) {
+        auto volume = std::make_shared<CollisionVolume>(CollisionVolume{
+            .settings = {.voxel_size = size},
+            .origin = origin,
+            .dimensions = dimensions,
+            .edge = 4,
+            .occupied_count = uint64_t(dimensions.x) * dimensions.y * dimensions.z,
+            .words = {1}});
+        while (volume->edge < std::max({dimensions.x, dimensions.y, dimensions.z}))
+            volume->edge *= 2;
+        volume->validate();
+        return volume;
+    }
+} // namespace collision_test

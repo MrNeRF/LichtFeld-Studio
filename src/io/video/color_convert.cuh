@@ -3,10 +3,14 @@
 
 #pragma once
 
+#include "io/video/video_frame_geometry.hpp"
 #include <cstdint>
 #include <cuda_runtime.h>
 
 namespace lfs::io::video {
+
+    void reframeRgbCuda(const float* src, float* dst, int source_width, int source_height,
+                        int width, int height, VideoFrameMapping mapping, cudaStream_t stream = nullptr);
 
     // Convert RGB float32 (0.0-1.0) to NV12 (Y plane + interleaved UV plane) on GPU
     // NV12 is NVENC's preferred input format

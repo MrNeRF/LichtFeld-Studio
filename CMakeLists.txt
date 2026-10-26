@@ -655,7 +655,6 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/compare.cpp
     src/app/converter.cpp
-    src/app/voxelizer.cpp
     src/app/batch_trainer.cpp
     src/app/licht_command.cpp
     src/app/converter_output_paths.cpp

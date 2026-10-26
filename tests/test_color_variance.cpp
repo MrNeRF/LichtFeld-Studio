@@ -3,18 +3,24 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/control_boundary.hpp"
+#include "core/image_io.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/checkpoint.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/strategies/strategy_factory.hpp"
+#include "training/trainer.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <gtest/gtest.h>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -39,16 +45,11 @@ namespace {
         std::vector<float> shN = std::vector<float>(18, 0.03f);
     };
 
-    std::vector<float> targets() {
-        std::vector<float> result(3 * pixels);
-        for (size_t i = 0; i < result.size(); ++i)
-            result[i] = static_cast<float>((i * 37 + 19) % 256) / 255.0f;
-        return result;
-    }
-
-    // Independent double-precision forward oracle. It evaluates the weighted
-    // objective directly in front-to-back order; no backward recurrence is used.
-    double reference(const Scene& scene, const std::vector<float>& target, double weight, bool photometric = false,
+    // Independent double-precision forward oracle. It blends each pixel front to back, takes the
+    // expected color C = sum P(i) c_i / sum P(i) of the same fragments, P(i) = T_i alpha_i, and
+    // evaluates sum P(i) |c_i - C|^2 directly; no backward recurrence is used. C is recomputed from
+    // the parameters, so finite differences of this function include its dependence on them.
+    double reference(const Scene& scene, double weight, bool photometric = false,
                      const std::vector<float>& pixel_weight = {}) {
         struct Primitive {
             double x, y, a, b, c, opacity;
@@ -96,22 +97,29 @@ namespace {
                 const int pix = y * width + x;
                 double T = 1.0;
                 std::array<double, 3> image{};
+                std::array<std::pair<double, const Primitive*>, 2> fragments{};
+                size_t n_fragments = 0;
                 for (const auto& p : prims) {
                     const double dx = p.x - (x + 0.5), dy = p.y - (y + 0.5);
                     const double alpha = std::min(0.999, p.opacity * std::exp(-0.5 * (p.a * dx * dx + 2 * p.b * dx * dy + p.c * dy * dy)));
                     if (alpha < 1.0 / 255.0)
                         continue;
-                    for (int ch = 0; ch < 3; ++ch) {
-                        const double residual = p.color[ch] - target[ch * pixels + pix];
-                        const double pixel_share = weight_sum > 0.0
-                                                       ? (pixel_weight.empty() ? 1.0 : pixel_weight[pix]) / weight_sum
-                                                       : 0.0;
-                        loss += weight * pixel_share * T * alpha * residual * residual;
+                    fragments[n_fragments++] = {T * alpha, &p};
+                    for (int ch = 0; ch < 3; ++ch)
                         image[ch] += T * alpha * p.color[ch];
-                    }
                     T *= 1.0 - alpha;
                     if (T < 1e-4)
                         break;
+                }
+                const double pixel_share = weight_sum > 0.0
+                                               ? (pixel_weight.empty() ? 1.0 : pixel_weight[pix]) / weight_sum
+                                               : 0.0;
+                for (size_t k = 0; k < n_fragments; ++k) {
+                    const auto [blend_weight, p] = fragments[k];
+                    for (int ch = 0; ch < 3; ++ch) {
+                        const double residual = p->color[ch] - image[ch] / (1.0 - T);
+                        loss += weight * pixel_share * blend_weight * residual * residual;
+                    }
                 }
                 if (photometric) {
                     for (int ch = 0; ch < 3; ++ch)
@@ -147,36 +155,32 @@ namespace {
         std::array<std::vector<float>, 6> gradients;
     };
 
-    Capture capture(const Scene& scene, float weight = 0.7f, bool u8 = false, bool photo = false, bool omit_disabled_target = false,
-                    const std::vector<float>& pixel_weight = {}) {
+    // The forward composites this background; a non-empty image replaces the color.
+    struct Background {
+        std::vector<float> color{0.1f, 0.3f, 0.5f};
+        std::vector<float> image;
+    };
+
+    Capture capture(const Scene& scene, float weight = 0.7f, bool photo = false,
+                    const std::vector<float>& pixel_weight = {}, const Background& background = {}) {
         auto cam = make_camera();
         auto owned_model = make_model(scene);
         auto& model = *owned_model;
         AdamOptimizer opt(model, AdamConfig{.lr = 0.0f});
         opt.allocate_gradients();
         opt.zero_grad(1);
-        auto bg = cuda_tensor({0.1f, 0.3f, 0.5f}, {3});
-        auto fwd = fast_rasterize_forward(cam, model, bg, 0, 0, 0, 0, false, {}, false, false);
+        auto bg = cuda_tensor(background.color, {3});
+        const auto bg_image = background.image.empty() ? Tensor{} : cuda_tensor(background.image, {3, height, width});
+        auto fwd = fast_rasterize_forward(cam, model, bg, 0, 0, 0, 0, false, bg_image, false, false);
         if (!fwd)
             throw std::runtime_error(std::string(fwd.error().user_message()));
-        auto target = targets();
-        Tensor gt;
-        if (u8) {
-            std::vector<std::uint8_t> bytes(target.size());
-            for (size_t i = 0; i < bytes.size(); ++i)
-                bytes[i] = static_cast<std::uint8_t>(std::lround(target[i] * 255));
-            gt = Tensor::from_blob(bytes.data(), {3, height, width}, Device::CPU, DataType::UInt8).cuda();
-        } else {
-            gt = cuda_tensor(target, {3, height, width});
-        }
         auto loss = Tensor::zeros({1}, Device::CUDA);
         std::vector<float> image_grad(3 * pixels, 0.0f);
         if (photo)
             for (int ch = 0; ch < 3; ++ch)
                 std::fill_n(image_grad.begin() + ch * pixels, pixels, 0.002f * (ch + 1));
         auto grad = cuda_tensor(image_grad, {3, height, width});
-        // A disabled loss must not validate or read its unused target.
-        FastGSColorVarianceLoss variance{weight == 0.0f && omit_disabled_target ? Tensor{} : gt, loss, weight};
+        FastGSColorVarianceLoss variance{loss, weight};
         if (!pixel_weight.empty())
             variance.pixel_weight = cuda_tensor(pixel_weight, {height, width});
         fast_rasterize_backward(fwd->second, grad, model, opt, {}, {}, DensificationType::None,
@@ -207,7 +211,9 @@ namespace {
         }
     };
 
-    // Central differences of the reference against every parameter gradient of `actual`.
+    // Central differences of the reference against every parameter gradient of `actual`. The
+    // kernel holds the expected color fixed while the reference recomputes it for every step,
+    // so agreement shows that holding it fixed gives the exact gradient.
     void expect_reference_gradients(Scene scene, const Capture& actual, const bool photo,
                                     const std::vector<float>& pixel_weight = {}) {
         std::array<std::vector<float>*, 6> parameters{&scene.means, &scene.scales, &scene.rotations,
@@ -218,10 +224,10 @@ namespace {
                 auto& value = (*parameters[k])[i];
                 const float old = value;
                 value = old + 1e-4f;
-                const double plus = reference(scene, targets(), 0.7, photo, pixel_weight);
+                const double plus = reference(scene, 0.7, photo, pixel_weight);
                 const float step_plus = value;
                 value = old - 1e-4f;
-                const double minus = reference(scene, targets(), 0.7, photo, pixel_weight);
+                const double minus = reference(scene, 0.7, photo, pixel_weight);
                 const float step_minus = value;
                 value = old;
                 const double expected = (plus - minus) / (step_plus - step_minus);
@@ -242,8 +248,9 @@ namespace {
     TEST_F(ColorVarianceCuda, LossAndEveryParameterGradientMatchIndependentReference) {
         for (const bool photo : {false, true}) {
             const Scene scene;
-            const auto actual = capture(scene, 0.7f, false, photo);
-            EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7), 2e-6);
+            const auto actual = capture(scene, 0.7f, photo);
+            EXPECT_GT(actual.loss, 1e-4f);
+            EXPECT_NEAR(actual.loss, reference(scene, 0.7), 2e-6);
             expect_reference_gradients(scene, actual, photo);
         }
     }
@@ -253,43 +260,53 @@ namespace {
             SCOPED_TRACE(::testing::Message() << "outside=" << outside);
             const Scene scene;
             const auto weights = roi_weights(outside);
-            const auto actual = capture(scene, 0.7f, false, true, false, weights);
-            EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7, false, weights), 2e-6);
+            const auto actual = capture(scene, 0.7f, true, weights);
+            EXPECT_NEAR(actual.loss, reference(scene, 0.7, false, weights), 2e-6);
             expect_reference_gradients(scene, actual, true, weights);
         }
 
         // Uniform weights are the plain pixel mean; zero weights leave only the photometric part.
         const auto plain = capture(Scene{});
-        const auto uniform = capture(Scene{}, 0.7f, false, false, false, std::vector<float>(pixels, 0.5f));
+        const auto uniform = capture(Scene{}, 0.7f, false, std::vector<float>(pixels, 0.5f));
         EXPECT_NEAR(uniform.loss, plain.loss, 1e-7);
         for (size_t k = 0; k < plain.gradients.size(); ++k)
             for (size_t j = 0; j < plain.gradients[k].size(); ++j)
                 EXPECT_NEAR(uniform.gradients[k][j], plain.gradients[k][j], 1e-6);
-        const auto photometric = capture(Scene{}, 0.0f, false, true);
-        const auto unweighted = capture(Scene{}, 0.7f, false, true, false, std::vector<float>(pixels, 0.0f));
+        const auto photometric = capture(Scene{}, 0.0f, true);
+        const auto unweighted = capture(Scene{}, 0.7f, true, std::vector<float>(pixels, 0.0f));
         EXPECT_EQ(unweighted.loss, 0.0f);
         for (size_t k = 0; k < photometric.gradients.size(); ++k)
             for (size_t j = 0; j < photometric.gradients[k].size(); ++j)
                 EXPECT_NEAR(unweighted.gradients[k][j], photometric.gradients[k][j], 1e-7);
     }
 
-    TEST_F(ColorVarianceCuda, UInt8AndNormalizedFloatTargetsAgree) {
-        const auto a = capture(Scene{});
-        const auto b = capture(Scene{}, 0.7f, true);
-        EXPECT_NEAR(a.loss, b.loss, 1e-7);
-        for (size_t k = 0; k < a.gradients.size(); ++k)
-            for (size_t j = 0; j < a.gradients[k].size(); ++j)
-                EXPECT_NEAR(a.gradients[k][j], b.gradients[k][j], 1e-6);
+    // The expected color leaves the background out, whether it is a color or an image.
+    TEST_F(ColorVarianceCuda, BackgroundDoesNotChangeTheLoss) {
+        const auto plain = capture(Scene{});
+        Background image{.color = {0.9f, 0.0f, 0.7f}};
+        image.image.resize(3 * pixels);
+        for (size_t i = 0; i < image.image.size(); ++i)
+            image.image[i] = static_cast<float>((i * 37 + 19) % 256) / 255.0f;
+        for (const auto& background : {Background{.color = {0.9f, 0.0f, 0.7f}}, image}) {
+            SCOPED_TRACE(::testing::Message() << "image=" << !background.image.empty());
+            const auto other = capture(Scene{}, 0.7f, false, {}, background);
+            EXPECT_NEAR(other.loss, plain.loss, 1e-7);
+            for (size_t k = 0; k < plain.gradients.size(); ++k)
+                for (size_t j = 0; j < plain.gradients[k].size(); ++j)
+                    EXPECT_NEAR(other.gradients[k][j], plain.gradients[k][j], 1e-6);
+        }
     }
 
-    TEST_F(ColorVarianceCuda, DisabledLossIgnoresTargetAndPreservesPhotometricGradients) {
-        const auto a = capture(Scene{}, 0.0f, false, true);
-        const auto b = capture(Scene{}, 0.0f, false, true, true);
-        EXPECT_EQ(a.loss, 0.0f);
-        EXPECT_EQ(b.loss, 0.0f);
-        for (size_t k = 0; k < a.gradients.size(); ++k)
-            for (size_t j = 0; j < a.gradients[k].size(); ++j)
-                EXPECT_NEAR(a.gradients[k][j], b.gradients[k][j], 1e-7);
+    // Splats of one color agree at every pixel: no loss and no gradient.
+    TEST_F(ColorVarianceCuda, SplatsOfOneColorHaveNoVariance) {
+        Scene scene;
+        scene.sh0 = {0.4f, -0.5f, 0.9f, 0.4f, -0.5f, 0.9f};
+        scene.shN.assign(18, 0.0f);
+        const auto actual = capture(scene);
+        EXPECT_NEAR(actual.loss, 0.0f, 1e-9);
+        for (const auto& gradient : actual.gradients)
+            for (const float value : gradient)
+                EXPECT_NEAR(value, 0.0f, 1e-7);
     }
 
     TEST_F(ColorVarianceCuda, ClampedFragmentColorsHaveNoDirectColorDerivative) {
@@ -297,7 +314,7 @@ namespace {
         scene.sh0[0] = -10;
         scene.sh0[1] = 20;
         const auto actual = capture(scene);
-        EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7), 2e-6);
+        EXPECT_NEAR(actual.loss, reference(scene, 0.7), 2e-6);
         EXPECT_EQ(actual.gradients[4][0], 0.0f);
         EXPECT_EQ(actual.gradients[4][1], 0.0f);
         for (size_t i : {0u, 1u, 3u, 4u, 6u, 7u})
@@ -320,7 +337,7 @@ namespace {
         scene.opacity = {20, 20};
         scene.scales.assign(6, -0.5f);
         const auto actual = capture(scene);
-        EXPECT_NEAR(actual.loss, reference(scene, targets(), 0.7), 2e-6);
+        EXPECT_NEAR(actual.loss, reference(scene, 0.7), 2e-6);
         for (float gradient : actual.gradients[3])
             EXPECT_NEAR(gradient, 0.0f, 1e-7);
     }
@@ -338,11 +355,10 @@ namespace {
             auto bg = cuda_tensor({0.1f, 0.3f, 0.5f}, {3});
             auto fwd = fast_rasterize_forward(cam, *model, bg, 0, 0, 0, 0, false, {}, false, false);
             ASSERT_TRUE(fwd.has_value());
-            auto gt = cuda_tensor(targets(), {3, height, width});
             auto loss = Tensor::zeros({1}, Device::CUDA);
             auto grad = Tensor::zeros({3, height, width}, Device::CUDA);
             fast_rasterize_backward(fwd->second, grad, *model, optimizer, {}, {}, DensificationType::None,
-                                    1001, {}, {}, {}, false, {gt, loss, weight});
+                                    1001, {}, {}, {}, false, {loss, weight});
             auto opacity = model->opacity_raw().cpu();
             EXPECT_EQ(opacity.ptr<float>()[0], scene.opacity[0]);
             if (weight == 0.0f) {
@@ -393,6 +409,95 @@ namespace {
         }
     }
 
+    // MRNF keeps exposure correction on by default: PPISP, and from iteration 6 here the residual
+    // grid. Without any correction, only the photometric loss's clamp sees the render. Either way
+    // every step's loss and the trained model stay finite once color variance starts.
+    TEST_F(ColorVarianceCuda, MrnfDefaultsTrainWithExposureCorrection) {
+        for (const bool exposure_correction : {true, false}) {
+            SCOPED_TRACE(::testing::Message() << "exposure_correction=" << exposure_correction);
+            struct TemporaryDirectory {
+                std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                             std::format("lfs-color-variance-{}",
+                                                         std::chrono::steady_clock::now().time_since_epoch().count());
+                ~TemporaryDirectory() {
+                    std::error_code ignored;
+                    std::filesystem::remove_all(path, ignored);
+                }
+            } directory;
+            std::filesystem::create_directories(directory.path);
+            constexpr size_t size = 32, count = 100;
+            std::vector<float> photo(3 * size * size);
+            for (size_t i = 0; i < photo.size(); ++i)
+                photo[i] = static_cast<float>((i * 37 + 19) % 256) / 255.0f;
+            save_image(directory.path / "image.png", Tensor::from_vector(photo, {3, size, size}, Device::CPU));
+            lfs::core::Scene scene;
+            auto camera = std::make_shared<Camera>(
+                Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU), 32.0f, 32.0f, 16.0f, 16.0f,
+                Tensor{}, Tensor{}, CameraModelType::PINHOLE, "image.png", directory.path / "image.png",
+                std::filesystem::path{}, size, size, 0);
+            scene.addCamera("image.png", scene.addGroup("Cameras"), camera);
+            std::vector<float> means(count * 3), sh0(count * 3), rotations(count * 4, 0.0f);
+            for (size_t i = 0; i < count; ++i) {
+                means[i * 3] = (static_cast<float>(i % 10) - 4.5f) * 0.1f;
+                means[i * 3 + 1] = (static_cast<float>(i / 10) - 4.5f) * 0.1f;
+                means[i * 3 + 2] = 2.0f + 0.1f * static_cast<float>(i % 3);
+                for (size_t ch = 0; ch < 3; ++ch)
+                    sh0[i * 3 + ch] = static_cast<float>((i * 7 + ch * 3) % 11) * 0.3f - 1.5f;
+                rotations[i * 4] = 1.0f;
+            }
+            scene.setTrainingModelNode(scene.addSplat(
+                "Model", std::make_unique<SplatData>(
+                             1, Tensor::from_vector(means, {count, 3}, Device::CUDA),
+                             Tensor::from_vector(sh0, {count, 1, 3}, Device::CUDA),
+                             Tensor::zeros({count, 3, 3}, Device::CUDA), Tensor::full({count, 3}, -2.0f, Device::CUDA),
+                             Tensor::from_vector(rotations, {count, 4}, Device::CUDA),
+                             Tensor::full({count, 1}, 0.5f, Device::CUDA), 1.0f)));
+
+            param::TrainingParameters params;
+            params.dataset.data_path = directory.path;
+            params.dataset.output_path = directory.path / "output";
+            params.no_download = true;
+            auto& opt = params.optimization;
+            opt = param::OptimizationParameters::mrnf_defaults();
+            opt.use_exposure_correction = exposure_correction;
+            opt.exposure_correction_grid_start_iter = 6;
+            opt.iterations = 10;
+            opt.color_variance_weight = 1.0f;
+            opt.color_variance_warmup_iters = 3;
+            opt.max_cap = 200;
+            opt.sh_degree = 1;
+            opt.headless = true;
+            opt.enable_eval = false;
+            opt.save_steps.clear();
+
+            Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            const auto initial_opacity = trainer.get_strategy().get_model().opacity_raw().cpu().to_vector();
+            std::vector<float> losses;
+            auto& hooks = ControlBoundary::instance();
+            const auto handle = hooks.register_callback(ControlHook::PostStep, [&](const HookContext& ctx) {
+                if (ctx.trainer == &trainer)
+                    losses.push_back(ctx.loss);
+            });
+            const auto trained = trainer.train();
+            hooks.unregister_callback(ControlHook::PostStep, handle);
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(losses.size(), 10u);
+            for (const float loss : losses)
+                EXPECT_TRUE(std::isfinite(loss)) << loss;
+            EXPECT_TRUE(std::isfinite(trainer.get_current_loss()));
+            const auto& model = trainer.get_strategy().get_model();
+            for (const Tensor* field : {&model.means(), &model.scaling_raw(), &model.rotation_raw(),
+                                        &model.opacity_raw(), &model.sh0()}) {
+                const auto values = field->cpu().to_vector();
+                EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](float v) { return std::isfinite(v); }));
+            }
+            EXPECT_NE(model.opacity_raw().cpu().to_vector(), initial_opacity);
+            trainer.shutdown();
+        }
+    }
+
     TEST(ColorVarianceParameters, AllStrategiesRoundTripAndScaleWarmup) {
         for (const auto* strategy : {"mcmc", "mrnf", "igs+"}) {
             auto p = param::OptimizationParameters::defaults_for_strategy(strategy);
@@ -427,7 +532,7 @@ namespace {
         }
         p.color_variance_weight = 1.0f;
         EXPECT_TRUE(p.validate().empty());
-        for (bool* flag : {&p.gut, &p.mip_filter, &p.use_ppisp, &p.use_bilateral_grid, &p.use_exposure_correction, &p.enable_sparsity}) {
+        for (bool* flag : {&p.gut, &p.mip_filter, &p.enable_sparsity}) {
             *flag = true;
             EXPECT_FALSE(p.validate().empty());
             *flag = false;
@@ -439,5 +544,24 @@ namespace {
         EXPECT_FALSE(p.validate().empty());
         p.color_variance_weight = 0.0f;
         EXPECT_TRUE(p.validate().empty());
+    }
+
+    // The target is the raw render, so the appearance models that correct it may train alongside.
+    TEST(ColorVarianceParameters, AcceptsAppearanceCorrection) {
+        for (const auto* strategy : {"mcmc", "mrnf", "igs+"}) {
+            SCOPED_TRACE(strategy);
+            auto p = param::OptimizationParameters::defaults_for_strategy(strategy);
+            p.color_variance_weight = 1.0f;
+            p.color_variance_warmup_iters = 15'000;
+            // Exposure correction runs PPISP and the grid itself, so it excludes the standalone flags.
+            for (const auto [exposure, grid, ppisp] : {std::array{true, false, false}, std::array{false, true, false},
+                                                       std::array{false, false, true}, std::array{false, true, true}}) {
+                p.use_exposure_correction = exposure;
+                p.use_bilateral_grid = grid;
+                p.use_ppisp = ppisp;
+                EXPECT_TRUE(p.validate().empty()) << p.validate();
+            }
+        }
+        EXPECT_TRUE(param::OptimizationParameters::mrnf_defaults().use_exposure_correction);
     }
 } // namespace

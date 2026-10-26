@@ -288,8 +288,6 @@ namespace lfs::vis {
                         target = TransportContextMenuRequest::Target::SNAP;
                     else if (id == "btn-preview")
                         target = TransportContextMenuRequest::Target::PREVIEW;
-                    else if (id == "btn-format")
-                        target = TransportContextMenuRequest::Target::FORMAT;
 
                     if (target != TransportContextMenuRequest::Target::NONE) {
                         transport_ctx_request_ = {target, input.mouse_x, input.mouse_y};
@@ -355,21 +353,20 @@ namespace lfs::vis {
         const float my = input.mouse_y;
         const bool mouse_in_x = mx >= pos.x && mx <= pos.x + width;
         // Click-to-scrub / diamond hits stay in #track-area.
-        const bool mouse_in_timeline = mouse_in_x &&
+        const bool mouse_in_panel_y = my >= cached_panel_y_ && my <= cached_panel_y_ + cached_total_height_;
+        const bool mouse_in_timeline = mouse_in_panel_y && mouse_in_x &&
                                        my >= track_area_top && my <= track_area_bottom;
-        const bool mouse_in_ruler = mouse_in_x &&
+        const bool mouse_in_ruler = mouse_in_panel_y && mouse_in_x &&
                                     my >= ruler_top && my <= ruler_bottom;
 
         // Wheel zoom/pan covers the whole timeline column: ruler top through
         // the film strip (when visible) or the easing stripe otherwise.
-        const float easing_bottom = cached_panel_y_ + cached_height_ + EASING_STRIPE_HEIGHT * s;
-        float wheel_y_bottom = easing_bottom;
-        if (film_strip_attached_) {
-            const float strip_y = cached_panel_y_ + cached_height_ + EASING_STRIPE_HEIGHT * s -
-                                  BORDER_OVERLAP * s;
-            wheel_y_bottom = strip_y + gui::FilmStripRenderer::STRIP_HEIGHT;
+        auto* bottom_element = film_strip_attached_ ? el_film_strip_panel_ : el_easing_stripe_;
+        float wheel_y_bottom = cached_panel_y_ + cached_total_height_;
+        if (bottom_element) {
+            wheel_y_bottom = cached_panel_y_ + bottom_element->GetAbsoluteOffset(Rml::BoxArea::Border).y + bottom_element->GetOffsetHeight();
         }
-        const bool mouse_in_wheel_zone = mouse_in_x && my >= ruler_top && my <= wheel_y_bottom;
+        const bool mouse_in_wheel_zone = mouse_in_panel_y && mouse_in_x && my >= ruler_top && my <= wheel_y_bottom;
 
         if (mouse_in_wheel_zone && !input.want_capture_mouse) {
             const float wheel = input.mouse_wheel;
@@ -620,8 +617,10 @@ namespace lfs::vis {
     void RmlSequencerPanel::handleEasingStripeInteraction(const float timeline_x, const float timeline_width,
                                                           const PanelInputState& input) {
         const float dp = cached_dp_ratio_;
-        const float stripe_y = cached_panel_y_ + cached_height_;
-        const float stripe_h = EASING_STRIPE_HEIGHT * dp;
+        if (!el_easing_stripe_)
+            return;
+        const float stripe_y = cached_panel_y_ + el_easing_stripe_->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+        const float stripe_h = el_easing_stripe_->GetOffsetHeight();
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
 
@@ -629,6 +628,7 @@ namespace lfs::vis {
             return;
 
         if (mx < timeline_x || mx > timeline_x + timeline_width ||
+            my < cached_panel_y_ || my > cached_panel_y_ + cached_total_height_ ||
             my < stripe_y || my > stripe_y + stripe_h) {
             return;
         }

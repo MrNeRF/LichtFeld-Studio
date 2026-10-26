@@ -57,11 +57,6 @@
 namespace lfs::vis {
 
     namespace {
-        bool hasMeshOrCollisionPreview(const FrameContext& ctx) {
-            return !ctx.scene_state.meshes.empty() ||
-                   (ctx.scene_manager && hasVisibleCollisionPreview(*ctx.scene_manager));
-        }
-
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
@@ -1025,7 +1020,7 @@ namespace lfs::vis {
             const auto vp_data = frame_ctx.makeViewportData();
             frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             frame.camera_position = vp_data.translation;
-            if (hasMeshOrCollisionPreview(frame_ctx)) {
+            if (!frame_ctx.scene_state.meshes.empty()) {
                 frame.depth_view = settings.depth_view;
                 frame.depth_view_min = settings.depth_view_min;
                 frame.depth_view_max = settings.depth_view_max;
@@ -1908,6 +1903,8 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
+        if (context.deterministic_export)
+            markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion, "deterministic_capture");
         if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
             // clear_external_backing waits for the arena to be idle. Do this
             // before taking either trainer lock, after the failed frame's borrow
@@ -2349,8 +2346,7 @@ namespace lfs::vis {
                 scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
             has_meshes = std::any_of(scene_state.meshes.begin(),
                                      scene_state.meshes.end(),
-                                     [](const auto& mesh) { return mesh.mesh != nullptr; }) ||
-                         (scene_manager && hasVisibleCollisionPreview(*scene_manager));
+                                     [](const auto& mesh) { return mesh.mesh || mesh.collision; });
             has_environment = environmentBackgroundEnabled(frame_settings);
             has_render_content =
                 has_visible_gaussian_model || has_point_cloud || has_comparison_point_cloud || has_meshes || has_environment;
@@ -2678,6 +2674,7 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
             .training_active = is_training,
+            .deterministic_export = context.deterministic_export,
             .gaussian_selection_visible = gaussian_selection_visible_,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
@@ -2924,7 +2921,7 @@ namespace lfs::vis {
 
             if (!panel_has_visible_gaussian_model) {
                 if (splitViewUsesIndependentPanels(frame_settings.split_view_mode) &&
-                    hasMeshOrCollisionPreview(frame_ctx)) {
+                    !frame_ctx.scene_state.meshes.empty()) {
                     return mesh_background_panel();
                 }
                 return std::unexpected("No renderable model for split-view panel");
@@ -4233,7 +4230,7 @@ namespace lfs::vis {
                 viewport_interaction_context_.scene_manager = scene_manager;
                 split_view_service_.updateInfo(FrameResources{});
 
-                if (hasMeshOrCollisionPreview(frame_ctx) ||
+                if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
                     populate_split_mesh_panels(mesh_frame);
@@ -4517,7 +4514,7 @@ namespace lfs::vis {
                             // Republish here so overlays and mesh/environment passes see
                             // the current camera and splat depth view.
                             const bool publish_mesh_frame =
-                                hasMeshOrCollisionPreview(frame_ctx) ||
+                                !frame_ctx.scene_state.meshes.empty() ||
                                 environmentBackgroundEnabled(frame_settings) ||
                                 render_result.depth_image_view != VK_NULL_HANDLE;
                             if (publish_mesh_frame) {
@@ -4877,12 +4874,12 @@ namespace lfs::vis {
                 frame_ctx.current_camera_id);
         }
 
-        if (!hasMeshOrCollisionPreview(frame_ctx)) {
+        if (frame_ctx.scene_state.meshes.empty()) {
             clearVulkanMeshFrame();
         }
 
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
-            (environmentBackgroundEnabled(frame_settings) || hasMeshOrCollisionPreview(frame_ctx) ||
+            (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_split_mesh_panels(gpu_mesh_frame);
@@ -4925,7 +4922,7 @@ namespace lfs::vis {
         render_lock.reset();
 
         const bool has_gpu_only_pass =
-            hasMeshOrCollisionPreview(frame_ctx) ||
+            !frame_ctx.scene_state.meshes.empty() ||
             environmentBackgroundEnabled(frame_settings) ||
             pending_split_view.enabled;
 

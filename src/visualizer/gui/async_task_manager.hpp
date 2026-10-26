@@ -26,6 +26,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
@@ -61,6 +62,11 @@ namespace lfs::vis {
             void startCollision(core::CollisionSettings settings);
             void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
             void cancelCollision();
+            [[nodiscard]] bool collisionWorkerActive() const;
+            void dropSceneReplacement();
+            bool deferSceneReplacement(std::move_only_function<void()> replacement);
+            [[nodiscard]] bool sceneReplacementRequired() const { return collision_worker_.valid() || collision_replacement_; }
+            [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
             [[nodiscard]] float collisionResolvedSize() const;
             [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }
@@ -342,15 +348,15 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             JobRegistry& jobs_;
             JobHandle collision_job_;
-            std::optional<std::jthread> collision_thread_;
+            std::future<void> collision_worker_;
+            std::stop_source collision_stop_;
+            std::move_only_function<void()> collision_replacement_;
             std::shared_ptr<const core::CollisionVolume> collision_result_;
             uint64_t collision_epoch_ = 0;
             std::optional<core::Scene::CollisionSourceIdentity> collision_source_;
             core::CollisionSettings collision_settings_;
             std::atomic<float> collision_resolved_size_{0};
-            std::atomic<bool> collision_pending_{false};
             void pollCollision();
-            void publishCollisionState(bool force = false);
             void launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work);
 
             struct ExportState {

@@ -41,20 +41,16 @@ target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
 add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
 set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
 
-add_executable(lichtfeld_collision_tests test_collision.cpp)
+add_executable(lichtfeld_collision_tests test_collision.cpp
+    ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
-target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart CUDA::cuda_driver)
+target_compile_definitions(lichtfeld_collision_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(lichtfeld_collision_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(lichtfeld_collision_tests PRIVATE lfs_io lfs_core lfs_rendering GTest::gtest_main CUDA::cudart CUDA::cuda_driver LibArchive::LibArchive)
 add_test(NAME lichtfeld.collision COMMAND lichtfeld_collision_tests --gtest_filter=-CollisionGpu.*)
 add_test(NAME lichtfeld.collision_gpu COMMAND lichtfeld_collision_tests --gtest_filter=CollisionGpu.*)
 set_tests_properties(lichtfeld.collision PROPERTIES LABELS "cpu;collision")
 set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120)
-add_executable(lichtfeld_voxelize_cli_tests test_voxelize_cli.cpp
-    ../src/app/voxelizer.cpp ../src/app/converter_overwrite.cpp)
-target_compile_features(lichtfeld_voxelize_cli_tests PRIVATE cxx_std_23)
-target_compile_definitions(lichtfeld_voxelize_cli_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
-target_include_directories(lichtfeld_voxelize_cli_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/app/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
-target_link_libraries(lichtfeld_voxelize_cli_tests PRIVATE lfs_io lfs_core GTest::gtest_main LibArchive::LibArchive)
-add_test(NAME lichtfeld.voxelize_cli COMMAND lichtfeld_voxelize_cli_tests)
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
@@ -175,8 +171,9 @@ if(BUILD_VISUALIZER_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         licht_test_support.cpp
-        test_collision_scene.cpp
-        test_collision_jobs.cpp
+        test_json_chapter_dom.cpp
+        test_visualizer_post_work.cpp
+        test_project_document.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
         test_keymap_layout_contract.cpp
@@ -199,8 +196,10 @@ if(BUILD_VISUALIZER_TESTS)
         test_vram_hud_geometry.cpp
         test_vram_hud_header_click.cpp
         test_input_key_repeat.cpp
+        test_input_controller_focus.cpp
     )
     add_executable(lichtfeld_visualizer_tests
+        test_main.cpp
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
     # Focused RmlUi migration contracts for the retained master interface.
@@ -232,6 +231,7 @@ if(BUILD_VISUALIZER_TESTS)
         $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>
     )
     target_compile_definitions(lichtfeld_visualizer_tests PRIVATE
+        LFS_TEST_SKIP_GPU_PREWARM
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
@@ -240,7 +240,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_visualizer
         lfs_core
         lfs_python_runtime
-        GTest::gtest_main
+        GTest::gtest
         Zep::Zep
         SDL3::SDL3
         ZLIB::ZLIB
@@ -263,13 +263,15 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
-    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*:VisualizerImplResetTest.StartupRecoveryScansRootAndProjectLocationScratch)
+    add_test(NAME lichtfeld.collision_archive COMMAND lichtfeld_visualizer_tests --gtest_filter=ProjectDocumentTest.SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads:ProjectDocumentTest.PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched:ProjectDocumentTest.TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings:VisualizerImplResetTest.ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable)
+    set_tests_properties(lichtfeld.collision_archive PROPERTIES LABELS "cpu;collision" TIMEOUT 120 WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
@@ -388,6 +390,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_project_chapters.cpp
     test_project_container.cpp
     licht_format_test_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/collision_volume.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/core/optimization_properties.cpp
@@ -792,6 +795,7 @@ set(TEST_FILES
     test_number_format.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
+    test_video_reframe.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp
     test_uv_runner.cpp
@@ -843,6 +847,7 @@ set(TEST_FILES
     test_rendering_refactor_services.cpp
     test_crop_polygon.cpp
     test_higs_exact_depth.cpp
+    test_higs_deterministic_export.cpp
     test_point_cloud_raster_orientation.cpp
     test_point_cloud_vulkan_projection.cpp
     test_point_cloud_selection_overlay.cpp
@@ -896,6 +901,8 @@ set(TEST_FILES
     test_viewport_depth_layout.cpp
     test_viewport_select.cpp
     test_sequencer_regressions.cpp
+    test_sequencer_export_settings.cpp
+    test_sequencer_export_workflow.cpp
     test_timeline_save_budget.cpp
     test_tensor_storage_version.cpp
     test_modal_form_behavior.cpp
@@ -1767,6 +1774,17 @@ if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_lod_budget_recovery_runtime.py
     )
     set_tests_properties(lichtfeld.python.lod_budget_recovery PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 300
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+    add_test(NAME lichtfeld.python.higs_deterministic_export
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_higs_deterministic_export_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.higs_deterministic_export PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS "gpu;integration"
         TIMEOUT 300

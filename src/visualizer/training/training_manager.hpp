@@ -86,6 +86,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isDatasetEditable() const;
         [[nodiscard]] bool canChangeStrategy(std::string_view strategy) const;
         [[nodiscard]] bool rejectsIterationLimit(std::size_t iterations) const;
+        [[nodiscard]] bool canChangeProperty(const core::prop::PropertyMeta& meta,
+                                             const std::any& current_value,
+                                             const std::any& new_value) const;
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }

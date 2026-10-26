@@ -1929,7 +1929,11 @@ class TrainingPanel(Panel):
             and not self._clamp_current_test_every_for_eval()
         ):
             return False
-        setattr(params, prop, val)
+        try:
+            setattr(params, prop, val)
+        except (ValueError, TypeError, RuntimeError) as e:
+            lf.logger.warning(str(e))
+            return False
         if prop == "enable_eval" and val:
             self._add_save_steps_to_eval_steps(params)
         if prop in RENDER_SYNC:
@@ -2070,8 +2074,10 @@ class TrainingPanel(Panel):
 
     @staticmethod
     def _can_edit_configuration():
-        return _trainer_run_is_finished() or (
-            RuntimeState.trainer_state.value == "ready" and RuntimeState.iteration.value == 0)
+        return (
+            RuntimeState.trainer_state.value == "ready"
+            and RuntimeState.iteration.value == 0
+        ) or _trainer_run_is_finished()
 
     def _reset_default(self, prop):
         params = lf.optimization_params()

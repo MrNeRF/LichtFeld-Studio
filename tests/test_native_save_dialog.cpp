@@ -77,17 +77,13 @@ TEST(NativeSaveDialogTest, CancelDoesNotCreateADestination) {
 TEST(NativeSaveDialogTest, JsonApprovalDoesNotCoverAnAppendedSuffix) {
     const auto path = std::filesystem::temp_directory_path() / "lfs-collision-dialog-test.json";
     std::ofstream(path).put('x');
-    bool confirmed = false;
-    selected_path = path.string();
-    EXPECT_EQ(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed), path);
-    EXPECT_TRUE(confirmed);
-    selected_path = (path.parent_path() / path.stem()).string();
-    EXPECT_FALSE(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed).empty());
-    EXPECT_FALSE(confirmed);
-    dialog_result = NFD_CANCEL;
-    confirmed = true;
-    EXPECT_TRUE(lfs::vis::gui::SaveJsonFileDialog("collision.voxel.json", {}, &confirmed).empty());
-    EXPECT_FALSE(confirmed);
+    for (int choice = 0; choice < 3; ++choice) {
+        selected_path = (choice == 1 ? path.parent_path() / path.stem() : path).string();
+        dialog_result = choice == 2 ? NFD_CANCEL : NFD_OKAY;
+        const auto [selected, confirmed] = lfs::vis::gui::SaveJsonFileDialogWithConfirmation("collision.voxel.json");
+        EXPECT_EQ(selected, choice == 2 ? std::filesystem::path{} : path);
+        EXPECT_EQ(confirmed, choice == 0);
+    }
     dialog_result = NFD_OKAY;
-    std::filesystem::remove(selected_path + ".json");
+    std::filesystem::remove(path);
 }

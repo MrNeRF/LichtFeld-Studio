@@ -51,7 +51,7 @@ class VoxelVolume:
 
 def generate_voxels(path: str | os.PathLike, settings: VoxelSettings = ..., progress: object | None = None) -> VoxelVolume:
     """
-    Generate owned full-detail occupancy from a splat file; callback False cancels.
+    Generate owned full-detail occupancy within voxel-pair export limits; callback False cancels.
     """
 
 def save_voxels(volume: VoxelVolume, path: str | os.PathLike, overwrite: bool = False, transform: Sequence[float] = [], progress: object | None = None) -> None:

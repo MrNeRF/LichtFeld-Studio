@@ -36,7 +36,6 @@ class ToolsMenu:
     order = 40
 
     def menu_items(self):
-        from .collision_rendering import open_collision
         tr = lf.ui.tr
         developer_items = [
             menu_action(
@@ -62,7 +61,7 @@ class ToolsMenu:
                 tr("rendering_panel.section_simplify"),
                 lambda: lf.ui.set_panel_enabled("lfs.splat_simplify", True),
             ),
-            menu_action(tr("collision.title"), open_collision),
+            menu_action(tr("collision.title"), lambda: lf.ui.get_panel_object("lfs.collision").show()),
             menu_separator(),
             menu_submenu(tr("menu.tools.developer"), developer_items),
             menu_action(

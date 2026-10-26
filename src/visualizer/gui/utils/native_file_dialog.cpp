@@ -815,14 +815,15 @@ namespace lfs::vis::gui {
 
     std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                              const std::filesystem::path& defaultPath) {
-        return SaveJsonFileDialog(defaultName, defaultPath, nullptr);
+        return SaveJsonFileDialogWithConfirmation(defaultName, defaultPath).first;
     }
 
-    std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
-                                             const std::filesystem::path& defaultPath, bool* overwriteConfirmed) {
+    std::pair<std::filesystem::path, bool> SaveJsonFileDialogWithConfirmation(
+        const std::string& defaultName, const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
-        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result, overwriteConfirmed);
-        return result;
+        bool confirmed = false;
+        runDialog(makeSaveFileRequest(jsonFilters(), defaultPath, defaultName, ".json"), result, &confirmed);
+        return {std::move(result), confirmed};
     }
 
     std::filesystem::path SavePngFileDialog(const std::string& defaultName,

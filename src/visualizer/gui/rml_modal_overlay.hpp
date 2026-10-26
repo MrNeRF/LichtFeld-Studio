@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
     class ModalFormBehaviorTest;
+    class SequencerExportWorkflowTest;
     struct PanelInputState;
 
     struct LFS_VIS_API ModalSnapshot {
@@ -81,6 +82,7 @@ namespace lfs::vis::gui {
         bool dismiss(const std::string& button_label);
         bool updateForm(const std::string& key, const std::optional<std::string>& body_rml,
                         const std::vector<lfs::core::ModalButtonSpec>& buttons);
+        bool setFormValues(const std::string& key, const std::unordered_map<std::string, std::string>& values);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
@@ -89,6 +91,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class ModalFormBehaviorTest;
+        friend class SequencerExportWorkflowTest;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -112,6 +115,9 @@ namespace lfs::vis::gui {
         void cacheElements();
 
         void showNext();
+        void applyFormUpdate(const std::optional<std::string>& body_rml,
+                             const std::vector<lfs::core::ModalButtonSpec>& buttons);
+        void flushPendingActions();
         void updateButtons(const std::vector<lfs::core::ModalButtonSpec>& buttons);
         bool dismissFirstEnabledButton();
         void bindTextInputRevert();
@@ -124,8 +130,30 @@ namespace lfs::vis::gui {
             void ProcessEvent(Rml::Event& event) override;
         };
 
+        struct DispatchScope {
+            explicit DispatchScope(RmlModalOverlay& overlay, bool flush = true);
+            ~DispatchScope();
+            RmlModalOverlay& overlay;
+            bool flush;
+        };
+
+        struct PendingAction {
+            enum class Kind { Update,
+                              Dismiss,
+                              Cancel } kind;
+            std::optional<std::string> body_rml;
+            std::vector<lfs::core::ModalButtonSpec> buttons;
+            std::string button_label;
+        };
+
+        std::deque<PendingAction> pending_actions_;
+        int dispatch_depth_ = 0;
+        bool flushing_actions_ = false;
+        bool close_pending_ = false;
+
         RmlUIManager* rml_manager_;
         OverlayEventListener listener_;
+        bool setting_form_values_ = false;
         rml_input::TextInputEscapeRevertController text_input_revert_;
 
         Rml::Context* rml_context_ = nullptr;

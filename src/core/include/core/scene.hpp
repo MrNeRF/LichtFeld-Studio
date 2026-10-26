@@ -390,7 +390,7 @@ namespace lfs::core {
         };
         // Scene-owner thread only. Render/visibility invalidation is not a content edit.
         [[nodiscard]] std::optional<CollisionSourceIdentity> collisionSourceIdentity(NodeId id) const;
-        [[nodiscard]] std::vector<struct CollisionSource> captureCollisionSources(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
+        [[nodiscard]] struct CollisionSource captureCollisionSource(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
         NodeId addCropBox(const std::string& name, NodeId parent_id);
         NodeId addEllipsoid(const std::string& name, NodeId parent_id);
         // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
@@ -650,8 +650,9 @@ namespace lfs::core {
             glm::mat4 transform;
             NodeId node_id = NULL_NODE;
             bool is_selected = false;
+            std::shared_ptr<const CollisionVolume> collision{};
         };
-        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
+        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes(bool include_collision = false) const;
 
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
         [[nodiscard]] std::vector<int> getVisibleNodeActiveShDegrees() const;

@@ -149,7 +149,10 @@ namespace lfs::io::project {
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
         ENCODED_SCENE_ASSETS = 9,
-        COLLISION_VOLUMES_V1 = 10,
+        // Scene nodes reference an external 3D Tiles tileset (REFS, source kind
+        // "tiles3d"); readers without it report an unsupported feature.
+        TILESET_REFERENCES = 10,
+        COLLISION_VOLUMES_V1 = 11,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -427,6 +430,9 @@ namespace lfs::io::project {
         ProjectReader& operator=(const ProjectReader&) = delete;
         ~ProjectReader();
 
+        // Retain the already validated commit and native file handle; never reopen by path.
+        [[nodiscard]] ProjectReader share() const { return ProjectReader(impl_); }
+        [[nodiscard]] lfs::Result<void> validate_source_identity() const;
         [[nodiscard]] const std::filesystem::path& path() const noexcept;
         [[nodiscard]] std::uint64_t physical_file_size() const noexcept;
         [[nodiscard]] OpenState open_state() const noexcept;

@@ -25,12 +25,9 @@ def _all_file_items(file_menu):
 def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     module = _load_file_menu(monkeypatch)
     calls = []
-    module.lf.ui.set_panel_enabled = lambda panel, enabled: calls.append((panel, enabled))
-    monkeypatch.setattr(module.lf, "get_collision_state", lambda: {}, raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _: SimpleNamespace(show=calls.append), raising=False)
     assert module.CollisionOperator().execute(None) == {"FINISHED"}
-    from lfs_plugins import collision_rendering
-    assert collision_rendering.CollisionRendering.export_mode
-    assert calls == [("lfs.collision", True)]
+    assert calls == [True]
     items = module.FileMenu().menu_items()
     submenus = {item["label"]: item["items"] for item in items if item["type"] == "submenu"}
     assert list(submenus) == [
