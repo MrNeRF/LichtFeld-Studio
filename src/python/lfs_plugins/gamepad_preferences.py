@@ -145,7 +145,7 @@ class GamepadTestSection:
             return self.navigation_error or self.state["error"]
         if self.state and not self.state.get("available"):
             return lf.ui.tr("gamepad.unavailable")
-        return lf.ui.tr("gamepad.navigation." + self.navigation.get("status", "disabled"))
+        return lf.ui.tr(f"gamepad.navigation.{self.navigation.get('status', 'disabled')}")
 
     def show_navigation_status(self):
         return bool(self.navigation_error or self.navigation.get("configuration_error") or self.state.get("error") or self.navigation.get("enabled") or
@@ -178,7 +178,7 @@ class GamepadTestSection:
             self.bindings.sync()
         records = [{"id": "0", "label": lf.ui.tr("gamepad.none")}]
         for device in state.get("devices", ()):
-            label = f"{device['name']} · #{device['id']}"
+            label = lf.ui.tr("gamepad.device_label").format(name=device["name"], id=device["id"])
             if not device.get("mapped"):
                 label += " — " + lf.ui.tr("gamepad.unmapped")
             if device.get("error"):

@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "Adicional 5",
   "gamepad.binding.button.misc6": "Adicional 6",
   "gamepad.binding.capture_button": "Pulsa un botón o un gatillo.",
-  "gamepad.binding.options": "Opciones de asignación"
+  "gamepad.binding.options": "Opciones de asignación",
+  "gamepad.device_label": "{name} · #{id}"
 }

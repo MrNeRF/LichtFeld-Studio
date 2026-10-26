@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "附加 5",
   "gamepad.binding.button.misc6": "附加 6",
   "gamepad.binding.capture_button": "按下按钮或扳机。",
-  "gamepad.binding.options": "分配选项"
+  "gamepad.binding.options": "分配选项",
+  "gamepad.device_label": "{name} · #{id}"
 }

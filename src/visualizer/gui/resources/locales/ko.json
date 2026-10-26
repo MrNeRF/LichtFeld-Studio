@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "추가 5",
   "gamepad.binding.button.misc6": "추가 6",
   "gamepad.binding.capture_button": "버튼이나 트리거를 누르세요.",
-  "gamepad.binding.options": "할당 옵션"
+  "gamepad.binding.options": "할당 옵션",
+  "gamepad.device_label": "{name} · #{id}"
 }

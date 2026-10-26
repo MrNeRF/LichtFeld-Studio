@@ -451,7 +451,7 @@
                 <span class="preferences-binding-desc">
                   <span data-if="binding.inherited" data-tooltip="gamepad.binding.inherited">&#x21B3; </span>
                   {{ binding.value }}
-                  <span data-if="binding.inverted" data-tooltip="gamepad.binding.inverted"> (&#x2212;)</span>
+                  <span data-if="binding.inverted" data-tooltip="gamepad.binding.inverted"> (−)</span>
                 </span>
                 <button class="btn btn--secondary preferences-rebind-btn" data-event-click="gamepad_binding_edit(binding.id, 'assign')">@tr:gamepad.binding.assign</button>
                 <button class="btn btn--secondary preferences-assignment-menu" data-tooltip="gamepad.binding.options" data-event-click="gamepad_binding_edit(binding.id, 'options')">&#x22EF;</button>

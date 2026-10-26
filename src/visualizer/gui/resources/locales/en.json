@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "Extra 5",
   "gamepad.binding.button.misc6": "Extra 6",
   "gamepad.binding.capture_button": "Press a button or a trigger.",
-  "gamepad.binding.options": "Assignment options"
+  "gamepad.binding.options": "Assignment options",
+  "gamepad.device_label": "{name} · #{id}"
 }

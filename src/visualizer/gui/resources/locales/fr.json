@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "Supplémentaire 5",
   "gamepad.binding.button.misc6": "Supplémentaire 6",
   "gamepad.binding.capture_button": "Appuyez sur un bouton ou une gâchette.",
-  "gamepad.binding.options": "Options d’affectation"
+  "gamepad.binding.options": "Options d’affectation",
+  "gamepad.device_label": "{name} · #{id}"
 }

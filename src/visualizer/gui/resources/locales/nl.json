@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "Extra 5",
   "gamepad.binding.button.misc6": "Extra 6",
   "gamepad.binding.capture_button": "Druk een knop of trekker in.",
-  "gamepad.binding.options": "Toewijzingsopties"
+  "gamepad.binding.options": "Toewijzingsopties",
+  "gamepad.device_label": "{name} · #{id}"
 }

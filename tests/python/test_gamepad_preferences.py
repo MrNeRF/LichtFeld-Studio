@@ -15,7 +15,7 @@ def section(monkeypatch):
     state = dict(available=True, devices=[], selected=0, generation=0, axes=[], buttons=[], pressed=[])
     selected = []
     ui = SimpleNamespace(
-        tr=lambda key: key,
+        tr=lambda key: "{name} · #{id}" if key == "gamepad.device_label" else key,
         get_gamepad_test_state=lambda: dict(state),
         set_gamepad_test_device=lambda value: selected.append(value),
     )

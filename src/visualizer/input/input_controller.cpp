@@ -2816,8 +2816,8 @@ namespace lfs::vis {
                 camera.t += delta;
                 camera.pivot += delta;
             } catch (const std::exception& e) {
-                walk_error = e.what();
-                LOG_ERROR("Walk stopped: {}", walk_error);
+                walk_error = core::localizedCollisionError(e);
+                LOG_ERROR("Walk stopped: {}", e.what());
                 setCameraNavigationMode(CameraNavigationMode::Orbit);
                 return true;
             }

@@ -56,7 +56,7 @@ class GamepadBindingsSection:
 
     @staticmethod
     def tr(key):
-        return lf.ui.tr("gamepad.binding." + key)
+        return lf.ui.tr(f"gamepad.binding.{key}")
 
     def profile(self):
         return json.loads(lf.ui.get_gamepad_profile_json())
@@ -129,8 +129,10 @@ class GamepadBindingsSection:
             if not identifier or not lf.ui.set_gamepad_test_device(identifier):
                 self.message = self.tr("select_device")
             else:
+                profile = self.profile()
+                current = profile["bindings"]["common"][action] if self.scope == "common" else effective(profile, self.scope, action)
                 self.capture = {"action": action, "id": identifier, "generation": None, "neutral": None,
-                                "binding": dict(EMPTY), "phase": "positive"}
+                                "binding": dict(EMPTY), "phase": "positive", "axis_inverted": current["inverted"]}
                 self.message = self.tr("release")
             self.sync()
 
@@ -178,6 +180,9 @@ class GamepadBindingsSection:
                 if control["id"] == capture["binding"]["positive"]:
                     continue
                 capture["binding"][capture["phase"]] = control["id"]
+                # Changing a stick assignment must preserve the user's inversion option.
+                if control["signed"]:
+                    capture["binding"]["inverted"] = capture["axis_inverted"]
                 if capture["phase"] == "positive" and action["continuous"] and not control["signed"]:
                     capture["phase"] = "negative"
                     capture["neutral"] = None

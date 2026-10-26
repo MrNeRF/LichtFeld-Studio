@@ -7,6 +7,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "input/gamepad_navigation.hpp"
 #include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
@@ -783,4 +784,58 @@ TEST(PreferencesMigration, CameraBrowseRepeatRateIsClampedAndPersistedOnRequest)
     const auto paths = lfs::core::UserPaths::resolve();
     ASSERT_TRUE(paths);
     EXPECT_EQ(readPreferences(*paths)["camera_browse_repeat_rate"], 7.0);
+}
+
+TEST(PreferencesMigration, GamepadEnablementAndAssignmentsSurviveReloadWithoutConnectionIds) {
+    const auto home = makeHome("lfs_gamepad_preferences_reload");
+    const auto other = makeHome("lfs_gamepad_preferences_reload_other");
+    const ScopedLfsHome scoped_home(home);
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    lfs::vis::input::GamepadNavigationSettings settings;
+    settings.enabled = true;
+    settings.move_speed = 2.3f;
+    settings.bindings.modes[0][0] = lfs::vis::input::GamepadBinding{};
+    ASSERT_TRUE(preferences.setGamepadNavigation(settings.json().dump()));
+    settings.bindings.modes[0][0].reset();
+    ASSERT_TRUE(preferences.setGamepadNavigation(settings.json().dump()));
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    const auto saved = readPreferences(*paths)["gamepad_navigation"];
+    EXPECT_TRUE(saved["enabled"].get<bool>());
+    EXPECT_FALSE(saved.contains("selected"));
+    EXPECT_FALSE(saved.contains("revision"));
+    EXPECT_FALSE(saved["bindings"]["modes"].contains("orbit"));
+    {
+        const ScopedLfsHome switch_home(other);
+        EXPECT_EQ(json::parse(preferences.gamepadNavigation()), json::object());
+    }
+    const auto restored = lfs::vis::input::GamepadNavigationSettings::fromJson(json::parse(preferences.gamepadNavigation()));
+    EXPECT_TRUE(restored.enabled);
+    EXPECT_FLOAT_EQ(restored.move_speed, 2.3f);
+    EXPECT_FALSE(restored.bindings.modes[0][0]);
+    settings.enabled = false;
+    ASSERT_TRUE(preferences.setGamepadNavigation(settings.json().dump()));
+    {
+        const ScopedLfsHome switch_home(other);
+        (void)preferences.gamepadNavigation();
+    }
+    EXPECT_FALSE(lfs::vis::input::GamepadNavigationSettings::fromJson(json::parse(preferences.gamepadNavigation())).enabled);
+}
+
+TEST(PreferencesMigration, InvalidGamepadProfileDoesNotOverwriteSavedPreferences) {
+    const auto home = makeHome("lfs_gamepad_invalid_preferences");
+    const ScopedLfsHome scoped_home(home);
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    lfs::vis::input::GamepadNavigationSettings settings;
+    ASSERT_TRUE(preferences.setGamepadNavigation(settings.json().dump()));
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    const auto before = readPreferences(*paths);
+    auto invalid = settings.json();
+    invalid["enabled"] = "true";
+    EXPECT_FALSE(preferences.setGamepadNavigation(invalid.dump()));
+    EXPECT_EQ(readPreferences(*paths), before);
+    settings.bindings.common[8] = settings.bindings.common[5];
+    EXPECT_FALSE(preferences.setGamepadNavigation(settings.json().dump()));
+    EXPECT_EQ(readPreferences(*paths), before);
 }

@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "追加 5",
   "gamepad.binding.button.misc6": "追加 6",
   "gamepad.binding.capture_button": "ボタンまたはトリガーを押してください。",
-  "gamepad.binding.options": "割り当てオプション"
+  "gamepad.binding.options": "割り当てオプション",
+  "gamepad.device_label": "{name} · #{id}"
 }

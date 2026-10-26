@@ -5509,7 +5509,7 @@ namespace lfs::python {
             result["mode"] = std::get<6>(state);
             result["configuration_error"] = std::get<7>(state);
             return result;
-        }, "Read this session's gamepad navigation settings and routing status.");
+        }, "Read saved gamepad preferences, current connection and navigation routing status.");
 
         m.def("set_gamepad_navigation", [](bool enabled, uint32_t device, float dead_zone, float look_speed, float move_speed) {
             return invoke_on_viewer([=] {
@@ -5525,7 +5525,7 @@ namespace lfs::python {
             }, false);
         }, nb::arg("enabled"), nb::arg("device_id"), nb::arg("dead_zone") = 0.15f,
            nb::arg("look_speed") = 1.5f, nb::arg("move_speed") = 1.0f,
-           "Configure navigation and persist tuning; device and enablement remain session-only.");
+           "Persist navigation enablement, tuning and assignments; connection IDs and viewport arming remain session-local.");
 
         m.def("get_gamepad_profile_json", [] {
             return invoke_on_viewer([] {

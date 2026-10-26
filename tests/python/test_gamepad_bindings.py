@@ -161,3 +161,9 @@ def test_assignment_options_expand_only_one_row_without_changing_profile(editor)
     e.subject.edit('next_rendering','options')
     assert not any(r['expanded'] for r in e.records['gamepad_binding_rows'])
     assert e.profile==before and not e.saves
+
+def test_reassigning_stick_keeps_explicit_inversion_option(editor):
+    e=editor;e.profile['bindings']['common']['move_x']['inverted']=True
+    e.subject.edit('move_x','assign');e.now[0]+=.13;e.subject.sync()
+    e.state['axes'][0]=.9;e.subject.sync()
+    assert e.profile['bindings']['common']['move_x']['inverted'] is True

@@ -3560,5 +3560,6 @@
   "gamepad.binding.button.misc5": "Aggiuntivo 5",
   "gamepad.binding.button.misc6": "Aggiuntivo 6",
   "gamepad.binding.capture_button": "Premi un tasto o un grilletto.",
-  "gamepad.binding.options": "Opzioni assegnazione"
+  "gamepad.binding.options": "Opzioni assegnazione",
+  "gamepad.device_label": "{name} · #{id}"
 }
