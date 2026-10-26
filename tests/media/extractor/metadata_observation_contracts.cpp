@@ -785,16 +785,36 @@ namespace {
         require(mixed && mixed->facts.size() == 2 && mixed->facts[0].xmp->property.subject == "DJI Meta Data" &&
                     mixed->facts[1].semantic == "camera.make" && mixed->facts[1].xmp->property.subject.empty(),
                 "DJI subject restrictions never leak into a later unqualified description");
-        auto named_link = standardPacket(extendedGuid);
-        std::string named_xml(named_link.bytes.begin() + named_link.payload_offset, named_link.bytes.end());
-        const auto description = named_xml.find("<r:Description") + std::string("<r:Description").size();
-        named_xml.insert(description, R"( r:about="DJI Meta Data" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="0")");
-        named_link.bytes.resize(named_link.payload_offset);
-        named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
-        const auto unassociated = summarizeImageMetadata(extendedCatalog({named_link, extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
-        require(unassociated && unassociated->facts.size() == 1 && unassociated->facts[0].semantic == "vendor.dji.altitude.relative" &&
-                    unassociated->xmp_packets.back().state == XmpPacketState::Unsupported,
-                "a named DJI declaration cannot authorize an unqualified Extended assembly");
+        for (const bool element_link : {false, true}) {
+            auto named_link = standardPacket(extendedGuid);
+            std::string named_xml(named_link.bytes.begin() + named_link.payload_offset, named_link.bytes.end());
+            const auto description = named_xml.find("<r:Description") + std::string("<r:Description").size();
+            named_xml.insert(description, R"( r:about="DJI Meta Data" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="0")");
+            const auto attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
+            if (element_link) {
+                named_xml.erase(named_xml.find(attribute), attribute.size());
+                named_xml.resize(named_xml.find("/></r:RDF>"));
+                named_xml += "><n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP></r:Description></r:RDF>";
+            }
+            named_link.bytes.resize(named_link.payload_offset);
+            named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
+            const auto unassociated = summarizeImageMetadata(extendedCatalog({standardPacket(extendedGuid), named_link,
+                                                                              extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
+            require(unassociated && unassociated->facts.size() == 2 &&
+                        std::any_of(unassociated->facts.begin(), unassociated->facts.end(), [](const auto& value) { return value.semantic == "vendor.dji.altitude.relative"; }) &&
+                        std::any_of(unassociated->xmp_packets.begin(), unassociated->xmp_packets.end(), [](const auto& value) { return value.assembly && value.state == XmpPacketState::Unsupported; }),
+                    "accepted DJI projection must not hide a qualified Extended link from the association check");
+            if (!element_link) {
+                named_xml.erase(named_xml.find(attribute), attribute.size());
+                named_link.bytes.resize(named_link.payload_offset);
+                named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
+                const auto independent = summarizeImageMetadata(extendedCatalog({standardPacket(extendedGuid), named_link,
+                                                                                 extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
+                require(independent && independent->facts.size() == 3 &&
+                            std::any_of(independent->facts.begin(), independent->facts.end(), [](const auto& value) { return value.semantic == "camera.model"; }),
+                        "a completely parsed DJI subject without a link does not block an independent valid association");
+            }
+        }
         const auto limited = summarizeImageMetadata(catalog, 1);
         require(limited && limited->limited && limited->facts.empty(), "DJI fields consume the existing packet property budget atomically");
     }

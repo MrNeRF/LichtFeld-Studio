@@ -372,7 +372,11 @@ these vendor properties and retained as `xmp_property.rdf_about`. Standard
 properties in that named description are not promoted to unqualified image
 facts. Other nonempty RDF subjects and description qualifiers retain the
 existing Unsupported behavior. A named description cannot supply an Extended
-XMP association or participate in cross-portion altitude derivation.
+XMP association or participate in cross-portion altitude derivation. Its
+`HasExtendedXMP` declaration is still counted as invalid association evidence,
+including the element form, rather than hidden by the selective photo
+projection. A completely parsed DJI description without that declaration does
+not block an independently valid association.
 
 | Properties | Summary semantics and units |
 | --- | --- |

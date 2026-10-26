@@ -230,8 +230,8 @@ namespace lfs::media {
                             return;
                         }
                         ++ordinal;
-                        if (collect_links && subject.empty() && named(key, note, "HasExtendedXMP")) {
-                            beginLink(false);
+                        if (collect_links && named(key, note, "HasExtendedXMP")) {
+                            beginLink(!subject.empty());
                             linkText(value);
                         } else {
                             add(field(key), value);
@@ -241,9 +241,9 @@ namespace lfs::media {
                     }
                 } else if (parent == Role::Description) {
                     ++ordinal;
-                    if (collect_links && subject.empty() && named(name, note, "HasExtendedXMP")) {
+                    if (collect_links && named(name, note, "HasExtendedXMP")) {
                         role = Role::ExtendedLink;
-                        beginLink(attributes != 0);
+                        beginLink(attributes != 0 || !subject.empty());
                     } else {
                         role = Role::Property;
                         selected = add(field(name), {});
