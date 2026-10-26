@@ -1760,10 +1760,8 @@ namespace lfs::vis {
             if (collision) {
                 collision_pipeline_attempted = true;
                 VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-                VkDescriptorSetLayoutCreateInfo descriptors{};
-                descriptors.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-                descriptors.bindingCount = 1;
-                descriptors.pBindings = &binding;
+                const VkDescriptorSetLayoutCreateInfo descriptors{
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 1, &binding};
                 if (!vk_try_bool(vkCreateDescriptorSetLayout(device, &descriptors, nullptr, &collision_layout),
                                  "vkCreateDescriptorSetLayout", "Collision preview descriptor layout"))
                     return false;
@@ -2631,29 +2629,20 @@ namespace lfs::vis {
             vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
             frame.staging = VK_NULL_HANDLE;
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
-            VkDescriptorPoolCreateInfo pool{};
-            pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pool.maxSets = 1;
-            pool.poolSizeCount = 1;
-            pool.pPoolSizes = &size;
+            const VkDescriptorPoolCreateInfo pool{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, 1, 1, &size};
             if (!vk_try_bool(vkCreateDescriptorPool(device, &pool, nullptr, &frame.pool),
                              "vkCreateDescriptorPool", "Collision preview descriptors"))
                 return;
-            VkDescriptorSetAllocateInfo allocation{};
-            allocation.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocation.descriptorPool = frame.pool;
-            allocation.descriptorSetCount = 1;
-            allocation.pSetLayouts = &collision_layout;
+            const VkDescriptorSetAllocateInfo allocation{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr, frame.pool, 1, &collision_layout};
             if (!vk_try_bool(vkAllocateDescriptorSets(device, &allocation, &frame.descriptor),
                              "vkAllocateDescriptorSets", "Collision preview descriptor"))
                 return;
             const VkDescriptorBufferInfo buffer{frame.buffer, 0, bytes};
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = frame.descriptor;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            write.pBufferInfo = &buffer;
+            const VkWriteDescriptorSet write{
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, frame.descriptor, 0, 0, 1,
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffer, nullptr};
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
             LOG_DEBUG("Collision preview uploaded {} bytes for immutable volume", bytes);
         }

@@ -383,7 +383,7 @@ set(LICHT_FORMAT_WINDOWS_FILES
     test_project_chapters.cpp
     test_project_container.cpp
     licht_format_test_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/collision.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/collision_volume.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/core/optimization_properties.cpp
