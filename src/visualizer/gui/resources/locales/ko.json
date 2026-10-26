@@ -3419,7 +3419,7 @@
   "gamepad.axes": "스틱 및 트리거",
   "gamepad.buttons": "버튼",
   "gamepad.navigation_title": "컨트롤러 탐색",
-  "gamepad.navigation_enabled": "이 세션에서 활성화",
+  "gamepad.navigation_enabled": "활성화",
   "gamepad.navigation_device": "탐색 컨트롤러",
   "gamepad.navigation_help": "환경설정을 닫고 뷰포트를 클릭한 다음 컨트롤러의 모든 입력을 놓으세요. 마우스, 키보드, 대화상자 및 포커스 변경 시 탐색이 일시 중지됩니다. L/R은 선택한 패널입니다.",
   "gamepad.dead_zone": "스틱 데드존",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: 이동; R: 시점; LT/RT: 하강/상승; LB/L1: 정밀; RB/R1: 빠르게.",
   "gamepad.preset.walk": "Walk — L: 걷기; R: 시점; East: Walk 종료; LB/L1: 정밀; LT/RT/RB: —.",
   "gamepad.binding.title": "할당",
-  "gamepad.binding.context": "탐색 모드",
+  "gamepad.binding.context": "컨텍스트",
   "gamepad.binding.common": "공통 할당",
   "gamepad.binding.orbit": "궤도",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "추가 4",
   "gamepad.binding.button.misc5": "추가 5",
   "gamepad.binding.button.misc6": "추가 6",
-  "gamepad.binding.capture_button": "버튼이나 트리거를 누르세요."
+  "gamepad.binding.capture_button": "버튼이나 트리거를 누르세요.",
+  "gamepad.binding.options": "할당 옵션"
 }

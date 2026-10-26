@@ -123,5 +123,3 @@
 .preferences-conflict-message {
     color: @{text};
 }
-
-.preferences-assignment-row { border-bottom-color: @{border}; }

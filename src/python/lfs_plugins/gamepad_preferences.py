@@ -135,7 +135,7 @@ class GamepadTestSection:
                     return lf.ui.tr("gamepad.binding.save_error")
             except (ValueError, RuntimeError):
                 return lf.ui.tr("gamepad.binding.save_error")
-        self.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
+        self.configure(enabled=False, selected=self.navigation.get("selected", 0), dead_zone=0.15, look_speed=1.5, move_speed=1.0)
         return self.navigation_error or None
 
     def navigation_status(self):

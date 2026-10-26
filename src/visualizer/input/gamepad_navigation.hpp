@@ -28,18 +28,19 @@ namespace lfs::vis::input {
         }
 
         nlohmann::json json() const {
-            return {{"schema_version", 1}, {"dead_zone", dead_zone}, {"look_speed", look_speed},
+            return {{"schema_version", 1}, {"enabled", enabled}, {"dead_zone", dead_zone}, {"look_speed", look_speed},
                     {"move_speed", move_speed}, {"bindings", bindings.json()}};
         }
         static GamepadNavigationSettings fromJson(const nlohmann::json& value) {
             if (!value.is_object() || (value.contains("schema_version") && (!value["schema_version"].is_number_integer() || value["schema_version"] != 1)))
                 throw std::invalid_argument("Unsupported gamepad configuration version");
             for (auto it = value.begin(); it != value.end(); ++it)
-                if (it.key() != "schema_version" && it.key() != "dead_zone" && it.key() != "look_speed" && it.key() != "move_speed" && it.key() != "bindings")
+                if (it.key() != "schema_version" && it.key() != "enabled" && it.key() != "dead_zone" && it.key() != "look_speed" && it.key() != "move_speed" && it.key() != "bindings")
                     throw std::invalid_argument("Unknown gamepad configuration field");
             GamepadNavigationSettings result;
             for (const char* key : {"dead_zone", "look_speed", "move_speed"})
                 if (value.contains(key) && !value[key].is_number()) throw std::invalid_argument("Invalid gamepad tuning value");
+            result.enabled = value.value("enabled", false);
             result.dead_zone = value.value("dead_zone", 0.15f);
             result.look_speed = value.value("look_speed", 1.5f);
             result.move_speed = value.value("move_speed", 1.0f);

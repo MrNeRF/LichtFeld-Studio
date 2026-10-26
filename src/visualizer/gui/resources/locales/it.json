@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Stick e grilletti",
   "gamepad.buttons": "Pulsanti",
   "gamepad.navigation_title": "Navigazione joypad",
-  "gamepad.navigation_enabled": "Abilita per questa sessione",
+  "gamepad.navigation_enabled": "Abilita",
   "gamepad.navigation_device": "Joypad per la navigazione",
   "gamepad.navigation_help": "Chiudi Preferenze, fai clic nella viewport e rilascia tutti i controlli del joypad per iniziare. Mouse, tastiera, dialoghi e cambi di focus sospendono la navigazione. L/R indicano il pannello della viewport selezionato.",
   "gamepad.dead_zone": "Zona morta stick",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: movimento; R: sguardo; LT/RT: scendi/sali; LB/L1: precisione; RB/R1: più veloce.",
   "gamepad.preset.walk": "Walk — L: cammina; R: sguardo; East: esci da Walk; LB/L1: precisione; LT/RT/RB: —.",
   "gamepad.binding.title": "Assegnazioni",
-  "gamepad.binding.context": "Modalità di navigazione",
+  "gamepad.binding.context": "Contesto",
   "gamepad.binding.common": "Assegnazioni comuni",
   "gamepad.binding.orbit": "Orbita",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Aggiuntivo 4",
   "gamepad.binding.button.misc5": "Aggiuntivo 5",
   "gamepad.binding.button.misc6": "Aggiuntivo 6",
-  "gamepad.binding.capture_button": "Premi un tasto o un grilletto."
+  "gamepad.binding.capture_button": "Premi un tasto o un grilletto.",
+  "gamepad.binding.options": "Opzioni assegnazione"
 }

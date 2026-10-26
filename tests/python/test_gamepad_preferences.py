@@ -229,3 +229,12 @@ def test_option_rebuild_does_not_replace_native_navigation_selection(section, mo
     listeners["navigation"]["blur"](None)
     subject._select_from_input("navigation", "0")
     assert len(changes) == 1
+
+def test_reset_disables_navigation_but_preserves_connected_device_choice(section, monkeypatch):
+    subject, state, selected, records, dirty = section
+    ui = subject.sync.__globals__['lf'].ui
+    subject.navigation = dict(enabled=True, selected=22, dead_zone=.3, look_speed=2., move_speed=3.)
+    calls = []
+    monkeypatch.setattr(ui, 'set_gamepad_navigation', lambda *args: calls.append(args) or True, raising=False)
+    assert subject.reset() is None
+    assert calls == [(False, 22, .15, 1.5, 1.)]

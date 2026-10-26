@@ -5496,10 +5496,9 @@ namespace lfs::python {
         m.def("get_gamepad_default_profile_json", [] { return vis::input::GamepadNavigationSettings{}.json().dump(); });
         m.def("set_gamepad_profile_json", [](const std::string& serialized) {
             const auto settings = vis::input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(serialized));
-            return invoke_on_viewer([settings = settings] () mutable {
+            return invoke_on_viewer([settings] {
                 auto* controller = vis::InputController::instance();
                 if (!controller) return false;
-                settings.enabled = controller->gamepadNavigationSettings().enabled;
                 return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
             }, false);
         }, nb::arg("serialized"));

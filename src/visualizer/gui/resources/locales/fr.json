@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Sticks et gâchettes",
   "gamepad.buttons": "Boutons",
   "gamepad.navigation_title": "Navigation à la manette",
-  "gamepad.navigation_enabled": "Activer pour cette session",
+  "gamepad.navigation_enabled": "Activer",
   "gamepad.navigation_device": "Manette de navigation",
   "gamepad.navigation_help": "Fermez les préférences, cliquez dans la vue et relâchez toutes les commandes. Souris, clavier, dialogues et changements de focus suspendent la navigation. L/R indique le panneau sélectionné.",
   "gamepad.dead_zone": "Zone morte du stick",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: déplacement; R: regard; LT/RT: descendre/monter; LB/L1: précision; RB/R1: plus rapide.",
   "gamepad.preset.walk": "Walk — L: marcher; R: regard; East: quitter Walk; LB/L1: précision; LT/RT/RB: —.",
   "gamepad.binding.title": "Affectations",
-  "gamepad.binding.context": "Mode de navigation",
+  "gamepad.binding.context": "Contexte",
   "gamepad.binding.common": "Affectations communes",
   "gamepad.binding.orbit": "Orbite",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Supplémentaire 4",
   "gamepad.binding.button.misc5": "Supplémentaire 5",
   "gamepad.binding.button.misc6": "Supplémentaire 6",
-  "gamepad.binding.capture_button": "Appuyez sur un bouton ou une gâchette."
+  "gamepad.binding.capture_button": "Appuyez sur un bouton ou une gâchette.",
+  "gamepad.binding.options": "Options d’affectation"
 }

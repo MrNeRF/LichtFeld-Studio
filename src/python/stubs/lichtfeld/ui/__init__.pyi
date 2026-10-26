@@ -2834,7 +2834,7 @@ def set_gamepad_test_device(device_id: int) -> bool:
     ...
 
 def get_gamepad_navigation_state() -> dict:
-    """Read session settings and the viewport navigation routing status."""
+    """Read saved preferences, current device selection and viewport routing status."""
     ...
 
 def set_gamepad_navigation(enabled: bool, device_id: int, dead_zone: float = 0.15,
@@ -3114,7 +3114,7 @@ def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
 
 def get_gamepad_profile_json() -> str:
-    """Return persisted tuning and semantic assignments, excluding device/session state."""
+    """Return persisted tuning and semantic assignments, excluding connection identifiers and arming state."""
     ...
 def get_gamepad_default_profile_json() -> str: ...
 def get_gamepad_binding_catalog_json() -> str: ...

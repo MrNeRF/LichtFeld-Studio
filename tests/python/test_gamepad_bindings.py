@@ -151,3 +151,13 @@ def test_short_button_press_can_be_captured_after_release(editor):
 def test_skipping_is_available_only_for_opposite_direction(editor):
     e=editor;e.subject.edit('next_rendering','assign');e.subject.finish_capture()
     assert e.subject.capture is not None and not e.saves
+
+def test_assignment_options_expand_only_one_row_without_changing_profile(editor):
+    e=editor;before=copy.deepcopy(e.profile)
+    e.subject.edit('move_x','options')
+    assert [r['id'] for r in e.records['gamepad_binding_rows'] if r['expanded']]==['move_x']
+    e.subject.edit('next_rendering','options')
+    assert [r['id'] for r in e.records['gamepad_binding_rows'] if r['expanded']]==['next_rendering']
+    e.subject.edit('next_rendering','options')
+    assert not any(r['expanded'] for r in e.records['gamepad_binding_rows'])
+    assert e.profile==before and not e.saves

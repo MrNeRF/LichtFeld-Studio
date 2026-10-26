@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Sticks und Trigger",
   "gamepad.buttons": "Tasten",
   "gamepad.navigation_title": "Controller-Navigation",
-  "gamepad.navigation_enabled": "Für diese Sitzung aktivieren",
+  "gamepad.navigation_enabled": "Aktivieren",
   "gamepad.navigation_device": "Navigationscontroller",
   "gamepad.navigation_help": "Schließen Sie die Einstellungen, klicken Sie in den Viewport und lassen Sie alle Controller-Eingaben los. Maus, Tastatur, Dialoge und Fokuswechsel unterbrechen die Navigation. L/R kennzeichnet den gewählten Viewport.",
   "gamepad.dead_zone": "Stick-Totzone",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: bewegen; R: Blick; LT/RT: ab/auf; LB/L1: Präzision; RB/R1: schneller.",
   "gamepad.preset.walk": "Walk — L: gehen; R: Blick; East: Walk verlassen; LB/L1: Präzision; LT/RT/RB: —.",
   "gamepad.binding.title": "Belegungen",
-  "gamepad.binding.context": "Navigationsmodus",
+  "gamepad.binding.context": "Kontext",
   "gamepad.binding.common": "Gemeinsame Belegung",
   "gamepad.binding.orbit": "Orbit",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Zusatz 4",
   "gamepad.binding.button.misc5": "Zusatz 5",
   "gamepad.binding.button.misc6": "Zusatz 6",
-  "gamepad.binding.capture_button": "Taste oder Trigger drücken."
+  "gamepad.binding.capture_button": "Taste oder Trigger drücken.",
+  "gamepad.binding.options": "Belegungsoptionen"
 }

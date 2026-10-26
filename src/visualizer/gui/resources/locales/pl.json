@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Drążki i spusty",
   "gamepad.buttons": "Przyciski",
   "gamepad.navigation_title": "Nawigacja kontrolerem",
-  "gamepad.navigation_enabled": "Włącz dla tej sesji",
+  "gamepad.navigation_enabled": "Włącz",
   "gamepad.navigation_device": "Kontroler nawigacji",
   "gamepad.navigation_help": "Zamknij Preferencje, kliknij widok i zwolnij wszystkie elementy kontrolera. Mysz, klawiatura, okna dialogowe i zmiany fokusu wstrzymują nawigację. L/R oznacza wybrany panel.",
   "gamepad.dead_zone": "Martwa strefa drążka",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: ruch; R: rozglądanie; LT/RT: w dół/w górę; LB/L1: precyzja; RB/R1: szybciej.",
   "gamepad.preset.walk": "Walk — L: chodzenie; R: rozglądanie; East: wyjdź z Walk; LB/L1: precyzja; LT/RT/RB: —.",
   "gamepad.binding.title": "Przypisania",
-  "gamepad.binding.context": "Tryb nawigacji",
+  "gamepad.binding.context": "Kontekst",
   "gamepad.binding.common": "Wspólne przypisania",
   "gamepad.binding.orbit": "Orbita",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Dodatkowy 4",
   "gamepad.binding.button.misc5": "Dodatkowy 5",
   "gamepad.binding.button.misc6": "Dodatkowy 6",
-  "gamepad.binding.capture_button": "Naciśnij przycisk lub spust."
+  "gamepad.binding.capture_button": "Naciśnij przycisk lub spust.",
+  "gamepad.binding.options": "Opcje przypisania"
 }

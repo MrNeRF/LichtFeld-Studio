@@ -39,6 +39,8 @@ class GamepadBindingsSection:
         self.capture = None
         self.message = ""
         self._rows = None
+        self.expanded_action = None
+        self._scope_records = None
         self.catalog = json.loads(lf.ui.get_gamepad_binding_catalog_json())
         model.bind_record_list("gamepad_binding_rows")
         model.bind_record_list("gamepad_binding_scopes")
@@ -50,8 +52,7 @@ class GamepadBindingsSection:
         model.bind_event("gamepad_binding_cancel", lambda *_: self.cancel())
         model.bind_event("gamepad_binding_skip", lambda *_: self.finish_capture())
         model.bind_event("gamepad_binding_reset", lambda *_: self.reset())
-        self.handle.update_record_list("gamepad_binding_scopes", [
-            {"id": scope, "label": self.tr(scope)} for scope in ["common", *self.catalog["modes"]]])
+
 
     @staticmethod
     def tr(key):
@@ -63,6 +64,7 @@ class GamepadBindingsSection:
     def set_scope(self, value):
         if value != self.scope and value in ("common", *self.catalog["modes"]):
             self.cancel()
+            self.expanded_action = None
             self.scope = value
             self.sync()
 
@@ -111,7 +113,10 @@ class GamepadBindingsSection:
         if action not in [a["id"] for a in self.catalog["actions"]]:
             return
         self.cancel()
-        if operation == "clear":
+        if operation == "options":
+            self.expanded_action = None if self.expanded_action == action else action
+            self.sync()
+        elif operation == "clear":
             self.change(action, dict(EMPTY))
         elif operation == "inherit" and self.scope != "common":
             self.change(action, None)
@@ -203,6 +208,10 @@ class GamepadBindingsSection:
                              [lf.ui.tr("common.cancel"), label], answer)
 
     def sync(self):
+        scopes = [{"id": scope, "label": self.tr(scope)} for scope in ["common", *self.catalog["modes"]]]
+        if scopes != self._scope_records:
+            self._scope_records = scopes
+            self.handle.update_record_list("gamepad_binding_scopes", scopes)
         self.sample()
         profile = self.profile()
         rows = []
@@ -215,9 +224,11 @@ class GamepadBindingsSection:
             binding = profile["bindings"]["common"][name] if self.scope == "common" else effective(profile, self.scope, name)
             inherited = self.scope != "common" and name not in profile["bindings"].get("modes", {}).get(self.scope, {})
             controls = [self.tr(binding[key]) for key in ("positive", "negative") if binding[key] != "none"]
-            rows.append({"id": name, "label": self.tr(name), "value": " / ".join(controls) or self.tr("none"),
-                         "inherited": inherited, "mode": self.scope != "common", "continuous": action["continuous"],
-                         "inverted": binding["inverted"]})
+            rows.append({"id": name, "label": self.tr(name), "value": " − ".join(controls) or self.tr("none"),
+                         "inherited": inherited, "mode": self.scope != "common", "continuous": action["continuous"] and bool(controls),
+                         "inverted": binding["inverted"], "expanded": self.expanded_action == name,
+                         "overridden": self.scope != "common" and not inherited,
+                         "assigned": bool(controls)})
         if rows != self._rows:
             self._rows = rows
             self.handle.update_record_list("gamepad_binding_rows", rows)

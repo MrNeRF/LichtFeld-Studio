@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Sticks en triggers",
   "gamepad.buttons": "Knoppen",
   "gamepad.navigation_title": "Controllernavigatie",
-  "gamepad.navigation_enabled": "Voor deze sessie inschakelen",
+  "gamepad.navigation_enabled": "Inschakelen",
   "gamepad.navigation_device": "Navigatiecontroller",
   "gamepad.navigation_help": "Sluit Voorkeuren, klik in de viewport en laat alle controllerbedieningen los. Muis, toetsenbord, dialoogvensters en focuswijzigingen onderbreken de navigatie. L/R geeft het geselecteerde paneel aan.",
   "gamepad.dead_zone": "Dode zone van stick",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: bewegen; R: kijken; LT/RT: omlaag/omhoog; LB/L1: precisie; RB/R1: sneller.",
   "gamepad.preset.walk": "Walk — L: lopen; R: kijken; East: Walk verlaten; LB/L1: precisie; LT/RT/RB: —.",
   "gamepad.binding.title": "Toewijzingen",
-  "gamepad.binding.context": "Navigatiemodus",
+  "gamepad.binding.context": "Context",
   "gamepad.binding.common": "Algemene toewijzingen",
   "gamepad.binding.orbit": "Orbit",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Extra 4",
   "gamepad.binding.button.misc5": "Extra 5",
   "gamepad.binding.button.misc6": "Extra 6",
-  "gamepad.binding.capture_button": "Druk een knop of trekker in."
+  "gamepad.binding.capture_button": "Druk een knop of trekker in.",
+  "gamepad.binding.options": "Toewijzingsopties"
 }

@@ -192,3 +192,66 @@ TEST_F(GamepadServiceTest, DiagnosticSelectionDoesNotStealNavigationAndBothInval
     EXPECT_EQ(service.navigationSample().id, 0u);
     EXPECT_EQ(service.snapshot().navigation_selected, 0u);
 }
+
+TEST_F(GamepadServiceTest, FirstUsableConnectionIsPreselectedWithoutSelectingDiagnostics) {
+    // Physical pads can coexist with virtual fixtures on developer machines.
+    const auto initial = service.snapshot();
+    const bool existing = std::any_of(initial.devices.begin(), initial.devices.end(),
+                                      [](const auto& d) { return d.mapped && d.error.empty(); });
+    const auto first = attach();
+    pump();
+    const auto expected = existing ? initial.navigation_selected : first;
+    EXPECT_EQ(service.navigationSample().id, expected);
+    EXPECT_EQ(service.snapshot().selected, 0u);
+    const auto second = attach();
+    pump();
+    EXPECT_EQ(service.navigationSample().id, expected);
+    ASSERT_TRUE(service.selectNavigation(second));
+    const auto third = attach();
+    pump();
+    EXPECT_EQ(service.navigationSample().id, second);
+    ASSERT_TRUE(SDL_DetachVirtualJoystick(second));
+    pump();
+    EXPECT_EQ(service.navigationSample().id, 0u);
+    ASSERT_TRUE(service.selectNavigation(first));
+    EXPECT_EQ(service.navigationSample().id, first);
+}
+
+TEST_F(GamepadServiceTest, StartupSelectsOnlyUnambiguousMappedController) {
+    const auto initial = service.snapshot();
+    const auto count = std::count_if(initial.devices.begin(), initial.devices.end(),
+                                     [](const auto& d) { return d.mapped && d.error.empty(); });
+    lfs::vis::input::GamepadService startup;
+    ASSERT_TRUE(startup.initialize());
+    EXPECT_EQ(startup.navigationSample().id, initial.navigation_selected);
+    startup.shutdown();
+    const auto first = attach();
+    pump();
+    ASSERT_TRUE(startup.initialize());
+    EXPECT_EQ(startup.navigationSample().id, count == 0 ? first : 0u);
+    startup.shutdown();
+    const auto second = attach();
+    pump();
+    ASSERT_NE(second, 0u);
+    ASSERT_TRUE(startup.initialize());
+    EXPECT_EQ(startup.navigationSample().id, 0u);
+    EXPECT_EQ(startup.snapshot().selected, 0u);
+}
+
+TEST_F(GamepadServiceTest, ReconnectIsPreselectedButExplicitDeselectIsStableAcrossFrames) {
+    const auto initial = service.snapshot();
+    const bool existing = std::any_of(initial.devices.begin(), initial.devices.end(),
+                                      [](const auto& d) { return d.mapped && d.error.empty(); });
+    const auto first = attach();
+    pump();
+    EXPECT_EQ(service.navigationSample().id, existing ? initial.navigation_selected : first);
+    ASSERT_TRUE(service.selectNavigation(0));
+    pump();
+    EXPECT_EQ(service.navigationSample().id, 0u);
+    ASSERT_TRUE(SDL_DetachVirtualJoystick(first));
+    pump();
+    const auto replacement = attach();
+    pump();
+    EXPECT_NE(first, replacement);
+    EXPECT_EQ(service.navigationSample().id, existing ? 0u : replacement);
+}

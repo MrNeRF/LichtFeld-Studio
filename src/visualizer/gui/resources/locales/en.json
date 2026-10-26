@@ -3419,7 +3419,7 @@
   "gamepad.axes": "Sticks and triggers",
   "gamepad.buttons": "Buttons",
   "gamepad.navigation_title": "Joypad navigation",
-  "gamepad.navigation_enabled": "Enable for this session",
+  "gamepad.navigation_enabled": "Enable",
   "gamepad.navigation_device": "Navigation controller",
   "gamepad.navigation_help": "Close Preferences, click the viewport, then release all controller inputs to start. Mouse, keyboard, dialogs and focus changes suspend navigation. L/R indicate the selected viewport panel.",
   "gamepad.dead_zone": "Stick dead zone",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: move; R: look; LT/RT: down/up; LB/L1: precision; RB/R1: faster.",
   "gamepad.preset.walk": "Walk — L: walk; R: look; East: exit Walk; LB/L1: precision; LT/RT/RB: —.",
   "gamepad.binding.title": "Assignments",
-  "gamepad.binding.context": "Navigation mode",
+  "gamepad.binding.context": "Context",
   "gamepad.binding.common": "Common assignments",
   "gamepad.binding.orbit": "Orbit",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "Extra 4",
   "gamepad.binding.button.misc5": "Extra 5",
   "gamepad.binding.button.misc6": "Extra 6",
-  "gamepad.binding.capture_button": "Press a button or a trigger."
+  "gamepad.binding.capture_button": "Press a button or a trigger.",
+  "gamepad.binding.options": "Assignment options"
 }

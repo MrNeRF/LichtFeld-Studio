@@ -201,13 +201,13 @@ TEST_F(NavigationTest, NeutralDurationUsesTimeRatherThanFrameCount) {
     }
 }
 
-TEST_F(NavigationTest, ProfileRoundTripExcludesSessionOwnership) {
+TEST_F(NavigationTest, ProfileRoundTripPreservesEnablementButExcludesDeviceOwnership) {
     settings.bindings.common[8] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
     const auto serialized = settings.json();
-    EXPECT_FALSE(serialized.contains("enabled"));
+    EXPECT_TRUE(serialized["enabled"].get<bool>());
     EXPECT_FALSE(serialized.contains("selected"));
     const auto restored = GamepadNavigationSettings::fromJson(serialized);
-    EXPECT_FALSE(restored.enabled);
+    EXPECT_TRUE(restored.enabled);
     EXPECT_EQ(restored.bindings.common[8], settings.bindings.common[8]);
     EXPECT_EQ(restored.json(), serialized);
 }
@@ -287,4 +287,16 @@ TEST_F(NavigationTest, SemanticCommandsAreIndependentOfVendorButtonLetters) {
     EXPECT_EQ(tick().rendering_step, 1);
     sample.has_button[SDL_GAMEPAD_BUTTON_NORTH] = false;
     EXPECT_EQ(tick().rendering_step, 0);
+}
+
+TEST_F(NavigationTest, LegacyProfileDefaultsToDisabledAndEnablementRemainsAnExplicitPreference) {
+    auto profile = settings.json();
+    profile.erase("enabled");
+    EXPECT_FALSE(GamepadNavigationSettings::fromJson(profile).enabled);
+    profile["enabled"] = true;
+    EXPECT_TRUE(GamepadNavigationSettings::fromJson(profile).enabled);
+    profile["enabled"] = false;
+    EXPECT_FALSE(GamepadNavigationSettings::fromJson(profile).enabled);
+    profile["enabled"] = "true";
+    EXPECT_THROW(GamepadNavigationSettings::fromJson(profile), nlohmann::json::exception);
 }

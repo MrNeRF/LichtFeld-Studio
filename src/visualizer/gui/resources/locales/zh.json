@@ -3419,7 +3419,7 @@
   "gamepad.axes": "摇杆和扳机",
   "gamepad.buttons": "按钮",
   "gamepad.navigation_title": "控制器导航",
-  "gamepad.navigation_enabled": "在本次会话中启用",
+  "gamepad.navigation_enabled": "启用",
   "gamepad.navigation_device": "导航控制器",
   "gamepad.navigation_help": "关闭偏好设置，单击视口，然后松开控制器的所有输入。鼠标、键盘、对话框和焦点变化会暂停导航。L/R表示所选面板。",
   "gamepad.dead_zone": "摇杆死区",
@@ -3440,7 +3440,7 @@
   "gamepad.preset.drone": "DRONE — L: 移动; R: 视角; LT/RT: 下降/上升; LB/L1: 精细; RB/R1: 加速.",
   "gamepad.preset.walk": "Walk — L: 行走; R: 视角; East: 退出Walk; LB/L1: 精细; LT/RT/RB: —.",
   "gamepad.binding.title": "按键分配",
-  "gamepad.binding.context": "导航模式",
+  "gamepad.binding.context": "上下文",
   "gamepad.binding.common": "通用分配",
   "gamepad.binding.orbit": "环绕",
   "gamepad.binding.trackball": "Trackball",
@@ -3511,5 +3511,6 @@
   "gamepad.binding.button.misc4": "附加 4",
   "gamepad.binding.button.misc5": "附加 5",
   "gamepad.binding.button.misc6": "附加 6",
-  "gamepad.binding.capture_button": "按下按钮或扳机。"
+  "gamepad.binding.capture_button": "按下按钮或扳机。",
+  "gamepad.binding.options": "分配选项"
 }

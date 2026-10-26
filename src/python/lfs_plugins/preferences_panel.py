@@ -90,6 +90,7 @@ class PreferencesPanel(Panel):
     }
 
     EXPANDABLE_SECTIONS = (
+        "gamepad_bindings",
         "language",
         "project_location",
         "project_manager",
@@ -183,7 +184,6 @@ class PreferencesPanel(Panel):
         model.bind_func("show_input_shortcuts", lambda: self._section == "input" and self._input_page == "shortcuts")
         model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
         model.bind_func("show_gamepad_controls", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "controls")
-        model.bind_func("show_gamepad_bindings", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "bindings")
         model.bind_func("show_gamepad_test", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
@@ -1584,7 +1584,7 @@ class PreferencesPanel(Panel):
     def _dirty_input_pages(self):
         if self._handle:
             for name in ("input_expanded", "input_page_title", "show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
-                         "show_gamepad_controls", "show_gamepad_test", "show_gamepad_bindings", "show_section_reset", "reset_section_label"):
+                         "show_gamepad_controls", "show_gamepad_test", "show_section_reset", "reset_section_label"):
                 self._handle.dirty(name)
 
     def _set_input_page(self, page):
@@ -1611,15 +1611,17 @@ class PreferencesPanel(Panel):
         key = "preferences.input_" + self._input_page
         if self._input_page == "gamepad" and self._gamepad_page == "test":
             key = "preferences.gamepad_diagnostics"
-        if self._input_page == "gamepad" and self._gamepad_page == "bindings":
-            key = "gamepad.binding.title"
         return lf.ui.tr(key)
 
     def _set_gamepad_page(self, page):
-        if page not in ("controls", "test", "bindings") or self._gamepad_page == page:
+        if page not in ("controls", "test") or self._gamepad_page == page:
             return
         self._gamepad_test.deactivate()
         self._gamepad_page = page
+        if page == "test":
+            identifier = self._gamepad_test.navigation.get("selected", 0)
+            if identifier:
+                self._gamepad_test.select(str(identifier))
         self._reset_content_scroll()
         self._dirty_input_pages()
 

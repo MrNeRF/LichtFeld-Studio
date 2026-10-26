@@ -21,7 +21,17 @@ namespace lfs::vis::input {
         uint64_t generation = 0;
         bool initialized = false;
 
-        void add(SDL_JoystickID id) {
+        void selectOnlyNavigation() {
+            if (state.navigation_selected) return;
+            SDL_JoystickID only = 0;
+            for (const auto& connection : connections) if (connection.handle) {
+                if (only) return;
+                only = connection.device.id;
+            }
+            state.navigation_selected = only;
+        }
+
+        void add(SDL_JoystickID id, bool auto_select = true) {
             const auto found = std::find_if(connections.begin(), connections.end(),
                                             [id](const auto& c) { return c.device.id == id; });
             if (found != connections.end())
@@ -42,7 +52,10 @@ namespace lfs::vis::input {
                     connection.device.error = SDL_GetError();
                 }
             }
+            const bool first_usable = connection.handle && std::none_of(connections.begin(), connections.end(),
+                                                                         [](const auto& c) { return bool(c.handle); });
             connections.push_back(std::move(connection));
+            if (auto_select && first_usable) selectOnlyNavigation();
         }
 
         void remove(SDL_JoystickID id) {
@@ -80,8 +93,10 @@ namespace lfs::vis::input {
             return false;
         }
         for (int i = 0; i < count; ++i)
-            impl_->add(devices[i]);
+            impl_->add(devices[i], false);
         SDL_free(devices);
+        impl_->selectOnlyNavigation();
+        sample();
         return true;
     }
 
@@ -116,7 +131,7 @@ namespace lfs::vis::input {
         case SDL_EVENT_GAMEPAD_REMAPPED:
             // Reopen after a mapping change. Selection requires explicit renewal.
             impl_->remove(event.gdevice.which);
-            impl_->add(event.gdevice.which);
+            impl_->add(event.gdevice.which, false);
             break;
         case SDL_EVENT_JOYSTICK_REMOVED:
             impl_->remove(event.jdevice.which);
@@ -125,7 +140,7 @@ namespace lfs::vis::input {
             impl_->remove(event.gdevice.which);
             // Losing a gamepad mapping need not disconnect the raw joystick.
             if (SDL_GetJoystickNameForID(event.gdevice.which))
-                impl_->add(event.gdevice.which);
+                impl_->add(event.gdevice.which, false);
             break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
             if (event.gbutton.which == impl_->state.navigation_selected &&
