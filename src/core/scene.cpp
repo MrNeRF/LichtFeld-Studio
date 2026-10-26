@@ -140,14 +140,9 @@ namespace lfs::core {
             return unique_name;
         }
 
-        void commit_combined_model_q16(SplatData& model, const SplatTensorAllocator& alloc) {
+        bool commit_combined_model_q16(SplatData& model, const SplatTensorAllocator& alloc) {
             model.set_tensor_allocator(alloc);
-            if (!alloc || !sh_value_quant::enabled()) {
-                return;
-            }
-            if (model.apply_shN_value_quant()) {
-                Tensor::trim_memory_pool();
-            }
+            return alloc && sh_value_quant::enabled() && model.apply_shN_value_quant();
         }
 
         void order_combined_build_outputs(Scene::CombinedModelBuild& build) {
@@ -192,7 +187,7 @@ namespace lfs::core {
             // Event creation/recording is allowed to fail in headless or
             // teardown-adjacent environments; preserve correctness with a
             // one-off host fence before publishing the result.
-            const cudaError_t sync_status = cudaDeviceSynchronize();
+            const cudaError_t sync_status = cudaStreamSynchronize(build.worker_stream);
             if (sync_status != cudaSuccess) {
                 LOG_ERROR("Combined model worker stream fence failed: {} ({})",
                           cudaGetErrorName(sync_status), cudaGetErrorString(sync_status));
@@ -901,19 +896,13 @@ namespace lfs::core {
                 }
             }
             if (visible_node_count > 1 && (visible_count > 1'000'000 ||
-                                           (import_validation_.load() && combinedModelBuildPending()))) {
+                                           combinedModelBuildPending())) {
                 // A large invalidated multi-node cache is rebuilt by the worker.
                 // Keep the previous renderable cache (or the previous single
                 // node alias) until its replacement lands; on the first-ever
                 // load both are null, so this intentionally returns null rather
                 // than rebuilding synchronously on the render thread.
                 return single_node_model_ ? single_node_model_ : cached_combined_.get();
-            }
-            if (visible_node_count < 2) {
-                // A stale multi-node worker must be drained before the
-                // synchronous single-node cache is installed. Otherwise the
-                // worker remains pending after the scene has become small.
-                waitForCombinedModelBuild();
             }
         }
         rebuildModelCacheIfNeeded();
@@ -1329,7 +1318,7 @@ namespace lfs::core {
             result.model->set_tensor_allocator(allocator);
         } else {
             result.model->set_active_sh_degree(stats.max_active_sh_degree);
-            commit_combined_model_q16(*result.model, allocator);
+            result.needs_memory_pool_trim = commit_combined_model_q16(*result.model, allocator);
         }
         if (has_any_deleted) {
             result.model->deleted() = std::move(deleted);
@@ -1367,6 +1356,9 @@ namespace lfs::core {
         model_cache_valid_.store(true, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
         invalidateVisibleSelectionMaskCache();
+        if (build.needs_memory_pool_trim) {
+            Tensor::trim_memory_pool();
+        }
         return true;
     }
 
@@ -1830,7 +1822,9 @@ namespace lfs::core {
             source->get_scene_scale(),
             shN_layout);
         compacted->set_active_sh_degree(source->get_active_sh_degree());
-        commit_combined_model_q16(*compacted, snapshot.allocator);
+        if (commit_combined_model_q16(*compacted, snapshot.allocator)) {
+            Tensor::trim_memory_pool();
+        }
 
         if (deleted.is_valid()) {
             compacted->deleted() = std::move(deleted);
@@ -2863,6 +2857,9 @@ namespace lfs::core {
         cached_visible_selection_indices_ = built.visible_selection_indices;
         cached_combined_includes_hidden_ = include_hidden_splats;
         invalidateVisibleSelectionMaskCache();
+        if (built.needs_memory_pool_trim) {
+            Tensor::trim_memory_pool();
+        }
 
         // Epoch fence: any CUDA copies from live training tensors must complete
         // before this function returns and drops live_model / combined locks.

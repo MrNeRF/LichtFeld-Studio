@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "颜色方差权重:",
     "losses.color_variance_warmup_iters": "颜色方差预热:",
-    "tooltip.color_variance_weight": "使可见 splat 的颜色趋于一致，以减少随机渲染中的噪点。需要 FastGS，并关闭 Mip 滤波器、外观校正和遮罩。数值越高越可能丢失细节。0 表示禁用。",
+    "tooltip.color_variance_weight": "使可见 splat 的颜色趋于一致，以减少随机渲染中的噪点。需要 FastGS，并关闭 Mip 滤波器和遮罩。数值越高越可能丢失细节。0 表示禁用。",
     "tooltip.color_variance_warmup_iters": "颜色方差开始前已完成的训练迭代次数。随训练计划缩放。对于 30000 次迭代的预热加精修实验，请使用 15000。",
     "losses.opacity_reg": "不透明度正则化:",
     "losses.scale_reg_decay_power": "缩放惩罚衰减:",

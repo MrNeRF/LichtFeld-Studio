@@ -539,6 +539,7 @@ namespace lfs::core {
             cudaStream_t worker_stream = nullptr;
             uint64_t generation = 0;
             bool includes_hidden_splats = false;
+            bool needs_memory_pool_trim = false;
             std::string error;
         };
 

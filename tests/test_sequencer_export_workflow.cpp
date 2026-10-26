@@ -494,6 +494,8 @@ namespace lfs::vis::gui {
             ASSERT_NE(width, nullptr);
             width->SetAttribute("value", "4294971136");
             width->DispatchEvent("change", {});
+            // Programmatic dispatch queues button updates until the next frame.
+            modal.render(800, 600);
             const auto snapshot = modal.current();
             ASSERT_TRUE(snapshot);
             EXPECT_FALSE(snapshot->button_enabled[0]);
@@ -563,6 +565,7 @@ namespace lfs::vis::gui {
             auto* cancel = doc.GetElementById("modal-btn-1");
             ASSERT_NE(cancel, nullptr);
             cancel->DispatchEvent("click", {});
+            modal.render(800, 600);
             EXPECT_FALSE(modal.current());
             EXPECT_EQ(viewer.getGuiManager()->getSequencerUIState().outputWidth(), 1920);
             EXPECT_EQ(viewer.getGuiManager()->getSequencerUIState().outputHeight(), 1080);

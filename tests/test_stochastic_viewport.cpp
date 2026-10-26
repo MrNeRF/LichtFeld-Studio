@@ -45,7 +45,7 @@ namespace lfs::vis {
                 buffer.size = buffer.capacity = buffer.allocSize = 64;
             };
             auto& main = renderer.stochastic_histories_[0].buffers;
-            for (auto* buffer : {&main.ids_depths.deviceBuffer, &main.occlusion.deviceBuffer,
+            for (auto* buffer : {&main.occluders.deviceBuffer,
                                  &main.outgoing_weights.deviceBuffer, &main.rest_average.deviceBuffer,
                                  &main.color[0].deviceBuffer, &main.color[1].deviceBuffer})
                 fake(*buffer);
@@ -60,14 +60,14 @@ namespace lfs::vis {
             EXPECT_TRUE(retired.empty());
             // Basic accumulation keeps only its color history.
             renderer.releaseUnusedStochasticBuffers(Slot::Main, 1);
-            EXPECT_EQ(retired.size(), 4u);
+            EXPECT_EQ(retired.size(), 3u);
             EXPECT_NE(main.color[0].deviceBuffer.buffer, VK_NULL_HANDLE);
             // Another view still holds history, so the sort-index copy stays.
             renderer.releaseUnusedStochasticBuffers(Slot::Main, 0);
-            EXPECT_EQ(retired.size(), 6u);
+            EXPECT_EQ(retired.size(), 5u);
             EXPECT_NE(renderer.buffers_.primitive_sort_indices.deviceBuffer.buffer, VK_NULL_HANDLE);
             renderer.releaseUnusedStochasticBuffers(Slot::SplitLeft, 0);
-            EXPECT_EQ(retired.size(), 8u);
+            EXPECT_EQ(retired.size(), 7u);
             EXPECT_EQ(renderer.buffers_.primitive_sort_indices.deviceBuffer.buffer, VK_NULL_HANDLE);
             for (const auto& [value, buffer] : retired)
                 EXPECT_EQ(value, 7u); // Destroyed once the last submitted frame retires.

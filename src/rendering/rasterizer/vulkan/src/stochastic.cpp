@@ -45,11 +45,9 @@ void VulkanGSRenderer::executeStochasticReuse(const VulkanGSRendererUniforms& un
     PerfTimer::Timer<PerfTimer::StochasticReuse> timer(this);
     using lfs::rendering::vulkan::BufferUse;
     const auto pixels = static_cast<std::size_t>(uniforms.image_width) * uniforms.image_height;
-    history.ids_depths.deviceBuffer.label = "stochastic.history_ids_depths";
-    history.occlusion.deviceBuffer.label = "stochastic.history_occlusion";
+    history.occluders.deviceBuffer.label = "stochastic.history_occluders";
     history.outgoing_weights.deviceBuffer.label = "stochastic.outgoing_weights";
-    resizeDeviceBuffer(history.ids_depths, pixels * VULKAN_GS_STOCHASTIC_HISTORY_SIZE * 2);
-    resizeDeviceBuffer(history.occlusion, pixels * VULKAN_GS_STOCHASTIC_HISTORY_SIZE * 4);
+    resizeDeviceBuffer(history.occluders, pixels * VULKAN_GS_STOCHASTIC_HISTORY_SIZE * 2);
     resizeDeviceBuffer(history.outgoing_weights, pixels * 4);
     executeCompute({{pixels, 256}}, &uniforms, sizeof(uniforms), pipeline_stochastic_reuse,
                    std::vector<TaggedBinding>{
@@ -57,8 +55,7 @@ void VulkanGSRenderer::executeStochasticReuse(const VulkanGSRendererUniforms& un
                        {buffers.pixel_depth_weight.deviceBuffer, BufferUse::ComputeRead},
                        {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
                        {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
-                       {history.ids_depths.deviceBuffer, BufferUse::ComputeReadWrite},
-                       {history.occlusion.deviceBuffer, BufferUse::ComputeReadWrite},
+                       {history.occluders.deviceBuffer, BufferUse::ComputeReadWrite},
                        {history.outgoing_weights.deviceBuffer, BufferUse::ComputeWrite},
                    });
 }

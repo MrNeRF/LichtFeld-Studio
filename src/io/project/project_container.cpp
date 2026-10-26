@@ -2745,8 +2745,19 @@ namespace lfs::io::project {
 
     CapabilitySet supported_reader_capabilities() {
         CapabilitySet result;
-        for (std::uint8_t bit = INDEX_ZSTD_V1;
-             bit <= COLLISION_VOLUMES_V1; ++bit) {
+        // List implemented capabilities explicitly: not every assigned bit is
+        // implemented in every build.
+        for (const auto bit : {INDEX_ZSTD_V1,
+                               CHUNK_ZSTD_V1,
+                               BLOCK_CRC32C_V1,
+                               INDEX_TOMBSTONES_V1,
+                               SIDECAR_OVERLAY_V1,
+                               OPAQUE_CHUNK_PRESERVATION,
+                               RETAINED_JSON_FIELDS,
+                               CLEAN_PROOF_REUSE,
+                               CHUNK_BYTESHUFFLE_ZSTD_V1,
+                               ENCODED_SCENE_ASSETS,
+                               COLLISION_VOLUMES_V1}) {
             result.set(bit);
         }
         return result;

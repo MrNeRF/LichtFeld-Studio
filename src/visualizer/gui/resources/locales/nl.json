@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Gewicht kleurvariantie:",
     "losses.color_variance_warmup_iters": "Opwarmen kleurvariantie:",
-    "tooltip.color_variance_weight": "Brengt de kleuren van zichtbare splats op één lijn om ruis bij stochastisch renderen te verminderen. Vereist FastGS met mip-filter, uiterlijkcorrectie en maskers uit. Hogere waarden kunnen detail verwijderen. 0 schakelt het uit.",
+    "tooltip.color_variance_weight": "Brengt de kleuren van zichtbare splats op één lijn om ruis bij stochastisch renderen te verminderen. Vereist FastGS met mip-filter en maskers uit. Hogere waarden kunnen detail verwijderen. 0 schakelt het uit.",
     "tooltip.color_variance_warmup_iters": "Voltooide trainingsiteraties voordat de kleurvariantie begint. Schaalt mee met het trainingsschema. Gebruik 15000 voor een opwarm- en verfijningsexperiment van 30000 iteraties.",
     "losses.opacity_reg": "Opaciteitsreg.:",
     "losses.scale_reg_decay_power": "Afbouw van de schaalstraf:",

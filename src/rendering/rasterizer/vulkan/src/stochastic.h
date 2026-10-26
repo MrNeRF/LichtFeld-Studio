@@ -10,11 +10,12 @@
 
 inline constexpr std::size_t VULKAN_GS_STOCHASTIC_HISTORY_SIZE = 4;
 
-// Separate allocations keep uint2 and float4 storage strides explicit. These
+// Separate allocations keep uint4 and float4 storage strides explicit. These
 // buffers belong to one logical viewport, not the rotating output-image ring.
 struct VulkanGSStochasticBuffers {
-    Buffer<std::uint32_t> ids_depths;
-    Buffer<float> occlusion;
+    // Two words per occluder: the splat ID, then a 16-bit depth key and four
+    // 4-bit occlusion ratios.
+    Buffer<std::uint32_t> occluders;
     Buffer<float> outgoing_weights;
     std::array<Buffer<float>, 2> color;
     Buffer<float> rest_average;
