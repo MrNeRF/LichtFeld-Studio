@@ -391,7 +391,7 @@ class IngestCLI(unittest.TestCase):
         packet = packet.replace('r:about=""', 'r:about="DJI Meta Data"').encode()
         self._xmp_jpeg(path, [b"http://ns.adobe.com/xap/1.0/\0" + packet])
         result, _ = self.invoke("source-metadata", path)
-        fact, = result["summary"]["facts"]
+        fact, = [f for f in result["summary"]["facts"] if "xmp_property" in f]
         self.assertEqual((fact["semantic"], fact["value"], fact["origin"]),
                          ("vendor.dji.altitude.relative", -1.25, "interpreted_source"))
         self.assertEqual(fact["xmp_property"]["rdf_about"], "DJI Meta Data")

@@ -781,6 +781,20 @@ namespace {
                         json_detail::metadataSummary(*named)["facts"][0]["xmp_property"]["rdf_about"] == "DJI Meta Data",
                     "observed DJI subjects retain their identity and never promote standard properties");
         }
+        const auto mixed = summarizeImageMetadata(xmpFixture(begin + R"(r:about="DJI Meta Data" d:RelativeAltitude="0"></r:Description><r:Description xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Make="plain">)" + end));
+        require(mixed && mixed->facts.size() == 2 && mixed->facts[0].xmp->property.subject == "DJI Meta Data" &&
+                    mixed->facts[1].semantic == "camera.make" && mixed->facts[1].xmp->property.subject.empty(),
+                "DJI subject restrictions never leak into a later unqualified description");
+        auto named_link = standardPacket(extendedGuid);
+        std::string named_xml(named_link.bytes.begin() + named_link.payload_offset, named_link.bytes.end());
+        const auto description = named_xml.find("<r:Description") + std::string("<r:Description").size();
+        named_xml.insert(description, R"( r:about="DJI Meta Data" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="0")");
+        named_link.bytes.resize(named_link.payload_offset);
+        named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
+        const auto unassociated = summarizeImageMetadata(extendedCatalog({named_link, extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
+        require(unassociated && unassociated->facts.size() == 1 && unassociated->facts[0].semantic == "vendor.dji.altitude.relative" &&
+                    unassociated->xmp_packets.back().state == XmpPacketState::Unsupported,
+                "a named DJI declaration cannot authorize an unqualified Extended assembly");
         const auto limited = summarizeImageMetadata(catalog, 1);
         require(limited && limited->limited && limited->facts.empty(), "DJI fields consume the existing packet property budget atomically");
     }
