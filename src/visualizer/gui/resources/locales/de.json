@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "Befehle oder Tasten suchen",
+  "input_settings.clear_search": "Suche löschen",
+  "input_settings.no_matches": "Keine passenden Befehle in diesem Werkzeugmodus.",
+  "preferences.input_navigation": "Navigation",
+  "preferences.input_shortcuts": "Tastenkürzel",
+  "preferences.input_gamepad": "Gamepad",
+  "preferences.gamepad_controls": "Gerät und Steuerung",
+  "preferences.gamepad_diagnostics": "Eingabetest",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "Transparenz",
   "main_panel.stochastic_max_frames": "Verfeinerungsframes",

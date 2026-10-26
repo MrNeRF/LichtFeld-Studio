@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "搜索命令或按键",
+  "input_settings.clear_search": "清除搜索",
+  "input_settings.no_matches": "此工具模式下没有匹配的命令。",
+  "preferences.input_navigation": "导航",
+  "preferences.input_shortcuts": "快捷键",
+  "preferences.input_gamepad": "游戏手柄",
+  "preferences.gamepad_controls": "设备与控制",
+  "preferences.gamepad_diagnostics": "输入测试",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "透明度",
   "main_panel.stochastic_max_frames": "细化帧数",

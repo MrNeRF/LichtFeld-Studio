@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "Szukaj poleceń lub klawiszy",
+  "input_settings.clear_search": "Wyczyść wyszukiwanie",
+  "input_settings.no_matches": "Brak pasujących poleceń w tym trybie narzędzia.",
+  "preferences.input_navigation": "Nawigacja",
+  "preferences.input_shortcuts": "Skróty",
+  "preferences.input_gamepad": "Kontroler",
+  "preferences.gamepad_controls": "Urządzenie i sterowanie",
+  "preferences.gamepad_diagnostics": "Test wejścia",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "Przezroczystość",
   "main_panel.stochastic_max_frames": "Klatki doprecyzowania",

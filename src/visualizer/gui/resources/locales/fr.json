@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "Rechercher des commandes ou des touches",
+  "input_settings.clear_search": "Effacer la recherche",
+  "input_settings.no_matches": "Aucune commande correspondante dans ce mode d’outil.",
+  "preferences.input_navigation": "Navigation",
+  "preferences.input_shortcuts": "Raccourcis",
+  "preferences.input_gamepad": "Manette",
+  "preferences.gamepad_controls": "Périphérique et commandes",
+  "preferences.gamepad_diagnostics": "Test des entrées",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "Transparence",
   "main_panel.stochastic_max_frames": "Images d'affinage",

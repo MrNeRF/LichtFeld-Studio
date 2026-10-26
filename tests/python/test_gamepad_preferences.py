@@ -90,6 +90,14 @@ def test_leaving_input_preferences_stops_diagnostic_sampling(section):
     assert subject.state == {}
 
 
+def test_leaving_the_page_discards_unfinished_device_selection(section):
+    subject, _state, selected, _records, _dirty = section
+    subject._selection_intent.add("test")
+    subject.deactivate()
+    subject._select_from_input("test", "22")
+    assert selected == []
+
+
 def test_short_press_expires_and_missing_axis_is_not_reported_as_zero(section, monkeypatch):
     subject, state, selected, records, dirty = section
     now = [10.0]

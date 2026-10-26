@@ -39,6 +39,35 @@ body.floating-panel {
     padding-right: 6dp;
 }
 
+.preferences-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.preferences-input-pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    margin-bottom: 10dp;
+}
+
+.preferences-input-pages .preferences-nav-item {
+    flex: 1;
+    text-align: center;
+}
+
+.preferences-gamepad-pages {
+    margin-bottom: 12dp;
+}
+
+.preferences-binding-search input {
+    flex: 1;
+    min-width: 0;
+}
+
 .preferences-section {
     margin-bottom: 8dp;
 }

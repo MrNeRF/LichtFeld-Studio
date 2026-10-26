@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "Search commands or keys",
+  "input_settings.clear_search": "Clear search",
+  "input_settings.no_matches": "No matching commands in this tool mode.",
+  "preferences.input_navigation": "Navigation",
+  "preferences.input_shortcuts": "Shortcuts",
+  "preferences.input_gamepad": "Gamepad",
+  "preferences.gamepad_controls": "Device and controls",
+  "preferences.gamepad_diagnostics": "Input test",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "Transparency",
   "main_panel.stochastic_max_frames": "Refinement frames",

@@ -17,6 +17,16 @@
       <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
     </div>
 
+    <div class="preferences-main">
+      <div class="preferences-input-pages" data-if="show_input">
+        <button class="btn preferences-nav-item" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
+        <button class="btn preferences-nav-item" data-class-active="show_input_shortcuts" data-event-click="input_page('shortcuts')">@tr:preferences.input_shortcuts</button>
+        <button class="btn preferences-nav-item" data-class-active="show_input_gamepad" data-event-click="input_page('gamepad')">@tr:preferences.input_gamepad</button>
+      </div>
+      <div class="preferences-input-pages preferences-gamepad-pages" data-if="show_input_gamepad">
+        <button class="btn preferences-nav-item" data-class-active="show_gamepad_controls" data-event-click="gamepad_page('controls')">@tr:preferences.gamepad_controls</button>
+        <button class="btn preferences-nav-item" data-class-active="show_gamepad_test" data-event-click="gamepad_page('test')">@tr:preferences.gamepad_diagnostics</button>
+      </div>
     <div class="preferences-content">
       <div class="preferences-section" data-if="show_general">
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
@@ -373,7 +383,7 @@
         </div>
       </div>
 
-      <div class="preferences-section" data-if="show_input">
+      <div class="preferences-section" data-if="show_gamepad_controls">
         <div class="section-header text-accent">@tr:gamepad.navigation_title</div>
         <div class="section-content">
           <div class="preferences-row preferences-checkbox-row">
@@ -405,6 +415,8 @@
             <span>{{ gamepad_move_speed }}</span>
           </div>
         </div>
+      </div>
+      <div class="preferences-section" data-if="show_gamepad_test">
         <div class="section-header text-accent">@tr:gamepad.title</div>
         <div class="section-content">
           <span class="preferences-description">@tr:gamepad.help</span>
@@ -421,6 +433,8 @@
             <span>{{ gamepad_test_buttons }}</span>
           </div>
         </div>
+      </div>
+      <div class="preferences-section" data-if="show_input_navigation">
         <div class="section-header text-accent" data-class-is-expanded="navigation_expanded" data-event-click="toggle_section('navigation')">
           <span class="section-arrow text-accent" data-class-is-expanded="navigation_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.camera_navigation</span>
@@ -493,12 +507,13 @@
           </div>
         </div>
 
+      </div>
+      <div class="preferences-section" data-if="show_input_shortcuts">
         <div class="section-header text-accent" data-class-is-expanded="key_bindings_expanded" data-event-click="toggle_section('key_bindings')">
           <span class="section-arrow text-accent" data-class-is-expanded="key_bindings_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.key_bindings</span>
         </div>
         <div class="section-content" data-if="key_bindings_expanded">
-          <span class="preferences-description">@tr:preferences.gallery.shortcuts_hint</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:input_settings.active_profile</span>
             <select id="profile-select" class="preferences-select" data-value="profile_idx"
@@ -514,7 +529,12 @@
             </select>
           </div>
           <span class="preferences-description">@tr:input_settings.select_tool_mode</span>
+          <div class="preferences-row preferences-binding-search">
+            <input type="text" data-value="binding_search" placeholder="@tr:input_settings.search_commands" data-attrif-disabled="is_capturing" />
+            <button class="btn btn--secondary" data-event-click="clear_binding_search" data-attrif-disabled="is_capturing">@tr:input_settings.clear_search</button>
+          </div>
           <span class="preferences-description" id="bindings-hint">{{bindings_hint}}</span>
+          <span class="preferences-description" data-if="binding_search_empty">@tr:input_settings.no_matches</span>
           <div id="bindings-table" class="preferences-bindings-table">
             <div data-for="row : binding_rows">
               <span class="preferences-binding-section" data-if="row.is_section">{{ row.section_title }}</span>
@@ -543,6 +563,7 @@
           </div>
           <span class="preferences-description">@tr:input_settings.save_hint</span>
           <span class="preferences-description">@tr:input_settings.double_click_hint</span>
+          <span class="preferences-description">@tr:preferences.gallery.shortcuts_hint</span>
         </div>
       </div>
 
@@ -669,6 +690,7 @@
     </div>
   </div>
 
+  </div>
   <div class="preferences-actions">
     <div class="preferences-footer-sidebar"></div>
     <div class="preferences-footer-gutter"></div>

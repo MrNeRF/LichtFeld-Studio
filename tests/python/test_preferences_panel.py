@@ -1257,6 +1257,7 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
         update_record_list=lambda name, items: records.__setitem__(name, list(items)),
     )
     panel._section = "input"
+    panel._input_page = "shortcuts"
 
     assert "key_bindings" in panel._expanded_sections
     assert panel._keymap._rows_built is False
@@ -1268,6 +1269,72 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
     assert records["binding_rows"]
 
 
+def test_input_pages_cancel_capture_and_release_diagnostic_device(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = "gamepad"
+    panel._gamepad_page = "test"
+    calls = []
+    module.lf.keymap.cancel_capture = lambda: calls.append("cancel")
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel._keymap.ensure_binding_rows = lambda: calls.append("rows")
+    assert not panel._show_section_reset()
+    panel._set_input_page("invalid")
+    assert not calls
+    panel._set_input_page("shortcuts")
+    assert calls == ["cancel", "release", "rows"]
+    assert panel._show_section_reset()
+    panel._set_input_page("navigation")
+    assert calls[-2:] == ["cancel", "release"]
+    panel._set_section("general")
+    assert calls[-2:] == ["cancel", "release"]
+
+
+@pytest.mark.parametrize("page", ["navigation", "shortcuts", "gamepad"])
+def test_input_page_reset_does_not_reset_other_pages(preferences_panel_module, page):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = page
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    resets = []
+    panel._keymap.reset_to_default = lambda: resets.append("shortcuts")
+    panel._gamepad_test.configure = lambda **_kwargs: resets.append("gamepad")
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(buttons[1])
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._on_reset_current_section(None, None, None)
+    assert resets == ([] if page == "navigation" else [page])
+    assert state.zoom_speed == (11 if page == "navigation" else 42)
+    assert state.navigation_speed == (10 if page == "navigation" else 73)
+
+
+def test_shortcut_search_keeps_matching_sections_and_typed_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    heading = dict(is_section=True, section_title="Navigazione")
+    orbit = dict(is_section=False, action_name="Orbita camera", desc_text="MMB Trascina", action_id="5", mode_id="0")
+    other = dict(is_section=True, section_title="Sequencer")
+    play = dict(is_section=False, action_name="Play/Pause", desc_text="Space", action_id="9", mode_id="0")
+    rows = [heading, orbit, other, play]
+    assert keymap._filter_rows(rows, "  ") == rows
+    assert keymap._filter_rows(rows, "NAVIGAZIONE mmb") == [heading, orbit]
+    assert keymap._filter_rows(rows, "space") == [other, play]
+    assert keymap._filter_rows(rows, "missing") == []
+    assert keymap._filter_rows(rows, "camera")[1] is orbit
+
+
+def test_input_page_labels_and_search_exist_in_all_locales():
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    keys = ["preferences." + key for key in ("input_navigation", "input_shortcuts", "input_gamepad", "gamepad_controls", "gamepad_diagnostics")]
+    keys += ["input_settings." + key for key in ("search_commands", "clear_search", "no_matches")]
+    for path in root.glob("*.json"):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        assert all(values.get(key) for key in keys), path.name
+
+
 @pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_input_reset_restores_bindings_and_refreshes_rows(
@@ -1276,6 +1343,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._section = "input"
+    panel._input_page = "shortcuts"
     panel._refresh_selection = lambda: None
     panel._set_zoom_speed(42)
     panel._set_navigation_speed(73)
@@ -1323,7 +1391,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
         assert panel._keymap._last_state_key == ("old bindings",)
         assert dirty == []
 
-    reset_input = confirmed and reset_scope != "bindings"
+    reset_input = confirmed and reset_scope == "all"
     assert state.zoom_speed == (11 if reset_input else 42)
     assert state.navigation_speed == (10 if reset_input else 73)
     assert panel._navigation_up_index() == ("0" if reset_input else "1")

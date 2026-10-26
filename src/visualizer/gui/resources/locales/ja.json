@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "コマンドまたはキーを検索",
+  "input_settings.clear_search": "検索をクリア",
+  "input_settings.no_matches": "このツールモードに一致するコマンドはありません。",
+  "preferences.input_navigation": "ナビゲーション",
+  "preferences.input_shortcuts": "ショートカット",
+  "preferences.input_gamepad": "ゲームパッド",
+  "preferences.gamepad_controls": "デバイスと操作",
+  "preferences.gamepad_diagnostics": "入力テスト",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "透明度",
   "main_panel.stochastic_max_frames": "リファインフレーム数",

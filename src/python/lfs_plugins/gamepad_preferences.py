@@ -73,6 +73,7 @@ class GamepadTestSection:
         self._pressed = []
 
     def deactivate(self):
+        self._selection_intent.clear()
         if self.state.get("selected"):
             select = getattr(lf.ui, "set_gamepad_test_device", None)
             if select:

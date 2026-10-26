@@ -1,4 +1,12 @@
 {
+  "input_settings.search_commands": "명령 또는 키 검색",
+  "input_settings.clear_search": "검색 지우기",
+  "input_settings.no_matches": "이 도구 모드에 일치하는 명령이 없습니다.",
+  "preferences.input_navigation": "탐색",
+  "preferences.input_shortcuts": "단축키",
+  "preferences.input_gamepad": "게임패드",
+  "preferences.gamepad_controls": "장치 및 컨트롤",
+  "preferences.gamepad_diagnostics": "입력 테스트",
   "rendering_panel.steady_splats": "SteadySplats",
   "main_panel.transparency_mode": "투명도",
   "main_panel.stochastic_max_frames": "정제 프레임",

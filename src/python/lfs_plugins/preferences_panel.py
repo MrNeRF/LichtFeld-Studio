@@ -120,6 +120,8 @@ class PreferencesPanel(Panel):
         self._last_state = None
         self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
+        self._input_page = "navigation"
+        self._gamepad_page = "controls"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
         self._mcp_expose_network = False
@@ -174,6 +176,11 @@ class PreferencesPanel(Panel):
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
+        model.bind_func("show_input_navigation", lambda: self._section == "input" and self._input_page == "navigation")
+        model.bind_func("show_input_shortcuts", lambda: self._section == "input" and self._input_page == "shortcuts")
+        model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
+        model.bind_func("show_gamepad_controls", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "controls")
+        model.bind_func("show_gamepad_test", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
@@ -312,6 +319,8 @@ class PreferencesPanel(Panel):
         model.bind_event("show_general", lambda *_: self._set_section("general"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
+        model.bind_event("input_page", lambda _handle, _event, args: self._set_input_page(str(args[0])) if args else None)
+        model.bind_event("gamepad_page", lambda _handle, _event, args: self._set_gamepad_page(str(args[0])) if args else None)
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_event("show_file_associations", lambda *_: self._set_section("file_associations"))
         model.bind_event("show_mcp", lambda *_: self._set_section("mcp"))
@@ -407,7 +416,7 @@ class PreferencesPanel(Panel):
         doc.remove_data_model("preferences")
 
     def on_update(self, doc):
-        if self._section == "input":
+        if self._section == "input" and self._input_page == "gamepad":
             self._gamepad_test.sync()
         else:
             self._gamepad_test.deactivate()
@@ -427,7 +436,7 @@ class PreferencesPanel(Panel):
         self._keymap.on_update(doc)
 
     def _ensure_keymap_rows_if_visible(self):
-        if self._section == "input" and "key_bindings" in self._expanded_sections:
+        if self._section == "input" and self._input_page == "shortcuts" and "key_bindings" in self._expanded_sections:
             self._keymap.ensure_binding_rows()
 
     def _state(self):
@@ -1535,7 +1544,12 @@ class PreferencesPanel(Panel):
     def _set_section(self, section):
         if self._section == section:
             return
+        if self._section == "input":
+            lf.keymap.cancel_capture()
+            self._gamepad_test.deactivate()
         self._section = section
+        self._dirty_input_pages()
+        self._reset_content_scroll()
         self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
@@ -1554,6 +1568,36 @@ class PreferencesPanel(Panel):
             ):
                 self._handle.dirty(name)
 
+    def _reset_content_scroll(self):
+        if self._document is not None:
+            content = self._document.query_selector(".preferences-content")
+            if content is not None:
+                content.scroll_top = 0
+
+    def _dirty_input_pages(self):
+        if self._handle:
+            for name in ("show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
+                         "show_gamepad_controls", "show_gamepad_test", "show_section_reset", "reset_section_label"):
+                self._handle.dirty(name)
+
+    def _set_input_page(self, page):
+        if page not in ("navigation", "shortcuts", "gamepad") or self._input_page == page:
+            return
+        lf.keymap.cancel_capture()
+        self._gamepad_test.deactivate()
+        self._input_page = page
+        self._ensure_keymap_rows_if_visible()
+        self._reset_content_scroll()
+        self._dirty_input_pages()
+
+    def _set_gamepad_page(self, page):
+        if page not in ("controls", "test") or self._gamepad_page == page:
+            return
+        self._gamepad_test.deactivate()
+        self._gamepad_page = page
+        self._reset_content_scroll()
+        self._dirty_input_pages()
+
     @staticmethod
     def _portal_account():
         from .portal_account import get_portal_account_service
@@ -1569,7 +1613,7 @@ class PreferencesPanel(Panel):
         return connection_action(self._portal_connection_state())[0]
 
     def _show_section_reset(self):
-        return self._section != "portal"
+        return self._section != "portal" and not (self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
 
     def _portal_connection_status(self):
         account = self._portal_connection_snapshot()
@@ -1652,12 +1696,13 @@ class PreferencesPanel(Panel):
         if self._section == "portal":
             return
         reset_label = self._reset_section_label()
-        section_name = lf.ui.tr(f"preferences.{self._section}")
+        scope = "input_" + self._input_page if self._section == "input" else self._section
+        section_name = lf.ui.tr(f"preferences.{scope}")
 
         def _on_result(button):
             if button != reset_label:
                 return
-            error = self._reset_section()
+            error = self._reset_section(scope)
             if error:
                 lf.ui.message_dialog(
                     reset_label,
@@ -1739,10 +1784,15 @@ class PreferencesPanel(Panel):
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
-        elif section == "input":
-            self._keymap.reset_to_default()
-            self._gamepad_test.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
-
+        elif section in ("input", "input_navigation", "input_shortcuts", "input_gamepad"):
+            if section in ("input", "input_shortcuts"):
+                self._keymap.reset_to_default()
+            if section in ("input", "input_gamepad"):
+                self._gamepad_test.deactivate()
+                self._gamepad_test.configure(enabled=False, selected=0, dead_zone=0.15, look_speed=1.5, move_speed=1.0)
+            if section != "input" and section != "input_navigation":
+                self._refresh_selection()
+                return None
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)

@@ -169,12 +169,17 @@ class KeymapBindingsSection:
         self._last_capturing = None
         self._rows_built = False
         self._altgr_capture_rejected = False
+        self._search = ""
+        self._search_empty = False
 
     # ── Data model ────────────────────────────────────────────
 
     def bind(self, model):
         model.bind_func("bindings_hint", self._get_bindings_hint)
         model.bind_func("is_capturing", lambda: lf.keymap.is_capturing())
+        model.bind("binding_search", lambda: self._search, self._set_search)
+        model.bind_func("binding_search_empty", lambda: self._search_empty)
+        model.bind_event("clear_binding_search", lambda *_: self._set_search(""))
 
         model.bind(
             "profile_idx",
@@ -203,6 +208,38 @@ class KeymapBindingsSection:
         profiles = lf.keymap.get_available_profiles()
         current = lf.keymap.get_current_profile()
         return profiles.index(current) if current in profiles else 0
+
+    def _set_search(self, value):
+        if lf.keymap.is_capturing():
+            return
+        value = str(value)
+        if value == self._search:
+            return
+        self._search = value
+        self._last_state_key = None
+        if self._rows_built:
+            self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
+        if self._handle:
+            self._handle.dirty("binding_search")
+
+    @staticmethod
+    def _filter_rows(rows, query):
+        terms = query.casefold().split()
+        if not terms:
+            return rows
+        result, heading, emitted = [], None, False
+        for row in rows:
+            if row["is_section"]:
+                heading, emitted = row, False
+                continue
+            text = " ".join((heading["section_title"] if heading else "",
+                             row.get("action_name", ""), row.get("desc_text", ""))).casefold()
+            if all(term in text for term in terms):
+                if heading is not None and not emitted:
+                    result.append(heading)
+                    emitted = True
+                result.append(row)
+        return result
 
     def _set_profile_idx(self, v):
         try:
@@ -572,6 +609,11 @@ class KeymapBindingsSection:
             actions = [getattr(lf.keymap.Action, name) for name, *_ in SHORTCUTS if hasattr(lf.keymap.Action, name)]
             if actions:
                 self._append_binding_section(rows, tr("preferences.gallery.shortcuts"), actions, mode)
+        rows = self._filter_rows(rows, self._search)
+        search_empty = not any(not row["is_section"] for row in rows)
+        if search_empty != self._search_empty:
+            self._search_empty = search_empty
+            self._handle.dirty("binding_search_empty")
         self._handle.update_record_list("binding_rows", rows)
 
     def _binding_row_record(self, action, mode):
