@@ -1216,6 +1216,7 @@ namespace lfs::core::internal {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* staging_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
+            std::optional<LfsHipError> failure_;
 
         public:
             explicit Upload(std::shared_ptr<Impl> owner) : owner_(std::move(owner)) {
@@ -1233,19 +1234,28 @@ namespace lfs::core::internal {
                 const auto view = !bytes && owner_->empty_view(destination) ? LfsHipView{} : owner_->view(destination, bytes);
                 LfsHipError error{};
                 check(owner_->api.staged_upload(owner_->context, staging_, view.buffer, view.offset, source, bytes, &error), error);
+                failure_.reset();
             }
             void wait() override {
                 std::lock_guard lock(owner_->mutex);
+                if (failure_)
+                    check(1, *failure_);
                 LfsHipError error{};
                 check(owner_->api.readback_wait(owner_->context, staging_, &error), error);
             }
             bool poll() override {
                 std::lock_guard lock(owner_->mutex);
+                if (failure_)
+                    check(1, *failure_);
                 LfsHipError error{};
                 int32_t ready = 0;
-                // Upload polling is a completion query, not an explicit
-                // discard of the native execution snapshot.
-                check(owner_->api.readback_poll(owner_->context, staging_, &ready, 0, &ready, &error), error);
+                // Upload snapshots retain the payload size, so a non-null
+                // zero-sized destination cannot query them. Preserve errors
+                // locally when the native null poll consumes the snapshot.
+                const int status = owner_->api.readback_poll(owner_->context, staging_, nullptr, 0, &ready, &error);
+                if (status)
+                    failure_ = error;
+                check(status, error);
                 return ready != 0;
             }
         };
