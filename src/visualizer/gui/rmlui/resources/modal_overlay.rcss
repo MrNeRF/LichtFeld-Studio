@@ -227,3 +227,32 @@ body {
     padding: 0;
 }
 .modal-check span { display: block; line-height: 28dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Export controls reserve a gutter even when RmlUi overlays its scrollbar. */
+.sequencer-export-form {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: 12dp;
+}
+.export-field-controls { display: flex; align-items: center; gap: 8dp; flex: 1; min-width: 0; }
+/* Keep the editable input's layer local so neighbouring native popups cover it. */
+.export-fps-combo { display: flex; align-items: center; position: relative; z-index: 0; flex: 1; min-width: 0; height: 28dp; }
+.form-modal .export-fps-combo select { position: absolute; left: 0; top: 50%; margin-top: -9dp; width: 100%; height: 18dp; }
+.form-modal .export-fps-combo selectvalue { visibility: hidden; }
+.form-modal .export-fps-combo input { position: relative; z-index: 1; flex: 1; min-width: 0; height: 18dp; margin-right: 18dp; border-right-width: 0; }
+.export-quality-scale { display: block; flex: 1; min-width: 24dp; }
+.export-quality-slider { display: block; width: 100%; height: 28dp; margin: 0; padding: 0; box-sizing: border-box; }
+.export-quality-slider[type="range"] slidertrack { margin-top: 12dp; }
+.export-quality-slider[type="range"] sliderbar { margin-top: 9dp; }
+.export-quality-value { display: flex; align-items: center; gap: 8dp; height: 28dp; flex-shrink: 0; }
+.form-modal .export-quality-value .export-quality-number { flex: 0 0 44dp; width: 44dp; }
+.export-crf-label { flex-shrink: 0; font-size: 11dp; }
+.sequencer-export-form .modal-field { margin-bottom: 6dp; }
+.sequencer-export-form .modal-note { margin: 5dp 0; line-height: 18dp; }
+@media (max-height: 650dp) {
+    .sequencer-export-form { max-height: 50vh; overflow-x: hidden; overflow-y: auto; }
+}
+@media (max-width: 650dp) {
+    .sequencer-export-form .modal-field-label { width: 150dp; white-space: normal; height: auto; line-height: 14dp; }
+}

@@ -283,7 +283,9 @@ namespace lfs::vis {
         options.timeline_x = timeline_x;
         options.timeline_width = timeline_width;
         options.strip_y = strip_y;
-        options.mouse_x = input.mouse_x;
+        const bool pointer_visible = input.mouse_x >= timeline_x && input.mouse_x <= timeline_x + timeline_width &&
+                                     input.mouse_y >= cached_panel_y_ && input.mouse_y <= cached_panel_y_ + cached_total_height_;
+        options.mouse_x = pointer_visible ? input.mouse_x : cached_panel_x_ - 1.0f;
         options.mouse_y = input.mouse_y;
         options.zoom_level = zoom_level_;
         options.pan_offset = pan_offset_;
@@ -292,6 +294,8 @@ namespace lfs::vis {
         options.hovered_keyframe_id = hoveredKeyframeId();
         options.selected_keyframe_time = selected_keyframe_time;
         options.hovered_keyframe_time = hovered_keyframe_time;
+        options.camera_width = ui_state_.camera_width;
+        options.camera_height = ui_state_.camera_height;
         film_strip.render(controller_, rm, sm, options);
 
         handleFilmStripInteraction(timeline_x, timeline_width, input, film_strip);
@@ -366,6 +370,16 @@ namespace lfs::vis {
             thumb_el->SetProperty("display", "block");
             thumb_el->SetProperty("left", fmt::format("{:.1f}px", thumb.screen_x - groove_origin_x));
             thumb_el->SetProperty("width", fmt::format("{:.1f}px", thumb.screen_width));
+            // Keep the existing time intervals and hit targets. Contain the
+            // camera image inside each tile instead of stretching it to the tile.
+            const float ratio = ui_state_.equirectangular ? 2.0f : static_cast<float>(std::clamp(ui_state_.camera_width, 1, 8192)) / std::clamp(ui_state_.camera_height, 1, 8192);
+            const float image_height = std::min(gui::FilmStripRenderer::STRIP_HEIGHT - 2 * gui::FilmStripRenderer::THUMB_PADDING, thumb.screen_width / ratio);
+            const float image_width = image_height * ratio;
+            image_el->SetProperty("position", "absolute");
+            image_el->SetProperty("width", fmt::format("{}px", image_width));
+            image_el->SetProperty("height", fmt::format("{}px", image_height));
+            image_el->SetProperty("left", fmt::format("{}px", (thumb.screen_width - image_width) * 0.5f));
+            image_el->SetProperty("top", fmt::format("{}px", (gui::FilmStripRenderer::STRIP_HEIGHT - 2 * gui::FilmStripRenderer::THUMB_PADDING - image_height) * 0.5f));
             thumb_el->SetClassNames("film-thumb");
             thumb_el->SetClass("hovered", thumb.hovered);
             thumb_el->SetClass("contains-selected", thumb.contains_selected);

@@ -35,7 +35,8 @@
 
 namespace lfs::vis::gui {
     class RmlSequencerOverlay;
-}
+    class SequencerExportWorkflowTest;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis {
     class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
@@ -88,6 +89,7 @@ namespace lfs::vis {
             void setTimelineView(float zoom, float pan);
 
         private:
+            friend class SequencerExportWorkflowTest;
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerPreviewLayoutTest;
             friend class lfs::vis::SequencerFrameIntegrityTest;
@@ -102,6 +104,10 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
+            void showExportSettings();
+            void showCameraAspectSettings();
+            void setCameraAspect(int width, int height);
+            void showTransportContextMenu(const TransportContextMenuRequest& request);
             void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
                                         sequencer::KeyframeId id, float duration_before);
             bool updateKeyframeFromView(sequencer::KeyframeId id, const sequencer::CameraState& view_state);
@@ -148,6 +154,8 @@ namespace lfs::vis {
                 glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
                 float focal_length_mm = 0.0f;
                 bool equirectangular = false;
+                bool orthographic = false;
+                float ortho_scale = 1.0f;
                 int width = 0;
                 int height = 0;
 

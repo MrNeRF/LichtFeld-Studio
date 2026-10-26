@@ -35,7 +35,6 @@
 
 .ruler-label,
 #duration,
-#resolution-info,
 .transport-info,
 .speed-text,
 .dropdown-arrow,
@@ -114,10 +113,6 @@
 #btn-snap.active .snap-check {
     background-color: @{primary};
     border-color: @{primary};
-}
-
-.format-badge {
-    background-color: @{alpha(surface_bright,0.30)};
 }
 
 #btn-export {
@@ -283,3 +278,5 @@
 .timeline-tooltip-line {
     color: @{alpha(text_dim,0.95)};
 }
+
+.menu-chevron { image-color: @{text_dim}; }

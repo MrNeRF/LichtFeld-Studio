@@ -5,7 +5,6 @@
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include <RmlUi/Core.h>
-#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>

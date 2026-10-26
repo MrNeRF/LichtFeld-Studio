@@ -47,6 +47,7 @@
 #include <functional>
 #include <initializer_list>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -1852,7 +1853,11 @@ namespace lfs::vis::project {
                     }),
                 optional_field("custom_width", &Preferences::custom_width),
                 optional_field("custom_height", &Preferences::custom_height),
+                optional_field("camera_width", &Preferences::camera_width),
+                optional_field("camera_height", &Preferences::camera_height),
                 optional_field("framerate", &Preferences::framerate),
+                optional_field("framerate_denominator", &Preferences::framerate_denominator),
+                optional_field("export_fit", &Preferences::export_fit),
                 optional_field("quality", &Preferences::quality),
             };
             return fields;
@@ -4216,6 +4221,20 @@ namespace lfs::vis::project {
                     ui,
                     "SEQR.preferences",
                     sequencer_preference_fields());
+                // Older projects derived the camera framing from export size.
+                // Preserve that image when introducing an independent camera ratio.
+                if (!preferences->contains("camera_width") || !preferences->contains("camera_height") ||
+                    ui.camera_width < 1 || ui.camera_width > 8192 || ui.camera_height < 1 || ui.camera_height > 8192) {
+                    const int width = std::clamp(ui.outputWidth(), 1, 8192);
+                    const int height = std::clamp(ui.outputHeight(), 1, 8192);
+                    const int divisor = std::gcd(width, height);
+                    ui.camera_width = width / divisor;
+                    ui.camera_height = height / divisor;
+                }
+                if (!preferences->contains("framerate_denominator") || ui.framerate_denominator <= 0)
+                    ui.framerate_denominator = 1;
+                if (!preferences->contains("export_fit") || ui.export_fit < 0 || ui.export_fit > 2)
+                    ui.export_fit = 0;
             }
             // Controller values are canonical over the UI mirrors.
             ui.playback_speed =
