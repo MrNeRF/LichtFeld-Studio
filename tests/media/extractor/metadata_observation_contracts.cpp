@@ -758,7 +758,7 @@ namespace {
         require(bool(changed), "summarize differing DJI aliases");
         for (const auto& item : changed->facts)
             require(item.ambiguous == (item.semantic == "vendor.dji.position.longitude"), "only genuine DJI alias conflicts flag their own semantic");
-        for (const auto& [name, value] : {std::pair{"GpsLatitude", "90.01"}, {"GpsLongitude", "-180.01"}, {"AbsoluteAltitude", "nan"}, {"RelativeAltitude", "1e999"}, {"FlightYawDegree", "1/2"}, {"CamReverse", "-1"}}) {
+        for (const auto& [name, value] : {std::pair{"GpsLatitude", "90.01"}, {"GpsLongitude", "-180.01"}, {"AbsoluteAltitude", "nan"}, {"RelativeAltitude", "1e999"}, {"FlightYawDegree", "1/2"}, {"CamReverse", "-1"}, {"GpsLatitude", "+-1"}, {"CamReverse", "+-0"}}) {
             const auto rejected = summarizeImageMetadata(xmpFixture(begin + "d:" + name + "=\"" + value + "\">" + end));
             require(rejected && rejected->facts.size() == 1 && rejected->facts[0].state == MetadataValueState::Invalid &&
                         std::get<std::string>(rejected->facts[0].value) == value,
@@ -817,6 +817,19 @@ namespace {
         }
         const auto limited = summarizeImageMetadata(catalog, 1);
         require(limited && limited->limited && limited->facts.empty(), "DJI fields consume the existing packet property budget atomically");
+        const auto named_catalog = xmpFixture(begin + R"(r:about="DJI Meta Data" d:RelativeAltitude="-1.25">)" + end);
+        const auto named_cost = std::string_view("vendor.dji.altitude.relative").size() +
+                                std::string_view("http://www.dji.com/drone-dji/1.0/").size() +
+                                std::string_view("RelativeAltitude").size() + std::string_view("DJI Meta Data").size();
+        for (const auto budget : {std::size_t{0}, named_cost - 1, named_cost}) {
+            const auto bounded = summarizeImageMetadata(named_catalog, 4096, budget);
+            require(bounded && bounded->limited == (budget < named_cost) &&
+                        bounded->facts.size() == (budget < named_cost ? 0 : 1),
+                    "named DJI provenance is charged at the exact summary text boundary");
+        }
+        const auto recovered = summarizeImageMetadata(catalog);
+        require(recovered && json_detail::metadataSummary(*recovered) == json_detail::metadataSummary(*summary),
+                "rejections and exhausted budgets do not contaminate a later valid summary");
     }
     void xmpContracts() {
         const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description r:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" )";

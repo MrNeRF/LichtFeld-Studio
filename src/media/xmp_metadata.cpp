@@ -347,16 +347,22 @@ namespace lfs::media {
             return packet;
         }
         bool integer(std::string_view value, int64_t& result) {
-            if (value.starts_with('+'))
+            if (value.starts_with('+')) {
                 value.remove_prefix(1);
+                if (value.starts_with('-'))
+                    return false;
+            }
             if (value.empty())
                 return false;
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
             return !value.empty() && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
         }
         bool real(std::string_view value, double& result) {
-            if (value.starts_with('+'))
+            if (value.starts_with('+')) {
                 value.remove_prefix(1);
+                if (value.starts_with('-'))
+                    return false;
+            }
             if (value.empty())
                 return false;
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result, std::chars_format::general);
