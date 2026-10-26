@@ -4243,11 +4243,40 @@ namespace lfs::vis::project {
                     ui.camera_width = width / divisor;
                     ui.camera_height = height / divisor;
                 }
-                if (!preferences->contains("framerate_numerator") || !preferences->contains("framerate_denominator") ||
-                    ui.framerate_denominator <= 0 || ui.framerate < ui.framerate_denominator ||
-                    int64_t{ui.framerate} > 1000LL * ui.framerate_denominator) {
-                    ui.framerate = std::clamp(scalar<int>(*preferences, "framerate").value_or(30), 1, 1000);
-                    ui.framerate_denominator = 1;
+                const auto fps_integer = [&](const char* key) -> std::optional<int> {
+                    const auto value = preferences->find(key);
+                    if (value == preferences->end())
+                        return std::nullopt;
+                    if (value->is_number_unsigned()) {
+                        const auto number = value->get<uint64_t>();
+                        return std::in_range<int>(number) ? std::optional(static_cast<int>(number)) : std::nullopt;
+                    }
+                    if (!value->is_number_integer())
+                        return std::nullopt;
+                    const auto number = value->get<int64_t>();
+                    return std::in_range<int>(number) ? std::optional(static_cast<int>(number)) : std::nullopt;
+                };
+                const auto legacy_fps = fps_integer("framerate");
+                const auto numerator = fps_integer("framerate_numerator");
+                const auto denominator = fps_integer("framerate_denominator");
+                const auto valid_rate = [](const int n, const int d) {
+                    return d > 0 && n >= d && int64_t{n} <= 1000LL * d;
+                };
+                ui.framerate = std::clamp(legacy_fps.value_or(30), 1, 1000);
+                ui.framerate_denominator = 1;
+                if (numerator && denominator && valid_rate(*numerator, *denominator)) {
+                    const auto rounded = (int64_t{*numerator} + *denominator / 2) / *denominator;
+                    // Old writers preserve unknown exact fields. A changed legacy
+                    // value must win over the stale pair they leave behind.
+                    if (!legacy_fps || *legacy_fps < 1 || *legacy_fps > 1000 || *legacy_fps == rounded) {
+                        ui.framerate = *numerator;
+                        ui.framerate_denominator = *denominator;
+                    }
+                } else if (!preferences->contains("framerate_numerator") && legacy_fps && denominator &&
+                           valid_rate(*legacy_fps, *denominator)) {
+                    // Earlier revisions stored the numerator in the legacy key.
+                    ui.framerate = *legacy_fps;
+                    ui.framerate_denominator = *denominator;
                 }
                 if (!preferences->contains("export_fit") || ui.export_fit < 0 || ui.export_fit > 2)
                     ui.export_fit = 0;

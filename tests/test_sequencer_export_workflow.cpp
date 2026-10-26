@@ -802,5 +802,94 @@ namespace lfs::vis::gui {
             }
         });
     }
+
+    TEST_F(SequencerExportWorkflowTest, LegacyWriterFrameRateChangesOverridePreservedExactFields) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        ui.framerate = 30000;
+        ui.framerate_denominator = 1001;
+        const auto original = project::captureGuiSession(viewer, {}, {});
+        ASSERT_TRUE(original);
+        for (const int legacy_fps : {30, 60, 24}) {
+            auto captured = *original;
+            ASSERT_TRUE(captured.sequencer.merge_known_state({{"preferences", {{"framerate", legacy_fps}}}}));
+            const auto prepared = project::prepareGuiSessionRestore(captured);
+            ASSERT_TRUE(prepared);
+            ui.framerate = 25;
+            ui.framerate_denominator = 1;
+            std::vector<project::CameraBookmarkProjectState> bookmarks;
+            project::applyGuiSession(viewer, *prepared, bookmarks);
+            EXPECT_EQ(ui.framerate, legacy_fps == 30 ? 30000 : legacy_fps);
+            EXPECT_EQ(ui.framerate_denominator, legacy_fps == 30 ? 1001 : 1);
+        }
+    }
+
+    TEST_F(SequencerExportWorkflowTest, EarlierBranchProjectsMigrateNumeratorFromLegacyKey) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        for (const auto [n, d] : {std::pair{24000, 1001}, {30000, 1001}, {60000, 1001}, {125, 4}}) {
+            ui.framerate = n;
+            ui.framerate_denominator = d;
+            auto captured = project::captureGuiSession(viewer, {}, {});
+            ASSERT_TRUE(captured);
+            auto json = io::JsonChapterDom::Json::parse(captured->sequencer.dom().dump());
+            json["preferences"].erase("framerate_numerator");
+            json["preferences"]["framerate"] = n;
+            const auto chapter = io::project::SequencerSessionChapter::parse(json.dump());
+            ASSERT_TRUE(chapter);
+            captured->sequencer = *chapter;
+            const auto prepared = project::prepareGuiSessionRestore(*captured);
+            ASSERT_TRUE(prepared);
+            ui.framerate = 25;
+            ui.framerate_denominator = 1;
+            std::vector<project::CameraBookmarkProjectState> bookmarks;
+            project::applyGuiSession(viewer, *prepared, bookmarks);
+            EXPECT_EQ(ui.framerate, n);
+            EXPECT_EQ(ui.framerate_denominator, d);
+            const auto upgraded = project::captureGuiSession(viewer, {}, {});
+            ASSERT_TRUE(upgraded);
+            const auto saved = io::JsonChapterDom::Json::parse(upgraded->sequencer.dom().dump());
+            EXPECT_EQ(saved["preferences"]["framerate_numerator"], n);
+            EXPECT_EQ(saved["preferences"]["framerate_denominator"], d);
+            EXPECT_EQ(saved["preferences"]["framerate"], (n + d / 2) / d);
+        }
+    }
+
+    TEST_F(SequencerExportWorkflowTest, InvalidExactFrameRatesFallBackWithoutUsingPreviousProjectState) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        const auto original = project::captureGuiSession(viewer, {}, {});
+        ASSERT_TRUE(original);
+        using Json = io::JsonChapterDom::Json;
+        for (const auto pair : {Json::array({30000, 0}), Json::array({0, 1001}), Json::array({30000, -1}),
+                                Json::array({"bad", 1001}), Json::array({30000, "bad"}), Json::array({2147483647, 1}),
+                                Json::array({4294997296LL, 1001}), Json::array({30000, 4294968297LL})}) {
+            auto captured = *original;
+            auto json = Json::parse(captured.sequencer.dom().dump());
+            json["preferences"]["framerate"] = 30;
+            json["preferences"]["framerate_numerator"] = pair[0];
+            json["preferences"]["framerate_denominator"] = pair[1];
+            const auto chapter = io::project::SequencerSessionChapter::parse(json.dump());
+            ASSERT_TRUE(chapter);
+            captured.sequencer = *chapter;
+            const auto prepared = project::prepareGuiSessionRestore(captured);
+            ASSERT_TRUE(prepared);
+            ui.framerate = 60000;
+            ui.framerate_denominator = 1001;
+            std::vector<project::CameraBookmarkProjectState> bookmarks;
+            project::applyGuiSession(viewer, *prepared, bookmarks);
+            EXPECT_EQ(ui.framerate, 30);
+            EXPECT_EQ(ui.framerate_denominator, 1);
+        }
+    }
     TEST_F(SequencerExportWorkflowTest, CameraAspectClickOpensMenu) { checkTransportClick("btn-camera-aspect", TransportContextMenuRequest::Target::CAMERA_ASPECT); }
 } // namespace lfs::vis::gui
