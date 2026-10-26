@@ -107,8 +107,9 @@ class CollisionRendering:
         model.bind_func("collision_resolved_size", self.resolved_size)
         model.bind_func("collision_can_generate", lambda: bool(self.state.get("source_name")) and not self.state.get("active"))
         model.bind_func("collision_source", lambda: self.state.get("source_name", ""))
-        for key, default in (("has_collision", False), ("active", False), ("progress", 0)):
-            model.bind_func(f"collision_{key}", lambda k=key, d=default: self.state.get(k, d))
+        model.bind_func("collision_has_collision", lambda: self.state.get("has_collision", False))
+        model.bind_func("collision_active", lambda: self.state.get("active", False))
+        model.bind_func("collision_progress", lambda: self.state.get("progress", 0))
         model.bind_func("collision_has_source", lambda: bool(self.state.get("source_name")))
         model.bind_func("collision_target", lambda: self.target()[1])
         model.bind_func("collision_exportable", lambda: bool(self.target()[0]) and not self.state.get("active", False))
