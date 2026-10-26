@@ -2907,7 +2907,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch config");
         ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir"});
         ::args::ValueFlag<std::string> config(parser, "path", "Batch configuration JSON file", {'c', "config"});
-        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {'r', "recursive"});
+        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {"recursive"});
         ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
         ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
         ::args::ValueFlag<int> timeout(parser, "minutes", "Timeout per training job in minutes (default: 0 = disabled)", {"timeout"});
@@ -2931,7 +2931,7 @@ dataset options work as in training; see the Evaluation page of the docs.
                 continue;
             }
 
-            if (arg == "-h" || arg == "--help" || arg == "-r" || arg == "--recursive" ||
+            if (arg == "-h" || arg == "--help" || arg == "--recursive" ||
                 arg == "--stop-on-failure" || arg == "--fail-fast" || arg == "--dry-run") {
                 batch_args.push_back(std::string(arg));
                 continue;

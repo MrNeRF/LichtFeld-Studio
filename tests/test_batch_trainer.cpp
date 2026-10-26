@@ -228,13 +228,16 @@ namespace {
             "./first",
             "--images",
             "images_4",
+            "-r",
+            "4",
             "./second"};
 
         auto res = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(res.has_value()) << res.error();
         const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*res).params;
         EXPECT_EQ(params.input_paths, (std::vector<fs::path>{"./first", "./second"}));
-        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--no-cpu-cache", "--images", "images_4"}));
+        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--no-cpu-cache", "--images", "images_4", "-r", "4"}));
+        EXPECT_FALSE(params.recursive); // -r is the training resize factor
     }
 
     TEST(BatchTrainerTest, ParseBatchTrainFreezeFlag) {
