@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "選択クロップフィルター切替",
     "action.brush_resize": "ブラシサイズ変更",
     "action.confirm_polygon": "ポリゴン確定",
+    "action.exit_walk": "歩行モードを終了",
     "action.cancel_polygon": "ポリゴンキャンセル",
     "action.undo_polygon_vertex": "ポリゴン頂点を戻す / 選択キャンセル",
     "action.cycle_selection_vis": "選択表示を切替",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "エクスポートできません: {}。ファイルは転送されていません。詳細はログを確認してください。",
   "preferences.drag_title": "スプラットの転送",
   "preferences.drag_pause": "スプラットをドラッグする前にトレーニングを一時停止してください。",
-  "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。"
+  "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。",
+  "collision.walk": "歩行",
+  "collision.walk_no_collision": "歩行モードに入る前にコライダーを読み込むか生成してください。",
+  "collision.walk_no_support": "カメラの下に歩行可能な面がありません。",
+  "collision.walk_blocked": "歩行用の身体が利用可能な空間に収まりません。",
+  "collision.walk_support_lost": "歩行を支える面がなくなりました。",
+  "collision.walk_invalid_settings": "歩行の寸法、段差の高さ、または速度が無効です。",
+  "collision.walk_enter_failed": "歩行モードに入れません: {}",
+  "collision.source_unavailable": "衝突判定のソースを利用できなくなりました。",
+  "collision.source_changed": "生成中に衝突判定のソースが変更されました。再生成してください。",
+  "collision.source_transform_invalid": "衝突判定のソースの変換は逆変換可能である必要があります。スケールを確認してください。"
 }

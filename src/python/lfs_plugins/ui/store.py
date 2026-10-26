@@ -319,9 +319,11 @@ class RuntimeState:
     export_progress_state = StateSignal[dict[str, object]]("export_progress_state", {})
     mesh2splat_state = StateSignal[dict[str, object]]("mesh2splat_state", {})
     splat_simplify_state = StateSignal[dict[str, object]]("splat_simplify_state", {})
+    collision_state = StateSignal[dict[str, object]]("collision_state", {})
     scripts_generation = StateSignal[int]("scripts_generation", 0)
     language_generation = StateSignal[int]("language_generation", 0)
     render_settings_generation = StateSignal[int]("render_settings_generation", 0)
+    viewport_toolbar_generation = StateSignal[int]("viewport_toolbar_generation", 0)
 
     # Compatibility names from the old AppState surface.
     is_training = training_running
@@ -391,8 +393,10 @@ class RuntimeState:
         cls.export_progress_state.value = {}
         cls.mesh2splat_state.value = {}
         cls.splat_simplify_state.value = {}
+        cls.collision_state.value = {}
         cls.scripts_generation.value = 0
         cls.language_generation.value = 0
+        cls.viewport_toolbar_generation.value = 0
         cls.has_scene.value = False
         cls.scene_path.value = ""
         cls.has_selection.value = False

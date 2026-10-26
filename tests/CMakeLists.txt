@@ -167,6 +167,10 @@ if(BUILD_VISUALIZER_TESTS)
     endif()
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
+        licht_test_support.cpp
+        test_collision_jobs.cpp
+        test_keymap_layout_contract.cpp
+        test_collision_scene.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
         test_sidebar_input_dispatch.cpp
@@ -224,6 +228,7 @@ if(BUILD_VISUALIZER_TESTS)
         PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
+        lfs_training
         lfs_io
         lfs_visualizer
         lfs_core
@@ -251,12 +256,15 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         TIMEOUT 300
     )
+    add_test(NAME lichtfeld.collision_jobs_gpu COMMAND lichtfeld_visualizer_tests --gtest_filter=CollisionJobsTest.*)
+    set_tests_properties(lichtfeld.collision_jobs_gpu PROPERTIES LABELS "gpu;collision" TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_PANEL_LAYOUT_TESTS)
         return()
     endif()

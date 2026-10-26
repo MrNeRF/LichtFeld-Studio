@@ -68,6 +68,7 @@ namespace lfs::training {
         lfs::io::project::SelectionChapter selection;
         lfs::io::project::ParameterManagerSnapshot parameters;
         lfs::io::project::SfmObservationCameras sfm_observation_cameras;
+        lfs::io::project::CollisionPayloads collisions;
         std::optional<ProjectSnapshotDocumentContext>
             document_context;
     };

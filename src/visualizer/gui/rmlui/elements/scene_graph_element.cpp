@@ -272,6 +272,7 @@ namespace lfs::vis::gui {
             case core::NodeType::CROP_POLYGON: return "crop_polygon";
             case core::NodeType::POINTCLOUD: return "pointcloud";
             case core::NodeType::MESH: return "mesh";
+            case core::NodeType::COLLISION: return "collision";
             case core::NodeType::KEYFRAME_GROUP: return "keyframe_group";
             case core::NodeType::KEYFRAME: return "keyframe";
             case core::NodeType::IMAGE_GROUP: return "group";
@@ -293,6 +294,7 @@ namespace lfs::vis::gui {
             case core::NodeType::CROP_POLYGON: return "icon-cropbox";
             case core::NodeType::ELLIPSOID: return "icon-ellipsoid";
             case core::NodeType::MESH: return "icon-mesh";
+            case core::NodeType::COLLISION: return "icon-cropbox";
             case core::NodeType::KEYFRAME_GROUP:
             case core::NodeType::KEYFRAME:
             case core::NodeType::IMAGE_GROUP:
@@ -343,6 +345,7 @@ namespace lfs::vis::gui {
             case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::POINTCLOUD:
             case core::NodeType::MESH:
+            case core::NodeType::COLLISION:
                 return true;
             default:
                 return false;

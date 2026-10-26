@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "切换选择裁剪过滤器",
     "action.brush_resize": "调整画笔大小",
     "action.confirm_polygon": "确认多边形",
+    "action.exit_walk": "退出行走模式",
     "action.cancel_polygon": "取消多边形",
     "action.undo_polygon_vertex": "撤销多边形顶点 / 取消选择",
     "action.cycle_selection_vis": "循环选择可视化",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "无法导出：{}。未传输任何文件。请查看日志了解详情。",
   "preferences.drag_title": "高斯点传输",
   "preferences.drag_pause": "拖动高斯点前请暂停训练。",
-  "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。"
+  "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。",
+  "collision.walk": "行走",
+  "collision.walk_no_collision": "进入行走模式前，请先加载或生成碰撞体。",
+  "collision.walk_no_support": "相机下方没有可行走的表面。",
+  "collision.walk_blocked": "可用空间无法容纳行走身体。",
+  "collision.walk_support_lost": "支撑行走的表面已不存在。",
+  "collision.walk_invalid_settings": "行走尺寸、台阶高度或速度无效。",
+  "collision.walk_enter_failed": "无法进入行走模式：{}",
+  "collision.source_unavailable": "碰撞源已不可用。",
+  "collision.source_changed": "碰撞源在生成期间发生了变化，请重新生成。",
+  "collision.source_transform_invalid": "碰撞源的变换必须可逆，请检查其缩放。"
 }

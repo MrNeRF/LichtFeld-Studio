@@ -5280,6 +5280,10 @@ namespace lfs::training {
                             }
                             document
                                 ->remove_geometry_payloads_not_bound_by_scene();
+                            for (const auto& [uuid, volume] : chapters->collisions) {
+                                if (auto stored = document->set_collision(uuid, volume); !stored)
+                                    return stored;
+                            }
                             if (auto synced =
                                     lfs::io::project::sync_sfm_observations(
                                         *document,

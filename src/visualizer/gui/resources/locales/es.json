@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "Alternar filtro de recorte de selección",
     "action.brush_resize": "Redimensionar pincel",
     "action.confirm_polygon": "Confirmar polígono",
+    "action.exit_walk": "Salir del modo Caminar",
     "action.cancel_polygon": "Cancelar polígono",
     "action.undo_polygon_vertex": "Deshacer vértice / Cancelar selección",
     "action.cycle_selection_vis": "Recorrer visualización de selección",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "No se puede exportar: {}. No se transfirió ningún archivo. Consulta el registro para más detalles.",
   "preferences.drag_title": "Transferencia de splats",
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
-  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles."
+  "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
+  "collision.walk": "Caminar",
+  "collision.walk_no_collision": "Carga o genera un colisionador antes de entrar en Caminar.",
+  "collision.walk_no_support": "No hay una superficie transitable debajo de la cámara.",
+  "collision.walk_blocked": "El cuerpo de Caminar no cabe en el espacio disponible.",
+  "collision.walk_support_lost": "La superficie que sostiene Caminar ya no existe.",
+  "collision.walk_invalid_settings": "Dimensiones, altura de escalón o velocidad de Caminar no válidas.",
+  "collision.walk_enter_failed": "No se puede entrar en Caminar: {}",
+  "collision.source_unavailable": "La fuente de colisión ya no está disponible.",
+  "collision.source_changed": "La fuente de colisión cambió durante la generación; vuelve a generarla.",
+  "collision.source_transform_invalid": "La transformación de la fuente de colisión debe ser invertible. Comprueba su escala."
 }

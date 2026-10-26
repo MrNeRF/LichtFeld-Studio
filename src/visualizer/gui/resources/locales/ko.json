@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "선택 자르기 필터 전환",
     "action.brush_resize": "브러시 크기 조정",
     "action.confirm_polygon": "다각형 확정",
+    "action.exit_walk": "걷기 모드 종료",
     "action.cancel_polygon": "다각형 취소",
     "action.undo_polygon_vertex": "다각형 꼭짓점 취소 / 선택 취소",
     "action.cycle_selection_vis": "선택 표시 순환",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "내보낼 수 없습니다: {}. 파일이 전송되지 않았습니다. 자세한 내용은 로그를 확인하세요.",
   "preferences.drag_title": "스플랫 전송",
   "preferences.drag_pause": "스플랫을 드래그하기 전에 학습을 일시 중지하세요.",
-  "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요."
+  "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요.",
+  "collision.walk": "걷기",
+  "collision.walk_no_collision": "걷기 모드에 들어가기 전에 콜라이더를 불러오거나 생성하세요.",
+  "collision.walk_no_support": "카메라 아래에 걸을 수 있는 표면이 없습니다.",
+  "collision.walk_blocked": "걷기 신체가 사용 가능한 공간에 들어가지 않습니다.",
+  "collision.walk_support_lost": "걷기를 지탱하는 표면이 더 이상 없습니다.",
+  "collision.walk_invalid_settings": "걷기 치수, 계단 높이 또는 속도가 올바르지 않습니다.",
+  "collision.walk_enter_failed": "걷기 모드에 들어갈 수 없습니다: {}",
+  "collision.source_unavailable": "충돌 소스를 더 이상 사용할 수 없습니다.",
+  "collision.source_changed": "생성 중 충돌 소스가 변경되었습니다. 다시 생성하세요.",
+  "collision.source_transform_invalid": "충돌 소스 변환은 역변환이 가능해야 합니다. 배율을 확인하세요."
 }

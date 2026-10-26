@@ -1797,6 +1797,7 @@
     "action.toggle_selection_crop_filter": "Attiva filtro di ritaglio selezione",
     "action.brush_resize": "Ridimensiona pennello",
     "action.confirm_polygon": "Conferma poligono",
+    "action.exit_walk": "Esci dalla modalità Cammina",
     "action.cancel_polygon": "Annulla poligono",
     "action.undo_polygon_vertex": "Annulla vertice / Annulla selezione",
     "action.cycle_selection_vis": "Scorri visualizzazione selezione",
@@ -3362,5 +3363,15 @@
   "project.session.newer_settings.title": "Impostazioni del progetto da una versione più recente",
   "project.session.newer_settings.message": "Questo progetto contiene impostazioni non riconosciute da questa versione. Valori predefiniti usati per: {}",
   "preferences.drag_pause": "Metti in pausa l’addestramento prima di trascinare gli splat.",
-  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli."
+  "preferences.drag_failed": "Esportazione splat non riuscita. Consulta il registro dell’applicazione per i dettagli.",
+  "collision.walk": "Cammina",
+  "collision.walk_no_collision": "Carica o genera un collider prima di attivare Cammina.",
+  "collision.walk_no_support": "Nessuna superficie percorribile sotto la fotocamera.",
+  "collision.walk_blocked": "Il corpo di Cammina non entra nello spazio disponibile.",
+  "collision.walk_support_lost": "La superficie di supporto di Cammina non è più presente.",
+  "collision.walk_invalid_settings": "Dimensioni, altezza del gradino o velocità di Cammina non valide.",
+  "collision.walk_enter_failed": "Impossibile attivare Cammina: {}",
+  "collision.source_unavailable": "La sorgente di collisione non è più disponibile.",
+  "collision.source_changed": "La sorgente di collisione è cambiata durante la generazione; generala di nuovo.",
+  "collision.source_transform_invalid": "La trasformazione della sorgente di collisione deve essere invertibile. Controlla la scala."
 }

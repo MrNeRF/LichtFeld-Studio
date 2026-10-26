@@ -1795,6 +1795,7 @@
     "action.toggle_selection_crop_filter": "Toggle Selection Crop Filter",
     "action.brush_resize": "Resize Brush",
     "action.confirm_polygon": "Confirm Polygon",
+    "action.exit_walk": "Exit Walk",
     "action.cancel_polygon": "Cancel Polygon",
     "action.undo_polygon_vertex": "Undo Polygon Vertex / Cancel Selection",
     "action.cycle_selection_vis": "Cycle Selection Visualization",
@@ -3362,5 +3363,15 @@
   "project.session.newer_settings.title": "Project settings from a newer version",
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
-  "preferences.drag_failed": "Splat export failed. See the application log for details."
+  "preferences.drag_failed": "Splat export failed. See the application log for details.",
+  "collision.walk": "Walk",
+  "collision.walk_no_collision": "Load or generate a collider before entering Walk.",
+  "collision.walk_no_support": "No walkable surface below the camera.",
+  "collision.walk_blocked": "The Walk body does not fit in the available space.",
+  "collision.walk_support_lost": "The surface supporting Walk is no longer present.",
+  "collision.walk_invalid_settings": "Invalid Walk dimensions, step height or speed.",
+  "collision.walk_enter_failed": "Cannot enter Walk: {}",
+  "collision.source_unavailable": "The collision source is no longer available.",
+  "collision.source_changed": "The collision source changed during generation; generate it again.",
+  "collision.source_transform_invalid": "The collision source transform must be invertible. Check its scale."
 }

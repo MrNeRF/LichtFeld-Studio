@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "Auswahl-Zuschneidefilter umschalten",
     "action.brush_resize": "Pinsel skalieren",
     "action.confirm_polygon": "Polygon bestätigen",
+    "action.exit_walk": "Begehungsmodus verlassen",
     "action.cancel_polygon": "Polygon abbrechen",
     "action.undo_polygon_vertex": "Polygonpunkt rückgängig / Auswahl abbrechen",
     "action.cycle_selection_vis": "Auswahl-Visualisierung durchschalten",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "Export nicht möglich: {}. Es wurden keine Dateien übertragen. Details stehen im Protokoll.",
   "preferences.drag_title": "Splat-Übertragung",
   "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
-  "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll."
+  "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll.",
+  "collision.walk": "Begehen",
+  "collision.walk_no_collision": "Vor dem Begehen einen Kollisionskörper laden oder erzeugen.",
+  "collision.walk_no_support": "Keine begehbare Fläche unter der Kamera.",
+  "collision.walk_blocked": "Der Geh-Körper passt nicht in den verfügbaren Raum.",
+  "collision.walk_support_lost": "Die tragende Fläche zum Begehen ist nicht mehr vorhanden.",
+  "collision.walk_invalid_settings": "Ungültige Körpermaße, Stufenhöhe oder Gehgeschwindigkeit.",
+  "collision.walk_enter_failed": "Begehen nicht möglich: {}",
+  "collision.source_unavailable": "Die Kollisionsquelle ist nicht mehr verfügbar.",
+  "collision.source_changed": "Die Kollisionsquelle wurde beim Erzeugen geändert. Erneut erzeugen.",
+  "collision.source_transform_invalid": "Die Transformation der Kollisionsquelle muss invertierbar sein. Skalierung prüfen."
 }

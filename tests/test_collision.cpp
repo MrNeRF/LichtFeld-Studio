@@ -1,16 +1,19 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
+#include "core/collision_walk.hpp"
 #include "core/cuda/collision_voxelization.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include <atomic>
 #include <chrono>
 #include <cuda_runtime.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <gtest/gtest.h>
 #include <random>
 #include <thread>
+#include <tuple>
 
 using namespace lfs::core;
 
@@ -276,5 +279,98 @@ namespace {
         EXPECT_THROW(generateCollision(input, settings), std::invalid_argument);
         input = source({{{0, 0, 0}, {.1f, .1f, .1f}}});
         EXPECT_THROW(generateCollision(input, settings, {}, [](float, const auto&) { return false; }), std::runtime_error);
+    }
+    using collision_test::box;
+    CapsuleQuery queryVolumes(std::vector<std::shared_ptr<const CollisionVolume>> volumes, glm::mat4 transform = glm::mat4(1)) {
+        return [volumes = std::move(volumes), transform](auto feet, auto up, float height, float radius) {
+            return std::ranges::any_of(volumes, [&](const auto& v) { return collisionCapsuleIntersects(*v, transform, feet, up, height, radius); });
+        };
+    }
+    TEST(CollisionWalk, AnalyticalClearanceAndTransformedSegment) {
+        const auto v = box({}, glm::ivec3(1));
+        for (const auto [feet, up, height, radius, hit] : {
+                 std::tuple{glm::vec3(-.25f, 0, .5f), glm::vec3(0, 1, 0), 2.f, .25f, false},
+                 {{-.249f, 0, .5f}, {0, 1, 0}, 2.f, .25f, true},
+                 {{1.2f, 1.2f, .5f}, {0, 0, 1}, .4f, .2f, false}})
+            EXPECT_EQ(collisionCapsuleIntersects(*v, glm::mat4(1), feet, up, height, radius), hit);
+        EXPECT_TRUE(collisionCapsuleIntersects(*v, glm::rotate(glm::mat4(1), .5f, {0, 0, 1}), {.3f, .3f, .5f}, {0, 1, 0}, 1, .1f));
+    }
+    TEST(CollisionWalk, WallSweepLedgeAndEditedGeometryAreSafe) {
+        const auto floor = box({-2, -1, -2}, {4, 1, 4});
+        auto transform = glm::mat4(1);
+        const auto wall = box({.5f, 0, -2}, {1, 400, 400}, .01f);
+        const auto ceiling = box({-2, 2, -2}, {4, 1, 4});
+        const auto obstacles = queryVolumes({wall, ceiling});
+        const CapsuleQuery query = [&](auto feet, auto up, float height, float radius) {
+            return collisionCapsuleIntersects(*floor, transform, feet, up, height, radius) ||
+                   obstacles(feet, up, height, radius);
+        };
+        WalkSettings settings;
+        WalkState state{.eye = {0, 1.8f, -1.99f}};
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::invalid_argument);
+        settleWalk(state, settings, {0, 1, 0}, query);
+        EXPECT_NEAR(state.eye.y, settings.height, .001f);
+        for (int i = 0; i < 500; ++i)
+            advanceWalk(state, settings, {0, 1, 0}, {10, 0, 0}, .1f, query);
+        EXPECT_LE(state.eye.x, .251f);
+        const auto grounded = state.feet;
+        for (int i = 0; i < 500; ++i) {
+            ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {0, 0, 100}, .1f, query));
+            EXPECT_EQ(state.feet, grounded);
+            EXPECT_TRUE(state.grounded);
+        }
+        for (bool edit_geometry : {false, true}) {
+            settings.height = edit_geometry ? 1.7f : 2.1f;
+            transform[3].y = edit_geometry ? .1f : 0;
+            EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::runtime_error);
+            EXPECT_EQ(state.feet, grounded);
+        }
+        transform[3].y = 0;
+        EXPECT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query));
+        WalkState unsupported{.eye = {100, 100, 100}};
+        EXPECT_THROW(settleWalk(unsupported, settings, {0, 1, 0}, query), std::runtime_error);
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, [](auto, auto, float, float) { return false; }), std::runtime_error);
+    }
+    TEST(CollisionWalk, MinimumStepFitsButLowerCeilingBlocksLift) {
+        for (float height : {1.85f, 1.75f}) {
+            const auto query = queryVolumes({box({-2, -1, -2}, {4, 1, 4}), box({.5f, 0, -2}, {100, 10, 400}, .01f),
+                                             box({-2, height, -2}, {400, 10, 400}, .01f)});
+            WalkSettings settings;
+            WalkState state{.eye = {0, 1.7f, 0}, .presentation = {0, 1.7f, 0}};
+            settleWalk(state, settings, {0, 1, 0}, query);
+            for (int i = 0; i < 550; ++i) {
+                ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, i < 50 ? glm::vec3(.5f, 0, 0) : glm::vec3(0), i < 50 ? .05f : .016f, query));
+                ASSERT_FALSE(query(state.feet, {0, 1, 0}, settings.height, settings.radius));
+            }
+            EXPECT_EQ(state.eye.x > 1, height == 1.85f);
+            if (height == 1.85f)
+                EXPECT_NEAR(state.eye.y, 1.8f, .001f);
+            EXPECT_LE(state.presentation.y, height);
+        }
+    }
+    TEST(CollisionWalk, RepeatedIdleAndMovementAcrossTransformsAndPrecisionBoundaries) {
+        auto exercise = [](const auto& query, WalkSettings settings, glm::vec3 up, glm::vec3 eye, glm::vec3 velocity) {
+            WalkState state{.eye = eye};
+            ASSERT_NO_THROW(settleWalk(state, settings, up, query));
+            const auto grounded = state.feet;
+            for (int frame = 0; frame < 700; ++frame) {
+                ASSERT_NO_THROW(advanceWalk(state, settings, up, frame < 500 ? glm::vec3(0) : velocity, .016f, query));
+                ASSERT_FALSE(query(state.feet, up, settings.height, settings.radius));
+                ASSERT_TRUE(state.grounded);
+                if (velocity == glm::vec3(0))
+                    ASSERT_EQ(state.feet, grounded);
+            }
+        };
+        for (float translation : {0.f, 100.f, 1000.f, -10000.f})
+            for (float scale : {.01f, 1.f, 100.f})
+                for (float angle : {0.f, .37f, 1.1f}) {
+                    auto t = glm::scale(glm::rotate(glm::translate(glm::mat4(1), glm::vec3(translation)), angle, glm::normalize(glm::vec3(1, 2, 3))), glm::vec3(scale));
+                    exercise(queryVolumes({box({-20, -1, -20}, {40, 1, 40})}, t), {1.7f * scale, .25f * scale, .3f * scale, 2 * scale},
+                             glm::normalize(glm::vec3(t * glm::vec4(0, 1, 0, 0))), glm::vec3(t * glm::vec4(0, 2, 0, 1)), glm::vec3(t * glm::vec4(.2f, 0, 0, 0)));
+                }
+        for (float altitude : {.1234567f, 1.99999f, 15.9999f, 127.999f, 1023.9999f, -1024.0001f, 8191.9995f})
+            for (float height : {.7f, 1.7f, 3.14159f, 17.f})
+                for (float radius : {.025f, .25f})
+                    exercise(queryVolumes({box({-20, altitude - 1, -20}, {40, 1, 40})}), {height, radius, .3f, 2}, {0, 1, 0}, {0, altitude + height + radius, 0}, {});
     }
 } // namespace

@@ -548,6 +548,8 @@ namespace lfs::app {
                 return "image";
             case core::NodeType::MESH:
                 return "mesh";
+            case core::NodeType::COLLISION:
+                return "collision";
             case core::NodeType::KEYFRAME_GROUP:
                 return "keyframe_group";
             case core::NodeType::KEYFRAME:
@@ -2515,6 +2517,33 @@ namespace lfs::app {
         }
 
         // --- Scene operations (posted to GUI thread) ---
+        registry.register_tool(
+            McpTool{.name = "scene.generate_collision",
+                    .description = "Voxelize exactly one selected loaded splat into a new undoable collision node; observe collision.main",
+                    .input_schema = {.type = "object", .properties = json{{"voxel_size", {{"type", "number"}}}, {"opacity", {{"type", "number"}}}, {"auto_resolution", {{"type", "boolean"}}}, {"cleanup", {{"type", "boolean"}}}, {"max_gaussian_area", {{"type", "number"}}}}, .required = {}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    if (!viewer_impl->getGuiManager())
+                        throw std::runtime_error("GUI manager is not initialized");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollision({.voxel_size = args.value("voxel_size", .05f), .opacity = args.value("opacity", .1f), .max_gaussian_area = args.value("max_gaussian_area", 0.f), .auto_resolution = args.value("auto_resolution", false), .cleanup = args.value("cleanup", true)});
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
+        registry.register_tool(
+            McpTool{.name = "scene.export_collision",
+                    .description = "Export a collision node UUID to a voxel JSON/binary pair; caller approves replacing both files",
+                    .input_schema = {.type = "object", .properties = json{{"uuid", {{"type", "string"}}}, {"path", {{"type", "string"}}}}, .required = {"uuid", "path"}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    const auto uuid = core::Uuid::from_string(args.at("uuid").get<std::string>());
+                    if (!uuid || !viewer_impl->getGuiManager())
+                        throw std::invalid_argument("Invalid collision UUID or unavailable GUI");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollisionExport(*uuid, core::utf8_to_path(args.at("path").get<std::string>()));
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
 
         registry.register_tool(
             McpTool{

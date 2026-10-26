@@ -227,6 +227,7 @@ namespace lfs::training {
                     lfs::ErrorCode::InvalidArgument,
                     "Detached snapshot CPU state has an invalid stamp"));
         }
+        auto collisions = std::move(state.scene_graph.collisions);
         auto scene_graph =
             lfs::io::project::
                 materialize_scene_graph_chapter(
@@ -263,6 +264,7 @@ namespace lfs::training {
             std::move(state.parameters);
         staged.sfm_observation_cameras =
             std::move(state.sfm_observation_cameras);
+        staged.collisions = std::move(collisions);
         staged.document_context = std::move(context);
         output = std::move(staged);
         return {};

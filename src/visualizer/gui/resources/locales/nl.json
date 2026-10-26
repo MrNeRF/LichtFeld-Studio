@@ -1784,6 +1784,7 @@
     "action.toggle_selection_crop_filter": "Bijsnijfilter selectie omschakelen",
     "action.brush_resize": "Penseelgrootte aanpassen",
     "action.confirm_polygon": "Polygoon bevestigen",
+    "action.exit_walk": "Loopmodus verlaten",
     "action.cancel_polygon": "Polygoon annuleren",
     "action.undo_polygon_vertex": "Polygoonpunt ongedaan / Selectie annuleren",
     "action.cycle_selection_vis": "Selectievisualisatie doorlopen",
@@ -3362,5 +3363,15 @@
   "preferences.drag_rejected_node": "Exporteren niet mogelijk: {}. Er zijn geen bestanden overgedragen. Raadpleeg het logboek voor details.",
   "preferences.drag_title": "Splats overdragen",
   "preferences.drag_pause": "Pauzeer de training voordat u splats sleept.",
-  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details."
+  "preferences.drag_failed": "Exporteren van splats mislukt. Zie het toepassingslogboek voor details.",
+  "collision.walk": "Lopen",
+  "collision.walk_no_collision": "Laad of genereer een collider voordat je Lopen inschakelt.",
+  "collision.walk_no_support": "Geen beloopbaar oppervlak onder de camera.",
+  "collision.walk_blocked": "Het lichaam voor Lopen past niet in de beschikbare ruimte.",
+  "collision.walk_support_lost": "Het ondersteunende oppervlak voor Lopen is niet meer aanwezig.",
+  "collision.walk_invalid_settings": "Ongeldige lichaamsmaten, staphoogte of loopsnelheid.",
+  "collision.walk_enter_failed": "Lopen kan niet worden ingeschakeld: {}",
+  "collision.source_unavailable": "De botsingsbron is niet meer beschikbaar.",
+  "collision.source_changed": "De botsingsbron is tijdens het genereren gewijzigd; genereer opnieuw.",
+  "collision.source_transform_invalid": "De transformatie van de botsingsbron moet omkeerbaar zijn. Controleer de schaal."
 }

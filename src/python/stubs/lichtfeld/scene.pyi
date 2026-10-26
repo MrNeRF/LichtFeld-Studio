@@ -112,6 +112,16 @@ class SplatData:
         Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
         """
 
+def generate_collision(voxel_size: float = 0.05000000074505806, opacity: float = 0.10000000149011612, auto_resolution: bool = False, cleanup: bool = True, max_gaussian_area: float = 0.0) -> None: ...
+
+def export_collision(uuid: str, path: str) -> None: ...
+
+def cancel_collision() -> None: ...
+
+def get_collision_state() -> dict: ...
+
+def set_walk_settings(height: float, radius: float, step: float, speed: float) -> None: ...
+
 class SceneSplatSnapshot:
     @property
     def transform(self) -> tuple: ...
@@ -148,6 +158,8 @@ class NodeType(enum.Enum):
     IMAGE = 9
 
     MESH = 10
+
+    COLLISION = 15
 
     KEYFRAME_GROUP = 11
 
