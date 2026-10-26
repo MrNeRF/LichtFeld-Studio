@@ -1476,7 +1476,7 @@ namespace lfs::python {
             return point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
                 auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
                 if (!viewer || !viewer->getGuiManager())
-                    throw std::runtime_error("Collision authoring requires the GUI");
+                    throw core::collisionError("collision.gui_required", "Collision authoring requires the GUI");
                 return action(viewer->getGuiManager()->asyncTasks(), manager);
             });
         };
@@ -1487,7 +1487,7 @@ namespace lfs::python {
         m.def("export_collision", [collision_access](const std::string& uuid, const std::string& path) {
             const auto parsed = core::Uuid::from_string(uuid);
             if (!parsed)
-                throw std::invalid_argument("Invalid collision target UUID");
+                throw core::collisionError("collision.select_export", "Invalid collision target UUID", ErrorCode::InvalidArgument);
             collision_access([&](auto& tasks, auto*) {
                 tasks.startCollisionExport(*parsed, core::utf8_to_path(path));
             }); }, nb::arg("uuid"), nb::arg("path"));

@@ -13,7 +13,7 @@ namespace lfs::io::project {
         using namespace chapter_binary;
         if (volume.words.size() > core::CollisionVolume::max_words ||
             volume.words.size() > (std::vector<std::byte>().max_size() - collision_payload_header_bytes) / sizeof(uint32_t))
-            throw std::length_error("Collision payload exceeds its addressable representation");
+            throw core::collisionError("collision.output_limit", "Collision payload exceeds its addressable representation", lfs::ErrorCode::ResourceExhausted);
         std::vector<std::byte> result(collision_payload_header_bytes + volume.words.size() * sizeof(uint32_t));
         const uint32_t header[]{
             0x564c4f43, 1, // COLV, version
@@ -34,17 +34,17 @@ namespace lfs::io::project {
         using namespace chapter_binary;
         if (bytes.size() < collision_payload_header_bytes + sizeof(uint32_t) ||
             bytes.size() % sizeof(uint32_t))
-            throw std::invalid_argument("Invalid collision payload length");
+            throw core::collisionError("collision.data_invalid", "Invalid collision payload length", lfs::ErrorCode::DataLoss);
         if (read_u32(bytes, 0) != 0x564c4f43)
-            throw std::invalid_argument("Invalid collision payload magic");
+            throw core::collisionError("collision.data_invalid", "Invalid collision payload magic", lfs::ErrorCode::DataLoss);
         if (read_u32(bytes, 4) != 1)
-            throw std::invalid_argument("Unsupported collision payload version");
+            throw core::collisionError("collision.data_invalid", "Unsupported collision payload version", lfs::ErrorCode::DataLoss);
         const auto automatic = read_u32(bytes, 56), cleanup = read_u32(bytes, 60);
         if (automatic > 1 || cleanup > 1)
-            throw std::invalid_argument("Invalid collision settings flags");
+            throw core::collisionError("collision.data_invalid", "Invalid collision settings flags", lfs::ErrorCode::DataLoss);
         const auto count = read_u32(bytes, 64);
         if (count > core::CollisionVolume::max_words || count != (bytes.size() - collision_payload_header_bytes) / sizeof(uint32_t))
-            throw std::invalid_argument("Invalid collision word count");
+            throw core::collisionError("collision.data_invalid", "Invalid collision word count", lfs::ErrorCode::DataLoss);
         auto volume = std::make_shared<core::CollisionVolume>();
         volume->origin = {read_f32(bytes, 8), read_f32(bytes, 12), read_f32(bytes, 16)};
         volume->dimensions = {read_i32(bytes, 20), read_i32(bytes, 24), read_i32(bytes, 28)};

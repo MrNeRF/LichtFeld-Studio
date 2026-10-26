@@ -2140,14 +2140,17 @@ namespace {
         }
         const auto volume = collision_scene.getNode("0")->collision;
         const auto bytes = encodeCollision(*volume);
-        EXPECT_THROW(decodeCollision(std::span(bytes).first(bytes.size() - 1)), std::invalid_argument);
+        collision_test::expectError([&] { decodeCollision(std::span(bytes).first(bytes.size() - 1)); }, "collision.data_invalid");
         lfs::core::CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {lfs::core::CollisionVolume::brick_tag | 1, 0x00110011, 0}};
         ASSERT_NO_THROW(padded.validate());
         padded.words[1] |= 2;
-        EXPECT_THROW(padded.validate(), std::invalid_argument);
+        collision_test::expectError([&] { padded.validate(); }, "collision.data_invalid");
         auto invalid = std::make_shared<lfs::core::CollisionVolume>(*volume);
         invalid->words.front() = 0xffffffff;
-        EXPECT_FALSE(document.set_collision(collision_scene.getNode("0")->uuid, invalid));
+        const auto rejected = document.set_collision(collision_scene.getNode("0")->uuid, invalid);
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(lfs::core::collisionErrorField(rejected.error(), "message_key"), "collision.data_invalid");
+        EXPECT_NE(rejected.error().detail().find("Invalid collision"), std::string_view::npos);
         fs::create_directory(temporary.path / "directory");
         EXPECT_FALSE(document.save(temporary.path / "directory"));
         EXPECT_EQ(read_file_bytes(path), baseline);

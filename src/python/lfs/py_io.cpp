@@ -352,12 +352,12 @@ namespace lfs::python {
                 glm::mat4 transform(1);
                 if (!matrix.empty()) {
                     if (matrix.size() != 16)
-                        throw_invalid_io_argument("transform must contain 16 column-major affine matrix values");
+                        throw core::collisionError("collision.export_transform", "transform must contain 16 column-major affine matrix values", ErrorCode::InvalidArgument);
                     std::memcpy(&transform[0][0], matrix.data(), sizeof(transform));
                 }
                 const auto binary = std::filesystem::path(path).replace_extension(".bin");
                 if (!overwrite && (core::native_fs::exists(path) || core::native_fs::exists(binary)))
-                    throw_invalid_io_argument("Voxel pair already exists; approve replacement with overwrite=True");
+                    throw core::collisionError("collision.replace_required", "Voxel pair already exists; approve replacement with overwrite=True", ErrorCode::InvalidArgument, core::path_to_utf8(path));
                 PyExportProgressCallback report{progress.is_none() ? nb::object{} : progress};
                 nb::gil_scoped_release release;
                 io::exportCollision(volume, path, transform, {}, report);

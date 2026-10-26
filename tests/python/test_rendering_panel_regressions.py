@@ -887,7 +887,7 @@ def test_completed_scrub_edits_recover_and_walk_merges_live_settings(controls):
         assert controls.values["error"] == error and not field.editing
     scrub._on_field_keydown(prop, enter)
     assert field.editing
-    assert controls.localized_error(RuntimeError(blocked.message_details)) == blocked.message_details
+    assert controls.localized_error(RuntimeError(blocked.message_details)) == "selection.operation_failed_generic"
 
 
 @pytest.mark.parametrize("approved,choice,error", [
@@ -916,5 +916,45 @@ def test_export_picker_and_pair_confirmation_latch_target(controls, tmp_path, ap
         module.lf.ui.confirm_dialog.assert_not_called()
     expected = [("first", str(path))] if approved or choice == "export.export" else []
     assert [call.args for call in module.lf.export_collision.call_args_list] == expected
-    assert controls.values["error"] == error
+    assert controls.values["error"] == ("selection.operation_failed_generic" if error else "")
     assert path.with_suffix(".bin").read_bytes() == b"old" and not path.exists()
+
+
+@pytest.mark.parametrize("locale", ["en", "de", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"])
+def test_collision_errors_translate_keys_and_preserve_only_supplied_details(controls, locale):
+    import json
+    from lfs_plugins import collision_panel as module
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    from test_localization_contracts import _flatten
+    messages = dict(_flatten(json.loads((locales / f"{locale}.json").read_text())))
+    module.lf.ui.tr.side_effect = messages.__getitem__
+    for key, translated in messages.items():
+        if not key.startswith("collision."):
+            continue
+        error = RuntimeError("opaque diagnostic with collision.walk_blocked in a path")
+        error.message_key = key
+        assert controls.localized_error(error) == translated
+        error.message_details = "/tmp/collision.walk_no_support/64000001.bin"
+        assert controls.localized_error(error) == f"{translated}\n{error.message_details}"
+    for error in (RuntimeError("unexpected internal failure"), ValueError("collision.walk_blocked")):
+        controls.run(lambda: (_ for _ in ()).throw(error))
+        assert controls.values["error"] == messages["selection.operation_failed_generic"]
+
+
+def test_collision_state_errors_are_already_localized_and_empty_stays_empty(controls):
+    from lfs_plugins import collision_panel as module
+    model = MagicMock()
+    controls.bind(model, popup=True)
+    read_error = next(call.args[1] for call in model.bind_func.call_args_list if call.args[0] == "collision_error")
+    assert read_error() == ""
+    controls.state["error"] = "Une erreur traduite avec /tmp/scene.ply"
+    assert read_error() == controls.state["error"]
+    controls.values["error"] = "Erreur du panneau"
+    assert read_error() == "Erreur du panneau"
+
+
+def test_collision_scrub_parse_errors_use_translated_validation_message(controls):
+    from lfs_plugins import collision_panel as module
+    module.lf.ui.tr.side_effect = lambda key: "Valeur invalide" if key == "preferences.viewport_defaults_invalid" else key
+    controls.scrubs._on_error("could not convert string to float")
+    assert controls.values["error"] == "Valeur invalide"

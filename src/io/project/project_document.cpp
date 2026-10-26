@@ -108,11 +108,14 @@ namespace lfs::io::project {
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
                                   std::string detail,
-                                  const std::string_view field = {}) {
+                                  const std::string_view field = {},
+                                  const std::string_view message_key = {}) {
             lfs::SmallFields fields;
             if (!field.empty()) {
                 fields.add("field", field);
             }
+            if (!message_key.empty())
+                fields.add("message_key", message_key);
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::IO,
@@ -131,13 +134,14 @@ namespace lfs::io::project {
         lfs::Result<T> fail(const lfs::ErrorCode code,
                             std::string message,
                             std::string detail,
-                            const std::string_view field = {}) {
+                            const std::string_view field = {},
+                            const std::string_view message_key = {}) {
             if constexpr (std::same_as<T, void>) {
                 return lfs::Result<void>::failure(document_error(
-                    code, std::move(message), std::move(detail), field));
+                    code, std::move(message), std::move(detail), field, message_key));
             } else {
                 return document_error(
-                    code, std::move(message), std::move(detail), field);
+                    code, std::move(message), std::move(detail), field, message_key);
             }
         }
 
@@ -975,7 +979,8 @@ namespace lfs::io::project {
             // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
             return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
                 dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
-                "A collision payload could not be decoded.", error.what(), "COLV");
+                "A collision payload could not be decoded.", error.what(), "COLV",
+                dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
         }
 
         [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
@@ -987,10 +992,11 @@ namespace lfs::io::project {
             if (!source_reader || !deferred_geometry_keys.contains(key) || row == source_rows.end())
                 return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
                     lfs::ErrorCode::DataLoss, "A saved collision payload is missing.",
-                    std::format("COLV instance {} is unavailable", uuid.to_string()), "COLV.instance_uuid");
+                    std::format("COLV instance {} is unavailable", uuid.to_string()), "COLV.instance_uuid", "collision.data_invalid");
             auto bytes = source_reader->read_chunk(row->second.info);
             if (!bytes)
-                return std::move(bytes).error();
+                return std::move(bytes).error().with_context("read collision payload", LFS_SOURCE_SITE_CURRENT(),
+                                                             lfs::SmallFields{}.add("message_key", std::string_view("collision.data_invalid")));
             return decode_collision(uuid, *bytes);
         }
 
@@ -3628,7 +3634,7 @@ namespace lfs::io::project {
         std::shared_ptr<const lfs::core::CollisionVolume> volume) {
         if (instance_uuid.is_nil() || !volume)
             return fail<void>(lfs::ErrorCode::InvalidArgument,
-                              "A collision payload is invalid.", "COLV requires a non-null UUID and volume", "COLV");
+                              "A collision payload is invalid.", "COLV requires a non-null UUID and volume", "COLV", "collision.data_invalid");
         if (const auto found = impl_->collisions.find(instance_uuid); found != impl_->collisions.end() && found->second == volume)
             return {};
         try {
@@ -3636,7 +3642,8 @@ namespace lfs::io::project {
         } catch (const std::exception& error) {
             // LFS-CENSUS-OK(empty-catch): validate first adoption through the Result boundary.
             return fail<void>(dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
-                              "A collision payload could not be validated.", error.what(), "COLV");
+                              "A collision payload could not be validated.", error.what(), "COLV",
+                              dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
         }
         impl_->deferred_geometry_keys.erase({FOURCC_COLV, instance_uuid});
         impl_->collisions.insert_or_assign(instance_uuid, std::move(volume));

@@ -13,7 +13,7 @@ namespace lfs::core {
                                  std::format("Invalid collision settings: voxel_size={} must be finite and positive, opacity={} must be finite in [0,1), max_gaussian_area={} must be finite and nonnegative and requires cleanup={} when positive",
                                              voxel_size, opacity, max_gaussian_area, cleanup),
                                  ErrorCode::InvalidArgument,
-                                 std::format("voxel_size={}; opacity={}; max_gaussian_area={}; cleanup={}", voxel_size, opacity, max_gaussian_area, cleanup));
+                                 std::format("{}; {}; {}; {}", voxel_size, opacity, max_gaussian_area, int(cleanup)));
     }
     bool CollisionVolume::occupied(glm::ivec3 p) const {
         if (glm::any(glm::lessThan(p, glm::ivec3(0))) || glm::any(glm::greaterThanEqual(p, dimensions)))
@@ -33,12 +33,12 @@ namespace lfs::core {
         if (words.empty() || words.size() > max_words || edge < 4 || edge > (1 << 21) || (edge & (edge - 1)) ||
             glm::any(glm::lessThanEqual(dimensions, glm::ivec3(0))) || glm::any(glm::greaterThan(dimensions, glm::ivec3(edge))) ||
             !std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z))
-            throw std::invalid_argument("Invalid collision volume bounds or storage");
+            throw collisionError("collision.data_invalid", "Invalid collision volume bounds or storage", ErrorCode::InvalidArgument);
         std::vector<bool> seen(words.size());
         uint64_t count = 0;
         auto mark = [&](size_t i) {
             if (i >= words.size() || seen[i])
-                throw std::invalid_argument("Invalid collision pointer or shared subtree");
+                throw collisionError("collision.data_invalid", "Invalid collision pointer or shared subtree", ErrorCode::InvalidArgument);
             seen[i] = true;
         };
         auto visit = [&](auto&& self, uint32_t i, glm::ivec3 lo, int size) -> void {
@@ -50,7 +50,7 @@ namespace lfs::core {
             } else if (v & brick_tag) {
                 const auto base = v & ~brick_tag;
                 if (size != 4 || base <= i)
-                    throw std::invalid_argument("Invalid collision brick");
+                    throw collisionError("collision.data_invalid", "Invalid collision brick", ErrorCode::InvalidArgument);
                 mark(base);
                 mark(base + 1);
                 const auto mask = uint64_t(words[base]) | (uint64_t(words[base + 1]) << 32);
@@ -58,19 +58,19 @@ namespace lfs::core {
                     if (mask & (uint64_t(1) << b)) {
                         const auto p = lo + glm::ivec3(b & 3, (b >> 2) & 3, b >> 4);
                         if (glm::any(glm::greaterThanEqual(p, dimensions)))
-                            throw std::invalid_argument("Collision brick contains occupied padding");
+                            throw collisionError("collision.data_invalid", "Collision brick contains occupied padding", ErrorCode::InvalidArgument);
                         ++count;
                     }
             } else if (v > 1) {
                 if (size <= 4 || v - 2 <= i || uint64_t(v) + 6 > words.size())
-                    throw std::invalid_argument("Invalid collision branch");
+                    throw collisionError("collision.data_invalid", "Invalid collision branch", ErrorCode::InvalidArgument);
                 for (int c = 0; c < 8; ++c)
                     self(self, v - 2 + c, lo + glm::ivec3(c & 1, (c >> 1) & 1, c >> 2) * (size / 2), size / 2);
             }
         };
         visit(visit, 0, {}, edge);
         if (count != occupied_count || std::find(seen.begin(), seen.end(), false) != seen.end())
-            throw std::invalid_argument("Collision occupancy count or topology is invalid");
+            throw collisionError("collision.data_invalid", "Collision occupancy count or topology is invalid", ErrorCode::InvalidArgument);
     }
     glm::mat4 collisionInverse(const glm::mat4& transform) {
         const double determinant = glm::determinant(glm::dmat3(transform));
@@ -82,7 +82,7 @@ namespace lfs::core {
             for (int row = 0; row < 4; ++row)
                 if (!std::isfinite(transform[column][row]) || !std::isfinite(inverse[column][row]))
                     throw collisionError("collision.source_transform_invalid", "Collision transform or inverse is not finite", ErrorCode::InvalidArgument,
-                                         std::format("transform[{}][{}]={}; inverse={}", column, row, transform[column][row], inverse[column][row]));
+                                         std::format("[{}][{}]: {} / {}", column, row, transform[column][row], inverse[column][row]));
         return inverse;
     }
 } // namespace lfs::core

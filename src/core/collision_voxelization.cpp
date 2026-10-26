@@ -107,10 +107,10 @@ namespace lfs::core {
         settings.validate();
         reportProgress(stop, progress, 0, collisionStage("gallery.transfer.phase.preparing", "Preparing collision geometry"));
         if (!s.means.is_valid() || s.means.ndim() != 2 || s.means.shape()[1] != 3)
-            throw std::invalid_argument("Collision means must have shape [N,3]");
+            throw collisionError("collision.geometry_invalid", "Collision means must have shape [N,3]", ErrorCode::InvalidArgument);
         const auto total = s.means.shape()[0];
         if (!total || total > size_t(INT_MAX))
-            throw std::invalid_argument("Collision source count exceeds the signed tensor index range or is empty");
+            throw collisionError("collision.geometry_invalid", "Collision source count exceeds the signed tensor index range or is empty", ErrorCode::InvalidArgument);
         const auto stream = getCurrentCUDAStream();
         if (!MemoryPressureCoordinator::instance().preflight({.operation = "Collision geometry",
                                                               .temporary_device_bytes = checked_product(total, 2 * sizeof(CollisionGaussianGpu) + 72, "Collision geometry")})
@@ -126,7 +126,7 @@ namespace lfs::core {
         {
             auto input = [&](const Tensor& tensor, size_t width, DataType type = DataType::Float32) {
                 if (!tensor.is_valid() || tensor.numel() != total * width || tensor.dtype() != type)
-                    throw std::invalid_argument("Invalid collision geometry tensor");
+                    throw collisionError("collision.geometry_invalid", "Invalid collision geometry tensor", ErrorCode::InvalidArgument);
                 auto result = tensor.to(Device::CUDA, stream).contiguous();
                 prepare_inputs_for_stream({&result}, stream);
                 return result;
@@ -218,7 +218,7 @@ namespace lfs::core {
         v.origin = glm::floor((low - settings.voxel_size * .5f) / settings.voxel_size) * settings.voxel_size - 2 * settings.voxel_size;
         const auto dimensions = glm::ceil((glm::dvec3(high) + settings.voxel_size * .5 - glm::dvec3(v.origin)) / double(settings.voxel_size)) + 3.;
         if (glm::any(glm::lessThan(dimensions, glm::dvec3(1))) || glm::any(glm::greaterThan(dimensions, glm::dvec3(1 << 21))) || !std::isfinite(dimensions.x + dimensions.y + dimensions.z))
-            throw collisionError("collision.output_limit", "Collision bounds exceed coordinate limits; increase cell size or remove remote outliers", ErrorCode::BoundsViolation, std::format("{} x {} x {} cells", dimensions.x, dimensions.y, dimensions.z));
+            throw collisionError("collision.output_limit", "Collision bounds exceed coordinate limits; increase cell size or remove remote outliers", ErrorCode::BoundsViolation, std::format("{} × {} × {}", dimensions.x, dimensions.y, dimensions.z));
         v.dimensions = glm::ivec3(dimensions);
         LOG_INFO("Collision grid {} x {} x {} at {} scene units; output limit {} sparse records", v.dimensions.x, v.dimensions.y, v.dimensions.z, settings.voxel_size, max_collision_records);
         v.edge = std::max(4u, std::bit_ceil(unsigned(std::max({v.dimensions.x, v.dimensions.y, v.dimensions.z}))));
@@ -245,7 +245,7 @@ namespace lfs::core {
         };
         auto append = [&](uint32_t n) {
             if (n > output.capacity())
-                throw std::runtime_error("Collision dispatch exceeded its output buffer");
+                throw collisionError("selection.operation_failed_generic", "Collision dispatch exceeded its output buffer", ErrorCode::Internal);
             const auto bytes = collisionOutputBytes(result_size, n);
             if (!n)
                 return;
@@ -341,12 +341,12 @@ namespace lfs::core {
                 const auto mask = bricks[begin].mask;
                 v.occupied_count += std::popcount(mask);
                 if (v.words.size() > CollisionVolume::max_words - 2)
-                    throw std::length_error("Collision brick pointer exceeds the packed address range");
+                    throw collisionError("collision.output_limit", "Collision brick pointer exceeds the packed address range", ErrorCode::ResourceExhausted);
                 v.words[i] = CollisionVolume::brick_tag | uint32_t(v.words.size());
                 v.words.insert(v.words.end(), {uint32_t(mask), uint32_t(mask >> 32)});
             } else {
                 if (v.words.size() > CollisionVolume::max_words - 8)
-                    throw std::length_error("Collision branch pointer exceeds the packed address range");
+                    throw collisionError("collision.output_limit", "Collision branch pointer exceeds the packed address range", ErrorCode::ResourceExhausted);
                 const auto base = uint32_t(v.words.size());
                 v.words.resize(base + 8);
                 v.words[i] = base + 2;

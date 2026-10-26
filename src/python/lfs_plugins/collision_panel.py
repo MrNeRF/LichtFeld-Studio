@@ -35,7 +35,7 @@ class CollisionPanel(Panel):
         self.state = {}
         self.scrubs = ScrubFieldController(
             SPECS, self.values.__getitem__, self.set_value, commit_value=self.commit,
-            on_error=lambda error: self.set_value("error", self.localized_error(error)),
+            on_error=lambda error: self.set_value("error", lf.ui.tr("preferences.viewport_defaults_invalid")),
         )
 
     def mount(self, doc):
@@ -65,7 +65,7 @@ class CollisionPanel(Panel):
     def localized_error(message):
         key = getattr(message, "message_key", "")
         if not key:
-            return str(message)
+            return lf.ui.tr("selection.operation_failed_generic")
         details = getattr(message, "message_details", "")
         return lf.ui.tr(key) + (f"\n{details}" if details else "")
 
@@ -85,7 +85,7 @@ class CollisionPanel(Panel):
         self.update()
         for key, field, default in (("collision_has_collision", "has_collision", False), ("collision_source", "source_name", ""), ("collision_active", "active", False), ("collision_progress", "progress", 0)):
             model.bind_func(key, lambda k=field, d=default: self.state.get(k, d))
-        model.bind_func("collision_error", lambda: self.values["error"] or self.localized_error(self.state.get("error" if popup else "walk_error", "")))
+        model.bind_func("collision_error", lambda: self.values["error"] or self.state.get("error" if popup else "walk_error", ""))
         if not popup:
             return
         model.bind_func("panel_label", lambda: lf.ui.tr(

@@ -86,14 +86,16 @@ namespace lfs::io {
     core::CollisionSource loadCollisionSource(const std::filesystem::path& path, std::stop_token stop,
                                               ExportProgressCallback progress) {
         if (path.filename() != "meta.json" && Loader::isDatasetPath(path))
-            throw std::invalid_argument("Input is a dataset; train and export Gaussian splats first");
+            throw core::collisionError("collision.source_unsupported", "Input is a dataset; train and export Gaussian splats first", lfs::ErrorCode::InvalidArgument, core::path_to_utf8(path));
         auto loaded = Loader::create()->load(path, {.progress = [&](float p, const std::string& stage) { core::reportProgress(stop, progress, p / 100.f, stage); },
                                                     .cancel_requested = [&] { return stop.stop_requested(); }});
         if (!loaded)
-            throw std::runtime_error(loaded.error().format());
+            throw lfs::Exception(to_lfs_error(loaded.error(), LFS_SOURCE_SITE_CURRENT())
+                                     .with_context("load collision source", LFS_SOURCE_SITE_CURRENT(),
+                                                   lfs::SmallFields{}.add("message_key", std::string_view("collision.source_load_failed")).add("message_details", core::path_to_utf8(path))));
         const auto* model = std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
         if (!model || !*model || loaded->point_cloud_source)
-            throw std::invalid_argument("Input must contain Gaussian splats, not a mesh, point cloud or dataset");
+            throw core::collisionError("collision.source_unsupported", "Input must contain Gaussian splats, not a mesh, point cloud or dataset", lfs::ErrorCode::InvalidArgument, core::path_to_utf8(path));
         auto source = core::captureCollisionSource(**model);
         core::reportProgress(stop, progress, 1, "Captured full-detail splats");
         return source;
