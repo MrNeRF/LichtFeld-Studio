@@ -2228,6 +2228,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hip_runtime_configuration.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hip_native_ci_filter.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hip_pointwise_generation.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_dense_matching.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py

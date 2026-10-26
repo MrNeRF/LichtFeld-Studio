@@ -18,10 +18,17 @@ add_test(NAME HipNative.Configuration
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_runtime_configuration.py")
 set_tests_properties(HipNative.Configuration PROPERTIES
     ENVIRONMENT "CMAKE_COMMAND=${CMAKE_COMMAND}" LABELS "cpu;hip" TIMEOUT 60)
+add_test(NAME HipNative.PointwiseGenerator
+    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_pointwise_generation.py")
+set_tests_properties(HipNative.PointwiseGenerator PROPERTIES LABELS "cpu;hip" TIMEOUT 60)
 add_test(NAME HipNative.ModuleBoundary
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_native_runtime.py"
         "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin" --abi-only)
 set_tests_properties(HipNative.ModuleBoundary PROPERTIES LABELS "cpu;hip" TIMEOUT 30)
+add_test(NAME HipNative.TensorModuleBoundary
+    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_tensor_operations.py"
+        "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin" --abi-only)
+set_tests_properties(HipNative.TensorModuleBoundary PROPERTIES LABELS "cpu;hip" TIMEOUT 30)
 
 # GPU execution is explicit; merely configuring or compiling needs no AMD GPU.
 if(LFS_HIP_NATIVE_GPU_TESTS)
@@ -36,4 +43,15 @@ if(LFS_HIP_NATIVE_GPU_TESTS)
             "${LFS_HIP_FAULT_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin"
             --device "${LFS_HIP_NATIVE_TEST_DEVICE}" --faults)
     set_tests_properties(HipNative.FaultRecovery PROPERTIES LABELS "hip;gpu" TIMEOUT 120)
+    add_test(NAME HipNative.TensorOperations
+        COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_tensor_operations.py"
+            "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin"
+            --device "${LFS_HIP_NATIVE_TEST_DEVICE}")
+    set_tests_properties(HipNative.TensorOperations PROPERTIES LABELS "hip;gpu" TIMEOUT 120)
+    add_test(NAME HipNative.TensorWorkspaceRecovery
+        COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_tensor_operations.py"
+            "${LFS_HIP_FAULT_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin"
+            --device "${LFS_HIP_NATIVE_TEST_DEVICE}" --faults)
+    set_tests_properties(HipNative.TensorWorkspaceRecovery PROPERTIES LABELS "hip;gpu" TIMEOUT 120)
+
 endif()

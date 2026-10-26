@@ -44,7 +44,7 @@ jobs:
     needs: hip-native-changes
     if: needs.hip-native-changes.outputs.changed == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
     env:

@@ -5,10 +5,13 @@ import argparse
 import ctypes as c
 from contextlib import contextmanager
 import os
+import math
 from pathlib import Path
+import re
+import struct
 import unittest
 
-EXPECTED_ABI = 2
+EXPECTED_ABI = 5
 options = None
 
 
@@ -20,6 +23,15 @@ class Device(c.Structure):
     _fields_ = [("name", c.c_char * 256), ("architecture", c.c_char * 256),
                 ("pci_bus_id", c.c_char * 32), ("total_bytes", c.c_uint64),
                 ("warp_size", c.c_int32)]
+
+
+class View(c.Structure):
+    _fields_ = [("buffer", c.c_void_p), ("offset", c.c_size_t)]
+
+
+def pointwise_operations():
+    catalog = Path(__file__).resolve().parents[2] / "src/core/include/core/detail/pointwise_ops.def"
+    return {name: index for index, name in enumerate(re.findall(r'LFS_POINTWISE_OP\((\w+),', catalog.read_text()))}
 
 
 def bind(module, name, arguments, result=c.c_int):
@@ -62,6 +74,11 @@ class RuntimeContract(unittest.TestCase):
             "readback_wait": ([pointer, pointer, error], c.c_int),
             "readback_poll": ([pointer, pointer, pointer, c.c_size_t, c.POINTER(c.c_int32), error], c.c_int),
             "readback_destroy": ([pointer, pointer, error], c.c_int),
+            "pointwise_f32": ([pointer, c.c_uint32, View, View, View, c.c_size_t, c.c_float, error], c.c_int),
+            "pointwise_f16": ([pointer, c.c_uint32, View, View, View, c.c_size_t, c.c_float, error], c.c_int),
+            "arange_f32": ([pointer, View, c.c_size_t, c.c_float, c.c_float, error], c.c_int),
+            "copy": ([pointer, View, View, c.c_size_t, error], c.c_int),
+            "memset": ([pointer, View, c.c_size_t, c.c_uint8, error], c.c_int),
         }
         cls.calls = {name: bind(cls.dll, name, args, result)
                      for name, (args, result) in signatures.items()}
@@ -183,6 +200,140 @@ class RuntimeContract(unittest.TestCase):
         ready = c.c_int32(7)
         self.assertNotEqual(self.calls["readback_poll"](None, None, None, 0, c.byref(ready), c.byref(error)), 0)
         self.assertEqual(ready.value, 0)
+        self.assertNotEqual(self.calls["pointwise_f32"](None, 0, View(), View(), View(), 0, 0, c.byref(error)), 0)
+
+    def test_shared_pointwise_catalog_f32_and_f16(self):
+        operations = pointwise_operations()
+        unary = {
+            "Abs": abs, "Neg": lambda x: -x, "Exp": math.exp, "Log": math.log,
+            "Sqrt": math.sqrt, "Sigmoid": lambda x: 1 / (1 + math.exp(-x)),
+            "Relu": lambda x: max(x, 0), "Square": lambda x: x * x,
+            "Tanh": math.tanh, "Rsqrt": lambda x: 1 / math.sqrt(x),
+            "Sign": lambda x: 1 if x > 0 else -1 if x < 0 else x,
+            "Reciprocal": lambda x: 1 / x, "Floor": math.floor, "Ceil": math.ceil,
+            "Round": round, "Exp2": math.exp2, "Log2": math.log2, "Log10": math.log10,
+            "Log1p": math.log1p, "Sin": math.sin, "Cos": math.cos, "Tan": math.tan,
+            "Asin": math.asin, "Acos": math.acos, "Atan": math.atan,
+            "Sinh": math.sinh, "Cosh": math.cosh,
+            "Gelu": lambda x: 0.5 * x * (1 + math.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * x**3))),
+            "Swish": lambda x: x / (1 + math.exp(-x)), "Trunc": math.trunc,
+            "IsNan": math.isnan, "IsInf": math.isinf, "IsFinite": math.isfinite,
+            "LogicalNot": lambda x: not x,
+            "ExpThenMulScalar": lambda x: math.exp(x) * 0.5,
+            "MulScalarThenAbs": lambda x: abs(x * 0.5),
+            "MulScalarThenRelu": lambda x: max(x * 0.5, 0),
+        }
+        binary = {
+            "Add": lambda x, y: x + y, "Sub": lambda x, y: x - y,
+            "Mul": lambda x, y: x * y, "Div": lambda x, y: x / y,
+            "Pow": math.pow, "Mod": math.fmod, "Maximum": max, "Minimum": min,
+            "Equal": lambda x, y: x == y, "NotEqual": lambda x, y: x != y,
+            "Less": lambda x, y: x < y, "LessEqual": lambda x, y: x <= y,
+            "Greater": lambda x, y: x > y, "GreaterEqual": lambda x, y: x >= y,
+            "LogicalAnd": lambda x, y: bool(x) and bool(y),
+            "LogicalOr": lambda x, y: bool(x) or bool(y),
+            "LogicalXor": lambda x, y: bool(x) != bool(y),
+        }
+        expected_names = set(unary) | {name + "Tensor" for name in binary} | {
+            name + "Scalar" for name in binary if not name.startswith("Logical")}
+        self.assertEqual(set(operations), expected_names)
+        count = 513
+        values = [0.25 + (i % 5) / 8 for i in range(count)]
+        with self.staging_resources(slots=0) as (context, lhs, _):
+            rhs, output = c.c_void_p(), c.c_void_p()
+            self.checked("buffer_allocate", context, 4096, c.byref(rhs))
+            self.checked("buffer_allocate", context, 4096, c.byref(output))
+            for storage, encoding in (("f32", "f"), ("f16", "e")):
+                raw = b"".join(struct.pack("<" + encoding, x) for x in values)
+                right = struct.pack("<" + encoding, 0.5) * count
+                source = c.create_string_buffer(raw)
+                other = c.create_string_buffer(right)
+                self.checked("upload", context, lhs, 0, source, len(raw))
+                self.checked("upload", context, rhs, 0, other, len(right))
+                half_operations = {"AddTensor", "SubTensor", "MulTensor", "DivTensor", "EqualTensor", "NotEqualTensor",
+                                   "LessTensor", "LessEqualTensor", "GreaterTensor", "GreaterEqualTensor", "LogicalAndTensor",
+                                   "LogicalOrTensor", "LogicalXorTensor", "IsNan", "IsInf", "IsFinite", "LogicalNot"}
+                for name, operation in operations.items():
+                    if storage == "f16" and name not in half_operations:
+                        error = Error()
+                        self.assertNotEqual(self.calls["pointwise_f16"](context, operation, View(lhs, 0), View(rhs, 0), View(output, 0), count, 0.5, c.byref(error)), 0)
+                        continue
+                    with self.subTest(storage=storage, operation=name):
+                        self.checked("memset", context, View(output, 0), 4096, 0xA5)
+                        self.checked("pointwise_" + storage, context, operation,
+                                     View(lhs, 0), View(rhs, 0), View(output, 0), count, 0.5)
+                        predicate = name.startswith(("Equal", "NotEqual", "Less", "Greater", "Logical", "IsNan", "IsInf", "IsFinite"))
+                        size = count if predicate else len(raw)
+                        actual = (c.c_ubyte * (size + 16))()
+                        self.checked("download", context, output, 0, actual, len(actual))
+                        self.assertEqual(bytes(actual[size:]), bytes([0xA5] * 16))
+                        decoded = list(actual[:size]) if predicate else [x[0] for x in struct.iter_unpack("<" + encoding, bytes(actual[:size]))]
+                        fn = unary[name] if name in unary else lambda x: binary[name[:-6]](x, 0.5)
+                        for x, y in zip(values, decoded):
+                            expected = fn(x)
+                            if predicate:
+                                self.assertEqual(y, int(expected))
+                            else:
+                                rounded = struct.unpack("<" + encoding, struct.pack("<" + encoding, expected))[0]
+                                self.assertTrue(math.isclose(y, rounded, rel_tol=0.002 if storage == "f16" else 2e-5, abs_tol=0.002 if storage == "f16" else 2e-6), (name, x, y, rounded))
+
+    def test_pointwise_views_reject_invalid_ranges_before_writes(self):
+        operations = pointwise_operations()
+        with self.staging_resources(slots=0) as (context, buffer, _):
+            self.checked("fill_f32", context, buffer, 0, 16, 3)
+            error = Error()
+            invalid = [
+                (operations["AddScalar"], View(buffer, 0), View(), View(buffer, 4), 8),
+                (operations["AddScalar"], View(buffer, 1), View(), View(buffer, 0), 8),
+                (operations["AddScalar"], View(buffer, 4096), View(), View(buffer, 0), 1),
+                (operations["EqualScalar"], View(buffer, 0), View(), View(buffer, 0), 8),
+                (operations["AddTensor"], View(buffer, 0), View(), View(buffer, 0), 8),
+                (operations["AddScalar"], View(buffer, 0), View(), View(buffer, 0), c.c_size_t(-1).value),
+                (0xFFFFFFFF, View(buffer, 0), View(), View(buffer, 0), 8),
+            ]
+            for storage in ("f32", "f16"):
+                for operation, lhs, rhs, output, count in invalid:
+                    self.assertNotEqual(self.calls["pointwise_" + storage](context, operation, lhs, rhs, output, count, 2, c.byref(error)), 0)
+            actual = (c.c_float * 16)()
+            self.checked("download", context, buffer, 0, actual, c.sizeof(actual))
+            self.assertEqual(list(actual), [3] * 16)
+            self.checked("pointwise_f32", context, operations["MulScalar"], View(buffer, 0), View(), View(buffer, 0), 16, 2)
+            self.checked("download", context, buffer, 0, actual, c.sizeof(actual))
+            self.assertEqual(list(actual), [6] * 16)
+            self.checked("pointwise_f32", context, operations["AddScalar"], View(buffer, 4096), View(), View(buffer, 4096), 0, 1)
+
+    def test_pointwise_special_values_and_device_movement(self):
+        operations = pointwise_operations()
+        with self.staging_resources(size=8192, slots=0) as (context, buffer, _):
+            values = (-0.0, 0.0, -3, 2, float("nan"), float("inf"))
+            for storage, encoding in (("f32", "f"),):
+                raw = b"".join(struct.pack("<" + encoding, x) for x in values)
+                source = c.create_string_buffer(raw)
+                for operation in ("Relu", "Sign"):
+                    with self.subTest(storage=storage, operation=operation):
+                        self.checked("upload", context, buffer, 0, source, len(raw))
+                        self.checked("pointwise_" + storage, context, operations[operation], View(buffer, 0), View(), View(buffer, 0), 6, 0)
+                        actual = (c.c_ubyte * len(raw))()
+                        self.checked("download", context, buffer, 0, actual, len(actual))
+                        decoded = [x[0] for x in struct.iter_unpack("<" + encoding, bytes(actual))]
+                        self.assertEqual(math.copysign(1, decoded[0]), 1)
+                        self.assertTrue(math.isnan(decoded[4]))
+                        self.assertEqual(decoded[2], 0 if operation == "Relu" else -1)
+                        self.assertEqual(decoded[5], float("inf") if operation == "Relu" else 1)
+                self.checked("upload", context, buffer, 0, source, len(raw))
+                for operation, expected in (("IsNan", [0, 0, 0, 0, 1, 0]), ("IsInf", [0, 0, 0, 0, 0, 1]), ("IsFinite", [1, 1, 1, 1, 0, 0])):
+                    self.checked("pointwise_" + storage, context, operations[operation], View(buffer, 0), View(), View(buffer, 64), 6, 0)
+                    mask = (c.c_ubyte * 6)()
+                    self.checked("download", context, buffer, 64, mask, 6)
+                    self.assertEqual(list(mask), expected)
+            error = Error()
+            self.assertNotEqual(self.calls["copy"](context, View(buffer, 0), View(buffer, 4), 16, c.byref(error)), 0)
+            self.checked("copy", context, View(buffer, 0), View(buffer, 0), 16)
+            self.checked("arange_f32", context, View(buffer, 0), 513, -8, 0.25)
+            self.checked("copy", context, View(buffer, 0), View(buffer, 2060), 513 * 4)
+            actual = (c.c_float * 513)()
+            self.checked("download", context, buffer, 2060, actual, c.sizeof(actual))
+            self.assertEqual(list(actual), [-8 + i * 0.25 for i in range(513)])
 
     @contextmanager
     def staging_resources(self, size=4096, slots=2):

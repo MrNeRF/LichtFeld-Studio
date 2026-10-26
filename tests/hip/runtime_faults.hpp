@@ -6,10 +6,11 @@
 // normal runtime: the production module has no error-injection entry points.
 #include "runtime_api.h"
 #include <hip/hip_runtime.h>
+#include <hipcub/hipcub.hpp>
 
 namespace lfs_hip_test {
-    static int fault = 0, pinned = 0, events = 0;
-    bool fail(int operation) {
+    inline int fault = 0, pinned = 0, events = 0, device_allocations = 0;
+    inline bool fail(int operation) {
         if (fault != operation)
             return false;
         fault = 0;
@@ -17,13 +18,16 @@ namespace lfs_hip_test {
     }
 } // namespace lfs_hip_test
 
+#ifdef LFS_HIP_TEST_EXPORTS
 extern "C" LFS_HIP_API void lfs_hip_test_fail_once(int operation) {
     lfs_hip_test::fault = operation;
 }
 extern "C" LFS_HIP_API int lfs_hip_test_live_resources() {
     // Check each category independently, including accidental negative counts.
-    return (lfs_hip_test::pinned != 0 ? 1 : 0) | (lfs_hip_test::events != 0 ? 2 : 0);
+    return (lfs_hip_test::pinned != 0 ? 1 : 0) | (lfs_hip_test::events != 0 ? 2 : 0) | (lfs_hip_test::device_allocations != 0 ? 4 : 0);
 }
+
+#endif
 
 static hipError_t lfs_hip_test_host_malloc(void** pointer, size_t bytes, unsigned flags) {
     if (lfs_hip_test::fail(1))
@@ -80,3 +84,31 @@ static hipError_t lfs_hip_test_stream_synchronize(hipStream_t stream) {
 #define hipEventCreateWithFlags lfs_hip_test_event_create
 #define hipMemcpyAsync          lfs_hip_test_copy
 #define hipStreamSynchronize    lfs_hip_test_stream_synchronize
+
+// Instantiate SDK templates before replacing allocation calls in our module.
+template <typename T>
+static hipError_t lfs_hip_test_device_malloc(T** pointer, size_t bytes) {
+    if (lfs_hip_test::fail(8))
+        return hipErrorOutOfMemory;
+    const auto result = hipMalloc(pointer, bytes);
+    if (result == hipSuccess)
+        ++lfs_hip_test::device_allocations;
+    return result;
+}
+static hipError_t lfs_hip_test_device_free(void* pointer) {
+    if (lfs_hip_test::fail(9))
+        return hipErrorUnknown;
+    const auto result = hipFree(pointer);
+    if (result == hipSuccess && pointer)
+        --lfs_hip_test::device_allocations;
+    return result;
+}
+#define hipMalloc lfs_hip_test_device_malloc
+#define hipFree   lfs_hip_test_device_free
+
+static hipError_t lfs_hip_test_memset_async(void* pointer, int value, size_t bytes, hipStream_t stream) {
+    if (lfs_hip_test::fail(10))
+        return hipErrorUnknown;
+    return hipMemsetAsync(pointer, value, bytes, stream);
+}
+#define hipMemsetAsync lfs_hip_test_memset_async

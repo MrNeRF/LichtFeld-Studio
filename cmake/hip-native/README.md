@@ -49,11 +49,9 @@ kept alive for the duration of the test. It does not modify PATH or the process-
 DLL search policy. This developer setup does not package SDK libraries. Application
 loading and distribution integration are separate work.
 
-The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION` (currently 2), returned
-by `lfs_hip_runtime_abi()`. Revision 1 provided only the foundation; revision 2
-adds owned asynchronous transfers. A future loader must check the exact revision
-before binding revision-specific exports; the boundary is private and does not
-promise binary compatibility between revisions.
+The private C ABI revision is `LFS_HIP_RUNTIME_ABI_VERSION`, returned by
+`lfs_hip_runtime_abi()`. A loader must check this exact revision before binding
+any other export. Binary compatibility between private revisions is not promised.
 
 The private versioned C ABI exposes inventory, contexts, owned buffers, blocking
 host transfers, synchronization, fill and affine smoke kernels. No HIP types or C++
@@ -68,9 +66,9 @@ context queue. Callers must keep borrowed host storage alive until a transfer
 completes; a failed synchronization must not be interpreted as successful drainage.
 
 The mathematical smoke checks cover non-aligned lengths and exact FP32 values;
-they are not performance benchmarks or training-quality claims. Public Tensor
-contracts, advanced operators, HIPRTC, renderer interop and trainer integration
-belong to later changes. CPU-only configuration regressions can run without an SDK:
+they are not performance benchmarks or training-quality claims. The standalone
+target does not register an application Tensor backend or enable training.
+CPU-only configuration checks need no SDK:
 
 ```sh
 python tests/python/test_hip_runtime_configuration.py
@@ -105,7 +103,8 @@ installation is required. The pip download cache avoids downloading the SDK
 again when the runner can restore it. This compile check follows the existing
 Ubuntu workflow triggers. A lightweight path check gates the SDK job: only changes
 in `cmake/hip-native/`, `src/core/tensor/backend/hip/`, `tests/hip/`, their CMake
-architecture/compression helpers, configuration/filter tests, the filter script
+architecture/compression helpers, shared pointwise catalog/functors, native
+configuration/filter/generator tests, the filter script
 or this Ubuntu workflow enable it. Pull requests compare against their merge
 base; pushes compare before/after trees, including deleted and renamed paths.
 Manual dispatch and the first push of a branch run the check unconditionally.
@@ -168,3 +167,93 @@ errors, rejection of invalid snapshots and balanced resource counts. The normal
 runtime contains none of these injection entry points; CPU-only builds do not
 build the instrumented module. These tests exercise API error handling on a
 real device, not physical device-loss or GPU-hang recovery.
+
+## Native contiguous pointwise operators
+
+The private runtime provides the FP32 pointwise catalog and the FP16 subset used
+by the Tensor backend: four binary arithmetic operations, nine binary predicates
+and four unary predicates. Other FP16 operations fail explicitly. FP32 arange,
+device copy and byte fill are also available.
+Predicates write byte booleans for either floating input type. Views carry a
+context-owned buffer and a byte offset; the runtime validates ownership, complete
+extents, element alignment and overlapping ranges before launching a kernel.
+Same-type pointwise operations allow exact in-place views; shifted overlap and
+predicate outputs overlapping their floating input are rejected. Device copy
+permits identical source/destination as a no-op and rejects shifted overlap.
+
+## Generic native Tensor operators
+
+The private C boundary additionally implements typed conversion, integer and
+boolean arithmetic, scalar-left and broadcast expressions, strided layouts and
+batched copies, global and axis reductions, arg extrema, fused chains, indexing,
+gather/scatter, masks, stable sort, scans, random generation, FP32 matrix
+multiplication and pairwise distances. Dtypes are FP32, FP16, Int32, Int64,
+UInt8, Bool and UInt32; individual entry points validate their supported subset.
+Integer comparisons preserve Int64 precision rather than converting to float.
+
+| Operator family | Native storage support |
+| --- | --- |
+| Pointwise, scalar-left, fused chains | FP32 catalog and chains; FP16 subset above; FP32 scalar-left add/subtract/multiply/divide |
+| Typed conversion and layout copy/fill | Seven storage dtypes; conversions use the standard Tensor backend pair matrix |
+| Broadcast and conditional selection | Floating, integer and boolean storage; operation-specific validation |
+| Global scalar reduction and arg extrema | FP32; extrema indices use Int64 |
+| Axis reduction | FP32/FP16 and integer/boolean subsets; output type is validated |
+| Gather, selection, masks and index copy | Typed storage; index arrays use Int32 or Int64 |
+| Indexed fill | FP32, Int32, UInt8, Bool; Int32 or Int64 indices |
+| Indexed addition | FP32 or Int32 |
+| Cumulative sum | FP32, Int32, Int64, UInt32 |
+| Stable sort | FP32 values and Int64 indices |
+| Random | FP32 uniform/normal/Bernoulli; Int32 integer draws |
+| Matrix multiplication and pairwise distance | FP32 |
+
+Unsupported combinations fail explicitly rather than running a CPU fallback.
+Numeric-to-Bool casts can use comparison against zero through `pointwise_f32`
+or `predicate_typed`, preserving nonzero and NaN truth semantics.
+Floating reductions and indexed atomic addition may differ in rounding order
+between devices. RNG seeds are reproducible for this implementation; no claim
+is made that another backend produces the same seeded sequence.
+
+All reduction entry points accept `LfsHipReduceOp`. Typed scalar predicates
+convert the scalar to the declared input dtype; Bool uses boolean conversion.
+HIP device ReLU canonicalizes negative zero to positive zero.
+
+Sort preserves input payload bits and stable ordering of NaNs and signed zeros.
+Selection with an unknown count validates output capacity before writing.
+For a pre-counted mask, set `LfsHipSelection::count_known` and provide the exact
+`selected_count`; the mask must remain unchanged on its context queue between
+counting and selection. This path enqueues selection without reading a host
+count. Selection retains only its counter and library workspace. Floating payload bits are preserved unchanged.
+
+Temporary workspaces belong to a context. Growth drains previous operations and
+releases disposable storage before replacing it; failed releases retain ownership
+for retry. `trim_workspace` releases reduction, scan and sort storage without
+releasing Tensor buffers. Host scalar results drain the stream before a blocking
+copy so a synchronization failure cannot leave a queued write to expired storage.
+Allocation and SDK failures are reported through the private error boundary.
+
+`HipNative.TensorModuleBoundary` binds all operator exports on CPU runners without
+querying a GPU. Explicit GPU tests compare operators with independent CPU
+references, including invalid descriptors, output preservation, precision, empty
+axes and numeric edge cases. The separate instrumented module checks allocation,
+workspace release and synchronization failures and balanced resources.
+
+This is native implementation infrastructure: the public application Tensor
+adapter, backend registration and training integration remain separate work.
+No CUDA, Metal or Vulkan implementation is replaced or modified.
+
+Checked indexing skips out-of-range device indices and reports the error at
+context synchronization, a blocking host read, or a staged readback wait/poll.
+Each staged readback captures prior execution faults at its queue position;
+later operations cannot invalidate an earlier snapshot. Packed appends retain
+faults from every appended range, including across context synchronization.
+A failed snapshot exposes neither bytes nor successful readiness. A drained
+null poll discards it while reporting its error, allowing slot reuse. Context
+error consumption is independent and does not validate a failed snapshot.
+Valid lanes may already have
+completed; these operations do not promise transactional rollback. Masked scatter
+validates its supplied count on the device before updating elements. Consuming an
+context error clears it, allowing subsequent valid operations on the context.
+
+The build compiles runtime services, pointwise kernels and Tensor operators as
+separate objects. `LFS_HIP_OFFLOAD_JOBS` controls concurrent architecture
+compilations per source (default `2`); lower it on memory-constrained builders.

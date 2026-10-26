@@ -49,7 +49,11 @@ class HipCiFilter(unittest.TestCase):
                      "tests/hip/test_native_runtime.py", "cmake/HipArchitectures.cmake",
                      "cmake/HipOffloadCompression.cmake", ".github/workflows/ubuntu.yml",
                      "tools/hip_native_ci_filter.py", "tests/python/test_hip_native_ci_filter.py",
-                     "tests/python/test_hip_runtime_configuration.py"):
+                     "tests/python/test_hip_runtime_configuration.py",
+                     "tests/python/test_hip_pointwise_generation.py",
+                     "src/core/include/core/detail/pointwise_ops.def",
+                     "src/core/include/core/detail/pointwise_lowering.hpp",
+                     "src/core/include/core/detail/tensor_functors.hpp"):
             with self.subTest(path=path):
                 self.write(path)
                 head = self.commit()

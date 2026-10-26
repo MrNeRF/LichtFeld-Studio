@@ -13,6 +13,10 @@ FILES = {
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",
     "tests/python/test_hip_runtime_configuration.py",
+    "tests/python/test_hip_pointwise_generation.py",
+    "src/core/include/core/detail/pointwise_ops.def",
+    "src/core/include/core/detail/pointwise_lowering.hpp",
+    "src/core/include/core/detail/tensor_functors.hpp",
 }
 
 
