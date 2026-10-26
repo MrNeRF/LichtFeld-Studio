@@ -293,6 +293,8 @@ namespace lfs::vis {
                 std::vector<SplatLoadRequest> requests;
                 size_t loaded_count = 0;
                 size_t failed_count = 0;
+                // Attached nodes; the completion overlay counts those still in the scene.
+                std::vector<core::Uuid> imported_nodes;
                 bool consolidation_pending = false;
                 std::optional<SplatLoadRequest> pending_render_request;
                 core::Uuid pending_render_node;

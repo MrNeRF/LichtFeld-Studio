@@ -1055,6 +1055,7 @@ namespace lfs::vis::gui {
             splat_load_state_.requests.clear();
             splat_load_state_.loaded_count = 0;
             splat_load_state_.failed_count = 0;
+            splat_load_state_.imported_nodes.clear();
             splat_load_state_.failures.clear();
             splat_load_state_.attachment_pending = false;
             splat_load_state_.consolidation_pending = false;
@@ -1385,6 +1386,7 @@ namespace lfs::vis::gui {
                          completion.stage_elapsed.count() + attach_elapsed.count());
                 ++splat_load_state_.loaded_count;
                 counted_as_loaded = true;
+                splat_load_state_.imported_nodes.push_back(imported_uuid);
                 if (splat_load_state_.validate_batch) {
                     splat_load_state_.pending_render_request = completion.request;
                     splat_load_state_.pending_render_node = imported_uuid;
@@ -1502,10 +1504,18 @@ namespace lfs::vis::gui {
         if (scene_manager)
             scene_manager->getScene().setImportValidation(false);
         const bool success = splat_load_state_.loaded_count > 0;
+        // Count only the imported nodes: other nodes and their soft-deleted rows are not part of it.
+        size_t imported_points = 0;
+        if (scene_manager) {
+            for (const auto& uuid : splat_load_state_.imported_nodes) {
+                if (const auto* node = scene_manager->getScene().getNodeByUuid(uuid))
+                    imported_points += node->gaussian_count.load(std::memory_order_acquire);
+            }
+        }
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.success = success;
-            import_state_.num_points = scene_manager ? scene_manager->getScene().getTotalGaussianCount() : 0;
+            import_state_.num_points = imported_points;
             import_state_.completion_time = std::chrono::steady_clock::now();
         }
         if (success) {
