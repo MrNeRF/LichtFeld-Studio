@@ -143,6 +143,13 @@ namespace lfs::python {
                 if (!*result) throw Exception(result->error()); }, nb::arg("path"), nb::arg("frame"), nb::arg("options") = AvifOutputOptions{}, nb::arg("cancelled") = nb::none());
         nb::class_<MediaIngest>(m, "MediaIngest")
             .def_static("capabilities", &MediaIngest::capabilities)
+            .def_static("source_metadata_json", [](const std::filesystem::path& path) {
+                nb::gil_scoped_release release;
+                const auto catalog = MediaIngest::sourceMetadata(path);
+                if (!catalog) throw Exception(catalog.error());
+                const auto summary = summarizeImageMetadata(*catalog);
+                if (!summary) throw Exception(summary.error());
+                return json_detail::dump(json_detail::json{{"schema_version", 1}, {"success", true}, {"metadata", json_detail::sourceMetadata(*catalog)}, {"summary", json_detail::metadataSummary(*summary)}}); }, nb::arg("path"), "Read the original image metadata catalog and interpreted summary as JSON, using the source-metadata CLI schema and default limits. Collection and interpretation run with the GIL released; binary values are hex and partial results retain their status.")
             .def_static("source_exif_json", [](const std::filesystem::path& path) {
                 nb::gil_scoped_release release;
                 const auto result = MediaIngest::sourceExif(path);

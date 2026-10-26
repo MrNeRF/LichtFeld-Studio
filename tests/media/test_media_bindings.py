@@ -28,6 +28,134 @@ fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
 media = None
 MEDIA_ERROR = None
+METADATA_CLI = None
+
+
+class SourceMetadataBindings(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="lfs-python-metadata-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_catalog_and_summary_match_cli_and_legacy_exif(self):
+        cli = METADATA_CLI
+        if cli is None or not cli.is_file():
+            self.fail("--cli must identify the production metadata CLI")
+        for carrier in ("jpeg", "png", "tiff"):
+            with self.subTest(carrier=carrier):
+                path = self.root / ("metadata é 日本語." + carrier)
+                source_exif_fixture.write_camera_metadata(path, carrier=carrier)
+                original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                encoded = media.MediaIngest.source_metadata_json(path)
+                result = json.loads(encoded)
+                reference = subprocess.run([str(cli), "source-metadata", str(path)],
+                                           check=True, capture_output=True, timeout=30)
+                self.assertEqual(result, json.loads(reference.stdout))
+                self.assertEqual(result["schema_version"], 1)
+                self.assertTrue(result["success"])
+                self.assertEqual(result["metadata"]["image_exif"],
+                                 json.loads(media.MediaIngest.source_exif_json(path)))
+                facts = {f["semantic"]: f for f in result["summary"]["facts"]}
+                self.assertEqual(facts["camera.make"]["value"], "Test Camera")
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+                path.unlink()
+                self.assertEqual(json.loads(encoded), result)
+
+    def test_named_xmp_and_partial_rejection_keep_original_packets(self):
+        path = self.root / "named-subject.tiff"
+        prefix = ('<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+                  '<r:Description r:about="DJI Meta Data" '
+                  'xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="-1.25"')
+        valid = (prefix + '/></r:RDF>').encode()
+        for packet, state in ((valid, "parsed"), ((prefix + '>').encode(), "malformed"),
+                              (b'<!DOCTYPE x SYSTEM "file:///must-not-open">' + valid, "unsupported")):
+            with self.subTest(state=state):
+                source_exif_fixture.write_tiff(path, xmp_packets=[packet])
+                result = json.loads(media.MediaIngest.source_metadata_json(path))
+                self.assertEqual(result["summary"]["xmp_packets"][0]["state"], state)
+                self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+                facts = [f for f in result["summary"]["facts"] if "xmp_property" in f]
+                if state == "parsed":
+                    fact, = facts
+                    self.assertEqual((fact["semantic"], fact["value"], fact["xmp_property"]["rdf_about"]),
+                                     ("vendor.dji.altitude.relative", -1.25, "DJI Meta Data"))
+                else:
+                    self.assertEqual(facts, [])
+
+    def test_remaining_carriers_use_the_same_catalog_contract(self):
+        for carrier in ("jxl", "avif", "heic"):
+            with self.subTest(carrier=carrier):
+                path = self.root / ("metadata." + carrier)
+                if carrier == "jxl":
+                    shutil.copyfile(ROOT / "tests/data/jxl/rgb8.jxl", path)
+                else:
+                    source_exif_fixture.write_heif_metadata(path, carrier=carrier)
+                original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                result = json.loads(media.MediaIngest.source_metadata_json(path))
+                reference = subprocess.run([str(METADATA_CLI), "source-metadata", str(path)],
+                                           check=True, capture_output=True, timeout=30)
+                self.assertEqual(result, json.loads(reference.stdout))
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+
+    def test_default_budget_reports_partial_collection(self):
+        path = self.root / "limited.tiff"
+        source_exif_fixture.write_tiff(path, xmp_packets=[b"x" * (1024 * 1024 + 1)])
+        result = json.loads(media.MediaIngest.source_metadata_json(path))
+        reference = subprocess.run([str(METADATA_CLI), "source-metadata", str(path)],
+                                   check=True, capture_output=True, timeout=30)
+        self.assertEqual(result, json.loads(reference.stdout))
+        self.assertTrue(result["success"])
+        self.assertEqual(result["metadata"]["image_xmp"]["status"], "limited")
+        self.assertTrue(result["summary"]["limited"])
+
+    def test_errors_and_recovery_use_the_existing_contract(self):
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.source_metadata_json("")
+        # The existing filesystem caster rejects NUL before native collection.
+        with self.assertRaises(TypeError):
+            media.MediaIngest.source_metadata_json("prefix\0suffix")
+        with self.assertRaises(TypeError):
+            media.MediaIngest.source_metadata_json(object())
+        missing = json.loads(media.MediaIngest.source_metadata_json(self.root / "missing.jpg"))
+        self.assertEqual(missing["metadata"]["image_exif"]["status"], "io_error")
+        path = self.root / "recovered.png"
+        source_exif_fixture.write_camera_metadata(path)
+        class SourcePath:
+            def __fspath__(self):
+                return str(path)
+        self.assertTrue(json.loads(media.MediaIngest.source_metadata_json(SourcePath()))["summary"]["facts"])
+
+    def test_concurrent_calls_keep_results_independent(self):
+        valid = self.root / "valid.tiff"
+        invalid = self.root / "invalid.tiff"
+        source_exif_fixture.write_tiff(valid)
+        invalid.write_bytes(b"II*\0")
+        expected = media.MediaIngest.source_metadata_json(valid)
+        def read(index):
+            return index, json.loads(media.MediaIngest.source_metadata_json(valid if index % 2 else invalid))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for index, result in pool.map(read, range(24)):
+                if index % 2:
+                    self.assertEqual(result, json.loads(expected))
+                else:
+                    self.assertEqual(result["metadata"]["image_exif"]["status"], "malformed")
+
+    @unittest.skipIf(os.name == "nt", "Native non-UTF-8 filename bytes are POSIX-specific")
+    def test_native_filename_bytes_and_pathlike(self):
+        native = os.fsencode(self.root) + b"/metadata-\xff.jpg"
+        path = Path(os.fsdecode(native))
+        try:
+            source_exif_fixture.write_jpeg(path)
+        except OSError as error:
+            if error.errno == errno.EILSEQ:
+                self.skipTest("The filesystem rejects non-UTF-8 filename bytes")
+            raise
+        class NativePath:
+            def __fspath__(self):
+                return os.fsdecode(native)
+        result = json.loads(media.MediaIngest.source_metadata_json(NativePath()))
+        self.assertEqual(result["metadata"]["source_locator_bytes"], native.hex())
+        self.assertTrue(result["summary"]["facts"])
 
 
 class MediaBindings(unittest.TestCase):
@@ -1220,8 +1348,10 @@ if __name__ == "__main__":
     parser.add_argument("--module-dir", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--dependency-dir", type=Path)
+    parser.add_argument("--cli", type=Path, help="Production media-ingest executable for metadata parity checks")
     parser.add_argument("--studio", action="store_true", help="Test the complete lichtfeld module")
     args, remaining = parser.parse_known_args()
+    METADATA_CLI = args.cli or args.runtime_dir / ("media-ingest.exe" if os.name == "nt" else "media-ingest")
     dll_handles = []
     if os.name == "nt":
         for directory in (args.runtime_dir, args.dependency_dir):

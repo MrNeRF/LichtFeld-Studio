@@ -349,7 +349,7 @@ When combined PNG collection continues after its first EXIF retention omission, 
 The regression corpus checks exact decoded Brotli bytes and aggregate statuses, high-expansion JXL output, near-`UINT64_MAX` box lengths, and a Linux sparse-file encoded-input ceiling. Opaque external-entity markup is preserved; on Linux an inotify watch verifies that the referenced local file is neither opened nor read. Zlib/deflate fixtures cover both HEIC and AVIF, EXIF and later-packet preservation, malformed/truncated/trailing streams, empty output and the exact 16 MiB provider boundary.
 ## Standard XMP property interpretation
 
-`summarizeImageMetadata` projects selected standard XMP properties from packets already retained in the catalog. The existing `source-metadata` CLI calls this summary. Collection and `MediaIngest::sourceMetadata` preserve original packets independently; normal probing, pixel decoding and training do not request interpretation. The Python catalog result remains the original catalog transport.
+`summarizeImageMetadata` projects selected standard XMP properties from packets already retained in the catalog. The existing `source-metadata` CLI calls this summary. Collection and `MediaIngest::sourceMetadata` preserve original packets independently; normal probing, pixel decoding and training do not request interpretation. Python callers can request the same image catalog and summary through `lichtfeld.media.MediaIngest.source_metadata_json(path)`.
 
 Expat recognizes expanded namespace URIs, not prefix spelling, in abbreviated attributes and simple RDF property elements. Supported fields are TIFF Make/Model/Orientation; EXIF ExposureTime, FNumber, FocalLength, GPSLatitude/Longitude, GPSAltitude/AltitudeRef, GPSMapDatum, DateTimeOriginal/Digitized; CIPA LensMake/LensModel; auxiliary Lens; XMP CreateDate/ModifyDate. Unknown properties remain in the packet. Structured or qualified forms of recognized properties yield Unsupported facts. This is a scalar projection rather than a complete RDF graph implementation; selected DJI source properties use the separate interpretation contract below.
 
@@ -422,3 +422,37 @@ Standard and Extended portions use the same bounded Expat parser and scalar proj
 Ordinary packets without extended declarations use the existing streaming projection. Extended inputs are prepared as a bounded set before projection so later duplicate/invalid associations cannot retroactively invalidate published facts. Parsers are released after each parse; owned parsed scalar text is bounded by aggregate input and per-packet text limits. One validated assembly buffer is used at a time and released after parsing. A standard declaration without retained fragments is reported explicitly; detecting this declaration can cause a second bounded interpretation pass over that catalog. These limits do not establish a whole-process memory ceiling or complete RDF graph support.
 
 Format reference: [Adobe XMP Specification Part 3, section 1.1.3.1](https://github.com/adobe/XMP-Toolkit-SDK/blob/main/docs/XMPSpecificationPart3.pdf).
+
+## Python image metadata access
+
+`lichtfeld.media.MediaIngest.source_metadata_json(path)` returns an owned JSON
+string with the same `schema_version`, `success`, `metadata` and `summary`
+fields as `media-ingest source-metadata INPUT`. It reuses the catalog reader,
+image summary and JSON serializers. Binary originals remain hex encoded;
+partial collection and interpretation retain their original states and
+provenance. The call uses the same default collection and summary budgets as
+the CLI. `source_exif_json` keeps its existing result format.
+
+The explicit call accepts the existing Python filesystem path conversion and
+releases the GIL during collection, interpretation and serialization. An
+empty source argument raises the existing LichtFeld error; filesystem argument
+conversion failures (including embedded NUL) raise TypeError. A missing file or an
+unsupported/malformed carrier can instead return catalog diagnostics, just as
+in the CLI. A successful call does not imply that every packet was parsed.
+Returned strings do not borrow catalog, parser or source-file storage.
+
+For example, a plugin can inspect the preserved declarations in-process:
+
+```python
+import json
+import lichtfeld
+
+result = json.loads(lichtfeld.media.MediaIngest.source_metadata_json(image_path))
+for fact in result["summary"]["facts"]:
+    if fact["state"] == "present" and not fact["ambiguous"]:
+        print(fact["semantic"], fact["value"], fact["unit"])
+```
+
+Validity and ambiguity are properties of the interpreted declaration, not a
+GNSS or calibration quality guarantee. Dataset/training loading does not
+request this operation automatically.

@@ -91,12 +91,14 @@ nanobind_add_module(media_test_bindings python_bindings.cpp
 target_compile_features(media_test_bindings PRIVATE cxx_std_23)
 target_include_directories(media_test_bindings PRIVATE ${MEDIA_ROOT}/src)
 target_link_libraries(media_test_bindings PRIVATE lfs_media)
+add_dependencies(media_test_bindings media-ingest)
 if(MSVC)
     target_compile_options(media_test_bindings PRIVATE /utf-8)
 endif()
 add_test(NAME MediaPythonBindingsContracts
     COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../test_media_bindings.py
         --module-dir $<TARGET_FILE_DIR:media_test_bindings> --runtime-dir ${CMAKE_BINARY_DIR}
+        --cli $<TARGET_FILE:media-ingest>
         --dependency-dir "${MEDIA_RUNTIME_LIBRARY_DIR}")
 set_tests_properties(MediaPythonBindingsContracts PROPERTIES LABELS "media;cpu;offline;integration"
     TIMEOUT 180

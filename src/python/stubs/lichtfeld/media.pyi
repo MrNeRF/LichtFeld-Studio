@@ -831,6 +831,12 @@ class MediaIngest:
     def capabilities() -> IngestCapabilities: ...
 
     @staticmethod
+    def source_metadata_json(path: str | os.PathLike) -> str:
+        """
+        Read the original image metadata catalog and interpreted summary as JSON, using the source-metadata CLI schema and default limits. Collection and interpretation run with the GIL released; binary values are hex and partial results retain their status.
+        """
+
+    @staticmethod
     def source_exif_json(path: str | os.PathLike) -> str:
         """
         Read JPEG/PNG EXIF envelopes, primary HEIF or JPEG XL provider-decoded EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.
