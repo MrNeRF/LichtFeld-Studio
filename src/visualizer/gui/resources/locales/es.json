@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Adicional 6",
   "gamepad.binding.capture_button": "Pulsa un botón o un gatillo.",
   "gamepad.binding.options": "Opciones de asignación",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Vista izquierda",
+  "gamepad.indicator.right": "Vista derecha",
+  "gamepad.indicator.suspended": "En pausa",
+  "gamepad.indicator.no_device": "Conecta o selecciona un mando",
+  "gamepad.indicator.viewport": "Haz clic en la vista para activar",
+  "gamepad.indicator.neutral": "Suelta los controles",
+  "gamepad.indicator.mapping": "Configura los controles asignados",
+  "gamepad.indicator.projection": "Usa Órbita o Trackball",
+  "gamepad.indicator.disabled": "Desactivado",
+  "gamepad.binding.shoulder_preset": "Preajuste de botones superiores",
+  "gamepad.binding.apply_preset": "Aplicar preajuste",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: siguiente navegación. RB/R1: siguiente visualización. Se aplica a todos los modos y sustituye las excepciones de estos comandos y las asignaciones superiores en conflicto. Conserva los demás ajustes.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: siguiente navegación. RB/R1: siguiente visualización. Sustituye conflictos solo en el contexto seleccionado."
 }

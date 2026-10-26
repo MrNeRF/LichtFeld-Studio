@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "附加 6",
   "gamepad.binding.capture_button": "按下按钮或扳机。",
   "gamepad.binding.options": "分配选项",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "左视图",
+  "gamepad.indicator.right": "右视图",
+  "gamepad.indicator.suspended": "已暂停",
+  "gamepad.indicator.no_device": "连接或选择游戏手柄",
+  "gamepad.indicator.viewport": "点击视图以激活",
+  "gamepad.indicator.neutral": "松开控件",
+  "gamepad.indicator.mapping": "配置已分配的控件",
+  "gamepad.indicator.projection": "使用环绕或轨迹球模式",
+  "gamepad.indicator.disabled": "已禁用",
+  "gamepad.binding.shoulder_preset": "肩键预设",
+  "gamepad.binding.apply_preset": "应用预设",
+  "gamepad.binding.shoulder_preset_all": "LB/L1：下一导航模式。RB/R1：下一渲染模式。应用于所有模式，替换这两个命令的独立设置及冲突的肩键分配。保留其他设置。",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1：下一导航模式。RB/R1：下一渲染模式。仅替换所选上下文中的冲突分配。"
 }

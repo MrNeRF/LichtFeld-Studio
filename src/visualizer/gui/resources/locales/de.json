@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Zusatz 6",
   "gamepad.binding.capture_button": "Taste oder Trigger drücken.",
   "gamepad.binding.options": "Belegungsoptionen",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Linke Ansicht",
+  "gamepad.indicator.right": "Rechte Ansicht",
+  "gamepad.indicator.suspended": "Pausiert",
+  "gamepad.indicator.no_device": "Gamepad anschließen oder auswählen",
+  "gamepad.indicator.viewport": "Zum Aktivieren in die Ansicht klicken",
+  "gamepad.indicator.neutral": "Bedienelemente loslassen",
+  "gamepad.indicator.mapping": "Zugewiesene Eingaben konfigurieren",
+  "gamepad.indicator.projection": "Orbit oder Trackball verwenden",
+  "gamepad.indicator.disabled": "Deaktiviert",
+  "gamepad.binding.shoulder_preset": "Schultertasten-Vorlage",
+  "gamepad.binding.apply_preset": "Vorlage anwenden",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: nächster Navigationsmodus. RB/R1: nächster Rendermodus. Gilt für alle Modi und ersetzt Overrides dieser Befehle sowie widersprechende Schulterbelegungen. Andere Einstellungen bleiben erhalten.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: nächster Navigationsmodus. RB/R1: nächster Rendermodus. Ersetzt Konflikte nur im gewählten Kontext."
 }

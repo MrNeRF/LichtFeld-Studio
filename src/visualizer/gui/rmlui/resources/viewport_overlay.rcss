@@ -2261,5 +2261,17 @@ body {
 .gamepad-navigation-indicator {
     left: 12dp;
     bottom: 12dp;
-    max-width: 600dp;
+    max-width: 320dp;
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    white-space: normal;
 }
+.gamepad-indicator-heading { display: flex; align-items: center; gap: 7dp; }
+.gamepad-indicator-dot { width: 6dp; height: 6dp; border-radius: 3dp; flex-shrink: 0; }
+.gamepad-indicator-label { font-size: 11dp; }
+.gamepad-indicator-mode { font-weight: bold; font-size: 12dp; }
+.gamepad-indicator-panel { font-size: 11dp; }
+.gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
+
+.gamepad-navigation-indicator.hidden { display: none; }

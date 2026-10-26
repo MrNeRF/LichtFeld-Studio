@@ -40,7 +40,7 @@ namespace lfs::vis::input {
         throw std::invalid_argument("Unknown gamepad control");
     }
     inline int controlFromName(const std::string& name) {
-        for (int i = -1; i < SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT; ++i)
+        for (int i = -1; i < int(SDL_GAMEPAD_AXIS_COUNT) + int(SDL_GAMEPAD_BUTTON_COUNT); ++i)
             if (controlName(i) == name) return i;
         throw std::invalid_argument("Unknown gamepad control: " + name);
     }
@@ -49,6 +49,20 @@ namespace lfs::vis::input {
         if (action == static_cast<size_t>(GamepadAction::ExitWalk)) return mode == 4;
         return mode != 4 || (action != static_cast<size_t>(GamepadAction::Vertical) && action != static_cast<size_t>(GamepadAction::Fast));
     }
+    // Try each other mode once. The activation callback performs the real
+    // capability/spawn check without committing failed candidates.
+    template <class Activate>
+    bool cycleGamepadNavigation(GamepadNavigationMode current, int direction, bool orthographic, Activate&& activate) {
+        if (direction != 1 && direction != -1) return false;
+        const int start = static_cast<int>(current);
+        for (int offset = 1; offset < int(gamepad_modes.size()); ++offset) {
+            const int index = (start + direction * offset + int(gamepad_modes.size())) % int(gamepad_modes.size());
+            if (orthographic && index > 1) continue;
+            if (activate(static_cast<GamepadNavigationMode>(index))) return true;
+        }
+        return false;
+    }
+
     struct GamepadBinding {
         int positive = -1;
         int negative = -1;
@@ -87,9 +101,9 @@ namespace lfs::vis::input {
             common[2] = {SDL_GAMEPAD_AXIS_RIGHTX, -1, true};
             common[3] = {SDL_GAMEPAD_AXIS_RIGHTY, -1, true};
             common[4] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_GAMEPAD_AXIS_LEFT_TRIGGER};
-            common[5] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_LEFT_SHOULDER};
-            common[6] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER};
-            modes[4][7] = GamepadBinding{SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_EAST};
+            common[8] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_LEFT_SHOULDER};
+            common[10] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER};
+            modes[4][7] = GamepadBinding{int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_EAST};
         }
         const GamepadBinding& resolve(size_t mode, size_t action) const {
             return modes.at(mode).at(action) ? *modes[mode][action] : common.at(action);
@@ -97,7 +111,7 @@ namespace lfs::vis::input {
         void validate() const {
             for (size_t a = 0; a < gamepad_action_count; ++a) common[a].validate(a);
             for (size_t m = 0; m < modes.size(); ++m) {
-                std::array<int, SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT> owner;
+                std::array<int, int(SDL_GAMEPAD_AXIS_COUNT) + int(SDL_GAMEPAD_BUTTON_COUNT)> owner;
                 owner.fill(-1);
                 for (size_t a = 0; a < gamepad_action_count; ++a) {
                     if (modes[m][a]) modes[m][a]->validate(a);

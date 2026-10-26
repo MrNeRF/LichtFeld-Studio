@@ -693,6 +693,10 @@ namespace lfs::vis {
     }
 
     bool InputController::setCameraNavigationMode(const CameraNavigationMode mode) {
+        return setCameraNavigationModeImpl(mode, true);
+    }
+
+    bool InputController::setCameraNavigationModeImpl(const CameraNavigationMode mode, const bool report_failure) {
         if (camera_navigation_mode_ == mode)
             return true;
 
@@ -702,6 +706,7 @@ namespace lfs::vis {
             try {
                 core::settleWalk(candidate, walk_settings, camera.navigationUp(), walkQuery());
             } catch (const std::exception& error) {
+                if (!report_failure) return false;
                 const auto message = core::localizedCollisionError(error);
                 if (walk_error != message) {
                     lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
@@ -2733,13 +2738,16 @@ namespace lfs::vis {
             return true;
         }
         if (intent.navigation_step) {
-            // Navigation enum order is not a serialization contract; use the public names.
-            const auto name = cameraNavigationModeName(camera_navigation_mode_);
-            const auto found = std::find(input::gamepad_modes.begin(), input::gamepad_modes.end(), name);
-            if (found != input::gamepad_modes.end()) {
-                const auto index = (std::distance(input::gamepad_modes.begin(), found) + intent.navigation_step + 5) % 5;
-                if (const auto mode = cameraNavigationModeFromName(std::string(input::gamepad_modes[index])))
-                    setCameraNavigationMode(*mode);
+            const bool changed = input::cycleGamepadNavigation(context.mode, intent.navigation_step, projection.orthographic,
+                [&](input::GamepadNavigationMode candidate) {
+                    const auto mode = cameraNavigationModeFromName(std::string(input::gamepad_modes[static_cast<size_t>(candidate)]));
+                    return mode && setCameraNavigationModeImpl(*mode, false);
+                });
+            if (changed) {
+                // This deliberate command came from an armed viewport. Keep its
+                // ownership, but require released controls before resuming motion.
+                ++gamepad_click_epoch_;
+                gamepad_frame_demand_ = true;
             }
             return true;
         }

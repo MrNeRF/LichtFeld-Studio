@@ -6,7 +6,15 @@
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
-    <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden"></div>
+    <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden">
+        <div class="gamepad-indicator-heading">
+            <span class="gamepad-indicator-dot"></span>
+            <span id="gamepad-indicator-label" class="gamepad-indicator-label">@tr:preferences.input_gamepad</span>
+            <span id="gamepad-indicator-mode" class="gamepad-indicator-mode"></span>
+            <span id="gamepad-indicator-panel" class="gamepad-indicator-panel hidden"></span>
+        </div>
+        <div id="gamepad-indicator-status" class="gamepad-indicator-status hidden"></div>
+    </div>
     <div id="comparison-name-left" class="comparison-name hidden"></div>
     <div id="comparison-name-right" class="comparison-name hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>

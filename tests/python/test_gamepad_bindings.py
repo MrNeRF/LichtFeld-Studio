@@ -167,3 +167,59 @@ def test_reassigning_stick_keeps_explicit_inversion_option(editor):
     e.subject.edit('move_x','assign');e.now[0]+=.13;e.subject.sync()
     e.state['axes'][0]=.9;e.subject.sync()
     assert e.profile['bindings']['common']['move_x']['inverted'] is True
+
+@pytest.fixture
+def shoulders(editor):
+    e=editor
+    for name in ('precision','fast','next_navigation'):
+        e.profile['bindings']['common'][name]=dict(e.module.EMPTY)
+        e.subject.catalog['actions'].append({'id':name,'continuous':False,'modes':['orbit','walk']})
+    e.profile['bindings']['common']['precision']['positive']='button.left_shoulder'
+    e.profile['bindings']['common']['fast']['positive']='button.right_shoulder'
+    e.profile['enabled']=True
+    return e
+
+
+def test_common_shoulder_preset_replaces_conflicts_without_resetting_tuning(shoulders):
+    e=shoulders
+    e.profile['bindings']['common']['move_x']['positive']='axis.left_x'
+    e.profile['bindings']['modes']['orbit']={'next_navigation':{**e.module.EMPTY,'positive':'button.north'}}
+    candidate=e.module.shoulder_navigation_preset(e.profile,e.subject.catalog,'common')
+    assert candidate['bindings']['common']['next_navigation']['positive']=='button.left_shoulder'
+    assert candidate['bindings']['common']['next_rendering']['positive']=='button.right_shoulder'
+    assert candidate['bindings']['common']['precision']['positive']=='none'
+    assert candidate['bindings']['common']['fast']['positive']=='none'
+    assert candidate['bindings']['common']['move_x']['positive']=='axis.left_x'
+    assert 'next_navigation' not in candidate['bindings']['modes']['orbit']
+    assert candidate['move_speed']==2 and candidate['enabled'] is True
+    assert not e.module.conflicts(candidate,e.subject.catalog)
+    assert e.profile['bindings']['common']['precision']['positive']=='button.left_shoulder'
+
+
+def test_mode_shoulder_preset_changes_only_that_context(shoulders):
+    e=shoulders
+    candidate=e.module.shoulder_navigation_preset(e.profile,e.subject.catalog,'orbit')
+    assert e.module.effective(candidate,'orbit','next_navigation')['positive']=='button.left_shoulder'
+    assert e.module.effective(candidate,'orbit','precision')['positive']=='none'
+    assert e.module.effective(candidate,'walk','precision')['positive']=='button.left_shoulder'
+    assert candidate['bindings']['common']==e.profile['bindings']['common']
+    assert not e.module.conflicts(candidate,e.subject.catalog)
+
+
+def test_shoulder_preset_preserves_modifiers_assigned_to_other_buttons(shoulders):
+    e=shoulders;e.profile['bindings']['common']['precision']['positive']='button.south'
+    candidate=e.module.shoulder_navigation_preset(e.profile,e.subject.catalog,'common')
+    assert candidate['bindings']['common']['precision']['positive']=='button.south'
+    assert not e.module.conflicts(candidate,e.subject.catalog)
+
+
+def test_shoulder_preset_confirmation_is_atomic_and_cancels_capture(shoulders):
+    e=shoulders;e.subject.edit('move_x','assign');assert e.subject.capture
+    before=copy.deepcopy(e.profile)
+    e.subject.apply_shoulder_preset()
+    assert e.subject.capture is None and e.selected[-1]==0
+    e.choices[-1][-1]('common.cancel')
+    assert e.profile==before and not e.saves
+    e.subject.apply_shoulder_preset();e.choices[-1][-1]('gamepad.binding.apply_preset')
+    assert e.profile['bindings']['common']['next_navigation']['positive']=='button.left_shoulder'
+    assert len(e.saves)==1

@@ -194,6 +194,8 @@ def test_navigation_status_and_presets_exist_in_every_locale():
     root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
     keys = {"gamepad.navigation." + state for state in
             ("disabled", "no_device", "suspended", "projection", "mapping", "viewport", "neutral", "ready", "moving")}
+    keys.update("gamepad.indicator." + state for state in ("disabled", "no_device", "suspended", "projection", "mapping", "viewport", "neutral", "left", "right"))
+    keys.update("gamepad.binding." + key for key in ("shoulder_preset", "shoulder_preset_all", "shoulder_preset_mode", "apply_preset"))
     keys.update("gamepad.preset." + mode for mode in ("orbit", "trackball", "fpv", "drone", "walk"))
     for path in root.glob("*.json"):
         values = json.loads(path.read_text(encoding="utf-8"))

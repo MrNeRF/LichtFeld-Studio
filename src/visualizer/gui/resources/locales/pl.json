@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Dodatkowy 6",
   "gamepad.binding.capture_button": "Naciśnij przycisk lub spust.",
   "gamepad.binding.options": "Opcje przypisania",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Lewy widok",
+  "gamepad.indicator.right": "Prawy widok",
+  "gamepad.indicator.suspended": "Wstrzymano",
+  "gamepad.indicator.no_device": "Podłącz lub wybierz kontroler",
+  "gamepad.indicator.viewport": "Kliknij widok, aby aktywować",
+  "gamepad.indicator.neutral": "Zwolnij elementy sterujące",
+  "gamepad.indicator.mapping": "Skonfiguruj przypisane wejścia",
+  "gamepad.indicator.projection": "Użyj Orbity lub Trackballa",
+  "gamepad.indicator.disabled": "Wyłączono",
+  "gamepad.binding.shoulder_preset": "Preset przycisków naramiennych",
+  "gamepad.binding.apply_preset": "Zastosuj preset",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: następny tryb nawigacji. RB/R1: następny tryb renderowania. Dotyczy wszystkich trybów; zastępuje wyjątki tych poleceń i kolidujące przypisania naramienne. Pozostałe ustawienia bez zmian.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: następna nawigacja. RB/R1: następne renderowanie. Zastępuje konflikty tylko w wybranym kontekście."
 }

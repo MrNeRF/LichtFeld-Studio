@@ -835,7 +835,7 @@ TEST(PreferencesMigration, InvalidGamepadProfileDoesNotOverwriteSavedPreferences
     invalid["enabled"] = "true";
     EXPECT_FALSE(preferences.setGamepadNavigation(invalid.dump()));
     EXPECT_EQ(readPreferences(*paths), before);
-    settings.bindings.common[8] = settings.bindings.common[5];
+    settings.bindings.common[8] = settings.bindings.common[10];
     EXPECT_FALSE(preferences.setGamepadNavigation(settings.json().dump()));
     EXPECT_EQ(readPreferences(*paths), before);
 }

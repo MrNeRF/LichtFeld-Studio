@@ -47,7 +47,8 @@ namespace lfs::vis::gui {
             if (!element)
                 return false;
             for (auto* node = element; node; node = node->GetParentNode()) {
-                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint")
+                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint" ||
+                    node->GetId() == "gamepad-navigation-indicator")
                     return false;
             }
             return element->GetTagName() != "body" &&
@@ -1558,16 +1559,39 @@ namespace lfs::vis::gui {
         }
         if (!enabled)
             return;
-        const std::string key = "gamepad.navigation." + std::string(controller->gamepadNavigationStatus());
-        const auto device = controller->gamepadNavigationDevice();
-        const auto device_label = device ? "#" + std::to_string(device) : std::string("—");
-        const auto text = std::format("{} · {} · {} · {} · {}", LOC("gamepad.navigation_title"), device_label,
-                                      controller->gamepadNavigationPanel() == SplitViewPanelId::Right ? "R" : "L",
-                                      InputController::cameraNavigationModeName(controller->cameraNavigationMode()), LOC(key));
-        const auto encoded = Rml::StringUtilities::EncodeRml(text);
-        if (element->GetInnerRML() != encoded) {
-            element->SetInnerRML(encoded);
-            markRenderNeeded(RenderReason::DocumentHook);
+        const std::string_view status = controller->gamepadNavigationStatus();
+        const bool ready = status == "ready" || status == "moving";
+        const auto set_class = [&](Rml::Element* target, const char* name, bool value) {
+            if (target && target->IsClassSet(name) != value) {
+                target->SetClass(name, value);
+                markRenderNeeded(RenderReason::DocumentHook);
+            }
+        };
+        const auto set_text = [&](const char* id, const std::string& text) {
+            if (auto* target = document_->GetElementById(id)) {
+                const auto encoded = Rml::StringUtilities::EncodeRml(text);
+                if (target->GetInnerRML() != encoded) {
+                    target->SetInnerRML(encoded);
+                    markRenderNeeded(RenderReason::DocumentHook);
+                }
+            }
+        };
+        set_text("gamepad-indicator-label", LOC("preferences.input_gamepad"));
+        set_class(element, "is-ready", ready);
+        set_class(element, "needs-action", !ready && status != "suspended");
+        const auto mode_key = controller->cameraNavigationMode() == InputController::CameraNavigationMode::Walk
+            ? std::string("collision.walk")
+            : std::string("preferences.navigation_") + InputController::cameraNavigationModeName(controller->cameraNavigationMode());
+        set_text("gamepad-indicator-mode", LOC(mode_key));
+        const bool split = split_divider_overlay_.visible;
+        set_class(document_->GetElementById("gamepad-indicator-panel"), "hidden", !split);
+        if (split)
+            set_text("gamepad-indicator-panel", controller->gamepadNavigationPanel() == SplitViewPanelId::Right
+                ? LOC("gamepad.indicator.right") : LOC("gamepad.indicator.left"));
+        set_class(document_->GetElementById("gamepad-indicator-status"), "hidden", ready);
+        if (!ready) {
+            const auto key = "gamepad.indicator." + std::string(status);
+            set_text("gamepad-indicator-status", LOC(key));
         }
     }
 

@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "追加 6",
   "gamepad.binding.capture_button": "ボタンまたはトリガーを押してください。",
   "gamepad.binding.options": "割り当てオプション",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "左ビュー",
+  "gamepad.indicator.right": "右ビュー",
+  "gamepad.indicator.suspended": "一時停止中",
+  "gamepad.indicator.no_device": "ゲームパッドを接続・選択",
+  "gamepad.indicator.viewport": "ビューをクリックして有効化",
+  "gamepad.indicator.neutral": "操作を離してください",
+  "gamepad.indicator.mapping": "割り当てた操作を設定",
+  "gamepad.indicator.projection": "オービットかトラックボールを使用",
+  "gamepad.indicator.disabled": "無効",
+  "gamepad.binding.shoulder_preset": "ショルダーボタン設定",
+  "gamepad.binding.apply_preset": "設定を適用",
+  "gamepad.binding.shoulder_preset_all": "LB/L1：次の移動モード。RB/R1：次の描画モード。全モードに適用し、この2コマンドの個別設定と競合するショルダーボタンの割り当てを置き換えます。他の設定は維持します。",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1：次の移動モード。RB/R1：次の描画モード。選択したコンテキスト内の競合のみ置き換えます。"
 }

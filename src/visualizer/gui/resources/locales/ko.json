@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "추가 6",
   "gamepad.binding.capture_button": "버튼이나 트리거를 누르세요.",
   "gamepad.binding.options": "할당 옵션",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "왼쪽 뷰",
+  "gamepad.indicator.right": "오른쪽 뷰",
+  "gamepad.indicator.suspended": "일시 정지",
+  "gamepad.indicator.no_device": "게임패드를 연결하거나 선택하세요",
+  "gamepad.indicator.viewport": "뷰를 클릭하여 활성화",
+  "gamepad.indicator.neutral": "조작부에서 손을 떼세요",
+  "gamepad.indicator.mapping": "할당된 조작을 설정하세요",
+  "gamepad.indicator.projection": "궤도 또는 트랙볼을 사용하세요",
+  "gamepad.indicator.disabled": "비활성화",
+  "gamepad.binding.shoulder_preset": "숄더 버튼 프리셋",
+  "gamepad.binding.apply_preset": "프리셋 적용",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: 다음 탐색 모드. RB/R1: 다음 렌더링 모드. 모든 모드에 적용하며 두 명령의 재정의와 충돌하는 숄더 할당을 교체합니다. 다른 설정은 유지됩니다.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: 다음 탐색 모드. RB/R1: 다음 렌더링 모드. 선택한 컨텍스트의 충돌만 교체합니다."
 }

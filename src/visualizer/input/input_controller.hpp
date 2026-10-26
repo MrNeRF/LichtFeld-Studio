@@ -215,6 +215,7 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure);
         bool updateGamepadNavigation(float delta_time);
         void stopGamepadMotion();
         input::GamepadNavigationSettings gamepad_settings_;

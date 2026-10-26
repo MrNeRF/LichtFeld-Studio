@@ -92,22 +92,25 @@ TEST_F(NavigationTest, RadialDeadZonePreservesPartialDeflectionAndBoundsDiagonal
 }
 
 TEST_F(NavigationTest, TriggerDifferenceAndPrecisionHaveExplicitPrecedence) {
+    settings.bindings.common[5] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_LEFT_STICK};
+    settings.bindings.common[6] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_STICK};
     arm();
     sample.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = 1;
     sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
     EXPECT_FLOAT_EQ(tick().vertical, 0);
     sample.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = 0;
     EXPECT_FLOAT_EQ(tick().vertical, 1);
-    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
-    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_STICK] = true;
+    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_STICK] = true;
     EXPECT_FLOAT_EQ(tick().speed, 0.35f);
 }
 
 TEST_F(NavigationTest, WalkDoesNotFlyOrSprintAndOnlyEastCanExitWalk) {
     context.mode = GamepadNavigationMode::Walk;
+    settings.bindings.common[6] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_STICK};
     arm();
     sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
-    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_STICK] = true;
     sample.pressed[SDL_GAMEPAD_BUTTON_SOUTH] = true;
     const auto intent = tick();
     EXPECT_FLOAT_EQ(intent.vertical, 0);
@@ -219,7 +222,7 @@ TEST_F(NavigationTest, InvalidProfilesAndConflictsAreRejected) {
     profile = settings.json();
     profile["device"] = 42;
     EXPECT_THROW(GamepadNavigationSettings::fromJson(profile), std::invalid_argument);
-    settings.bindings.common[8] = settings.bindings.common[5];
+    settings.bindings.common[8] = settings.bindings.common[10];
     EXPECT_THROW(settings.validate(), std::invalid_argument);
     settings = GamepadNavigationSettings{true};
     settings.bindings.modes[4][6] = GamepadBinding{SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
@@ -299,4 +302,62 @@ TEST_F(NavigationTest, LegacyProfileDefaultsToDisabledAndEnablementRemainsAnExpl
     EXPECT_FALSE(GamepadNavigationSettings::fromJson(profile).enabled);
     profile["enabled"] = "true";
     EXPECT_THROW(GamepadNavigationSettings::fromJson(profile), nlohmann::json::exception);
+}
+
+TEST_F(NavigationTest, ShoulderFactoryPresetCyclesBothCommandsOncePerPress) {
+    settings.validate();
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
+    auto intent = tick();
+    EXPECT_EQ(intent.navigation_step, 1);
+    EXPECT_FLOAT_EQ(intent.speed, settings.move_speed);
+    EXPECT_EQ(tick().navigation_step, 0);
+    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = false;
+    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    EXPECT_EQ(tick().rendering_step, 1);
+    EXPECT_EQ(tick().rendering_step, 0);
+}
+
+TEST_F(NavigationTest, DeliberateControllerModeChangeRearmsOnlyAfterNeutralWithoutNewMouseClick) {
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
+    EXPECT_EQ(tick().navigation_step, 1);
+    session.suspend(context.click_epoch);
+    context.mode = GamepadNavigationMode::Trackball;
+    ++context.click_epoch; // trusted mode command from the previously armed target
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "neutral");
+    sample.buttons.fill(false);
+    for (int i = 0; i < 3; ++i) tick();
+    EXPECT_STREQ(session.status(), "ready");
+    sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
+    EXPECT_EQ(tick().navigation_step, 1);
+}
+
+TEST(GamepadModeCycle, SkipsUnavailableWalkAndWrapsInBothDirections) {
+    using namespace lfs::vis::input;
+    std::vector<GamepadNavigationMode> tried;
+    EXPECT_TRUE(cycleGamepadNavigation(GamepadNavigationMode::Drone, 1, false, [&](auto mode) {
+        tried.push_back(mode);
+        return mode != GamepadNavigationMode::Walk;
+    }));
+    EXPECT_EQ(tried, (std::vector{GamepadNavigationMode::Walk, GamepadNavigationMode::Orbit}));
+    tried.clear();
+    EXPECT_TRUE(cycleGamepadNavigation(GamepadNavigationMode::Orbit, -1, false, [&](auto mode) {
+        tried.push_back(mode);
+        return mode != GamepadNavigationMode::Walk;
+    }));
+    EXPECT_EQ(tried, (std::vector{GamepadNavigationMode::Walk, GamepadNavigationMode::Drone}));
+}
+
+TEST(GamepadModeCycle, OrthographicCyclesOnlySupportedModesAndFailureIsBounded) {
+    using namespace lfs::vis::input;
+    std::vector<GamepadNavigationMode> tried;
+    EXPECT_TRUE(cycleGamepadNavigation(GamepadNavigationMode::Trackball, 1, true, [&](auto mode) {
+        tried.push_back(mode); return true;
+    }));
+    EXPECT_EQ(tried, (std::vector{GamepadNavigationMode::Orbit}));
+    int attempts = 0;
+    EXPECT_FALSE(cycleGamepadNavigation(GamepadNavigationMode::Orbit, 1, false, [&](auto) { ++attempts; return false; }));
+    EXPECT_EQ(attempts, 4);
 }

@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Extra 6",
   "gamepad.binding.capture_button": "Press a button or a trigger.",
   "gamepad.binding.options": "Assignment options",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Left view",
+  "gamepad.indicator.right": "Right view",
+  "gamepad.indicator.suspended": "Paused",
+  "gamepad.indicator.no_device": "Connect or select a gamepad",
+  "gamepad.indicator.viewport": "Click the view to activate",
+  "gamepad.indicator.neutral": "Release the controls",
+  "gamepad.indicator.mapping": "Configure the assigned controls",
+  "gamepad.indicator.projection": "Use Orbit or Trackball",
+  "gamepad.indicator.disabled": "Disabled",
+  "gamepad.binding.shoulder_preset": "Shoulder preset",
+  "gamepad.binding.apply_preset": "Apply preset",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: next navigation mode. RB/R1: next rendering mode. Apply to all modes, replacing these two command overrides and conflicting shoulder assignments. Other settings are preserved.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: next navigation mode. RB/R1: next rendering mode. Replace conflicting assignments only in the selected context."
 }

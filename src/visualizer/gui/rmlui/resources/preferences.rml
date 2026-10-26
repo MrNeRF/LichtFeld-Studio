@@ -464,6 +464,7 @@
             </div>
           </div>
           <div class="preferences-inline-actions">
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_shoulder_preset()">@tr:gamepad.binding.shoulder_preset</button>
             <button class="btn btn--secondary" data-event-click="gamepad_binding_reset()">@tr:gamepad.binding.reset</button>
           </div>
         </div>

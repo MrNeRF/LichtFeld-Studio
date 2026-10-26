@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Supplémentaire 6",
   "gamepad.binding.capture_button": "Appuyez sur un bouton ou une gâchette.",
   "gamepad.binding.options": "Options d’affectation",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Vue gauche",
+  "gamepad.indicator.right": "Vue droite",
+  "gamepad.indicator.suspended": "En pause",
+  "gamepad.indicator.no_device": "Connectez ou choisissez une manette",
+  "gamepad.indicator.viewport": "Cliquez dans la vue pour activer",
+  "gamepad.indicator.neutral": "Relâchez les commandes",
+  "gamepad.indicator.mapping": "Configurez les commandes affectées",
+  "gamepad.indicator.projection": "Utilisez Orbite ou Trackball",
+  "gamepad.indicator.disabled": "Désactivé",
+  "gamepad.binding.shoulder_preset": "Préréglage des boutons supérieurs",
+  "gamepad.binding.apply_preset": "Appliquer le préréglage",
+  "gamepad.binding.shoulder_preset_all": "LB/L1 : navigation suivante. RB/R1 : rendu suivant. S’applique à tous les modes, remplaçant les exceptions de ces commandes et les affectations supérieures en conflit. Les autres réglages sont conservés.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1 : navigation suivante. RB/R1 : rendu suivant. Remplace les conflits uniquement dans le contexte choisi."
 }

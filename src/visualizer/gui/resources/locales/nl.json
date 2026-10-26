@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Extra 6",
   "gamepad.binding.capture_button": "Druk een knop of trekker in.",
   "gamepad.binding.options": "Toewijzingsopties",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Linker weergave",
+  "gamepad.indicator.right": "Rechter weergave",
+  "gamepad.indicator.suspended": "Gepauzeerd",
+  "gamepad.indicator.no_device": "Sluit een gamepad aan of kies er een",
+  "gamepad.indicator.viewport": "Klik in de weergave om te activeren",
+  "gamepad.indicator.neutral": "Laat de bediening los",
+  "gamepad.indicator.mapping": "Configureer de toegewezen bediening",
+  "gamepad.indicator.projection": "Gebruik Orbit of Trackball",
+  "gamepad.indicator.disabled": "Uitgeschakeld",
+  "gamepad.binding.shoulder_preset": "Schouderknoppenpreset",
+  "gamepad.binding.apply_preset": "Preset toepassen",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: volgende navigatiemodus. RB/R1: volgende rendermodus. Geldt voor alle modi en vervangt uitzonderingen van deze opdrachten en conflicterende schoudertoewijzingen. Andere instellingen blijven behouden.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: volgende navigatiemodus. RB/R1: volgende rendermodus. Vervangt conflicten alleen in de gekozen context."
 }

@@ -31,6 +31,30 @@ def conflicts(profile, catalog):
     return result
 
 
+def shoulder_navigation_preset(profile, catalog, scope):
+    """Replace the two shoulder assignments atomically within the chosen context."""
+    result = copy.deepcopy(profile)
+    bindings = result["bindings"]
+    preset = {"next_navigation": {**EMPTY, "positive": "button.left_shoulder"},
+              "next_rendering": {**EMPTY, "positive": "button.right_shoulder"}}
+    controls = {binding["positive"] for binding in preset.values()}
+    if scope == "common":
+        for action, binding in bindings["common"].items():
+            if action not in preset and controls.intersection((binding["positive"], binding["negative"])):
+                bindings["common"][action] = dict(EMPTY)
+        bindings["common"].update(preset)
+        # A common preset consistently assigns these two commands in all modes.
+        for overrides in bindings.setdefault("modes", {}).values():
+            for action in preset:
+                overrides.pop(action, None)
+    else:
+        bindings.setdefault("modes", {}).setdefault(scope, {}).update(preset)
+    for mode, first, second in conflicts(result, catalog):
+        other = first if first not in preset else second
+        bindings.setdefault("modes", {}).setdefault(mode, {})[other] = dict(EMPTY)
+    return result
+
+
 class GamepadBindingsSection:
     def __init__(self, owner, model):
         self.owner = owner
@@ -52,6 +76,7 @@ class GamepadBindingsSection:
         model.bind_event("gamepad_binding_cancel", lambda *_: self.cancel())
         model.bind_event("gamepad_binding_skip", lambda *_: self.finish_capture())
         model.bind_event("gamepad_binding_reset", lambda *_: self.reset())
+        model.bind_event("gamepad_binding_shoulder_preset", lambda *_: self.apply_shoulder_preset())
 
 
     @staticmethod
@@ -193,7 +218,22 @@ class GamepadBindingsSection:
                 break
         lf.ui.request_redraw(delay=.12)
 
+    def apply_shoulder_preset(self):
+        self.cancel()
+        scope = self.scope
+        label = self.tr("apply_preset")
+        def answer(button):
+            if button != label:
+                return
+            self.cancel()
+            self.expanded_action = None
+            self.save(shoulder_navigation_preset(self.profile(), self.catalog, scope))
+        lf.ui.confirm_dialog(self.tr("shoulder_preset"),
+                             self.tr("shoulder_preset_all" if scope == "common" else "shoulder_preset_mode"),
+                             [lf.ui.tr("common.cancel"), label], answer)
+
     def reset(self):
+        self.cancel()
         scope = self.scope
         label = self.tr("reset")
         def answer(button):

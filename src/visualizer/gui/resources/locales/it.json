@@ -3561,5 +3561,18 @@
   "gamepad.binding.button.misc6": "Aggiuntivo 6",
   "gamepad.binding.capture_button": "Premi un tasto o un grilletto.",
   "gamepad.binding.options": "Opzioni assegnazione",
-  "gamepad.device_label": "{name} · #{id}"
+  "gamepad.device_label": "{name} · #{id}",
+  "gamepad.indicator.left": "Vista sinistra",
+  "gamepad.indicator.right": "Vista destra",
+  "gamepad.indicator.suspended": "In pausa",
+  "gamepad.indicator.no_device": "Collega o seleziona un joypad",
+  "gamepad.indicator.viewport": "Clic nella vista per attivare",
+  "gamepad.indicator.neutral": "Rilascia i controlli",
+  "gamepad.indicator.mapping": "Configura i controlli assegnati",
+  "gamepad.indicator.projection": "Usa Orbita o Orbita libera",
+  "gamepad.indicator.disabled": "Disabilitato",
+  "gamepad.binding.shoulder_preset": "Preset dorsali",
+  "gamepad.binding.apply_preset": "Applica preset",
+  "gamepad.binding.shoulder_preset_all": "LB/L1: navigazione successiva. RB/R1: visualizzazione successiva. Si applica a tutte le modalità, sostituendo gli override dei due comandi e le assegnazioni dei dorsali in conflitto. Le altre impostazioni restano invariate.",
+  "gamepad.binding.shoulder_preset_mode": "LB/L1: navigazione successiva. RB/R1: visualizzazione successiva. Sostituisce le assegnazioni in conflitto solo nel contesto selezionato."
 }
