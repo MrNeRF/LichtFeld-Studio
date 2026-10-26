@@ -345,6 +345,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
 
         // Point cloud
         bool point_cloud_mode = false;

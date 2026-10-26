@@ -3169,7 +3169,7 @@ namespace lfs::core {
             n,
             rest,
             stream);
-        LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "sh_value quant codec device barrier");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "sh_value quant codec stream barrier");
 
         shN = std::move(u16);
         shN_value_bounds() = std::move(bounds);

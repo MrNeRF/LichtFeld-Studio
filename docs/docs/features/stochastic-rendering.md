@@ -34,7 +34,7 @@ The implementation follows [SteadySplats](https://arxiv.org/html/2610.05576v2), 
 
 ## Memory
 
-While a stochastic mode is on, each view needs 32 bytes per pixel (Stochastic) or 160 bytes per pixel (SteadySplats), about 66 MB or 330 MB at 1920 x 1080, plus 4 bytes per splat and a 1 MiB noise volume. Switching back to alpha blend frees them.
+While a stochastic mode is on, each view needs 32 bytes per pixel (Stochastic) or 96 bytes per pixel (SteadySplats), about 66 MB or 200 MB at 1920 x 1080, plus 4 bytes per splat and a 1 MiB noise volume. Switching back to alpha blend frees them. As in the authors' viewer, SteadySplats stores each of the four recent occluders in 8 bytes: the splat, a 16-bit depth key and its occlusion toward the four neighbors in steps of 1/15.
 
 ## References
 

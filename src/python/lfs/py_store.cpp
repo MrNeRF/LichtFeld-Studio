@@ -391,6 +391,8 @@ namespace lfs::python {
                 store.language_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "render_settings_generation")
                 store.render_settings_generation.set(nb::cast<std::uint64_t>(value));
+            else if (field == "viewport_toolbar_generation")
+                store.viewport_toolbar_generation.set(nb::cast<std::uint64_t>(value));
             else
                 throw_unknown_field(field);
         }
@@ -457,6 +459,8 @@ namespace lfs::python {
                 return nb::cast(store.language_generation.get());
             if (field == "render_settings_generation")
                 return nb::cast(store.render_settings_generation.get());
+            if (field == "viewport_toolbar_generation")
+                return nb::cast(store.viewport_toolbar_generation.get());
             throw_unknown_field(field);
         }
 
@@ -529,6 +533,8 @@ namespace lfs::python {
                 return subscribe_observable(store.language_generation, std::move(callback));
             if (field == "render_settings_generation")
                 return subscribe_observable(store.render_settings_generation, std::move(callback));
+            if (field == "viewport_toolbar_generation")
+                return subscribe_observable(store.viewport_toolbar_generation, std::move(callback));
             throw_unknown_field(field);
         }
 

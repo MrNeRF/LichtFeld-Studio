@@ -16,6 +16,7 @@
         <div id="menu-toolbar">
             <div class="icon-btn menu-toolbar-btn"
                  data-for="button : menu_camera_buttons"
+                 data-class-disabled="!button.enabled"
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-action="button.action"

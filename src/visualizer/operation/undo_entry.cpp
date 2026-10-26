@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "undo_entry.hpp"
+#include "core/collision.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
@@ -940,6 +941,7 @@ namespace lfs::vis::op {
                 snapshot.payload_device = node.point_cloud->means.device();
                 snapshot.point_cloud = clonePointCloud(*node.point_cloud);
             }
+            snapshot.collision = node.collision;
             if (capture_payload && node.mesh) {
                 snapshot.payload_device = node.mesh->vertices.device();
                 snapshot.mesh = cloneMeshData(*node.mesh);
@@ -1039,6 +1041,10 @@ namespace lfs::vis::op {
                 return;
             }
             switch (snapshot.type) {
+            case lfs::core::NodeType::COLLISION:
+                if (!snapshot.collision)
+                    throw HistoryCorruptionError("Collision payload is missing");
+                break;
             case lfs::core::NodeType::POINTCLOUD:
                 if (!snapshot.point_cloud &&
                     snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
@@ -1265,6 +1271,9 @@ namespace lfs::vis::op {
                             desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
                         }
                         break;
+                    case lfs::core::NodeType::COLLISION:
+                        desc.collision = snapshot.collision;
+                        break;
                     case lfs::core::NodeType::MESH:
                         if (!snapshot.mesh &&
                             snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
@@ -1424,6 +1433,8 @@ namespace lfs::vis::op {
                 total += tensorBytes(snapshot.point_cloud->scaling);
                 total += tensorBytes(snapshot.point_cloud->rotation);
             }
+            if (snapshot.collision)
+                total += snapshot.collision->words.size() * sizeof(uint32_t);
             if (snapshot.mesh) {
                 total += tensorBytes(snapshot.mesh->vertices);
                 total += tensorBytes(snapshot.mesh->normals);
@@ -1477,6 +1488,8 @@ namespace lfs::vis::op {
             if (snapshot.point_cloud) {
                 total += estimatePointCloudMemory(*snapshot.point_cloud);
             }
+            if (snapshot.collision)
+                total.cpu_bytes += snapshot.collision->words.size() * sizeof(uint32_t);
             if (snapshot.mesh) {
                 total += estimateMeshMemory(*snapshot.mesh);
             }
@@ -1613,6 +1626,10 @@ namespace lfs::vis::op {
                     node.point_cloud = clonePointCloud(*snapshot.point_cloud);
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
+                break;
+            case lfs::core::NodeType::COLLISION:
+                node.collision = snapshot.collision;
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 break;
             case lfs::core::NodeType::MESH:
                 if (snapshot.mesh) {
@@ -2288,6 +2305,7 @@ namespace lfs::vis::op {
           selection_slice_device(other.selection_slice_device),
           source_path(other.source_path),
           shared_model(other.shared_model),
+          collision(other.collision),
           camera(other.camera),
           children(other.children) {
         if (other.selection_slice) {

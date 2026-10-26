@@ -24,6 +24,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
     struct Theme;
     struct ProjectDisplayInfo;
 } // namespace lfs::vis
@@ -70,6 +71,7 @@ namespace lfs::vis::gui {
     };
 
     struct MenuToolbarButtonView {
+        bool enabled = true;
         std::string button_id;
         std::string action;
         std::string value;
@@ -188,6 +190,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
+        friend class lfs::vis::InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
         void bindModel();
         bool updateTheme();
         void rebuildLabels();
@@ -239,7 +242,7 @@ namespace lfs::vis::gui {
         std::vector<MenuToolbarButtonView> camera_buttons_;
         std::vector<MenuToolbarButtonView> render_buttons_;
         std::vector<MenuToolbarButtonView> projection_buttons_;
-        std::array<std::string, 4> navigation_tooltips_;
+        std::array<std::string, 5> navigation_tooltips_;
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;

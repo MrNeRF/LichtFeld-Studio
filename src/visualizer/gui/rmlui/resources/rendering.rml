@@ -610,6 +610,23 @@
         </div>
       </div>
     </div>
+    <div class="section" data-if="collision_has_collision">
+      <div class="section-header text-accent" id="hdr-collision" data-event-click="toggle_section('collision')">
+        <span class="section-arrow text-accent is-expanded" id="arrow-collision">▶</span>
+        <span class="text-accent">@tr:collision.title</span>
+      </div>
+      <div class="section-content" id="sec-collision">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">@tr:main_panel.selection_outline_opacity</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="collision_preview_opacity" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{collision_preview_opacity}}</span>
+        </div>
+      </div>
+      <div id="collision-walk-fields"></div>
+      <div data-if="collision_error != ''"><span>@tr:status.error</span>: {{collision_error}}</div>
+      </div>
+    </div>
     <div id="color-picker-popup" class="color-picker-popup">
       <color-picker id="color-picker-el" data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b" data-event-change="picker_change" />
       <div class="color-popup-fields" data-if="editing_background_color">

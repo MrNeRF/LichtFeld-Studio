@@ -27,11 +27,18 @@ from . import (
     ui as ui,
     undo as undo
 )
+from .scene import (
+    cancel_collision as cancel_collision,
+    export_collision as export_collision,
+    generate_collision as generate_collision,
+    get_collision_state as get_collision_state,
+    set_walk_settings as set_walk_settings
+)
 
 
 class Error(RuntimeError):
     """
-    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context.
+    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context. Presentation fields .message_key and .message_details are included when provided.
     """
 
 class InvalidArgumentError(Error, ValueError):
@@ -66,6 +73,8 @@ class OperatorResult(enum.Enum):
 
 class ProjectOpenOutcome(enum.Enum):
     OPENED = 0
+
+    DEFERRED = 2
 
     RECOVERY_PROMPT_PENDING = 1
 

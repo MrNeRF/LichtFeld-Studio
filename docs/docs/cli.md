@@ -4,6 +4,23 @@ title: Command line
 
 # Command line
 
+## Voxel collision
+
+```sh
+LichtFeld-Studio voxelize scene.ply -o scene.voxel.json --voxel-size 0.05
+LichtFeld-Studio voxelize scene.sog scene.voxel.json --auto --overwrite
+```
+
+`--voxel-opacity` sets accumulated opacity (default 0.1, range [0,1)). `--filter cleanup` rejects
+outliers; `--filter none` disables cleanup. `--max-gaussian-area` is a three-sigma projected area in
+squared scene units (0 disables the manual cap). Cleanup may still apply its automatic limit.
+
+See [Collision](features/collision.md) for the pair format, Auto resolution, limits and overwrite approval.
+
+Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_voxels(volume, path,
+overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
+returning `False` cancels. Optional transforms are 16 column-major data-world values.
+
 ## Embed a dataset in a project
 
 `LichtFeld-Studio licht <project.licht> --embed` embeds the dataset currently referenced by a project. To select a

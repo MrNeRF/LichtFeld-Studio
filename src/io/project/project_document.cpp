@@ -7,6 +7,7 @@
 #include "core/native_fs.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
+#include "collision_serialization.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/resource_messages.hpp"
@@ -107,11 +108,14 @@ namespace lfs::io::project {
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
                                   std::string detail,
-                                  const std::string_view field = {}) {
+                                  const std::string_view field = {},
+                                  const std::string_view message_key = {}) {
             lfs::SmallFields fields;
             if (!field.empty()) {
                 fields.add("field", field);
             }
+            if (!message_key.empty())
+                fields.add("message_key", message_key);
             return lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = lfs::ErrorDomain::IO,
@@ -130,13 +134,14 @@ namespace lfs::io::project {
         lfs::Result<T> fail(const lfs::ErrorCode code,
                             std::string message,
                             std::string detail,
-                            const std::string_view field = {}) {
+                            const std::string_view field = {},
+                            const std::string_view message_key = {}) {
             if constexpr (std::same_as<T, void>) {
                 return lfs::Result<void>::failure(document_error(
-                    code, std::move(message), std::move(detail), field));
+                    code, std::move(message), std::move(detail), field, message_key));
             } else {
                 return document_error(
-                    code, std::move(message), std::move(detail), field);
+                    code, std::move(message), std::move(detail), field, message_key);
             }
         }
 
@@ -173,7 +178,7 @@ namespace lfs::io::project {
             return fourcc == FOURCC_PROJ || fourcc == FOURCC_PRMS ||
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_SPLT ||
-                   fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH ||
+                   fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH || fourcc == FOURCC_COLV ||
                    fourcc == FOURCC_GUIL || fourcc == FOURCC_VIEW ||
                    fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR ||
                    fourcc == FOURCC_METR;
@@ -915,6 +920,7 @@ namespace lfs::io::project {
         std::unordered_map<lfs::core::Uuid, SplatChapterPayload> splats;
         std::unordered_map<lfs::core::Uuid, PointCloudPayload> point_clouds;
         std::unordered_map<lfs::core::Uuid, MeshPayload> meshes;
+        std::unordered_map<lfs::core::Uuid, std::shared_ptr<const lfs::core::CollisionVolume>> collisions;
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> checkpoints;
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> ppisp_payloads;
         std::unordered_map<lfs::core::Uuid, LazyChunkValue> dataset_sources;
@@ -961,6 +967,37 @@ namespace lfs::io::project {
                 return {};
             }
             return std::move(*source);
+        }
+
+        [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
+        decode_collision(const lfs::core::Uuid& uuid, std::span<const std::byte> bytes) try {
+            auto volume = decodeCollision(bytes);
+            collisions.emplace(uuid, volume);
+            deferred_geometry_keys.erase({FOURCC_COLV, uuid});
+            return volume;
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): decoding stays inside the project Result boundary.
+            return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
+                dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::DataLoss,
+                "A collision payload could not be decoded.", error.what(), "COLV",
+                dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
+        }
+
+        [[nodiscard]] lfs::Result<std::shared_ptr<const lfs::core::CollisionVolume>>
+        resolve_collision(const lfs::core::Uuid& uuid) {
+            if (const auto found = collisions.find(uuid); found != collisions.end())
+                return found->second;
+            const ChunkKey key{FOURCC_COLV, uuid};
+            const auto row = source_rows.find(key);
+            if (!source_reader || !deferred_geometry_keys.contains(key) || row == source_rows.end())
+                return fail<std::shared_ptr<const lfs::core::CollisionVolume>>(
+                    lfs::ErrorCode::DataLoss, "A saved collision payload is missing.",
+                    std::format("COLV instance {} is unavailable", uuid.to_string()), "COLV.instance_uuid", "collision.data_invalid");
+            auto bytes = source_reader->read_chunk(row->second.info);
+            if (!bytes)
+                return std::move(bytes).error().with_context("read collision payload", LFS_SOURCE_SITE_CURRENT(),
+                                                             lfs::SmallFields{}.add("message_key", std::string_view("collision.data_invalid")));
+            return decode_collision(uuid, *bytes);
         }
 
         void mark(const Fourcc fourcc, const lfs::core::Uuid& instance_uuid) {
@@ -1371,6 +1408,16 @@ namespace lfs::io::project {
             std::set<ChunkKey, ChunkKeyLess> bound_embedded;
             std::optional<lfs::core::Uuid> bound_checkpoint;
             for (const auto& node : *nodes) {
+                if (node.collision.has_value() != (node.type == "collision") ||
+                    (node.collision && (node.payload || (!collisions.contains(*node.collision) &&
+                                                         !deferred_geometry_keys.contains({FOURCC_COLV, *node.collision}))))) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss, "A collision payload is missing or incorrectly bound.",
+                        std::format("SCNG node {} requires an existing COLV instance", node.uuid.to_string()),
+                        "SCNG.nodes.collision");
+                }
+                if (node.collision)
+                    bound_embedded.insert({FOURCC_COLV, *node.collision});
                 const bool geometry =
                     node.type == "splat" || node.type == "pointcloud" ||
                     node.type == "mesh";
@@ -1533,6 +1580,8 @@ namespace lfs::io::project {
                 !result) {
                 return result;
             }
+            if (auto result = ensure_all_bound(collisions, FOURCC_COLV, "COLV"); !result)
+                return result;
             for (const auto& key : deferred_geometry_keys) {
                 if (!bound_embedded.contains(key)) {
                     return fail<void>(
@@ -2024,20 +2073,17 @@ namespace lfs::io::project {
                           const ProjectDocumentOpenOptions& options) {
         const auto open_started =
             std::chrono::steady_clock::now();
-        auto normalized = normalized_absolute_path(path);
+        auto normalized = options.retained_source ? lfs::Result<std::filesystem::path>(options.retained_source->path()) : normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
         }
         const auto normalized_at =
             std::chrono::steady_clock::now();
-        auto reader = ProjectReader::open(*normalized, options.reader);
-        if (!reader) {
+        auto reader = options.retained_source ? lfs::Result<ProjectReader>(options.retained_source->share()) : ProjectReader::open(*normalized, options.reader);
+        if (!reader)
             return std::move(reader).error();
-        }
-        const auto reader_opened_at =
-            std::chrono::steady_clock::now();
-        auto shared_reader = std::make_shared<ProjectReader>(
-            std::move(*reader));
+        const auto reader_opened_at = std::chrono::steady_clock::now();
+        auto shared_reader = std::make_shared<ProjectReader>(std::move(*reader));
         auto impl = std::make_unique<Impl>();
         impl->project_uuid = shared_reader->superblock().project_uuid;
         impl->source_path = *normalized;
@@ -2153,15 +2199,15 @@ namespace lfs::io::project {
             const bool geometry_payload =
                 row.key.fourcc == FOURCC_SPLT ||
                 row.key.fourcc == FOURCC_PCLD ||
-                row.key.fourcc == FOURCC_MESH;
+                row.key.fourcc == FOURCC_MESH ||
+                row.key.fourcc == FOURCC_COLV;
             const auto materialized_max =
                 detail::max_materialized_bytes_for(row);
             const bool oversized_splat =
                 row.key.fourcc == FOURCC_SPLT &&
                 (row.stored_bytes > materialized_max ||
                  row.uncompressed_bytes > materialized_max);
-            if ((options.defer_geometry_payloads && geometry_payload) ||
-                oversized_splat) {
+            if ((options.defer_geometry_payloads && geometry_payload) || oversized_splat) {
                 impl->deferred_geometry_keys.insert(row.key);
                 continue;
             }
@@ -2404,6 +2450,10 @@ namespace lfs::io::project {
                 impl->meshes.emplace(row.key.instance_uuid,
                                      std::move(*payload));
                 impl->content_hashes.emplace(row.key, xxh3_128(*bytes));
+            } else if (row.key.fourcc == FOURCC_COLV) {
+                auto volume = impl->decode_collision(row.key.instance_uuid, *bytes);
+                if (!volume)
+                    return std::move(volume).error();
             }
         }
         const auto chapter_scan_finished =
@@ -2480,7 +2530,8 @@ namespace lfs::io::project {
                 chapter_scan_finished,
                 open_finished),
             milliseconds(open_started, open_finished));
-        sweep_stale_licht_artifacts(*normalized, false);
+        if (!options.retained_source)
+            sweep_stale_licht_artifacts(*normalized, false);
         return ProjectDocument(std::move(impl));
     }
 
@@ -2563,6 +2614,8 @@ namespace lfs::io::project {
                 (void)ignored;
                 names.insert("MESH");
             }
+            if (!impl_->collisions.empty())
+                names.insert("COLV");
             for (const auto& [uuid, ignored] : impl_->checkpoints) {
                 (void)uuid;
                 (void)ignored;
@@ -2603,6 +2656,7 @@ namespace lfs::io::project {
         append_loaded(impl_->splats, FOURCC_SPLT);
         append_loaded(impl_->point_clouds, FOURCC_PCLD);
         append_loaded(impl_->meshes, FOURCC_MESH);
+        append_loaded(impl_->collisions, FOURCC_COLV);
         for (const auto& key : impl_->deferred_geometry_keys) {
             result.push_back({
                 .fourcc = key.fourcc,
@@ -3575,6 +3629,28 @@ namespace lfs::io::project {
         return removed;
     }
 
+    lfs::Result<void> ProjectDocument::set_collision(
+        const lfs::core::Uuid& instance_uuid,
+        std::shared_ptr<const lfs::core::CollisionVolume> volume) {
+        if (instance_uuid.is_nil() || !volume)
+            return fail<void>(lfs::ErrorCode::InvalidArgument,
+                              "A collision payload is invalid.", "COLV requires a non-null UUID and volume", "COLV", "collision.data_invalid");
+        if (const auto found = impl_->collisions.find(instance_uuid); found != impl_->collisions.end() && found->second == volume)
+            return {};
+        try {
+            volume->validate();
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): validate first adoption through the Result boundary.
+            return fail<void>(dynamic_cast<const std::bad_alloc*>(&error) ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
+                              "A collision payload could not be validated.", error.what(), "COLV",
+                              dynamic_cast<const std::bad_alloc*>(&error) ? "selection.operation_failed_generic" : "collision.data_invalid");
+        }
+        impl_->deferred_geometry_keys.erase({FOURCC_COLV, instance_uuid});
+        impl_->collisions.insert_or_assign(instance_uuid, std::move(volume));
+        impl_->mark(FOURCC_COLV, instance_uuid);
+        return {};
+    }
+
     void ProjectDocument::remove_geometry_payloads_not_bound_by_scene() {
         auto nodes = impl_->scene_graph.nodes();
         if (!nodes) {
@@ -3583,6 +3659,8 @@ namespace lfs::io::project {
 
         std::set<ChunkKey, ChunkKeyLess> bound;
         for (const auto& node : *nodes) {
+            if (node.collision)
+                bound.insert(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = *node.collision});
             if (!node.payload) {
                 continue;
             }
@@ -3607,7 +3685,7 @@ namespace lfs::io::project {
         std::set<ChunkKey, ChunkKeyLess> orphans;
         const auto consider = [&](const ChunkKey& key) {
             if ((key.fourcc == FOURCC_SPLT || key.fourcc == FOURCC_PCLD ||
-                 key.fourcc == FOURCC_MESH) &&
+                 key.fourcc == FOURCC_MESH || key.fourcc == FOURCC_COLV) &&
                 !bound.contains(key)) {
                 orphans.insert(key);
             }
@@ -3633,6 +3711,8 @@ namespace lfs::io::project {
                 .instance_uuid = uuid,
             });
         }
+        for (const auto& uuid : impl_->collisions | std::views::keys)
+            consider(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
         for (const auto& key : impl_->deferred_geometry_keys) {
             consider(key);
         }
@@ -3649,6 +3729,11 @@ namespace lfs::io::project {
                 removed = remove_point_cloud(key.instance_uuid);
             } else if (key.fourcc == FOURCC_MESH) {
                 removed = remove_mesh(key.instance_uuid);
+            } else if (key.fourcc == FOURCC_COLV) {
+                removed = impl_->collisions.erase(key.instance_uuid) != 0;
+                removed = impl_->deferred_geometry_keys.erase(key) != 0 || removed;
+                if (removed)
+                    impl_->mark(key.fourcc, key.instance_uuid);
             }
             if (!removed) {
                 impl_->content_hashes.erase(key);
@@ -3945,7 +4030,7 @@ namespace lfs::io::project {
     ProjectDocument::save_impl(
         const std::filesystem::path& path,
         const ProjectDocumentSaveOptions& options,
-        const ProjectDocumentAutosaveOptions* autosave) {
+        const ProjectDocumentAutosaveOptions* autosave) try {
         const bool is_autosave = autosave != nullptr;
         const auto save_started = std::chrono::steady_clock::now();
         auto preview_finished = save_started;
@@ -4310,6 +4395,14 @@ namespace lfs::io::project {
             const auto size = bytes->size();
             add_encoded(key, std::move(*bytes), tensor_options(size));
         }
+        for (const auto& [uuid, volume] : impl_->collisions) {
+            const ChunkKey key{.fourcc = FOURCC_COLV, .instance_uuid = uuid};
+            if (!impl_->dirty_or_new(key))
+                continue;
+            auto bytes = encodeCollision(*volume);
+            const auto size = bytes.size();
+            add_encoded(key, std::move(bytes), tensor_options(size));
+        }
 
         auto embedded = staged_project->embedded_payload_provenance();
         if (!embedded) {
@@ -4383,6 +4476,8 @@ namespace lfs::io::project {
             desired.insert(
                 ChunkKey{.fourcc = FOURCC_MESH, .instance_uuid = uuid});
         }
+        for (const auto& uuid : impl_->collisions | std::views::keys)
+            desired.insert(ChunkKey{.fourcc = FOURCC_COLV, .instance_uuid = uuid});
         desired.insert(
             impl_->deferred_geometry_keys.begin(),
             impl_->deferred_geometry_keys.end());
@@ -4974,6 +5069,11 @@ namespace lfs::io::project {
         report.commit_uuid = impl_->source_reader->commit().commit_uuid;
         report.snapshot_uuid = impl_->source_reader->commit().snapshot_uuid;
         return report;
+    } catch (const std::exception& error) {
+        // LFS-CENSUS-OK(empty-catch): serialization failures settle the save Result before publication.
+        const bool exhausted = dynamic_cast<const std::bad_alloc*>(&error) || dynamic_cast<const std::length_error*>(&error);
+        return fail<ProjectDocumentSaveReport>(exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::InvalidArgument,
+                                               "The project could not be serialized.", error.what(), "project.save");
     }
 
     lfs::Result<ProjectDocumentSaveReport>
@@ -5541,7 +5641,8 @@ namespace lfs::io::project {
         lfs::core::Scene& destination) const {
         auto shell =
             stage_scene_shell(
-                impl_->scene_graph, destination, impl_->sfm_observation_source());
+                impl_->scene_graph, destination, impl_->sfm_observation_source(),
+                [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); });
         if (!shell) {
             return std::move(shell).error();
         }
@@ -6003,6 +6104,7 @@ namespace lfs::io::project {
             }
             ScenePayloadResolver resolver;
             resolver.sfm_observations = impl_->sfm_observation_source();
+            resolver.collision = [this](const lfs::core::Uuid& uuid) { return impl_->resolve_collision(uuid); };
             resolver.splat =
                 [&staged_splats,
                  &staged_checkpoint_splats,

@@ -2494,6 +2494,34 @@ def test_label_reset_respects_coupled_step_lock(training_panel_module, monkeypat
     assert panel._reset_default(prop) == (None if locked else 100)
 
 
+@pytest.mark.parametrize("state,iteration,editable", [
+    ("ready", 0, True),
+    ("ready", 100, False),
+    ("running", 100, False),
+    ("paused", 100, False),
+    ("completed", 100, True),
+    ("stopped", 100, True),
+    ("error", 100, True),
+])
+def test_configuration_editability_follows_run_state(
+    training_panel_module, monkeypatch, state, iteration, editable
+):
+    module = training_panel_module
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(
+        trainer_state=_make_signal(state), iteration=_make_signal(iteration)))
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: 100)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_disabled(model, lambda: params)
+
+    assert panel._can_edit_configuration() is editable
+    for binding in ("struct_disabled", "live_disabled", "adv_disabled"):
+        assert model.bindings[binding][0]() is (not editable)
+    assert panel._reset_default("means_lr") == (100 if editable else None)
+
+
 def test_label_reset_rejects_training_runtime_and_forced_method_fields(training_panel_module, monkeypatch):
     module = training_panel_module
     panel = module.TrainingPanel()

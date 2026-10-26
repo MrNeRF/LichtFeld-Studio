@@ -5,6 +5,7 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
+#include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -135,6 +136,34 @@ namespace {
         EXPECT_EQ(scene.getNodeTransform(dataset), glm::mat4(1));
         ASSERT_TRUE(vis::op::undoHistory().redo().success);
         EXPECT_FLOAT_EQ(scene.getWorldTransform(dataset)[0][0], 2);
+    }
+
+    TEST_F(AprilTagSceneApply, CompleteSceneScalesRootAndChildCollisionsOnceWithUndoRedo) {
+        auto& scene = manager->getScene();
+        const auto volume = collision_test::box({}, glm::ivec3(1));
+        const auto root = scene.addCollision("root-collision", volume);
+        const auto child = scene.addCollision("child-collision", volume, scene.getNode("splats")->id);
+        ASSERT_NE(root, core::NULL_NODE);
+        ASSERT_NE(child, core::NULL_NODE);
+        const auto initial = glm::translate(glm::mat4(1), glm::vec3(3, 0, 0));
+        scene.setNodeTransform(root, initial);
+        scene.setNodeTransform(child, initial);
+
+        const auto result = vis::cap::applyUniformScaleAboutDataPivot(*manager, {}, {0, 0, 0}, 2);
+        ASSERT_TRUE(result.applied) << result.error_message;
+        for (const auto id : {root, child}) {
+            EXPECT_FLOAT_EQ(scene.getWorldTransform(id)[0][0], 2);
+            EXPECT_FLOAT_EQ(scene.getWorldTransform(id)[3][0], 6);
+        }
+        EXPECT_EQ(scene.getNodeTransform(child), initial);
+        ASSERT_TRUE(vis::op::undoHistory().undo().success);
+        for (const auto id : {root, child})
+            EXPECT_EQ(scene.getWorldTransform(id), initial);
+        ASSERT_TRUE(vis::op::undoHistory().redo().success);
+        for (const auto id : {root, child}) {
+            EXPECT_FLOAT_EQ(scene.getWorldTransform(id)[0][0], 2);
+            EXPECT_FLOAT_EQ(scene.getWorldTransform(id)[3][0], 6);
+        }
     }
 
     TEST_F(AprilTagSceneApply, ExplicitTargetsAllowPartialScaling) {

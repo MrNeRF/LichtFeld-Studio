@@ -452,6 +452,8 @@ namespace lfs::io::project {
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
         std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
+        // Shared immutable occupancy in the COLV instance with this UUID.
+        std::optional<lfs::core::Uuid> collision = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };

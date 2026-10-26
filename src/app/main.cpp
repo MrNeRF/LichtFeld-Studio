@@ -152,6 +152,10 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VoxelizeMode>) {
+                applyCudaContextTuning();
+                preflightGpuOrExit(false);
+                return lfs::app::run_voxelizer(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);

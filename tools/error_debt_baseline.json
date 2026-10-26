@@ -261,7 +261,6 @@
       "src/visualizer/rendering/passes/vulkan_environment_pass.cpp:691",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:4346",
       "src/visualizer/selection/selection_service.cpp:2423",
-      "src/visualizer/sequencer/rml_sequencer_panel.cpp:1322",
       "src/visualizer/theme/theme.cpp:888",
       "src/visualizer/theme/theme.cpp:1257",
       "src/visualizer/theme/theme.cpp:1459"

@@ -10,6 +10,7 @@
 #include "core/splat_data.hpp"
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "input/camera_animation_cadence.hpp"
 #include "input/frame_input_buffer.hpp"
@@ -19,6 +20,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "internal/viewport.hpp"
 #include "keymap_history_helpers.hpp"
+#include "licht_test_support.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -166,6 +168,31 @@ namespace lfs::vis {
                 1.0f);
         }
     } // namespace
+
+    TEST_F(InputControllerFocusTest, WalkRejectionDoesNotEscapeNativeDispatch) {
+        SceneManager manager;
+        services().set(&manager);
+        auto& scene = manager.getScene();
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::Orbit);
+        gui::RmlMenuBar bar;
+        bar.rebuildToolbarButtons();
+        EXPECT_FALSE(bar.camera_buttons_.back().enabled);
+        EXPECT_NO_THROW(bar.dispatchToolbarAction("set_camera_navigation_mode", "walk"));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_collision"));
+        const auto floor = scene.addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        scene.setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        scene.setNodeVisibility(floor, false);
+        bar.rebuildToolbarButtons();
+        EXPECT_TRUE(bar.camera_buttons_.back().enabled);
+        viewport.camera.t = {0, 20, 0};
+        EXPECT_NO_THROW(bar.dispatchToolbarAction("set_camera_navigation_mode", "walk"));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_support"));
+        EXPECT_EQ(controller.cameraNavigationMode(), InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
+    }
 
     TEST_F(InputControllerFocusTest, NavigationModeChangesRequestGuiRedraw) {
         using Mode = InputController::CameraNavigationMode;
@@ -2233,7 +2260,7 @@ namespace lfs::vis {
         bool published = false;
         bool source_open_at_publish = false;
 #ifdef __linux__
-        struct stat source_identity {};
+        struct stat source_identity{};
         ASSERT_EQ(::stat(profile_path.c_str(), &source_identity), 0);
 #endif
         loaded.setOnBindingsChanged([&] {
@@ -2248,7 +2275,7 @@ namespace lfs::vis {
                 const auto fd = std::strtol(fd_text.c_str(), &parsed_end, 10);
                 if (parsed_end == fd_text.c_str() || fd < 0)
                     continue;
-                struct stat open_identity {};
+                struct stat open_identity{};
                 if (::fstat(static_cast<int>(fd), &open_identity) != 0)
                     continue;
                 if (open_identity.st_dev == source_identity.st_dev &&

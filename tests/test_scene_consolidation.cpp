@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "combined_model_worker_fixture.hpp"
 #include "core/alloc_counter.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
@@ -490,9 +491,10 @@ TEST_F(SceneConsolidationExtractTest, ReplacingNodeModelRetiresPreviousUntilWork
 
     // Leave one node so the post-poll cache rebuild is synchronous and avoids
     // starting another worker while checking that the stale result was
-    // rejected.
+    // rejected. The alias is installed without waiting for the worker.
     scene.removeNodeById(second_id);
     EXPECT_EQ(scene.getCombinedModel(), replaced->model.get());
+    EXPECT_EQ(lfs::test::combined_model::settledCombinedModel(scene), replaced->model.get());
     EXPECT_FALSE(scene.combinedModelBuildPending());
 }
 
@@ -1210,4 +1212,60 @@ TEST(SceneCombinedEncode, QuantizedStorageCoversReservedModelCapacity) {
         const auto expected_bounds = reference.model->shN_value_bounds().cpu();
         EXPECT_EQ(std::memcmp(bounds.data_ptr(), expected_bounds.data_ptr(), bounds.numel() * sizeof(float)), 0);
     }
+}
+
+namespace {
+    [[nodiscard]] std::unique_ptr<SplatData> make_rows_model(const size_t rows) {
+        return std::make_unique<SplatData>(
+            1, Tensor::zeros({rows, 3}, Device::CUDA),
+            Tensor::zeros({rows, 1, 3}, Device::CUDA),
+            Tensor::zeros({rows, 3, 3}, Device::CUDA),
+            Tensor::zeros({rows, 3}, Device::CUDA),
+            Tensor::ones({rows, 4}, Device::CUDA),
+            Tensor::zeros({rows, 1}, Device::CUDA), 1.f);
+    }
+} // namespace
+
+// Catches the render thread joining a stale combined-model worker: hiding one of two large models
+// right after an import blocked the viewport until the whole background build had finished.
+TEST(SceneCombinedBuild, HidingANodeNeverWaitsForTheRunningWorker) {
+    namespace combined = lfs::test::combined_model;
+    constexpr size_t rows = 600'000; // two visible nodes exceed the worker threshold
+    Scene scene;
+    const auto first = scene.addSplat("first", make_rows_model(rows));
+    const auto second = scene.addSplat("second", make_rows_model(rows));
+    combined::HeldWorker worker;
+    scene.setCombinedModelAllocator(worker.allocator());
+    EXPECT_EQ(scene.getCombinedModel(), nullptr);
+    ASSERT_TRUE(worker.waitEntered());
+    const auto* first_model = scene.getNodeById(first)->model.get();
+
+    scene.setNodeVisibility(second, false);
+    const auto hidden = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(hidden.prompt) << "getCombinedModel waited " << hidden.elapsed.count() << " ms for the worker";
+    EXPECT_EQ(hidden.model, first_model);
+    EXPECT_TRUE(scene.combinedModelBuildPending()) << "the stale worker is still held";
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 1u);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), rows);
+
+    // Shown again before the stale result lands: the alias stays until the next build,
+    // which starts once the stale result has been dropped.
+    scene.setNodeVisibility(second, true);
+    const auto shown = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(shown.prompt) << "getCombinedModel waited " << shown.elapsed.count() << " ms for the worker";
+    EXPECT_EQ(shown.model, first_model);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 1u);
+
+    worker.release();
+    const auto* both = combined::settledCombinedModel(scene);
+    ASSERT_NE(both, nullptr);
+    EXPECT_FALSE(scene.combinedModelBuildPending());
+    EXPECT_EQ(static_cast<size_t>(both->size()), 2 * rows);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 2u);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 2 * rows);
+
+    scene.setNodeVisibility(second, false);
+    EXPECT_EQ(combined::settledCombinedModel(scene), first_model);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), rows);
+    EXPECT_EQ(scene.getVisibleSelectionIndices()->numel(), rows);
 }

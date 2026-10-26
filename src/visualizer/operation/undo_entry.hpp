@@ -536,6 +536,7 @@ namespace lfs::vis::op {
         std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
+        std::shared_ptr<const lfs::core::CollisionVolume> collision;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
         std::unique_ptr<lfs::core::EllipsoidData> ellipsoid;
         std::unique_ptr<lfs::core::CropPolygonData> crop_polygon;

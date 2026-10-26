@@ -25,9 +25,11 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
+#include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
+#include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
@@ -2398,6 +2400,54 @@ namespace lfs::python {
         EXPECT_EQ(scene.getNodeById(nodes.model), nullptr);
         EXPECT_EQ(scene.getTrainingModelNodeName(), "");
         EXPECT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Idle);
+    }
+
+    TEST(TrainerManagerTest, RejectsNeedsRestartPropertyChangeDuringActiveTraining) {
+        lfs::core::param::ensure_optimization_properties_registered();
+        const auto meta_restart = lfs::core::prop::PropertyRegistry::instance().get_property("optimization", "use_bilateral_grid");
+        const auto meta_live = lfs::core::prop::PropertyRegistry::instance().get_property("optimization", "means_lr");
+        ASSERT_TRUE(meta_restart.has_value());
+        ASSERT_TRUE(meta_live.has_value());
+        EXPECT_TRUE(meta_restart->needs_restart());
+        EXPECT_FALSE(meta_live->needs_restart());
+
+        lfs::vis::TrainerManager manager;
+        // When trainer is not present or dataset is editable, changes are allowed
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, true));
+        EXPECT_TRUE(manager.canChangeProperty(*meta_live, 0.001f, 0.002f));
+
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Running));
+        EXPECT_FALSE(manager.isDatasetEditable());
+
+        // When training is running:
+        // 1. Changing a non-restart parameter is allowed
+        EXPECT_TRUE(manager.canChangeProperty(*meta_live, 0.001f, 0.002f));
+        // 2. Setting a restart-required parameter to its current value is allowed
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, false));
+        // 3. Changing a restart-required parameter to a new value is rejected
+        EXPECT_FALSE(manager.canChangeProperty(*meta_restart, false, true));
+
+        // When paused mid-run, changes to restart-required parameters are still rejected
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Paused));
+        EXPECT_FALSE(manager.canChangeProperty(*meta_restart, false, true));
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, false));
+
+        // A finished run starts fresh after consent, so its settings can change.
+        ASSERT_TRUE(transition_trainer_manager_for_test(manager, lfs::vis::TrainingState::Finished));
+        EXPECT_FALSE(manager.isDatasetEditable());
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, true));
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, false));
+
+        // After clearing trainer / resetting, changes are allowed again
+        ASSERT_TRUE(manager.clearTrainer());
+        EXPECT_TRUE(manager.isDatasetEditable());
+        EXPECT_TRUE(manager.canChangeProperty(*meta_restart, false, true));
     }
 
 } // namespace lfs::python

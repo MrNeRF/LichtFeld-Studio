@@ -1903,6 +1903,8 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
+        if (context.deterministic_export)
+            markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion, "deterministic_capture");
         if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
             // clear_external_backing waits for the arena to be idle. Do this
             // before taking either trainer lock, after the failed frame's borrow
@@ -2344,7 +2346,7 @@ namespace lfs::vis {
                 scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
             has_meshes = std::any_of(scene_state.meshes.begin(),
                                      scene_state.meshes.end(),
-                                     [](const auto& mesh) { return mesh.mesh != nullptr; });
+                                     [](const auto& mesh) { return mesh.mesh || mesh.collision; });
             has_environment = environmentBackgroundEnabled(frame_settings);
             has_render_content =
                 has_visible_gaussian_model || has_point_cloud || has_comparison_point_cloud || has_meshes || has_environment;
@@ -2672,6 +2674,7 @@ namespace lfs::vis {
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
             .training_active = is_training,
+            .deterministic_export = context.deterministic_export,
             .gaussian_selection_visible = gaussian_selection_visible_,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),

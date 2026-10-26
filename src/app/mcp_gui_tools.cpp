@@ -22,6 +22,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -549,6 +550,8 @@ namespace lfs::app {
                 return "image";
             case core::NodeType::MESH:
                 return "mesh";
+            case core::NodeType::COLLISION:
+                return "collision";
             case core::NodeType::KEYFRAME_GROUP:
                 return "keyframe_group";
             case core::NodeType::KEYFRAME:
@@ -2516,6 +2519,33 @@ namespace lfs::app {
         }
 
         // --- Scene operations (posted to GUI thread) ---
+        registry.register_tool(
+            McpTool{.name = "scene.generate_collision",
+                    .description = "Voxelize exactly one selected loaded splat into a new undoable collision node; observe collision.main",
+                    .input_schema = {.type = "object", .properties = json{{"voxel_size", {{"type", "number"}}}, {"opacity", {{"type", "number"}}}, {"auto_resolution", {{"type", "boolean"}}}, {"cleanup", {{"type", "boolean"}}}, {"max_gaussian_area", {{"type", "number"}}}}, .required = {}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    if (!viewer_impl->getGuiManager())
+                        throw std::runtime_error("GUI manager is not initialized");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollision({.voxel_size = args.value("voxel_size", .05f), .opacity = args.value("opacity", .1f), .max_gaussian_area = args.value("max_gaussian_area", 0.f), .auto_resolution = args.value("auto_resolution", false), .cleanup = args.value("cleanup", true)});
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
+        registry.register_tool(
+            McpTool{.name = "scene.export_collision",
+                    .description = "Export a collision node UUID to a voxel JSON/binary pair; caller approves replacing both files",
+                    .input_schema = {.type = "object", .properties = json{{"uuid", {{"type", "string"}}}, {"path", {{"type", "string"}}}}, .required = {"uuid", "path"}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    const auto uuid = core::Uuid::from_string(args.at("uuid").get<std::string>());
+                    if (!uuid || !viewer_impl->getGuiManager())
+                        throw std::invalid_argument("Invalid collision UUID or unavailable GUI");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollisionExport(*uuid, core::utf8_to_path(args.at("path").get<std::string>()));
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
 
         registry.register_tool(
             McpTool{
@@ -2719,6 +2749,8 @@ namespace lfs::app {
                          true},
                     };
                 }
+                if (*result == vis::ProjectOpenOutcome::Deferred)
+                    return json{{"status", "switch_pending"}};
                 auto info = post_and_wait(
                     viewer, [viewer] {
                         return viewer->projectGetInfo();
@@ -2992,15 +3024,12 @@ namespace lfs::app {
                 auto result = [&]() -> lfs::Result<std::string> {
                     if (panel_id.empty())
                         return lfs::from_legacy_expected(
-                            capture_after_gui_render(viewer, [viewer, width, height]() {
-                                return capture_full_window_to_base64(viewer, width, height);
-                            }),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Unavailable,
-                                .domain = lfs::ErrorDomain::MCP,
-                                .operation = "Capture composited app window",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                            capture_after_gui_render(viewer, [viewer, width, height]() { return capture_full_window_to_base64(viewer, width, height); }, true), lfs::LegacyErrorContext{
+                                                                                                                                                                    .code = lfs::ErrorCode::Unavailable,
+                                                                                                                                                                    .domain = lfs::ErrorDomain::MCP,
+                                                                                                                                                                    .operation = "Capture composited app window",
+                                                                                                                                                                    .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                                                                                                                });
                     auto promise = std::make_shared<std::promise<lfs::Result<vis::VulkanContext::WindowCapture>>>();
                     auto future = promise->get_future();
                     const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
@@ -3568,10 +3597,17 @@ namespace lfs::app {
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
                     if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&params->getActiveParams());
                         for (const auto& change : changes) {
                             if (change.meta.id == "iterations" &&
                                 trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
                                 return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                            if (change.meta.needs_restart()) {
+                                auto current_val = change.meta.getter(ref);
+                                if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
+                                }
                             }
                         }
                     }
@@ -6248,9 +6284,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_full_window_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -6264,9 +6298,7 @@ namespace lfs::app {
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_full_window_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 }
                 if (!result)
                     return std::unexpected(result.error());

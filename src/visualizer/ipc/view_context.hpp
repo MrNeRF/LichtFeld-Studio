@@ -108,6 +108,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
         bool point_cloud_mode = false;
         float voxel_size = 0.01f;
         bool show_rings = false;

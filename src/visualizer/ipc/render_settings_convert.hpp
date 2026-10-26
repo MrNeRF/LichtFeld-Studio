@@ -58,6 +58,7 @@ namespace lfs::vis {
         p.show_grid = s.show_grid;
         p.grid_plane = s.grid_plane;
         p.grid_opacity = s.grid_opacity;
+        p.collision_preview_opacity = s.collision_preview_opacity;
         p.point_cloud_mode = s.point_cloud_mode;
         p.voxel_size = s.voxel_size;
         p.show_rings = s.show_rings;
@@ -158,6 +159,7 @@ namespace lfs::vis {
         s.show_grid = p.show_grid;
         s.grid_plane = p.grid_plane;
         s.grid_opacity = p.grid_opacity;
+        s.collision_preview_opacity = p.collision_preview_opacity;
         s.point_cloud_mode = p.point_cloud_mode;
         s.voxel_size = p.voxel_size;
         s.show_rings = p.show_rings;

@@ -263,7 +263,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
 
     tools_items = tools_mod.ToolsMenu().menu_items()
-    python_console = tools_items[4]["items"][0]
+    python_console = tools_items[5]["items"][0]
     assert python_console["shortcut"] == "Ctrl+`"
     python_console["callback"]()
     assert state["python_console_shown"] == 1
@@ -398,9 +398,12 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
     assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
-                      "tr:rendering_panel.section_simplify", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
-    items[4]["items"][0]["callback"]()
+                      "tr:rendering_panel.section_simplify", "tr:collision.title", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[5]["items"][0]["callback"]()
     items[2]["callback"]()
+    state["panels"]["lfs.collision"] = SimpleNamespace(show=lambda export=False: state.__setitem__("collision_export", export))
+    items[3]["callback"]()
+    assert state["collision_export"] is False
 
     assert state["python_console_shown"] == 1
 
@@ -410,7 +413,7 @@ def test_developer_system_console_is_windows_only(monkeypatch, platform):
     state = _install_lichtfeld_stub(monkeypatch)
     monkeypatch.setattr(sys, "platform", platform)
     tools_mod = _import_tools_menu(monkeypatch)
-    items = tools_mod.ToolsMenu().menu_items()[4]["items"]
+    items = tools_mod.ToolsMenu().menu_items()[5]["items"]
     assert items[0]["label"] == "tr:menu.tools.python_console"
     assert len(items) == (2 if platform == "win32" else 1)
     if platform == "win32":

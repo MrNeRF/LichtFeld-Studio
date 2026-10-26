@@ -12,7 +12,9 @@
 #include "py_error.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/selection_ops.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/input/input_controller.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -20,6 +22,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
+#include "visualizer/visualizer_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/type_ptr.hpp>
@@ -1468,6 +1471,70 @@ namespace lfs::python {
     }
 
     void register_scene(nb::module_& m) {
+        const auto collision_access = [](auto&& action) {
+            auto* manager = get_scene_manager();
+            return point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
+                auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+                if (!viewer || !viewer->getGuiManager())
+                    throw core::collisionError("collision.gui_required", "Collision authoring requires the GUI");
+                return action(viewer->getGuiManager()->asyncTasks(), manager);
+            });
+        };
+        m.def("generate_collision", [collision_access](float size, float opacity, bool automatic, bool cleanup, float max_area) {
+            const core::CollisionSettings settings{.voxel_size = size, .opacity = opacity, .max_gaussian_area = max_area,
+                                                    .auto_resolution = automatic, .cleanup = cleanup};
+            collision_access([&](auto& tasks, auto*) { tasks.startCollision(settings); }); }, nb::arg("voxel_size") = .05f, nb::arg("opacity") = .1f, nb::arg("auto_resolution") = false, nb::arg("cleanup") = true, nb::arg("max_gaussian_area") = 0.f);
+        m.def("export_collision", [collision_access](const std::string& uuid, const std::string& path) {
+            const auto parsed = core::Uuid::from_string(uuid);
+            if (!parsed)
+                throw core::collisionError("collision.select_export", "Invalid collision target UUID", ErrorCode::InvalidArgument);
+            collision_access([&](auto& tasks, auto*) {
+                tasks.startCollisionExport(*parsed, core::utf8_to_path(path));
+            }); }, nb::arg("uuid"), nb::arg("path"));
+        m.def("cancel_collision", [collision_access] {
+            collision_access([](auto& tasks, auto*) { tasks.cancelCollision(); });
+        });
+        m.def("get_collision_state", [collision_access] {
+            nb::dict result;
+            collision_access([&](auto& tasks, auto* manager) {
+                // Posted access releases the caller's GIL while the viewer fills this snapshot.
+                nb::gil_scoped_acquire acquire;
+                const auto job = tasks.collisionJob();
+                const auto settings = tasks.collisionGenerationSettings();
+                const auto* input = vis::InputController::instance();
+                const auto walk = input ? input->walk_settings : core::WalkSettings{};
+                const auto* target = manager ? manager->getScene().getNode(manager->getSelectedNodeName()) : nullptr;
+                const bool collider = target && target->type == core::NodeType::COLLISION && target->collision;
+                const bool source = target && target->type == core::NodeType::SPLAT && manager->getSelectedNodeIds().size() == 1 && (target->model || manager->getScene().isConsolidated());
+                result["active"] = job && job->running();
+                result["progress"] = job ? job->progress : 0.f;
+                result["stage"] = job ? job->stage : "";
+                result["error"] = job ? job->error : "";
+                result["walk_error"] = input ? input->walk_error : "";
+                result["has_collision"] = manager && std::ranges::any_of(manager->getScene().getNodes(), [](const auto* node) {
+                                              return node && bool(node->collision);
+                                          });
+                result["walking"] = input && input->cameraNavigationMode() == vis::InputController::CameraNavigationMode::Walk;
+                result["walk_settings"] = nb::make_tuple(walk.height, walk.radius, walk.step, walk.speed);
+                result["target_uuid"] = collider ? target->uuid.to_string() : "";
+                result["target_name"] = collider ? target->name : "";
+                result["source_name"] = source ? target->name : "";
+                result["resolved_voxel_size"] = tasks.collisionResolvedSize();
+                result["generation_settings"] = nb::make_tuple(settings.voxel_size, settings.opacity,
+                                                               settings.auto_resolution, settings.cleanup, settings.max_gaussian_area);
+            });
+            return result;
+        });
+        m.def("set_walk_settings", [](float height, float radius, float step, float speed) {
+            const core::WalkSettings settings{height, radius, step, speed};
+            settings.validate();
+            auto* manager = get_scene_manager();
+            point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
+                auto* input = vis::InputController::instance();
+                if (!input)
+                    throw std::runtime_error("No input controller");
+                input->setWalkSettings(settings);
+            }); }, nb::arg("height"), nb::arg("radius"), nb::arg("step"), nb::arg("speed"));
         nb::class_<PySceneSplatSnapshot>(m, "SceneSplatSnapshot")
             .def_prop_ro("transform", [](const PySceneSplatSnapshot& value) {
                 return mat4_to_tuple(value.snapshot().world_transform);
@@ -1501,6 +1568,7 @@ namespace lfs::python {
             .value("IMAGE_GROUP", core::NodeType::IMAGE_GROUP)
             .value("IMAGE", core::NodeType::IMAGE)
             .value("MESH", core::NodeType::MESH)
+            .value("COLLISION", core::NodeType::COLLISION)
             .value("KEYFRAME_GROUP", core::NodeType::KEYFRAME_GROUP)
             .value("KEYFRAME", core::NodeType::KEYFRAME)
             .value("CROP_POLYGON", core::NodeType::CROP_POLYGON);

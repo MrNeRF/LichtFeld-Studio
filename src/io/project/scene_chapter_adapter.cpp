@@ -90,6 +90,8 @@ namespace lfs::io::project {
                 return "image";
             case MESH:
                 return "mesh";
+            case COLLISION:
+                return "collision";
             case PLY_SEQUENCE:
                 return "ply_sequence";
             case CROP_POLYGON:
@@ -137,6 +139,8 @@ namespace lfs::io::project {
             if (value == "mesh") {
                 return MESH;
             }
+            if (value == "collision")
+                return COLLISION;
             if (value == "ply_sequence") {
                 return PLY_SEQUENCE;
             }
@@ -516,6 +520,7 @@ namespace lfs::io::project {
 
         const auto all_nodes = scene.getNodes();
         result.nodes.reserve(all_nodes.size());
+        std::unordered_map<const lfs::core::CollisionVolume*, lfs::core::Uuid> collision_instances;
         std::unordered_set<lfs::core::NodeId> excluded;
         for (const lfs::core::SceneNode* node : all_nodes) {
             if (node->type == lfs::core::NodeType::KEYFRAME ||
@@ -541,6 +546,12 @@ namespace lfs::io::project {
                 return lfs::Result<void>::failure(std::move(captured).error());
             }
             captured->parent_uuid = parent_uuid;
+            if (node.collision) {
+                const auto instance =
+                    collision_instances.emplace(node.collision.get(), node.uuid).first;
+                captured->collision = instance->second;
+                result.collisions.try_emplace(instance->second, node.collision);
+            }
             result.nodes.push_back(std::move(*captured));
             std::uint32_t saved_order = 0;
             for (const lfs::core::NodeId child_id : node.children) {
@@ -696,6 +707,7 @@ namespace lfs::io::project {
                     *type == lfs::core::NodeType::POINTCLOUD ||
                     *type == lfs::core::NodeType::MESH;
                 if (record.cropbox.has_value() != is_cropbox ||
+                    record.collision.has_value() != (*type == lfs::core::NodeType::COLLISION) ||
                     record.ellipsoid.has_value() != is_ellipsoid ||
                     record.crop_polygon.has_value() != is_crop_polygon ||
                     record.camera.has_value() != is_camera ||
@@ -766,6 +778,20 @@ namespace lfs::io::project {
                                        record.georef_pose->translation[1],
                                        record.georef_pose->translation[2]),
                     };
+                }
+                if (record.collision) {
+                    if (!resolver.collision)
+                        return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                          "A saved collision payload cannot be resolved.",
+                                          "COLV resolver is missing", record.uuid);
+                    auto payload = resolver.collision(*record.collision);
+                    if (!payload)
+                        return lfs::Result<void>::failure(std::move(payload).error());
+                    if (!*payload)
+                        return fail<void>(lfs::ErrorCode::DataLoss,
+                                          "A saved collision payload resolved to null.",
+                                          "COLV resolver returned null", record.uuid);
+                    desc.collision = std::move(*payload);
                 }
                 if (record.cropbox) {
                     desc.cropbox = std::make_unique<lfs::core::CropBoxData>(
@@ -1026,12 +1052,13 @@ namespace lfs::io::project {
     stage_scene_shell(
         const SceneGraphChapter& chapter,
         lfs::core::Scene& target,
-        std::shared_ptr<const SfmObservationChapterSource> sfm_observations) {
+        std::shared_ptr<const SfmObservationChapterSource> sfm_observations,
+        CollisionPayloadResolver collision) {
         auto staged =
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, ScenePayloadResolver{.sfm_observations = std::move(sfm_observations)},
+                    chapter, *staged, ScenePayloadResolver{.splat = {}, .point_cloud = {}, .mesh = {}, .sfm_observations = std::move(sfm_observations), .collision = std::move(collision)},
                     true, false);
             !populated) {
             return std::move(populated).error();

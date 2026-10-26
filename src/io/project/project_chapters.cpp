@@ -2828,6 +2828,12 @@ namespace lfs::io::project {
                 }
                 result.crop_polygon = std::move(*parsed);
             }
+            if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
+                auto parsed = parse_uuid(*collision, "SCNG", "nodes.collision");
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.collision = *parsed;
+            }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
                 camera) {
@@ -2964,6 +2970,10 @@ namespace lfs::io::project {
                 "UUID/type/name/transform must be valid and generated keyframes are excluded",
                 "SCNG", "nodes");
         }
+        if (value.collision && (value.collision->is_nil() || value.type != "collision"))
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
+                "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
         if (value.payload &&
             (value.payload->fourcc.size() != 4 ||
              value.payload->instance_uuid.is_nil() ||
@@ -3041,6 +3051,10 @@ namespace lfs::io::project {
         } else {
             element.erase("crop_polygon");
         }
+        if (value.collision)
+            element["collision"] = value.collision->to_string();
+        else
+            element.erase("collision");
         if (value.camera) {
             element["camera"] = camera_json(*value.camera);
         } else {

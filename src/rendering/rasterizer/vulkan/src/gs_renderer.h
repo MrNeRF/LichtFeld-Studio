@@ -14,6 +14,10 @@
 #include <utility>
 #include <vector>
 
+namespace lfs::vis {
+    struct HiGSExportTestAccess;
+}
+
 struct VulkanGSOutlineStyle {
     float red = 0.0f;
     float green = 0.604f;
@@ -215,6 +219,8 @@ inline constexpr uint32_t kLodCompactProtectedCap = 98304;
 inline constexpr uint32_t kLodCompactMissCap = 16384;
 
 class VulkanGSRenderer : public VulkanGSPipeline {
+    friend struct lfs::vis::HiGSExportTestAccess;
+
 public:
     struct PrimitiveVisibilityStats {
         size_t visible_count = 0; // clamped to the frame's visible capacity
@@ -560,7 +566,7 @@ protected:
     _ComputePipelinePair pipeline_rasterize_stochastic = _ComputePipelinePair(17);
     _ComputePipelinePair pipeline_rasterize_stochastic_plain = _ComputePipelinePair(17);
     _VulkanBuffer stochastic_noise_;
-    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(7);
+    _ComputePipeline pipeline_stochastic_reuse = _ComputePipeline(6);
     _ComputePipeline pipeline_stochastic_resolve = _ComputePipeline(6);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(24);
     _ComputePipelinePair pipeline_rasterize_forward_3dgut_rad = _ComputePipelinePair(24);

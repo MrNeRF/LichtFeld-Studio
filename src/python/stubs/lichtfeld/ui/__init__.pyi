@@ -2010,9 +2010,10 @@ def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
     """Choose a text log export path. Returns empty string if cancelled."""
 
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
-    """
-    Open a save file dialog for JSON files. Returns empty string if cancelled.
-    """
+    """Choose a JSON path. Returns empty string if cancelled."""
+
+def save_json_file_dialog_with_confirmation(default_name: str = 'config.json') -> tuple[str, bool]:
+    """Return (JSON path, overwrite_confirmed); empty path on cancellation."""
 
 def save_png_file_dialog(default_name: str = 'export.png') -> str:
     """
@@ -2582,6 +2583,32 @@ class SequencerUIState:
     def sequence_fps(self, arg: float, /) -> None: ...
 
     @property
+    def camera_width(self) -> int:
+        """Sequence camera aspect width (1-8192)"""
+
+    @camera_width.setter
+    def camera_width(self, arg: int, /) -> None: ...
+
+    @property
+    def camera_height(self) -> int:
+        """Sequence camera aspect height (1-8192)"""
+
+    @camera_height.setter
+    def camera_height(self, arg: int, /) -> None: ...
+
+    @property
+    def framerate(self) -> int:
+        """Video export FPS numerator"""
+
+    @property
+    def framerate_denominator(self) -> int:
+        """Video export FPS denominator"""
+
+    @property
+    def export_fit(self) -> int:
+        """Video fitting: 0 fit, 1 crop, 2 stretch"""
+
+    @property
     def selected_keyframe(self) -> int: ...
 
 def get_sequencer_state() -> SequencerUIState:
@@ -2610,9 +2637,9 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
-def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True) -> None:
+def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True, framerate_denominator: int = 1, camera_width: int = 0, camera_height: int = 0, framing: str = 'fit') -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. FPS is framerate/framerate_denominator. Camera aspect defaults to the output size (0, 0); framing is 'fit', 'crop' (alias 'fill'), or 'stretch'.
     """
 
 def add_keyframe() -> None:

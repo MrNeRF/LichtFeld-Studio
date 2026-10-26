@@ -41,7 +41,8 @@ namespace lfs::vis::cap {
                type == core::NodeType::CROPBOX ||
                type == core::NodeType::ELLIPSOID ||
                type == core::NodeType::CROP_POLYGON ||
-               type == core::NodeType::MESH;
+               type == core::NodeType::MESH ||
+               type == core::NodeType::COLLISION;
     }
 
     bool isAlignTransformTargetType(const core::NodeType type) {
@@ -1174,6 +1175,7 @@ namespace lfs::vis::cap {
         } else {
             for (const auto* const node : scene.getNodes()) {
                 if (node && (isAlignTransformTargetType(node->type) ||
+                             node->type == core::NodeType::COLLISION ||
                              node->type == core::NodeType::CAMERA_GROUP || node->type == core::NodeType::CAMERA)) {
                     candidate_names.push_back(node->name);
                 }

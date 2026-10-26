@@ -270,6 +270,9 @@ namespace lfs::vis::project {
         boundDocument() const noexcept {
             return document_;
         }
+        [[nodiscard]] std::uint64_t documentEpoch() const noexcept {
+            return epoch_.load(std::memory_order_acquire);
+        }
         void recoverDeferredPayloadsAfterUndo(
             std::vector<lfs::core::Uuid> node_uuids);
         [[nodiscard]] bool isScratchBoundSession() const;
@@ -620,7 +623,16 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            std::move_only_function<lfs::Result<void>()> after_open = {});
+        lfs::Result<void> finishScratchRecovery();
+        struct PreparedOpen;
+        lfs::Result<void> commitOpen(PreparedOpen&& prepared);
+        lfs::Result<void> finishRecovered(
+            const std::filesystem::path& master, const std::filesystem::path& sidecar,
+            const std::filesystem::path& temporary, lfs::io::project::RecoverySession session);
+        bool deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry);
+        [[nodiscard]] bool collisionSwitchPending() const;
         [[nodiscard]] lfs::Result<void>
         openRecovered(
             const std::filesystem::path& master_path,

@@ -549,6 +549,23 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+    lfs::Result<bool> NativeFile::same_file(const NativeFile& other) const {
+#ifdef _WIN32
+        BY_HANDLE_FILE_INFORMATION a{}, b{};
+        if (GetFileInformationByHandle(handle_, &a) && GetFileInformationByHandle(other.handle_, &b))
+            return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+                   a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+        const auto error = GetLastError();
+#else
+        struct stat a{}, b{};
+        if (::fstat(fd_, &a) == 0 && ::fstat(other.fd_, &b) == 0)
+            return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+        const auto error = errno;
+#endif
+        return project_error(lfs::ErrorCode::Unavailable, "The project file identity could not be checked.",
+                             std::format("File identity query failed ({})", error), path_);
+    }
+
     lfs::Result<std::uint64_t> NativeFile::size() const {
 #ifdef _WIN32
         LARGE_INTEGER size{};
@@ -562,7 +579,7 @@ namespace lfs::io::project::detail {
         }
         return static_cast<std::uint64_t>(size.QuadPart);
 #else
-        struct stat status {};
+        struct stat status{};
         if (::fstat(fd_, &status) != 0 || status.st_size < 0) {
             const int error = errno;
             return project_error(native_error_code(error, false),
@@ -853,7 +870,7 @@ namespace lfs::io::project::detail {
 #ifndef _WIN32
     lfs::Result<bool> writer_lock_fd_matches_path(
         const int fd, const std::filesystem::path& lock_path) {
-        struct stat fd_status {};
+        struct stat fd_status{};
         if (::fstat(fd, &fd_status) != 0) {
             const int error = errno;
             return project_error(
@@ -862,7 +879,7 @@ namespace lfs::io::project::detail {
                 std::format("lockfile fstat failed: {}", std::strerror(error)), lock_path,
                 std::nullopt, "writer_lock", error, std::strerror(error));
         }
-        struct stat path_status {};
+        struct stat path_status{};
         if (::stat(lock_path.c_str(), &path_status) != 0 ||
             fd_status.st_dev != path_status.st_dev ||
             fd_status.st_ino != path_status.st_ino) {

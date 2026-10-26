@@ -31,6 +31,7 @@ namespace lfs::vis::input {
         SCALE = 5,
         ALIGN = 6,
         CROP_BOX = 7,
+        WALK = 8,
     };
 
     enum class SelectionOp : uint8_t {
@@ -40,8 +41,9 @@ namespace lfs::vis::input {
     };
 
     // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
-    inline constexpr size_t kToolModeCount = 8;
-    inline constexpr std::array<ToolMode, 7> kAllToolModes = {
+    inline constexpr size_t kToolModeCount = 9;
+    inline constexpr std::array<ToolMode, 8> kAllToolModes = {
+        ToolMode::WALK,
         ToolMode::GLOBAL,
         ToolMode::SELECTION,
         ToolMode::ALIGN,
@@ -162,6 +164,7 @@ namespace lfs::vis::input {
         APPLY_ALIGNMENT,
         INSERT_CROP_POLYGON_VERTEX,
         REMOVE_CROP_POLYGON_VERTEX,
+        EXIT_WALK,
     };
 
     enum class ShortcutScope : uint8_t {

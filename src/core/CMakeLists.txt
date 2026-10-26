@@ -80,6 +80,9 @@ set(CORE_SOURCES
         apriltag_scene_scale.cpp
         argument_parser.cpp
         camera.cpp
+        collision_volume.cpp
+        collision_walk.cpp
+        collision_voxelization.cpp
         checkpoint_format.cpp
         crop_polygon.cpp
         image_loader.cpp

@@ -26,6 +26,7 @@ namespace lfs::vis {
         ProjectWrite,
         ProjectOpen,
         DatasetEmbed,
+        Collision,
         AprilTagScan,
     };
 
