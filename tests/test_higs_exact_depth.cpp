@@ -45,6 +45,7 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
         for (const glm::ivec2 size : {glm::ivec2(64, 64), glm::ivec2(65, 67)}) {
             SCOPED_TRACE(::testing::Message() << size.x << 'x' << size.y);
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = size;
             request.sh_degree = 0;
             request.overlay.cursor = {.enabled = overlays, .cursor = {-1000.0f, -1000.0f}, .radius = 1.0f};
@@ -86,7 +87,7 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
             request.require_exact_depth = false;
             for (int frame = 0; frame < 2; ++frame) {
                 auto rendered = renderer.render(context, model, request, false,
-                                                lfs::vis::VksplatViewportRenderer::OutputSlot::Main, false, true);
+                                                lfs::vis::VksplatViewportRenderer::OutputSlot::Main, false);
                 ASSERT_TRUE(rendered) << rendered.error();
             }
             auto approximate = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size});
@@ -110,7 +111,7 @@ TEST(HiGSExactDepth, MedianSurvivesHalfPrecisionBatchBoundary) {
                 // HiGS; depth capture would bypass HiGS and hide this regression.
                 for (int frame = 0; frame < 2; ++frame) {
                     auto rendered = renderer.render(context, model, request, false,
-                                                    lfs::vis::VksplatViewportRenderer::OutputSlot::Main, false, true);
+                                                    lfs::vis::VksplatViewportRenderer::OutputSlot::Main, false);
                     ASSERT_TRUE(rendered) << rendered.error();
                     auto depth = renderer.sampleDepthAtPixel(context, {.pixel = size / 2, .source_size = size});
                     ASSERT_TRUE(depth) << depth.error();
