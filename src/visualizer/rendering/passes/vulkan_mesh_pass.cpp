@@ -2607,27 +2607,71 @@ namespace lfs::vis {
                 LOG_ERROR("Collision preview requires {} storage bytes; device limit is {}", bytes, properties.limits.maxStorageBufferRange);
                 return;
             }
-            std::vector<uint32_t> data{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
-                                       uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
-            data.insert(data.end(), volume.words.begin(), volume.words.end());
-            if (!createDeviceLocalBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, frame.buffer, frame.allocation))
+            VkBufferCreateInfo buffer_info{};
+            buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            buffer_info.size = bytes;
+            buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+            if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
+                                             &frame.buffer, &frame.allocation, nullptr),
+                             "vmaCreateBuffer", "Collision preview storage buffer"))
                 return;
-            if (!createStagingBuffer(bytes, data.data(), frame.staging, frame.staging_allocation))
+
+            VkMemoryPropertyFlags memory_properties{};
+            vmaGetAllocationMemoryProperties(allocator, frame.allocation, &memory_properties);
+            const bool direct_upload = (memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+            VmaAllocation upload_allocation = frame.allocation;
+            if (!direct_upload) {
+                buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
+                                                 &frame.staging, &frame.staging_allocation, nullptr),
+                                 "vmaCreateBuffer", "Collision preview staging buffer"))
+                    return;
+                upload_allocation = frame.staging_allocation;
+            }
+
+            void* mapped = nullptr;
+            if (!vk_try_bool(vmaMapMemory(allocator, upload_allocation, &mapped),
+                             "vmaMapMemory", "Collision preview upload mapping"))
                 return;
-            const auto commands = beginSingleTimeCommands();
-            if (commands == VK_NULL_HANDLE)
+            const std::array<uint32_t, 4> header{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
+                                                 uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
+            std::memcpy(mapped, header.data(), sizeof(header));
+            if (!volume.words.empty())
+                std::memcpy(static_cast<uint32_t*>(mapped) + header.size(), volume.words.data(),
+                            volume.words.size() * sizeof(uint32_t));
+            // VMA flushes non-coherent memory and does nothing for coherent allocations.
+            const VkResult flush_result = vmaFlushAllocation(allocator, upload_allocation, 0, bytes);
+            vmaUnmapMemory(allocator, upload_allocation);
+            if (!vk_try_bool(flush_result, "vmaFlushAllocation", "Collision preview upload flush"))
                 return;
-            const VkBufferCopy copy{0, 0, bytes};
-            vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
-            const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
-                                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
-            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 0, 1, &barrier, 0, nullptr, 0, nullptr);
-            // One upload fence, never a device-wide wait or a per-frame transfer.
-            if (!endSingleTimeCommands(commands, &frame.pending_upload))
-                return;
-            vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
-            frame.staging = VK_NULL_HANDLE;
+
+            // The immutable buffer is written and flushed before the draw's queue submission.
+            // Submission makes these host writes visible to fragment shader reads (or to the
+            // staging transfer below), so direct uploads need no copy, barrier, or upload fence.
+            if (!direct_upload) {
+                const auto commands = beginSingleTimeCommands();
+                if (commands == VK_NULL_HANDLE)
+                    return;
+                const VkBufferCopy copy{0, 0, bytes};
+                vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
+                const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+                vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 1, &barrier, 0, nullptr, 0, nullptr);
+                // One upload fence, never a device-wide wait or a per-frame transfer.
+                if (!endSingleTimeCommands(commands, &frame.pending_upload))
+                    return;
+                vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
+                frame.staging = VK_NULL_HANDLE;
+                frame.staging_allocation = VK_NULL_HANDLE;
+            }
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             const VkDescriptorPoolCreateInfo pool{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, 1, 1, &size};
