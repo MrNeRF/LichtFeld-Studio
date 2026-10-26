@@ -55,6 +55,10 @@ readback, upload, fences, completion and timestamp facilities use HIP-owned
 resources; CUDA availability is irrelevant to those paths.
 Synchronous scalar results use reusable context-owned staging; a failed copy or
 wait leaves the caller's result unchanged and retains staging for safe cleanup.
+Staged readbacks capture preceding execution errors at their queue position.
+Later work cannot invalidate an earlier snapshot, and consuming the context's
+error cannot validate a failed snapshot. Packed slots retain errors across
+appends and check them before publishing bytes, including after a queue wait.
 
 Generic pointwise, strided, indexing, reduction, scan, sorting, GEMM and sampling
 operations use the private native operators. Image, geometry and NN operations
