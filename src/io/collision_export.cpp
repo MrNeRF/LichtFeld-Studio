@@ -40,8 +40,7 @@ namespace lfs::io {
         // Classify only the intersecting region; stop as soon as it is mixed.
         int classify(const core::CollisionVolume& v, Cursor cursor,
                      I3 lo, I3 hi, const std::stop_token& stop) {
-            if (stop.stop_requested())
-                throw core::OperationCancelled();
+            core::reportProgress(stop, {}, 0, "");
             lo = glm::max(lo, cursor.p);
             hi = glm::min(hi, cursor.p + cursor.size);
             if (glm::any(glm::greaterThanEqual(lo, hi)))
@@ -95,8 +94,6 @@ namespace lfs::io {
         const auto* model = std::get_if<std::shared_ptr<core::SplatData>>(&loaded->data);
         if (!model || !*model || loaded->point_cloud_source)
             throw std::invalid_argument("Input must contain Gaussian splats, not a mesh, point cloud or dataset");
-        // captureCollisionSource extracts original LOD leaves and rejects partial
-        // out-of-core residency rather than substituting coarse resident proxies.
         auto source = core::captureCollisionSource(**model);
         core::reportProgress(stop, progress, 1, "Captured full-detail splats");
         return source;
@@ -211,8 +208,7 @@ namespace lfs::io {
                     throw core::collisionError("collision.output_limit", "Voxel leaf limit exceeded; increase cell size and regenerate", lfs::ErrorCode::ResourceExhausted,
                                                std::format("{} / {}", leaves.size() / 2, 1u << 24));
                 nodes[i] = uint32_t(leaves.size() / 2);
-                leaves.push_back(uint32_t(mask));
-                leaves.push_back(uint32_t(mask >> 32));
+                leaves.insert(leaves.end(), {uint32_t(mask), uint32_t(mask >> 32)});
             } else {
                 uint32_t mask = 0;
                 const auto base = uint32_t(nodes.size());
@@ -273,7 +269,6 @@ namespace lfs::io {
                 installed[i] = true;
             }
         } catch (...) {
-            const auto failure = std::current_exception();
             std::string recovery_paths;
             for (int i = 0; i < 2; ++i) {
                 const auto& target = outputs[i]->output_path();
@@ -287,7 +282,7 @@ namespace lfs::io {
             }
             if (!recovery_paths.empty()) {
                 try {
-                    std::rethrow_exception(failure);
+                    throw;
                 } catch (const std::exception& error) {
                     LOG_ERROR("Original voxel publication failure before rollback error: {}", error.what());
                 } catch (...) {
@@ -297,7 +292,7 @@ namespace lfs::io {
                                   Error{ErrorCode::WRITE_FAILURE, "Voxel publication failed; recovery files retained." + recovery_paths},
                                   recovery_paths);
             }
-            std::rethrow_exception(failure);
+            throw;
         }
         for (const auto& backup : backups)
             if (!backup.empty()) {

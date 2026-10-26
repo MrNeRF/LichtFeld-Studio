@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <stdexcept>
 
 namespace lfs::core {
     namespace {
