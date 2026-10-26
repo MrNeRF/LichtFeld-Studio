@@ -15,11 +15,14 @@ layout(push_constant) uniform Projection {
     vec4 panorama;
 } projection;
 
-// Return the containing uniform region, or a single cell within a mask brick.
+uint traversal_path[22];
+int traversal_level;
+
+// Retain ancestors across ray steps; only descend from the changed coordinate bit.
 bool occupied(ivec3 cell, out ivec3 lo, out ivec3 hi) {
-    uint index = 0;
-    int edge = volume.dimensions_edge.w;
-    lo = ivec3(0);
+    uint index = traversal_path[traversal_level];
+    int edge = 1 << traversal_level;
+    lo = cell & ~(edge - 1);
     while (true) {
         uint word = volume.words[index];
         hi = min(lo + edge, volume.dimensions_edge.xyz);
@@ -34,8 +37,10 @@ bool occupied(ivec3 cell, out ivec3 lo, out ivec3 hi) {
             return (mask & (1u << (bit % 32u))) != 0u;
         }
         edge /= 2;
+        --traversal_level;
         ivec3 child = ivec3(greaterThanEqual(cell, lo + edge));
         index = word - 2u + uint(child.x + 2 * child.y + 4 * child.z);
+        traversal_path[traversal_level] = index;
         lo += child * edge;
     }
 }
@@ -74,6 +79,8 @@ void main() {
     }
     if (enter >= leave)
         discard;
+    traversal_level = findMSB(volume.dimensions_edge.w);
+    traversal_path[traversal_level] = 0u;
     ivec3 cell = clamp(ivec3(floor(origin + direction * enter)), ivec3(0), volume.dimensions_edge.xyz - 1);
     while (enter < leave && all(greaterThanEqual(cell, ivec3(0))) &&
            all(lessThan(cell, volume.dimensions_edge.xyz))) {
@@ -100,6 +107,7 @@ void main() {
                 exit_time[axis] = (float(direction[axis] > 0.0 ? hi[axis] : lo[axis]) - origin[axis]) / direction[axis];
         }
         enter = min(exit_time.x, min(exit_time.y, exit_time.z));
+        ivec3 previous = cell;
         cell = ivec3(floor(origin + direction * enter));
         for (int axis = 0; axis < 3; ++axis) {
             if (exit_time[axis] == enter) {
@@ -109,6 +117,8 @@ void main() {
                 cell[axis] = clamp(cell[axis], lo[axis], hi[axis] - 1);
             }
         }
+        uvec3 changed = uvec3(previous ^ cell);
+        traversal_level = max(traversal_level, findMSB(changed.x | changed.y | changed.z) + 1);
     }
     discard;
 }

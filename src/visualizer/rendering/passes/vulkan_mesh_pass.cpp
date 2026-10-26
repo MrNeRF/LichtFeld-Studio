@@ -163,7 +163,18 @@ namespace lfs::vis {
             VmaAllocation allocation = VK_NULL_HANDLE;
             VkDescriptorPool pool = VK_NULL_HANDLE;
             VkDescriptorSet descriptor = VK_NULL_HANDLE;
+            VkBuffer staging = VK_NULL_HANDLE;
+            VmaAllocation staging_allocation = VK_NULL_HANDLE;
+            VkFence pending_upload = VK_NULL_HANDLE;
             ~CollisionFrame() {
+                if (pending_upload && vkGetFenceStatus(device, pending_upload) != VK_SUCCESS) {
+                    LOG_ERROR("Collision upload has not retired; retaining its buffers until device teardown");
+                    return;
+                }
+                if (pending_upload)
+                    vkDestroyFence(device, pending_upload, nullptr);
+                if (staging)
+                    vmaDestroyBuffer(allocator, staging, staging_allocation);
                 if (buffer)
                     vmaDestroyBuffer(allocator, buffer, allocation);
                 if (pool)
@@ -177,6 +188,7 @@ namespace lfs::vis {
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
         std::vector<VkDescriptorPool> material_descriptor_pools;
         VkCommandPool transfer_pool = VK_NULL_HANDLE;
+        mutable bool retain_transfer_pool = false;
         VkQueue graphics_queue = VK_NULL_HANDLE;
 
         struct LightDrawResources {
@@ -372,7 +384,7 @@ namespace lfs::vis {
             return cb;
         }
 
-        bool endSingleTimeCommands(VkCommandBuffer cb) const {
+        bool endSingleTimeCommands(VkCommandBuffer cb, VkFence* pending = nullptr) const {
             VkResult r = vkEndCommandBuffer(cb);
             if (r != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
@@ -457,6 +469,11 @@ namespace lfs::vis {
                         vkHandleValue(cb),
                         formatWaitFailure(wait_outcome));
                 }
+            }
+            if (submitted && !wait_ready) {
+                retain_transfer_pool = true;
+                if (pending)
+                    *pending = fence;
             }
             // AMB-4: destroy fence/CB only when never submitted or wait Ready.
             if (fence != VK_NULL_HANDLE) {
@@ -549,7 +566,7 @@ namespace lfs::vis {
                 vkDestroySampler(device, shadow_sampler, nullptr);
                 shadow_sampler = VK_NULL_HANDLE;
             }
-            if (transfer_pool != VK_NULL_HANDLE) {
+            if (transfer_pool != VK_NULL_HANDLE && !retain_transfer_pool) {
                 vkDestroyCommandPool(device, transfer_pool, nullptr);
                 transfer_pool = VK_NULL_HANDLE;
             }
@@ -2598,8 +2615,24 @@ namespace lfs::vis {
             std::vector<uint32_t> data{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
                                        uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
             data.insert(data.end(), volume.words.begin(), volume.words.end());
-            if (!createStagingBuffer(bytes, data.data(), frame.buffer, frame.allocation, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+            if (!createDeviceLocalBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, frame.buffer, frame.allocation))
                 return;
+            if (!createStagingBuffer(bytes, data.data(), frame.staging, frame.staging_allocation))
+                return;
+            const auto commands = beginSingleTimeCommands();
+            if (commands == VK_NULL_HANDLE)
+                return;
+            const VkBufferCopy copy{0, 0, bytes};
+            vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
+            const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 1, &barrier, 0, nullptr, 0, nullptr);
+            // One upload fence, never a device-wide wait or a per-frame transfer.
+            if (!endSingleTimeCommands(commands, &frame.pending_upload))
+                return;
+            vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
+            frame.staging = VK_NULL_HANDLE;
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             VkDescriptorPoolCreateInfo pool{};
             pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
