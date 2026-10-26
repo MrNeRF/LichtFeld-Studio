@@ -215,6 +215,42 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        // Fails if a vertex click rebound in a key map saved by master's v36 brings the default click back
+        // on this build. Master's action numbers 96 and 97 are dev's Right and Left view keys.
+        TEST_F(KeymapTest, MasterV36ReboundVertexClickReplacesTheDefault) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_master_v36_vertex_rebind.json";
+            auto saved = test::historicalSavedProfile("v36_master");
+            bool rebound = false;
+            for (auto& binding : saved["bindings"]) {
+                if (binding.value("mode", -1) == static_cast<int>(ToolMode::CROP_BOX) &&
+                    binding.value("description", std::string{}) == "Remove polygon vertex") {
+                    binding["modifiers"] = MODIFIER_ALT;
+                    rebound = true;
+                }
+            }
+            ASSERT_TRUE(rebound);
+            test::writeProfile(path, saved);
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_ALT),
+                      Action::REMOVE_CROP_POLYGON_VERTEX);
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_CTRL),
+                      Action::NONE);
+            EXPECT_EQ(upgraded.getActionForMouseButton(ToolMode::CROP_BOX, MouseButton::LEFT, MODIFIER_SHIFT),
+                      Action::INSERT_CROP_POLYGON_VERTEX);
+            // Dev's keys under the same numbers stay where dev's defaults put them.
+            InputBindings defaults;
+            for (const auto action : {Action::VIEW_AXIS_RIGHT, Action::VIEW_AXIS_LEFT}) {
+                SCOPED_TRACE(static_cast<int>(action));
+                const auto trigger = defaults.getTriggerForAction(action);
+                ASSERT_TRUE(trigger.has_value());
+                const auto* const key = std::get_if<KeyTrigger>(&*trigger);
+                ASSERT_NE(key, nullptr);
+                EXPECT_EQ(upgraded.getActionForKey(ToolMode::GLOBAL, key->key, key->modifiers), action);
+            }
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, StaleFullListDoesNotOverrideFutureDefaults) {
             const fs::path path = fs::temp_directory_path() / "lfs_keymap_future_defaults.json";
             InputBindings current;

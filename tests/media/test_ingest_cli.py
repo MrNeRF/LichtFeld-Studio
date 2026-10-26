@@ -345,6 +345,136 @@ class IngestCLI(unittest.TestCase):
                          b"".join(box(kind, data) for kind, data in before) + box(b"jxlc", codestream) +
                          b"".join(box(kind, data) for kind, data in after))
 
+    @staticmethod
+    def _rdf_packet(body, attributes=""):
+        return ('<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+                '<r:Description r:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" '
+                'xmlns:e="http://ns.adobe.com/exif/1.0/" ' + attributes + '>' + body +
+                '</r:Description></r:RDF>')
+
+    def test_source_metadata_xmp_interpretation_carriers(self):
+        packet = self._rdf_packet('<t:Model>Body &amp; lens</t:Model><e:FNumber>28/10</e:FNumber>',
+                                  't:Make="Caméra 日本語"').encode()
+        for carrier in ("jpeg", "png", "jxl", "tiff", "avif", "heic"):
+            with self.subTest(carrier=carrier):
+                path = self.root / ("interpreted." + carrier)
+                if carrier == "jpeg":
+                    self._xmp_jpeg(path, [b"http://ns.adobe.com/xap/1.0/\x00" + packet])
+                elif carrier == "png":
+                    self._xmp_png(path, [b"XML:com.adobe.xmp\x00\x01\x00\x00\x00" + zlib.compress(packet)])
+                elif carrier == "jxl":
+                    self._xmp_jxl(path, [(b"xml ", packet)])
+                elif carrier == "tiff":
+                    source_exif_fixture.write_tiff(path, xmp_packets=[packet])
+                else:
+                    source_exif_fixture.write_heif_metadata(path, [{"data": zlib.compress(packet), "encoding": "compress_zlib"}], carrier=carrier)
+                original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                result, _ = self.invoke("source-metadata", path)
+                summary = result["summary"]
+                self.assertEqual([p["state"] for p in summary["xmp_packets"]], ["parsed"])
+                facts = {f["semantic"]: f for f in summary["facts"] if "xmp_property" in f}
+                self.assertEqual(len(facts), 3)
+                self.assertEqual(facts["camera.make"]["value"], "Caméra 日本語")
+                self.assertEqual(facts["camera.model"]["value"], "Body & lens")
+                self.assertEqual(facts["lens.f_number"]["value"], {"numerator": 28, "denominator": 10})
+                self.assertTrue(all(f["source"] == {"kind": "xmp_block", "block": 0} for f in facts.values()))
+                self.assertEqual(facts["camera.make"]["xmp_property"], {"namespace": "http://ns.adobe.com/tiff/1.0/", "name": "Make", "description": 0, "ordinal": 1})
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+
+    def test_source_metadata_xmp_agreement_and_independent_limits(self):
+        path = self.root / "xmp-agreement.jpg"
+        for orientation in ("6", "3", "invalid"):
+            with self.subTest(orientation=orientation):
+                source_exif_fixture.write_camera_metadata(path, carrier="jpeg")
+                packet = self._rdf_packet("", f't:Orientation="{orientation}" t:Make="Test Camera"').encode()
+                envelope = b"http://ns.adobe.com/xap/1.0/\0" + packet
+                original = path.read_bytes()
+                path.write_bytes(original[:2] + b"\xff\xe1" + struct.pack(">H", len(envelope) + 2) + envelope + original[2:])
+                saved = path.read_bytes(), path.stat().st_mtime_ns
+                result, _ = self.invoke("source-metadata", path)
+                for semantic, conflict in (("orientation.exif", orientation != "6"), ("camera.make", False)):
+                    facts = [f for f in result["summary"]["facts"] if f["semantic"] == semantic]
+                    self.assertEqual(len(facts), 2)
+                    self.assertTrue(all(f["ambiguous"] == conflict for f in facts))
+                    self.assertEqual(sum("xmp_property" in f for f in facts), 1)
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), saved)
+        good = self._rdf_packet('<t:Make>Unique</t:Make>').encode()
+        attrs = " ".join(f'a{i}="x"' for i in range(129))
+        failures = (self._rdf_packet("", attrs).encode(), b"x" * (1024 * 1024 + 1))
+        for bad in failures:
+            for packets in ((good, bad), (bad, good)):
+                self._xmp_jxl(path, [(b"xml ", packet) for packet in packets])
+                result, _ = self.invoke("source-metadata", path)
+                summary = result["summary"]
+                self.assertTrue(summary["limited"])
+                fact, = summary["facts"]
+                self.assertEqual(fact["value"], "Unique")
+                self.assertFalse(fact["ambiguous"])
+
+    def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
+        packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()
+        child = self._rdf_packet('<t:Make>secondary</t:Make>').encode()
+        path = self.root / "xmp-directory.tif"
+        source_exif_fixture.write_tiff_graph(path, blobs=[(700, packet)], subimage_blobs=[(700, child)])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual([p["state"] for p in result["summary"]["xmp_packets"]], ["parsed", "unsupported"])
+        self.assertEqual([f["value"] for f in result["summary"]["facts"] if "xmp_property" in f], ["primary"])
+        path = self.root / "xmp-crc.png"
+        self._xmp_png(path, [b"XML:com.adobe.xmp\x00\x00\x00\x00\x00" + packet], bad_crc=True)
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "malformed")
+        self.assertFalse(any("xmp_property" in f for f in result["summary"]["facts"]))
+
+    def test_source_metadata_xmp_interpretation_packet_failures(self):
+        path = self.root / "unsafe-xmp.jxl"
+        good = self._rdf_packet('<t:Model>valid</t:Model>').encode()
+        for packet, expected in (
+                (good[:-1], "malformed"),
+                (b'<!DOCTYPE x SYSTEM "file:///must-not-open">' + good, "unsupported"),
+                (b'<!DOCTYPE x [<!ENTITY a "expanded">]>' + good, "unsupported"),
+                (good.replace(b"valid", b"\xff"), "malformed"),
+                (good.replace(b'r:about=""', b'r:about="other"'), "unsupported"),
+                (good.replace(b'<t:Model>valid</t:Model>', b'<u>' * 40 + b'</u>' * 40), "limited")):
+            with self.subTest(expected=expected, packet=packet[:50]):
+                self._xmp_jxl(path, [(b"xml ", packet), (b"xml ", good)])
+                result, _ = self.invoke("source-metadata", path)
+                self.assertEqual([p["state"] for p in result["summary"]["xmp_packets"]], [expected, "parsed"])
+                self.assertEqual(len(result["summary"]["facts"]), 1)
+                self.assertEqual(result["summary"]["facts"][0]["source"]["block"], 1)
+                self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["payload_bytes"]), packet)
+
+    def test_source_metadata_xmp_interpretation_values(self):
+        path = self.root / "xmp-values.jxl"
+        cases = [("GPSLatitude", "90,0N", "present", 90.0),
+                 ("GPSLatitude", "90,0.1N", "invalid", "90,0.1N"),
+                 ("GPSLongitude", "45,30,0W", "present", -45.5),
+                 ("GPSLongitude", "45.5W", "invalid", "45.5W"),
+                 ("GPSLongitude", "45,3e1W", "invalid", "45,3e1W"),
+                 ("GPSLatitude", "-0,30N", "invalid", "-0,30N"),
+                 ("ExposureTime", "1/125", "present", {"numerator": 1, "denominator": 125}),
+                 ("ExposureTime", "1/0", "invalid", "1/0"),
+                 ("FocalLength", "NaN", "invalid", "NaN"),
+                 ("DateTimeOriginal", "2024-02", "present", "2024-02"),
+                 ("DateTimeOriginal", "2023-02-29", "invalid", "2023-02-29"),
+                 ("DateTimeOriginal", "2016-12-31T23:59:60Z", "unsupported", "2016-12-31T23:59:60Z")]
+        for name, value, state, expected in cases:
+            with self.subTest(name=name, value=value):
+                packet = self._rdf_packet(f"<e:{name}>{value}</e:{name}>").encode()
+                self._xmp_jxl(path, [(b"xml ", packet)])
+                result, _ = self.invoke("source-metadata", path)
+                fact, = result["summary"]["facts"]
+                self.assertEqual((fact["state"], fact["value"]), (state, expected))
+
+    def test_source_metadata_xmp_interpretation_utf16_and_duplicates(self):
+        path = self.root / "utf16-xmp.jxl"
+        xml = self._rdf_packet('<t:Make>日本語</t:Make><t:Make>other</t:Make><z:Make xmlns:z="urn:wrong">ignored</z:Make>')
+        packet = ('<?xml version="1.0" encoding="UTF-16"?>' + xml).encode("utf-16")
+        self._xmp_jxl(path, [(b"xml ", packet)])
+        result, _ = self.invoke("source-metadata", path)
+        self.assertEqual([f["value"] for f in result["summary"]["facts"]], ["日本語", "other"])
+        self.assertTrue(all(f["ambiguous"] for f in result["summary"]["facts"]))
+        self.assertEqual([f["xmp_property"]["ordinal"] for f in result["summary"]["facts"]], [1, 2])
+
     def test_source_metadata_exif_jxl_envelopes_and_facts(self):
         path = self.root / "EXIF JPEG XL \u00e9 \u65e5\u672c\u8a9e.jxl"
         fixture = self.root / "camera-jxl.png"

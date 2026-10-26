@@ -499,22 +499,41 @@ namespace lfs::vis::input {
                     stored_keys.insert(key);
                     if (b.contains("description") && b["description"].is_string())
                         stored_descriptions.emplace(key, b.value("description", ""));
-                    if (!parseStoredBinding(b)) {
+                }
+                // A record is malformed only if it does not parse under the action numbers of the
+                // version that saved it: master and dev give the same numbers to different actions.
+                const auto malformedIdsFor = [&](const nlohmann::json& action_symbols) {
+                    std::unordered_set<std::string> ids;
+                    for (const auto& b : stored_bindings) {
+                        if (!b.is_object())
+                            continue;
+                        auto renumbered = b;
+                        if (b.contains("action")) {
+                            if (const auto action = integerValue(b["action"])) {
+                                const auto symbol = action_symbols.find(std::to_string(*action));
+                                if (symbol != action_symbols.end() && symbol->is_string()) {
+                                    if (const auto mapped = findActionBySymbol(symbol->get<std::string>()))
+                                        renumbered["action"] = static_cast<int>(*mapped);
+                                }
+                            }
+                        }
+                        if (parseStoredBinding(renumbered))
+                            continue;
                         const auto mode = b.contains("mode") ? integerValue(b["mode"])
                                                              : std::optional<int>(0);
                         if (!mode)
                             continue;
                         if (b.contains("action")) {
                             if (const auto action = integerValue(b["action"]))
-                                malformed_default_ids.insert("a:" + std::to_string(*mode) + ":" +
-                                                             std::to_string(*action));
+                                ids.insert("a:" + std::to_string(*mode) + ":" + std::to_string(*action));
                         }
                         if (b.contains("description") && b["description"].is_string()) {
-                            malformed_default_ids.insert("d:" + std::to_string(*mode) + ":" +
-                                                         toLowerCopy(b["description"].get<std::string>()));
+                            ids.insert("d:" + std::to_string(*mode) + ":" +
+                                       toLowerCopy(b["description"].get<std::string>()));
                         }
                     }
-                }
+                    return ids;
+                };
                 const auto hasInvalidRecordFor = [&](const nlohmann::json& candidate) {
                     const auto mode = candidate.value("mode", 0);
                     const auto action = candidate.value("action", 0);
@@ -526,12 +545,16 @@ namespace lfs::vis::input {
                                                           description);
                 };
                 const auto& historical = historicalKeymapDefaults();
+                std::unordered_set<std::string> best_malformed_ids;
                 for (const auto& snapshot : historical["profiles"]) {
                     if (snapshot.at("version").get<int>() != version)
                         continue;
                     const auto& snapshot_data = historical["data"].at(
                         snapshot.at("data").get<size_t>());
                     const auto& candidate = snapshot_data["bindings"];
+                    auto candidate_malformed = malformedIdsFor(
+                        snapshot_data.value("actions", nlohmann::json::object()));
+                    std::swap(malformed_default_ids, candidate_malformed);
                     size_t matches = 0;
                     for (const auto& b : candidate)
                         matches += stored_keys.contains(bindingKey(b)) || hasInvalidRecordFor(b);
@@ -542,8 +565,10 @@ namespace lfs::vis::input {
                         best_difference = difference;
                         historical_bindings = candidate;
                         historical_action_symbols = snapshot_data.value("actions", nlohmann::json::object());
+                        best_malformed_ids = malformed_default_ids;
                     }
                 }
+                malformed_default_ids = std::move(best_malformed_ids);
                 // Sparse hand-written files predate complete saved profiles and
                 // still need the explicit compatibility migrations below.
                 if (historical_bindings.empty() ||

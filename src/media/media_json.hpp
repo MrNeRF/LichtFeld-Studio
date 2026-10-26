@@ -163,8 +163,8 @@ namespace lfs::media::json_detail {
                                                                                            : block.envelope == XmpEnvelope::HeifMime             ? "heif_mime"
                                                                                                                                                  : "jxl_xml";
                 json payload = nullptr;
-                if (block.status == core::image_codecs::MetadataStatus::Collected && original && block.payload_offset <= original->size())
-                    payload = block.inflated ? hexBytes(*block.inflated) : hexBytes(original->subspan(block.payload_offset));
+                if (const auto view = catalog.xmpPayloadBytes({index}))
+                    payload = hexBytes(*view);
                 retained["blocks"].push_back({{"envelope", envelope}, {"bytes", original ? json(hexBytes(*original)) : json(nullptr)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
                 if (block.heif_item) {
                     const auto& item = *block.heif_item;
@@ -258,6 +258,27 @@ namespace lfs::media::json_detail {
                 item["derivation"] = fact.derivation;
                 item["diagnostic"] = fact.diagnostic;
                 item["ambiguous"] = fact.ambiguous;
+                const auto location = [](const XmpPropertyLocation& value) {
+                    return json{{"namespace", value.field ? value.field->namespace_uri : std::string_view{}}, {"name", value.field ? value.field->name : std::string_view{}}, {"description", value.description}, {"ordinal", value.ordinal}};
+                };
+                if (fact.xmp) {
+                    item["xmp_property"] = location(fact.xmp->property);
+                    item["xmp_inputs"] = json::array();
+                    for (const auto& input : fact.xmp->inputs)
+                        item["xmp_inputs"].push_back(location(input));
+                }
+            }
+        }
+        if (!summary.xmp_packets.empty()) {
+            result["xmp_packets"] = json::array();
+            for (const auto& packet : summary.xmp_packets) {
+                const char* state = packet.state == XmpPacketState::Parsed      ? "parsed"
+                                    : packet.state == XmpPacketState::Malformed ? "malformed"
+                                    : packet.state == XmpPacketState::Limited   ? "limited"
+                                                                                : "unsupported";
+                result["xmp_packets"].push_back({{"source", metadataReference(packet.source.reference)},
+                                                 {"state", state},
+                                                 {"diagnostic", packet.diagnostic}});
             }
         }
         return result;

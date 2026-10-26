@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/metadata_observation.hpp"
+#include "metadata_summary_common.hpp"
+#include "xmp_metadata.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -138,19 +140,9 @@ namespace lfs::media {
             bool append(const TagView& tag, std::string_view semantic, MetadataScalar value, MetadataUnit unit,
                         MetadataValueState state, std::string_view diagnostic = {}, bool ambiguous = false,
                         std::span<const TagView* const> operands = {}, std::string_view derivation = {}) {
-                const auto* string = std::get_if<std::string>(&value);
-                std::size_t cost = 0;
-                for (const auto count : {semantic.size(), diagnostic.size(), derivation.size(), string ? string->size() : 0}) {
-                    if (count > bytes - charged - cost) {
-                        result.limited = true;
-                        return false;
-                    }
-                    cost += count;
-                }
-                if (result.facts.size() >= facts) {
-                    result.limited = true;
+                const auto cost = summary_detail::factCost(result, facts, bytes, charged, semantic, value, diagnostic, derivation);
+                if (!cost)
                     return false;
-                }
                 const auto source = catalog.bind(*tag.reference);
                 if (!source)
                     return false;
@@ -165,7 +157,7 @@ namespace lfs::media {
                     if (handle)
                         fact.inputs.push_back(*handle);
                 }
-                charged += cost;
+                charged += *cost;
                 result.facts.push_back(std::move(fact));
                 return true;
             }
@@ -226,27 +218,23 @@ namespace lfs::media {
                 if (!direction && ref && ref->type == 2 && ref->count == 1 && ref->bytes.size() == 1)
                     direction = std::string_view(reinterpret_cast<const char*>(ref->bytes.data()), 1);
                 std::array<double, 3> dms{};
-                const double limit = latitude ? 90 : 180;
                 bool valid = tag.type == 5 && tag.count == 3;
                 for (std::size_t i = 0; i < dms.size(); ++i)
                     valid = number(tag, i, dms[i]) && valid;
-                valid = valid && dms[0] <= limit && dms[1] < 60 && dms[2] < 60 &&
-                        (dms[0] < limit || (dms[1] == 0 && dms[2] == 0));
-                const double magnitude = dms[0] + dms[1] / 60 + dms[2] / 3600;
-                valid = valid && magnitude <= limit;
+                double value = 0;
                 const bool valid_ref = direction && direction->size() == 1 &&
                                        (latitude ? (*direction == "N" || *direction == "S") : (*direction == "E" || *direction == "W"));
+                valid = summary_detail::coordinate(dms[0], dms[1], dms[2], latitude,
+                                                   valid_ref ? direction->front() : (latitude ? 'N' : 'E'), value) &&
+                        valid;
                 auto state = !valid ? MetadataValueState::Invalid : duplicate ? MetadataValueState::Unsupported
                                                                 : !ref        ? MetadataValueState::Absent
                                                                 : !valid_ref  ? MetadataValueState::Invalid
                                                                               : MetadataValueState::Present;
                 if (!group.complete)
                     state = MetadataValueState::Unsupported;
-                double value = magnitude;
-                if (valid_ref && (*direction == "S" || *direction == "W"))
-                    value = -value;
                 const std::array<const TagView*, 1> inputs{ref};
-                return append(tag, latitude ? "gps.latitude" : "gps.longitude", state == MetadataValueState::Present ? MetadataScalar(value) : MetadataScalar(std::string{}),
+                return append(tag, latitude ? summary_detail::semantic::latitude : summary_detail::semantic::longitude, state == MetadataValueState::Present ? MetadataScalar(value) : MetadataScalar(std::string{}),
                               MetadataUnit::Degrees, state, !group.complete ? "Directory metadata is incomplete" : state == MetadataValueState::Present ? ""
                                                                                                                                                         : "Coordinate requires valid DMS and one hemisphere reference",
                               ambiguous || duplicate, ref ? std::span<const TagView* const>(inputs) : std::span<const TagView* const>{}, "exif_dms_hemisphere");
@@ -264,8 +252,11 @@ namespace lfs::media {
                                                                               : MetadataValueState::Present;
                 if (!group.complete)
                     state = MetadataValueState::Unsupported;
+                double value = 0;
+                if (state == MetadataValueState::Present)
+                    summary_detail::altitude(magnitude, static_cast<int>(sign), value);
                 const std::array<const TagView*, 1> inputs{ref};
-                return append(tag, "gps.altitude_sea_level", state == MetadataValueState::Present ? MetadataScalar(sign == 1 ? -magnitude : magnitude) : MetadataScalar(std::string{}),
+                return append(tag, summary_detail::semantic::altitude, state == MetadataValueState::Present ? MetadataScalar(value) : MetadataScalar(std::string{}),
                               MetadataUnit::Metres, state, !group.complete ? "Directory metadata is incomplete" : state == MetadataValueState::Present ? ""
                                                                                                                                                        : "Altitude requires one supported altitude reference",
                               ambiguous || duplicate, ref ? std::span<const TagView* const>(inputs) : std::span<const TagView* const>{}, "exif_altitude_reference_0_1");
@@ -444,28 +435,28 @@ namespace lfs::media {
                     bool more = true;
                     if (group.role == Role::Image) {
                         switch (tag.id) {
-                        case 0x010f: more = builder.string(tag, "camera.make", ambiguous); break;
-                        case 0x0110: more = builder.string(tag, "camera.model", ambiguous); break;
-                        case 0x0112: more = builder.scalar(tag, "orientation.exif", MetadataUnit::Unitless, 3, 1, 8, ambiguous); break;
+                        case 0x010f: more = builder.string(tag, summary_detail::semantic::make, ambiguous); break;
+                        case 0x0110: more = builder.string(tag, summary_detail::semantic::model, ambiguous); break;
+                        case 0x0112: more = builder.scalar(tag, summary_detail::semantic::orientation, MetadataUnit::Unitless, 3, 1, 8, ambiguous); break;
                         case 0x0132: more = builder.string(tag, "time.modified.civil", ambiguous, TextKind::CivilTime); break;
                         }
                     } else if (group.role == Role::Exif) {
                         constexpr double positive = std::numeric_limits<double>::min();
                         constexpr double maximum = std::numeric_limits<double>::max();
                         switch (tag.id) {
-                        case 0x829a: more = builder.scalar(tag, "exposure.duration", MetadataUnit::Seconds, 5, positive, maximum, ambiguous); break;
-                        case 0x829d: more = builder.scalar(tag, "lens.f_number", MetadataUnit::Unitless, 5, 0, maximum, ambiguous, 0); break;
+                        case 0x829a: more = builder.scalar(tag, summary_detail::semantic::exposure, MetadataUnit::Seconds, 5, positive, maximum, ambiguous); break;
+                        case 0x829d: more = builder.scalar(tag, summary_detail::semantic::f_number, MetadataUnit::Unitless, 5, 0, maximum, ambiguous, 0); break;
                         case 0x8827: more = builder.scalar(tag, "sensitivity.photographic", MetadataUnit::Unitless, 3, 0, 65535, ambiguous, 0, 65535); break;
                         case 0x8830: more = builder.scalar(tag, "sensitivity.type", MetadataUnit::Unitless, 3, 0, 7, ambiguous, 0); break;
                         case 0x8831: more = builder.scalar(tag, "sensitivity.standard_output", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
                         case 0x8832: more = builder.scalar(tag, "sensitivity.recommended_exposure_index", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
                         case 0x8833: more = builder.scalar(tag, "sensitivity.iso_speed", MetadataUnit::Unitless, 4, 0, UINT32_MAX, ambiguous, 0); break;
-                        case 0x920a: more = builder.scalar(tag, "lens.focal_length", MetadataUnit::Millimetres, 5, 0, maximum, ambiguous, 0); break;
+                        case 0x920a: more = builder.scalar(tag, summary_detail::semantic::focal_length, MetadataUnit::Millimetres, 5, 0, maximum, ambiguous, 0); break;
                         case 0xa405: more = builder.scalar(tag, "lens.focal_length_35mm", MetadataUnit::Millimetres, 3, 0, 65535, ambiguous, 0); break;
-                        case 0xa433: more = builder.string(tag, "lens.make", ambiguous); break;
-                        case 0xa434: more = builder.string(tag, "lens.model", ambiguous); break;
-                        case 0x9003: more = builder.string(tag, "time.original.civil", ambiguous, TextKind::CivilTime) && builder.captureTime(group, tag, ambiguous, 0x9011, 0x9291, "time.original"); break;
-                        case 0x9004: more = builder.string(tag, "time.digitized.civil", ambiguous, TextKind::CivilTime) && builder.captureTime(group, tag, ambiguous, 0x9012, 0x9292, "time.digitized"); break;
+                        case 0xa433: more = builder.string(tag, summary_detail::semantic::lens_make, ambiguous); break;
+                        case 0xa434: more = builder.string(tag, summary_detail::semantic::lens_model, ambiguous); break;
+                        case 0x9003: more = builder.string(tag, "time.original.civil", ambiguous, TextKind::CivilTime) && builder.captureTime(group, tag, ambiguous, 0x9011, 0x9291, summary_detail::semantic::original); break;
+                        case 0x9004: more = builder.string(tag, "time.digitized.civil", ambiguous, TextKind::CivilTime) && builder.captureTime(group, tag, ambiguous, 0x9012, 0x9292, summary_detail::semantic::digitized); break;
                         case 0x9010: more = builder.string(tag, "time.modified.offset", ambiguous, TextKind::Offset); break;
                         case 0x9011: more = builder.string(tag, "time.original.offset", ambiguous, TextKind::Offset); break;
                         case 0x9012: more = builder.string(tag, "time.digitized.offset", ambiguous, TextKind::Offset); break;
@@ -479,7 +470,7 @@ namespace lfs::media {
                         case 4: more = builder.coordinate(group, tag, ambiguous); break;
                         case 6: more = builder.altitude(group, tag, ambiguous); break;
                         case 7: more = builder.gpsTime(tag, ambiguous); break;
-                        case 18: more = builder.string(tag, "gps.map_datum", ambiguous); break;
+                        case 18: more = builder.string(tag, summary_detail::semantic::datum, ambiguous); break;
                         case 29: more = builder.gpsDate(tag, ambiguous); break;
                         }
                     }
@@ -487,6 +478,7 @@ namespace lfs::media {
                         return std::move(builder.result);
                 }
             }
+            appendXmpMetadata(catalog, builder.result, max_facts, max_text_bytes, builder.charged);
             return std::move(builder.result);
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Image metadata summary allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
