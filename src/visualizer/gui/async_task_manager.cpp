@@ -3797,14 +3797,14 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollision(core::CollisionSettings settings) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision capture requires the viewer thread");
         pollCollision();
         settings.validate();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         if (!manager)
-            throw std::runtime_error("No scene manager");
+            throw core::collisionError("runtime.no_scene_manager", "No scene manager");
         const auto selected = manager->getSelectedNodeIds();
         if (selected.size() != 1)
             throw core::collisionError("collision.source_unavailable", "Select exactly one splat node to voxelize");
@@ -3825,14 +3825,14 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollisionExport(core::Uuid uuid, const std::filesystem::path& path) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision export capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision export capture requires the viewer thread");
         pollCollision();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
         if (!node || node->type != core::NodeType::COLLISION || !node->collision)
-            throw std::runtime_error("The export target is not a collision node");
+            throw core::collisionError("collision.select_export", "The export target is not a collision node");
         const auto transform = manager->getScene().getWorldTransform(node->id);
         launchCollision([volume = node->collision, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
             io::exportCollision(*volume, path, transform, stop, progress);
@@ -3842,10 +3842,10 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work) {
         if (collisionWorkerActive() || collision_replacement_)
-            throw std::runtime_error("A collision worker or scene replacement is still pending");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision worker or scene replacement is still pending");
         pollCollision();
         if (!beginJob(collision_job_, JobType::Collision, LOC("gallery.transfer.phase.preparing")))
-            throw std::runtime_error("Cannot start collision job");
+            throw core::collisionError("projects.gallery.eligibility.busy", "Cannot start collision job");
         collision_result_.reset();
         collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();
         publish_viewport_toolbar_generation();
@@ -3881,7 +3881,7 @@ namespace lfs::vis::gui {
             LOG_ERROR("Cannot launch collision worker: {}", e.what());
             jobs_.failed(job, core::localizedCollisionError(e));
             publish_viewport_toolbar_generation();
-            throw;
+            throw core::collisionError("selection.operation_failed_generic", e.what(), lfs::ErrorCode::Internal);
         }
     }
 
@@ -3911,12 +3911,12 @@ namespace lfs::vis::gui {
                 scene.noteLiveModelLockAcquired();
                 const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
                 if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
-                    throw core::collisionError("collision.source_changed", "Collision source changed during generation; generate it again");
+                    throw core::collisionError("collision.source_unavailable", "Collision source changed during generation; generate it again");
                 const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
                 auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
                 const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
                 if (id == core::NULL_NODE)
-                    throw std::runtime_error("Cannot add collision node");
+                    throw core::collisionError("selection.operation_failed_generic", "Cannot add collision node");
                 bool installed = false;
                 const ScopeExit rollback([&] {
                     if (!installed)
@@ -3926,7 +3926,7 @@ namespace lfs::vis::gui {
                 // while inheriting subsequent source/ancestor edits.
                 scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
                 op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
-                    manager, "Generate collision", std::move(before),
+                    manager, LOC("collision.title"), std::move(before),
                     op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
                 installed = true;
             } catch (const std::exception& e) {

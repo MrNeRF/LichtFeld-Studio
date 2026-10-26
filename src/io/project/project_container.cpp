@@ -2920,7 +2920,7 @@ namespace lfs::io::project {
         auto block = parse_superblock(**current, *size);
         if (!block)
             return lfs::Result<void>::failure(std::move(block).error());
-        bool unchanged = *same && block->crc32c == superblock().crc32c;
+        bool unchanged = *same && *size >= commit().committed_file_end && block->crc32c == superblock().crc32c;
         for (std::size_t slot = 0; slot < HEAD_SLOT_OFFSETS.size(); ++slot) {
             auto raw = read_fixed<HEAD_SLOT_BYTES>(**current, HEAD_SLOT_OFFSETS[slot], *size, *size, "head.identity");
             if (!raw)
@@ -2930,7 +2930,7 @@ namespace lfs::io::project {
         if (!unchanged)
             return lfs::Result<void>::failure(detail::project_error(lfs::ErrorCode::FailedPrecondition,
                                                                     "The project file changed while opening. Open it again.",
-                                                                    "The destination is not the validated file and exact commit", path()));
+                                                                    std::format("The destination is not the validated file and exact commit: size={}, required_extent={}", *size, commit().committed_file_end), path()));
         return {};
     }
 

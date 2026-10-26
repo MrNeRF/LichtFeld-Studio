@@ -78,7 +78,7 @@ namespace lfs::core {
         const auto* typed = dynamic_cast<const Exception*>(&exception);
         const auto key = typed ? collisionErrorField(typed->error(), "message_key") : std::string_view{};
         if (key.empty())
-            return exception.what();
+            return LOC("selection.operation_failed_generic");
         const auto details = collisionErrorField(typed->error(), "message_details");
         return std::string(LOC(key)) + (details.empty() ? "" : "\n" + std::string(details));
     }

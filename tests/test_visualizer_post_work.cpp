@@ -21791,7 +21791,7 @@ namespace lfs::vis::gui {
                                                                                                                     : JobStatus::Failed);
                 ASSERT_EQ(colliders().size(), edit == 0 ? 1 : 0);
                 if (edit > 0 && edit < 7)
-                    EXPECT_EQ(tasks().collisionJob()->error, LOC("collision.source_changed"));
+                    EXPECT_EQ(tasks().collisionJob()->error, LOC("collision.source_unavailable"));
                 if (edit == 0) {
                     EXPECT_FLOAT_EQ(tasks().collisionResolvedSize(), .25f);
                     const auto uuid = colliders().front()->uuid;
@@ -21824,9 +21824,9 @@ namespace lfs::vis::gui {
                 ASSERT_TRUE(document->save(destination));
             }
             const auto original = lfs::test::licht::read_file_bytes(path);
-            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Deleted", "Replaced", "SameCommitCopy", "NewGeneration", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
+            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Deleted", "Replaced", "SameCommitCopy", "Truncated", "NewGeneration", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
                 SCOPED_TRACE(replacement);
-                const bool reject_prepared = replacement == "Prepared" || replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy" || replacement == "NewGeneration";
+                const bool reject_prepared = replacement == "Prepared" || replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy" || replacement == "Truncated" || replacement == "NewGeneration";
                 const bool retain_source = reject_prepared || replacement == "StaleEpoch" || replacement == "CancelClose" || replacement == "DiscardClose";
                 const auto current_path = temporary_.path / (std::string(replacement) + "-current.licht");
                 if (reject_prepared) {
@@ -21902,6 +21902,11 @@ namespace lfs::vis::gui {
                     ASSERT_TRUE(std::filesystem::copy_file(second_path, path));
                 if (replacement == "SameCommitCopy")
                     lfs::test::licht::write_file_bytes(path, original);
+                if (replacement == "Truncated") {
+                    ASSERT_GT(original.size(), lfs::io::project::APPEND_REGION_OFFSET);
+                    std::filesystem::resize_file(path, lfs::io::project::APPEND_REGION_OFFSET);
+                    EXPECT_EQ(lfs::test::licht::read_file_bytes(path), (std::vector<std::byte>(original.begin(), original.begin() + lfs::io::project::APPEND_REGION_OFFSET)));
+                }
                 if (replacement == "NewGeneration") {
                     auto newer = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
                     const auto generation = newer.generation();

@@ -8200,7 +8200,8 @@ namespace lfs::vis::project {
         auto* manager = viewer_.getSceneManager();
         auto* parameter_manager = viewer_.getParameterManager();
         if (auto valid = candidate->source_reader()->validate_source_identity(); !valid)
-            return valid;
+            return lfs::Result<void>::failure(std::move(valid).error().with_context("prepared_project", LFS_SOURCE_SITE_CURRENT(),
+                                                                                    lfs::SmallFields{}.add("message_key", std::string_view("collision.source_unavailable"))));
         stopHydrationThreads();
         if (auto* trainer_manager = viewer_.getTrainerManager();
             trainer_manager && trainer_manager->hasTrainer() &&
