@@ -600,7 +600,7 @@ namespace {
         std::string overflowing_properties;
         for (std::size_t i = 0; i < 1024; ++i)
             overflowing_properties += "<t:Make>x</t:Make>";
-        const std::string qualified_description = R"(</r:Description><r:Description xml:lang="en">)";
+        const std::string qualified_description = R"(</r:Description><r:Description xmlns:n="http://ns.adobe.com/xmp/note/" xml:lang="en">)";
         for (const auto* stopping_content : std::array<const std::string*, 2>{&overflowing_properties, &qualified_description})
             for (const bool link_first : {false, true}) {
                 auto duplicate = standardPacket(extendedGuid);
