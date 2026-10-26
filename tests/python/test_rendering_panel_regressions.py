@@ -926,7 +926,7 @@ def test_collision_errors_translate_keys_and_preserve_only_supplied_details(cont
     from lfs_plugins import collision_panel as module
     locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
     from test_localization_contracts import _flatten
-    messages = dict(_flatten(json.loads((locales / f"{locale}.json").read_text())))
+    messages = dict(_flatten(json.loads((locales / f"{locale}.json").read_text(encoding="utf-8"))))
     module.lf.ui.tr.side_effect = messages.__getitem__
     for key, translated in messages.items():
         if not key.startswith("collision."):

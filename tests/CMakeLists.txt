@@ -232,6 +232,7 @@ if(BUILD_VISUALIZER_TESTS)
     )
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
         lfs_training
+        lfs_sequencer
         lfs_io
         lfs_visualizer
         lfs_core
