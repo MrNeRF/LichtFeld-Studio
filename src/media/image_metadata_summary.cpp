@@ -253,8 +253,8 @@ namespace lfs::media {
                 if (!group.complete)
                     state = MetadataValueState::Unsupported;
                 double value = 0;
-                if (state == MetadataValueState::Present)
-                    summary_detail::altitude(magnitude, static_cast<int>(sign), value);
+                if (state == MetadataValueState::Present && !summary_detail::altitude(magnitude, static_cast<int>(sign), value))
+                    state = MetadataValueState::Invalid;
                 const std::array<const TagView*, 1> inputs{ref};
                 return append(tag, summary_detail::semantic::altitude, state == MetadataValueState::Present ? MetadataScalar(value) : MetadataScalar(std::string{}),
                               MetadataUnit::Metres, state, !group.complete ? "Directory metadata is incomplete" : state == MetadataValueState::Present ? ""

@@ -6,6 +6,7 @@
 #include "media/metadata_observation.hpp"
 #include "media/metadata_summary_common.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <future>
 #include <limits>
@@ -503,6 +504,12 @@ namespace {
         invalid(std::string(1024 * 1024 + 1, 'x'), XmpPacketState::Limited);
         const auto aliases = summarizeImageMetadata(xmpFixture(begin + R"(t:Make="one"><t:Make>two</t:Make><x:Make xmlns:x="urn:wrong">ignored</x:Make><t:Model><r:Seq><r:li>structured</r:li></r:Seq></t:Model>)" + end));
         require(aliases && aliases->facts.size() == 3 && aliases->facts[0].ambiguous && aliases->facts[1].ambiguous && aliases->facts[2].state == MetadataValueState::Unsupported, "duplicates retained, spoof namespace ignored, structure unsupported");
+        for (const std::string lens : {"Lens One", "Lens Two"}) {
+            const auto agreeing_aliases = summarizeImageMetadata(xmpFixture(begin + R"(xmlns:x="http://ns.adobe.com/xap/1.0/" xmlns:a="http://ns.adobe.com/exif/1.0/aux/" xmlns:c="http://cipa.jp/exif/1.0/" t:Make="Same"><t:Make>Same</t:Make><e:DateTimeDigitized>2024-02-29T12:34:56</e:DateTimeDigitized><x:CreateDate>2024-02-29T12:34:56</x:CreateDate><a:Lens>Lens One</a:Lens><c:LensModel>)" + lens + "</c:LensModel>" + end));
+            require(agreeing_aliases && agreeing_aliases->facts.size() == 6, "alias summary");
+            for (const auto& item : agreeing_aliases->facts)
+                require(item.ambiguous == (item.semantic == "lens.model" && lens != "Lens One"), "equal aliases in one description agree; a differing alias flags only its semantic");
+        }
         const auto limited = summarizeImageMetadata(catalog, 1);
         require(limited && limited->limited && limited->facts.empty(), "property limit does not project partial packet");
         const auto text_limited = summarizeImageMetadata(catalog, 4096, 1);
