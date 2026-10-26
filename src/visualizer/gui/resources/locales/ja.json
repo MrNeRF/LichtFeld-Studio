@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "色分散の重み:",
     "losses.color_variance_warmup_iters": "色分散のウォームアップ:",
-    "tooltip.color_variance_weight": "見えているスプラットの色をそろえ、確率的レンダリングのノイズを減らします。FastGS で、ミップフィルター、外観補正、マスクをオフにする必要があります。値を大きくすると細部が失われることがあります。0 で無効です。",
+    "tooltip.color_variance_weight": "見えているスプラットの色をそろえ、確率的レンダリングのノイズを減らします。FastGS で、ミップフィルターとマスクをオフにする必要があります。値を大きくすると細部が失われることがあります。0 で無効です。",
     "tooltip.color_variance_warmup_iters": "色分散が始まるまでに完了する学習反復数です。学習スケジュールに合わせてスケールします。30000 反復のウォームアップと仕上げの試行には 15000 を使います。",
     "losses.opacity_reg": "不透明度の正則化:",
     "losses.scale_reg_decay_power": "スケールペナルティの減衰:",

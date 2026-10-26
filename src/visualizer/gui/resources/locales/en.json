@@ -617,7 +617,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Color Variance Weight:",
     "losses.color_variance_warmup_iters": "Color Variance Warm-up:",
-    "tooltip.color_variance_weight": "Aligns visible splat colors to reduce noise in stochastic rendering. Requires FastGS with mip filtering, appearance correction and masks off. Higher values can remove detail. 0 disables.",
+    "tooltip.color_variance_weight": "Aligns visible splat colors to reduce noise in stochastic rendering. Requires FastGS with mip filtering and masks off. Higher values can remove detail. 0 disables.",
     "tooltip.color_variance_warmup_iters": "Completed training iterations before color variance starts. Scales with the training schedule. Use 15000 for a 30000-iteration warm-up and refinement experiment.",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg_decay_power": "Scale Penalty Fade:",

@@ -159,8 +159,10 @@ namespace lfs::training {
         float* impact_peak_out = nullptr;
     };
 
+    // SteadySplats color variance against each pixel's expected splat color, which the
+    // backward derives from the context's forward image: that image must still hold the
+    // raw render, so callers must not clamp or correct it in place before the backward.
     struct FastGSColorVarianceLoss {
-        core::Tensor target;
         core::Tensor loss; // Optional caller-zeroed CUDA float32 scalar.
         float weight = 0.0f;
         // Optional CUDA Float32 [H, W] pixel weights, such as the crop box ROI. The loss

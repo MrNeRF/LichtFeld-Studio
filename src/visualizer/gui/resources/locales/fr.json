@@ -608,7 +608,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Poids de variance des couleurs :",
     "losses.color_variance_warmup_iters": "Préchauffage de la variance des couleurs :",
-    "tooltip.color_variance_weight": "Aligne les couleurs des splats visibles pour réduire le bruit du rendu stochastique. Nécessite FastGS avec le filtre Mip, la correction de l'apparence et les masques désactivés. Des valeurs élevées peuvent effacer des détails. 0 la désactive.",
+    "tooltip.color_variance_weight": "Aligne les couleurs des splats visibles pour réduire le bruit du rendu stochastique. Nécessite FastGS avec le filtre Mip et les masques désactivés. Des valeurs élevées peuvent effacer des détails. 0 la désactive.",
     "tooltip.color_variance_warmup_iters": "Itérations d'entraînement terminées avant que la variance des couleurs commence. Suit l'échelle du plan d'entraînement. Utilisez 15000 pour un essai de préchauffage et d'affinage sur 30000 itérations.",
     "losses.opacity_reg": "Rég. d'opacité :",
     "losses.scale_reg_decay_power": "Atténuation de la pénalité d'échelle :",

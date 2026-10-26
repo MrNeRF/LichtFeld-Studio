@@ -621,7 +621,7 @@
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.color_variance_weight": "Peso della varianza del colore:",
     "losses.color_variance_warmup_iters": "Riscaldamento della varianza del colore:",
-    "tooltip.color_variance_weight": "Allinea i colori degli splat visibili per ridurre il rumore nel rendering stocastico. Richiede FastGS con filtro Mip, correzione dell'aspetto e maschere disattivati. Valori più alti possono eliminare dettagli. 0 la disattiva.",
+    "tooltip.color_variance_weight": "Allinea i colori degli splat visibili per ridurre il rumore nel rendering stocastico. Richiede FastGS con filtro Mip e maschere disattivati. Valori più alti possono eliminare dettagli. 0 la disattiva.",
     "tooltip.color_variance_warmup_iters": "Iterazioni di addestramento completate prima che inizi la varianza del colore. Segue la scala del piano di addestramento. Usa 15000 per un esperimento di riscaldamento e rifinitura su 30000 iterazioni.",
     "losses.opacity_reg": "Regolarizzazione opacità:",
     "losses.scale_reg_decay_power": "Attenuazione della penalità di scala:",
