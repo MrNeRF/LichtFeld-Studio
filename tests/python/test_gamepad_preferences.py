@@ -114,6 +114,30 @@ def test_short_press_expires_and_missing_axis_is_not_reported_as_zero(section, m
     assert subject.buttons() == "—"
 
 
+def test_diagnostic_rows_keep_each_axis_separate_and_mark_missing_controls(section):
+    subject, state, _selected, _records, _dirty = section
+    state.update(selected=11, axes=[0.5, -0.25, 0, 0.9, 0, 1], has_axes=[True, True, True, False, True, True])
+    subject.sync()
+    rows = subject.axis_rows()
+    assert [row["label"] for row in rows] == ["LX", "LY", "RX", "RY", "LT", "RT"]
+    assert [row["group_start"] for row in rows] == [True, False, True, False, True, False]
+    assert rows[0]["value"] == "+0.50" and rows[0]["magnitude"] == 0.5
+    assert rows[1]["value"] == "-0.25" and rows[1]["magnitude"] == 0.25
+    assert rows[3]["value"] == "—" and not rows[3]["available"]
+    state.update(selected=0)
+    subject.sync()
+    assert all(row["value"] == "—" and row["magnitude"] == 0 for row in subject.axis_rows())
+
+
+def test_sidebar_reset_and_diagnostic_labels_exist_in_every_locale():
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    keys = ["preferences." + key for key in ("reset_page", "reset_page_confirmation", "reset_all_scope", "reset_safe_mode_note", "open_gamepad_test", "back_to_gamepad")]
+    keys += ["input_settings.reset_scope", "gamepad.left_stick", "gamepad.right_stick", "gamepad.triggers"]
+    for path in root.glob("*.json"):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        assert all(values.get(key) for key in keys), path.name
+
+
 def test_controller_diagnostics_are_localized_in_every_shipped_language():
     root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
     required = {"gamepad." + key for key in ("title", "help", "none", "empty", "unavailable", "unmapped", "axes", "buttons")}

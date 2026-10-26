@@ -11,6 +11,7 @@ class GamepadTestSection:
         self.state = {}
         self.handle = None
         self._records = None
+        self._axis_records = None
         self._pressed = []
         self._pressed_until = 0.0
         self.navigation = {}
@@ -19,6 +20,7 @@ class GamepadTestSection:
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
+        model.bind_record_list("gamepad_test_axis_rows")
         model.bind("gamepad_test_id", lambda: str(self.state.get("selected", 0)),
                    lambda value: self._select_from_input("test", value))
         model.bind_func("gamepad_test_status", self.status)
@@ -70,6 +72,7 @@ class GamepadTestSection:
         self.deactivate()
         self.handle = None
         self._records = None
+        self._axis_records = None
         self._pressed = []
 
     def deactivate(self):
@@ -148,6 +151,10 @@ class GamepadTestSection:
             self._records = records
             self.handle.update_record_list("gamepad_test_devices", records)
             changed = True
+        axis_rows = self.axis_rows()
+        if axis_rows != self._axis_records:
+            self._axis_records = axis_rows
+            self.handle.update_record_list("gamepad_test_axis_rows", axis_rows)
         if changed:
             for name in ("gamepad_test_id", "gamepad_test_status", "gamepad_test_axes", "gamepad_test_buttons"):
                 self.handle.dirty(name)
@@ -170,6 +177,19 @@ class GamepadTestSection:
             f"{name} {value:+.2f}" if available else f"{name} —"
             for name, value, available in zip(("LX", "LY", "RX", "RY", "LT", "RT"), axes, present)
         )
+
+    def axis_rows(self):
+        values = self.state.get("axes", ())
+        present = self.state.get("has_axes", (True,) * 6)
+        rows = []
+        for index, label in enumerate(("LX", "LY", "RX", "RY", "LT", "RT")):
+            available = bool(self.state.get("selected")) and index < len(values) and index < len(present) and present[index]
+            value = max(-1.0, min(1.0, values[index])) if available else 0.0
+            rows.append({"label": label, "value": f"{value:+.2f}" if available else "—",
+                         "magnitude": abs(value), "available": available,
+                         "group_start": index % 2 == 0,
+                         "group": lf.ui.tr(("gamepad.left_stick", "gamepad.right_stick", "gamepad.triggers")[index // 2])})
+        return rows
 
     def buttons(self):
         return ", ".join(dict.fromkeys([*self.state.get("buttons", ()), *self._pressed])) or "—"

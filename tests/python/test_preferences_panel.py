@@ -1335,6 +1335,90 @@ def test_input_page_labels_and_search_exist_in_all_locales():
         assert all(values.get(key) for key in keys), path.name
 
 
+def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    assert not panel._input_expanded
+    panel._toggle_input_group()
+    assert panel._section == "input" and panel._input_expanded
+    panel._set_input_page("gamepad")
+    panel._toggle_input_group()
+    assert not panel._input_expanded and panel._input_page == "gamepad"
+    assert panel._section == "input"
+    panel._set_section("general")
+    panel._set_input_page("gamepad")
+    assert panel._section == "input" and panel._input_expanded
+    assert panel._input_page == "gamepad"
+
+
+@pytest.mark.parametrize("section,safe,visible", [
+    ("portal", False, False), ("file_associations", False, False),
+    ("mcp", True, False), ("mcp", False, True), ("input", True, True),
+])
+def test_reset_visibility_respects_scope_and_safe_mode(preferences_panel_module, section, safe, visible):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._mcp_safe_mode = section, safe
+    confirmations = []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    assert panel._show_section_reset() == visible
+    panel._on_reset_current_section(None, None, None)
+    assert bool(confirmations) == visible
+
+
+def test_page_reset_confirmation_captures_scope_and_explains_hidden_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._input_page, panel._mcp_safe_mode = "input", "shortcuts", True
+    confirmations, resets = [], []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._reset_section = lambda scope: resets.append(scope)
+    panel._on_reset_current_section(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "input_settings.reset_scope" in message
+    assert "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not resets
+    panel._input_page = "gamepad"
+    callback(buttons[1])
+    assert resets == ["input_shortcuts"]
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_shortcut_table_reset_also_requires_confirmation(preferences_panel_module, confirmed):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    resets, confirmations = [], []
+    keymap.reset_to_default = lambda: resets.append(True)
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    keymap._on_reset_default(None, None, None)
+    assert not resets
+    _title, message, buttons, callback = confirmations[0]
+    assert message == "input_settings.reset_scope"
+    callback(buttons[1 if confirmed else 0])
+    assert resets == ([True] if confirmed else [])
+
+
+def test_global_reset_covers_input_macro_and_documents_exclusions(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._refresh_selection = lambda: None
+    confirmations, scopes = [], []
+    panel._reset_section = lambda scope: scopes.append(scope)
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    panel._on_reset_all_settings(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "preferences.reset_all_scope" in message and "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not scopes
+    callback(buttons[1])
+    assert scopes == ["general", "appearance", "viewport", "input", "interface", "marketplace", "mcp"]
+
+
 @pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_input_reset_restores_bindings_and_refreshes_rows(

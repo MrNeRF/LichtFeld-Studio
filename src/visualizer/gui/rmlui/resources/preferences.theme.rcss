@@ -37,6 +37,25 @@
     font-weight: bold;
 }
 
+.preferences-nav-child,
+.preferences-nav-child:hover,
+.preferences-nav-child:focus-visible,
+.preferences-nav-child.active {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.preferences-nav-child:hover,
+.preferences-nav-child:focus-visible {
+    color: @{text};
+}
+
+.preferences-nav-child.active {
+    color: @{primary};
+    border-left-color: @{primary};
+    border-left-width: 2dp;
+}
+
 .preferences-theme-variant.active {
     color: @{text};
     background-color: @{blend(surface,primary,button.tint_active)};

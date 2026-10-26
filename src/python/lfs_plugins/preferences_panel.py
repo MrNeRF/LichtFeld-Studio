@@ -121,6 +121,7 @@ class PreferencesPanel(Panel):
         self._marketplace_git_available = shutil.which("git") is not None
         self._section = "general"
         self._input_page = "navigation"
+        self._input_expanded = False
         self._gamepad_page = "controls"
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._mcp_enabled = True
@@ -176,6 +177,8 @@ class PreferencesPanel(Panel):
         model.bind_func("show_general", lambda: self._section == "general")
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
+        model.bind_func("input_expanded", lambda: self._input_expanded)
+        model.bind_func("input_page_title", self._input_page_title)
         model.bind_func("show_input_navigation", lambda: self._section == "input" and self._input_page == "navigation")
         model.bind_func("show_input_shortcuts", lambda: self._section == "input" and self._input_page == "shortcuts")
         model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
@@ -318,7 +321,7 @@ class PreferencesPanel(Panel):
         model.bind_event("clear_startup_sidebar", lambda *_: lf.ui.clear_startup_sidebar())
         model.bind_event("show_general", lambda *_: self._set_section("general"))
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
-        model.bind_event("show_input", lambda *_: self._set_section("input"))
+        model.bind_event("show_input", lambda *_: self._toggle_input_group())
         model.bind_event("input_page", lambda _handle, _event, args: self._set_input_page(str(args[0])) if args else None)
         model.bind_event("gamepad_page", lambda _handle, _event, args: self._set_gamepad_page(str(args[0])) if args else None)
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
@@ -1542,6 +1545,9 @@ class PreferencesPanel(Panel):
             self._handle.dirty_all()
 
     def _set_section(self, section):
+        if section == "input":
+            self._input_expanded = True
+            self._dirty_input_pages()
         if self._section == section:
             return
         if self._section == "input":
@@ -1576,12 +1582,15 @@ class PreferencesPanel(Panel):
 
     def _dirty_input_pages(self):
         if self._handle:
-            for name in ("show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
+            for name in ("input_expanded", "input_page_title", "show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
                          "show_gamepad_controls", "show_gamepad_test", "show_section_reset", "reset_section_label"):
                 self._handle.dirty(name)
 
     def _set_input_page(self, page):
-        if page not in ("navigation", "shortcuts", "gamepad") or self._input_page == page:
+        if page not in ("navigation", "shortcuts", "gamepad"):
+            return
+        self._set_section("input")
+        if self._input_page == page:
             return
         lf.keymap.cancel_capture()
         self._gamepad_test.deactivate()
@@ -1589,6 +1598,19 @@ class PreferencesPanel(Panel):
         self._ensure_keymap_rows_if_visible()
         self._reset_content_scroll()
         self._dirty_input_pages()
+
+    def _toggle_input_group(self):
+        if self._input_expanded:
+            self._input_expanded = False
+            self._dirty_input_pages()
+        else:
+            self._set_section("input")
+
+    def _input_page_title(self):
+        key = "preferences.input_" + self._input_page
+        if self._input_page == "gamepad" and self._gamepad_page == "test":
+            key = "preferences.gamepad_diagnostics"
+        return lf.ui.tr(key)
 
     def _set_gamepad_page(self, page):
         if page not in ("controls", "test") or self._gamepad_page == page:
@@ -1613,7 +1635,9 @@ class PreferencesPanel(Panel):
         return connection_action(self._portal_connection_state())[0]
 
     def _show_section_reset(self):
-        return self._section != "portal" and not (self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
+        return self._section not in ("portal", "file_associations") and not (
+            self._section == "mcp" and self._mcp_safe_mode) and not (
+            self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
 
     def _portal_connection_status(self):
         account = self._portal_connection_snapshot()
@@ -1690,14 +1714,19 @@ class PreferencesPanel(Panel):
             self._handle.dirty(f"{section}_expanded")
 
     def _reset_section_label(self):
-        return lf.ui.tr("preferences.reset_current_section")
+        return lf.ui.tr("preferences.reset_page")
 
     def _on_reset_current_section(self, _handle, _event, _args):
-        if self._section == "portal":
+        if not self._show_section_reset():
             return
         reset_label = self._reset_section_label()
         scope = "input_" + self._input_page if self._section == "input" else self._section
         section_name = lf.ui.tr(f"preferences.{scope}")
+        message = lf.ui.tr("preferences.reset_page_confirmation").replace("{page}", section_name)
+        if scope == "input_shortcuts":
+            message += "\n\n" + lf.ui.tr("input_settings.reset_scope")
+        if self._mcp_safe_mode:
+            message += "\n\n" + lf.ui.tr("preferences.reset_safe_mode_note")
 
         def _on_result(button):
             if button != reset_label:
@@ -1717,13 +1746,16 @@ class PreferencesPanel(Panel):
 
         lf.ui.confirm_dialog(
             f"{reset_label}: {section_name}",
-            f"{lf.ui.tr('preferences.reset_section_confirmation')} {section_name}.",
+            message,
             [lf.ui.tr("common.cancel"), reset_label],
             _on_result,
         )
 
     def _on_reset_all_settings(self, _handle, _event, _args):
         reset_label = lf.ui.tr("preferences.reset_all_settings")
+        message = lf.ui.tr("preferences.reset_all_settings_confirmation") + "\n\n" + lf.ui.tr("preferences.reset_all_scope")
+        if self._mcp_safe_mode:
+            message += "\n\n" + lf.ui.tr("preferences.reset_safe_mode_note")
 
         def _on_result(button):
             if button != reset_label:
@@ -1746,7 +1778,7 @@ class PreferencesPanel(Panel):
 
         lf.ui.confirm_dialog(
             reset_label,
-            lf.ui.tr("preferences.reset_all_settings_confirmation"),
+            message,
             [lf.ui.tr("common.cancel"), reset_label],
             _on_result,
         )

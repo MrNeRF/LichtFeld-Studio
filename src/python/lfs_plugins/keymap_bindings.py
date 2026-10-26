@@ -269,7 +269,10 @@ class KeymapBindingsSection:
         lf.keymap.save_profile(lf.keymap.get_current_profile())
 
     def _on_reset_default(self, _handle, _ev, _args):
-        self.reset_to_default()
+        label = lf.ui.tr("input_settings.reset_to_default")
+        lf.ui.confirm_dialog(label, lf.ui.tr("input_settings.reset_scope"),
+                             [lf.ui.tr("common.cancel"), label],
+                             lambda button: self.reset_to_default() if button == label else None)
 
     def reset_to_default(self):
         self._clear_pending_conflict()

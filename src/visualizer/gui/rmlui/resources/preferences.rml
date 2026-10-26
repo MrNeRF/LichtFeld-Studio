@@ -9,7 +9,16 @@
       <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
-      <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
+      <button class="btn preferences-nav-item preferences-nav-group" data-class-active="show_input" data-event-click="show_input">
+        <span class="preferences-nav-disclosure" data-if="!input_expanded">&#x25B6;</span>
+        <span class="preferences-nav-disclosure" data-if="input_expanded">&#x25BC;</span>
+        <span>@tr:preferences.input</span>
+      </button>
+      <div class="preferences-nav-children" data-if="input_expanded">
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_shortcuts" data-event-click="input_page('shortcuts')">@tr:preferences.input_shortcuts</button>
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_gamepad" data-event-click="input_page('gamepad')">@tr:preferences.input_gamepad</button>
+      </div>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
       <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
@@ -18,14 +27,10 @@
     </div>
 
     <div class="preferences-main">
-      <div class="preferences-input-pages" data-if="show_input">
-        <button class="btn preferences-nav-item" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
-        <button class="btn preferences-nav-item" data-class-active="show_input_shortcuts" data-event-click="input_page('shortcuts')">@tr:preferences.input_shortcuts</button>
-        <button class="btn preferences-nav-item" data-class-active="show_input_gamepad" data-event-click="input_page('gamepad')">@tr:preferences.input_gamepad</button>
-      </div>
-      <div class="preferences-input-pages preferences-gamepad-pages" data-if="show_input_gamepad">
-        <button class="btn preferences-nav-item" data-class-active="show_gamepad_controls" data-event-click="gamepad_page('controls')">@tr:preferences.gamepad_controls</button>
-        <button class="btn preferences-nav-item" data-class-active="show_gamepad_test" data-event-click="gamepad_page('test')">@tr:preferences.gamepad_diagnostics</button>
+      <div class="preferences-page-header" data-if="show_input">
+        <span class="preferences-page-title">{{ input_page_title }}</span>
+        <button class="btn btn--secondary" data-if="show_gamepad_controls" data-event-click="gamepad_page('test')">@tr:preferences.open_gamepad_test</button>
+        <button class="btn btn--secondary" data-if="show_gamepad_test" data-event-click="gamepad_page('controls')">@tr:preferences.back_to_gamepad</button>
       </div>
     <div class="preferences-content">
       <div class="preferences-section" data-if="show_general">
@@ -424,13 +429,17 @@
             <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
           </select>
           <span class="preferences-description">{{ gamepad_test_status }}</span>
-          <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.axes</span>
-            <span>{{ gamepad_test_axes }}</span>
+          <div data-for="axis : gamepad_test_axis_rows">
+            <span class="preferences-metric-heading text-accent" data-if="axis.group_start">{{ axis.group }}</span>
+            <div class="preferences-metric-row" data-class-unavailable="!axis.available">
+              <span class="preferences-metric-label">{{ axis.label }}</span>
+              <progress max="1" data-attr-value="axis.magnitude" />
+              <span class="preferences-metric-value">{{ axis.value }}</span>
+            </div>
           </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:gamepad.buttons</span>
-            <span>{{ gamepad_test_buttons }}</span>
+            <span class="preferences-metric-values">{{ gamepad_test_buttons }}</span>
           </div>
         </div>
       </div>
