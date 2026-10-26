@@ -1,5 +1,5 @@
 {
-  "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
   "dependencies": [
     "cppzmq",
     "curl",
@@ -95,7 +95,9 @@
         "gtest",
         {
           "name": "openexr",
-          "features": ["cpp"]
+          "features": [
+            "cpp"
+          ]
         }
       ]
     },
