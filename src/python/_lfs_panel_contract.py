@@ -53,6 +53,10 @@ class Panel:
     def on_unmount(self, doc):
         del doc
 
+    def on_visibility_changed(self, visible):
+        '''Release transient resources on hide, even when the document stays mounted.'''
+        del visible
+
     def on_update(self, doc):
         del doc
 

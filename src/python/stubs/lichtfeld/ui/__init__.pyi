@@ -337,6 +337,10 @@ class Panel:
 
     def on_unmount(self, doc): ...
 
+    def on_visibility_changed(self, visible: bool):
+        """Release transient resources when hidden without unmounting the document."""
+        ...
+
     def on_update(self, doc): ...
 
     def on_scene_changed(self, doc): ...
@@ -2871,6 +2875,10 @@ def take_gamepad_test_state() -> dict:
 
 def set_gamepad_test_device(device_id: int) -> bool:
     """Select a connected mapped controller for diagnostics; zero clears selection."""
+    ...
+
+def set_gamepad_test_active(active: bool) -> None:
+    """Keep controller discovery active only while the gamepad page is visible."""
     ...
 
 def get_gamepad_navigation_state() -> dict:

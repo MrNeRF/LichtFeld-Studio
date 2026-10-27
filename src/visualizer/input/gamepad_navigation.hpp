@@ -125,7 +125,9 @@ namespace lfs::vis::input {
             };
             condition(previous);
             condition(current);
-            return previous != current;
+            return previous != current ||
+                   std::any_of(current.pressed.begin(), current.pressed.end(), [](bool pressed) { return pressed; }) ||
+                   std::any_of(current.trigger_pressed.begin(), current.trigger_pressed.end(), [](bool pressed) { return pressed; });
         }
 
         GamepadNavigationIntent update(const GamepadSample& sample, const GamepadNavigationSettings& settings,
@@ -198,7 +200,8 @@ namespace lfs::vis::input {
             const float down = trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
             const float up = trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
             const bool buttons_released = std::none_of(sample.buttons.begin(), sample.buttons.end(), [](bool b) { return b; }) &&
-                                          std::none_of(sample.pressed.begin(), sample.pressed.end(), [](bool b) { return b; });
+                                          std::none_of(sample.pressed.begin(), sample.pressed.end(), [](bool b) { return b; }) &&
+                                          std::none_of(sample.trigger_pressed.begin(), sample.trigger_pressed.end(), [](bool b) { return b; });
             // Hysteresis: entering the armed state requires more clearance than
             // remaining at zero after the regular dead zone has been applied.
             const bool neutral = buttons_released &&
@@ -249,8 +252,11 @@ namespace lfs::vis::input {
                 const bool enabled = allowedGamepadAction(scope, a) &&
                                      (sequencer_action ? context.sequencer_open : navigation_supported && !reserved(b.positive));
                 const bool held = enabled && read_control(b.positive) > 0.5f;
-                const bool short_press = enabled && b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
-                                         sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT];
+                const bool short_press = enabled &&
+                                         ((b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
+                                           sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT]) ||
+                                          (b.positive >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER && b.positive < SDL_GAMEPAD_AXIS_COUNT &&
+                                           sample.has_axis[b.positive] && sample.trigger_pressed[b.positive - SDL_GAMEPAD_AXIS_LEFT_TRIGGER]));
                 // Keep held state while timeline gestures block editing, so a
                 // button held through the gesture cannot fire on release.
                 edge[a] = (!sequencer_action || context.sequencer_commands_allowed) &&

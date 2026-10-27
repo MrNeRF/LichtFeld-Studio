@@ -235,7 +235,6 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_training
         lfs_sequencer
         lfs_io
-        lfs_sequencer
         lfs_visualizer
         lfs_core
         lfs_python_runtime

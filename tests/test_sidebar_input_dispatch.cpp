@@ -110,6 +110,7 @@ namespace lfs::vis {
             input::InputBindings::setPersistenceEnabled(persistence_enabled_);
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        void setEventWatchActive(bool active) { window_->watching_event_ = active; }
         void setKeyboardContext(Rml::Context* context, bool external_enabled) {
             manager().keyboard_context_ = context;
             manager().native_windows_enabled_ = external_enabled;
@@ -240,6 +241,70 @@ namespace lfs::vis {
     };
 } // namespace lfs::vis
 namespace lfs::vis {
+    TEST_F(SidebarInputDispatchTest, GamepadDiscoveryLifetimeFollowsVisibleDiagnostics) {
+        window_->setInputController(nullptr);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        window_->setGamepadDiagnosticsActive(true);
+        ASSERT_TRUE(window_->gamepads().snapshot().available);
+        window_->pollEvents();
+        EXPECT_TRUE(window_->gamepads().snapshot().available);
+        window_->setGamepadDiagnosticsActive(false);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        window_->pollEvents();
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+    }
+
+    TEST_F(SidebarInputDispatchTest, GamepadHandleChangesWaitUntilTheEventWatchReturns) {
+        window_->setInputController(nullptr);
+        setEventWatchActive(true);
+        window_->setGamepadDiagnosticsActive(true);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        setEventWatchActive(false);
+        window_->pollEvents();
+        ASSERT_TRUE(window_->gamepads().snapshot().available);
+        setEventWatchActive(true);
+        window_->setGamepadDiagnosticsActive(false);
+        EXPECT_TRUE(window_->gamepads().snapshot().available);
+        setEventWatchActive(false);
+        window_->pollEvents();
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+    }
+
+    TEST_F(SidebarInputDispatchTest, WindowPumpPreservesShortTriggerCrossingsForBothConsumers) {
+        window_->setInputController(nullptr);
+        window_->setGamepadDiagnosticsActive(true);
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+        desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+        desc.name = "LichtFeld trigger dispatch test";
+        const auto id = SDL_AttachVirtualJoystick(&desc);
+        ASSERT_NE(id, 0u);
+        window_->pollEvents();
+        ASSERT_TRUE(window_->gamepads().selectNavigation(id));
+        ASSERT_TRUE(window_->gamepads().select(id));
+        SDL_Event event{};
+        event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        event.gaxis.which = id;
+        event.gaxis.axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+        event.gaxis.value = 24000;
+        ASSERT_TRUE(SDL_PushEvent(&event));
+        event.gaxis.value = 0;
+        ASSERT_TRUE(SDL_PushEvent(&event));
+        window_->pollEvents();
+        window_->pollEvents();
+        EXPECT_FLOAT_EQ(window_->gamepads().navigationSample().axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER], 0.f);
+        EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
+        EXPECT_TRUE(window_->gamepads().takeDiagnosticSnapshot().sample.trigger_pressed[1]);
+        EXPECT_FALSE(window_->gamepads().takeDiagnosticSnapshot().sample.trigger_pressed[1]);
+        EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
+        EXPECT_TRUE(SDL_DetachVirtualJoystick(id));
+        window_->setGamepadDiagnosticsActive(false);
+    }
+
     TEST_F(SidebarInputDispatchTest, SidebarCtrlWheelRemainsAvailableToScrollableContent) {
         gui::RmlPanelHost host(&manager(), "sidebar-content", "");
         attachInputHost(host, 400, 300,

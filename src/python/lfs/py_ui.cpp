@@ -5517,6 +5517,11 @@ namespace lfs::python {
         m.def("get_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(false); }, "Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.");
         m.def("take_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(true); }, "Read and consume diagnostic presses, independently of navigation commands.");
 
+        m.def("set_gamepad_test_active", [](bool active) { invoke_on_viewer([active] {
+                                                               if (auto* window = vis::services().windowOrNull())
+                                                                   window->setGamepadDiagnosticsActive(active);
+                                                           }); }, nb::arg("active"), "Acquire controller discovery while the gamepad preferences page is visible; release it on exit.");
+
         m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
                                                                if (get_visualizer())
                                                                    if (auto* window = vis::services().windowOrNull())
@@ -5533,7 +5538,7 @@ namespace lfs::python {
                 if (!controller || !window)
                     return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", "", 0, ""};
                 const auto& settings = controller->gamepadNavigationSettings();
-                return {settings.enabled, window->gamepads().navigationSample().id,
+                return {settings.enabled, window->gamepads().navigationSelected(),
                         settings.dead_zone, settings.look_speed, settings.move_speed,
                         controller->gamepadNavigationStatus(),
                         vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode()), controller->gamepadConfigurationError(),

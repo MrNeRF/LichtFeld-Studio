@@ -419,8 +419,13 @@ class PreferencesPanel(Panel):
         self._handle = None
         doc.remove_data_model("preferences")
 
+    def on_visibility_changed(self, visible):
+        if not visible:
+            self._gamepad_test.deactivate()
+
     def on_update(self, doc):
         if self._section == "input" and self._input_page == "gamepad":
+            self._gamepad_test.activate()
             self._gamepad_test.sync()
         else:
             self._gamepad_test.deactivate()
@@ -1616,7 +1621,7 @@ class PreferencesPanel(Panel):
     def _set_gamepad_page(self, page):
         if page not in ("controls", "test") or self._gamepad_page == page:
             return
-        self._gamepad_test.deactivate()
+        self._gamepad_test.deactivate(release_discovery=False)
         self._gamepad_page = page
         if page == "test":
             identifier = self._gamepad_test.navigation.get("selected", 0)
@@ -1792,6 +1797,7 @@ class PreferencesPanel(Panel):
 
     def _reset_section(self, section=None):
         section = section or self._section
+        reset_error = None
         if section == "portal":
             return None
         if section == "viewport":
@@ -1828,12 +1834,10 @@ class PreferencesPanel(Panel):
                 self._keymap.reset_to_default()
             if section in ("input", "input_gamepad"):
                 self._gamepad_test.deactivate()
-                error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
-                if error:
-                    return error
+                reset_error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
             if section != "input" and section != "input_navigation":
                 self._refresh_selection()
-                return None
+                return reset_error
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
@@ -1857,7 +1861,7 @@ class PreferencesPanel(Panel):
                 lf.ui.set_mcp_preferences(True, False, 45677, False)
                 self._load_mcp_preferences()
         self._refresh_selection()
-        return None
+        return reset_error
 
     def _refresh_selection(self):
         self._last_state = self._state()

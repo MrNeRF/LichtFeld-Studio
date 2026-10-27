@@ -23,6 +23,7 @@ class GamepadTestSection:
         self._tuning_draft = {}
         self._tuning_revision = None
         self._tuning_deadline = 0.0
+        self._active = False
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
@@ -93,7 +94,14 @@ class GamepadTestSection:
         self._button_records = None
         self._pressed = []
 
-    def deactivate(self):
+    def activate(self):
+        if not self._active:
+            setter = getattr(lf.ui, "set_gamepad_test_active", None)
+            if setter:
+                setter(True)
+            self._active = True
+
+    def deactivate(self, release_discovery=True):
         self.flush_tuning()
         if self.profiles:
             self.profiles._intent(False)
@@ -106,6 +114,11 @@ class GamepadTestSection:
                 select(0)
             self.state = {}
             self._pressed = []
+        if release_discovery and self._active:
+            setter = getattr(lf.ui, "set_gamepad_test_active", None)
+            if setter:
+                setter(False)
+            self._active = False
 
     def select(self, value):
         try:
@@ -114,6 +127,7 @@ class GamepadTestSection:
             return
         # IDs are connection-specific. Unknown/disconnected IDs are rejected natively.
         if 0 <= device_id <= 0xFFFFFFFF:
+            self.activate()
             select = getattr(lf.ui, "set_gamepad_test_device", None)
             if select:
                 select(device_id)

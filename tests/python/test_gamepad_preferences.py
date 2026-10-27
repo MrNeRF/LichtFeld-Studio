@@ -65,6 +65,31 @@ def test_diagnostics_are_consumed_once_and_shared_with_binding_capture(section, 
     assert captured == [[True], [False]]
 
 
+def test_discovery_is_acquired_only_for_the_visible_gamepad_page(section, monkeypatch):
+    subject, _state, _selected, _records, _dirty = section
+    usage = []
+    monkeypatch.setattr(sys.modules["lichtfeld"].ui, "set_gamepad_test_active", usage.append, raising=False)
+    subject.sync()
+    assert usage == []
+    subject.activate()
+    subject.sync()
+    subject.activate()
+    subject.sync()
+    assert usage == [True]
+    subject.deactivate(release_discovery=False)
+    subject.sync()
+    assert usage == [True]
+    subject.deactivate()
+    subject.deactivate()
+    assert usage == [True, False]
+    subject.sync()
+    assert usage == [True, False]
+    subject.activate()
+    subject.sync()
+    subject.close()
+    assert usage == [True, False, True, False]
+
+
 def test_identical_names_stay_distinct_and_removal_clears_sample(section):
     subject, state, selected, records, dirty = section
     state.update(devices=[dict(id=11, name="Pad", mapped=True), dict(id=22, name="Pad", mapped=True)],

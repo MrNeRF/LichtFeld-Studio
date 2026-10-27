@@ -33,6 +33,7 @@ namespace lfs::vis::input {
         std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> buttons{};
         std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> has_button{};
         std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> pressed{};
+        std::array<bool, 2> trigger_pressed{};
         std::array<SDL_GamepadButtonLabel, 4> labels{};
         bool operator==(const GamepadSample&) const = default;
     };
@@ -58,16 +59,19 @@ namespace lfs::vis::input {
         GamepadService& operator=(const GamepadService&) = delete;
 
         bool initialize();
+        // Acquire SDL only while navigation or a visible diagnostics page needs it.
+        bool setActive(bool active);
         void shutdown();
         void beginFrame();
         void consumeNavigationPresses();
         [[nodiscard]] GamepadSnapshot takeDiagnosticSnapshot();
         void handleEvent(const SDL_Event& event);
-        bool sample();
+        bool sample(bool navigation_enabled = true);
         [[nodiscard]] bool select(SDL_JoystickID id);
         [[nodiscard]] bool selectNavigation(SDL_JoystickID id);
         [[nodiscard]] const GamepadSample& navigationSample() const;
         [[nodiscard]] SDL_JoystickID diagnosticSelected() const;
+        [[nodiscard]] SDL_JoystickID navigationSelected() const;
         [[nodiscard]] std::string navigationProfileKey() const;
         [[nodiscard]] GamepadSnapshot snapshot() const;
 

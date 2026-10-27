@@ -14,6 +14,11 @@ temporary and are never stored in a profile. Disconnecting or changing the
 controller revokes its viewport assignment. Reconnecting requires activation
 again, even when a profile is restored for the same model.
 
+Controller discovery and open SDL handles exist only while navigation is enabled
+or the Gamepad preferences page is visible. Leaving that page releases its
+discovery request; when navigation is also off, the service closes its devices
+and SDL subsystem instead of polling connected controllers while idle.
+
 Click the intended viewport once, then release the controls briefly to activate
 navigation. Its assignment survives interaction with other application panels.
 Modals, native file dialogs, Preferences, controller tests, text editing in the
@@ -75,6 +80,8 @@ without moving the camera. Navigation and diagnostic selection are independent.
 An assignment capture is cancelled if its navigation device, connection
 generation or configuration changes. Short button presses remain buffered until
 their consumer reads them; diagnostic reads do not consume navigation commands.
+Short trigger presses bound to commands are buffered across the activation
+threshold too, even if the trigger is released before the next input frame.
 
 ## Integration notes
 
@@ -85,7 +92,7 @@ camera-compatible projection or sticks. Walk physics retains an explicit
 viewport owner across neutral input and focus changes. Effective input, rather
 than raw stick noise inside the neutral threshold, wakes the viewer.
 
-Hardware checks should cover at least Xbox-style and PlayStation-style layouts,
+Hardware checks should cover different positional button layouts,
 USB/Bluetooth reconnection, two identical controllers, split views, modal
 interruptions and a drifting stick. Virtual SDL tests cover routing and lifetime
 rules but cannot certify vendor drivers or physical calibration.

@@ -1548,11 +1548,14 @@ namespace lfs::vis::gui {
     }
 
     void RmlViewportOverlay::syncGamepadIndicator() {
+        const auto* controller = InputController::instance();
+        const bool enabled = controller && controller->gamepadNavigationSettings().enabled;
+        if (!enabled && !gamepad_indicator_visible_)
+            return;
         auto* element = document_ ? document_->GetElementById("gamepad-navigation-indicator") : nullptr;
         if (!element)
             return;
-        const auto* controller = InputController::instance();
-        const bool enabled = controller && controller->gamepadNavigationSettings().enabled;
+        gamepad_indicator_visible_ = enabled;
         if (element->IsClassSet("hidden") == enabled) {
             element->SetClass("hidden", !enabled);
             markRenderNeeded(RenderReason::DocumentHook);

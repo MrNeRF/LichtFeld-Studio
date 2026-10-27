@@ -2660,22 +2660,27 @@ namespace lfs::vis {
             stopGamepadMotion();
             return false;
         }
-        const auto previous_device = window->gamepads().navigationSample().id;
+        const auto previous_device = window->gamepads().navigationSelected();
+        window->updateGamepadService(settings.enabled || gamepad_settings_.enabled);
         if (!window->gamepads().selectNavigation(device)) {
-            if (settings.enabled)
+            if (settings.enabled) {
+                window->updateGamepadService(gamepad_settings_.enabled);
                 return false;
+            }
             (void)window->gamepads().selectNavigation(0);
         }
         suspendGamepadNavigation();
         if (settings.json() != gamepad_settings_.json() || !gamepad_configuration_error_.empty()) {
             if (const auto result = UserPreferences::instance().setGamepadNavigation(settings.json().dump()); !result) {
                 (void)window->gamepads().selectNavigation(previous_device);
+                window->updateGamepadService(gamepad_settings_.enabled);
                 throw std::runtime_error(lfs::format_for_developer(result.error()));
             }
             gamepad_configuration_error_.clear();
         }
         settings.revision = gamepad_settings_.revision + 1;
         gamepad_settings_ = settings;
+        window->updateGamepadService(gamepad_settings_.enabled);
         python::request_redraw();
         return true;
     }
@@ -2688,6 +2693,8 @@ namespace lfs::vis {
         suspendGamepadNavigation();
         settings.revision = gamepad_settings_.revision + 1;
         gamepad_settings_ = std::move(settings);
+        if (auto* window = services().windowOrNull())
+            window->updateGamepadService(gamepad_settings_.enabled);
         gamepad_configuration_error_.clear();
         python::request_redraw();
         return true;
@@ -2710,7 +2717,7 @@ namespace lfs::vis {
 
     SDL_JoystickID InputController::gamepadNavigationDevice() const {
         auto* window = services().windowOrNull();
-        return window ? window->gamepads().navigationSample().id : 0;
+        return window ? window->gamepads().navigationSelected() : 0;
     }
 
     SplitViewPanelId InputController::gamepadNavigationPanel() const {
@@ -2736,6 +2743,10 @@ namespace lfs::vis {
     }
 
     bool InputController::updateGamepadNavigation(float delta_time) {
+        if (!gamepad_settings_.enabled) {
+            stopGamepadMotion();
+            return false;
+        }
         // Selection/generation is session-local. A remembered model only chooses
         // settings; it never enables navigation or grants viewport ownership.
         if (auto* window = services().windowOrNull()) {
@@ -2757,10 +2768,6 @@ namespace lfs::vis {
                     LOG_WARN("Gamepad device profile was not loaded: {}", error.what());
                 }
             }
-        }
-        if (!gamepad_settings_.enabled) {
-            stopGamepadMotion();
-            return false;
         }
         auto* window = services().windowOrNull();
         if (!window) {

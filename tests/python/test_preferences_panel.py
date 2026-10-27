@@ -657,6 +657,52 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
     assert state.navigation_speed == 10
 
 
+@pytest.mark.parametrize("safe_mode", [False, True])
+@pytest.mark.parametrize("scope", ["input", "all"])
+def test_gamepad_reset_failure_does_not_skip_navigation_defaults(preferences_panel_module, safe_mode, scope):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    panel._refresh_selection = lambda: None
+    state.zoom_speed = 42
+    state.navigation_speed = 73
+    state.camera_browse_repeat = False
+    state.camera_browse_repeat_rate = 17
+    state.new_project_axis = "data_z"
+    state.new_project_align_grid = False
+    state.navigation_up_axis = "data_z"
+    camera_changes, resets, messages = [], [], []
+    module.lf.set_camera_navigation_mode = lambda mode: camera_changes.append(("mode", mode))
+    module.lf.set_camera_view_snap_enabled = lambda enabled: camera_changes.append(("snap", enabled))
+    module.lf.ui.set_remember_camera_navigation = lambda enabled: camera_changes.append(("remember_mode", enabled))
+    module.lf.ui.set_remember_camera_view_snap = lambda enabled: camera_changes.append(("remember_snap", enabled))
+    panel._gamepad_test.reset = lambda all_profiles=False: "profile is read-only or unsupported"
+
+    if scope == "input":
+        assert panel._reset_section("input") == "profile is read-only or unsupported"
+    else:
+        reset = panel._reset_section
+        def reset_section(section):
+            resets.append(section)
+            return reset(section) if section == "input" else None
+        panel._reset_section = reset_section
+        module.lf.ui.reset_window_state = lambda: resets.append("window")
+        module.lf.ui.message_dialog = lambda *args: messages.append(args)
+        module.lf.ui.confirm_dialog = lambda _title, _message, buttons, callback: callback(buttons[1])
+        panel._on_reset_all_settings(None, None, None)
+        assert resets == ["general", "appearance", "viewport", "input", "interface", "marketplace", "mcp", "window"]
+        assert "profile is read-only or unsupported" in messages[0][1]
+
+    assert state.zoom_speed == 11
+    assert state.navigation_speed == 10
+    assert state.camera_browse_repeat is True
+    assert state.camera_browse_repeat_rate == 5
+    assert state.new_project_axis == "legacy_y"
+    assert state.new_project_align_grid is True
+    assert state.navigation_up_axis == "data_z"
+    assert camera_changes == [("remember_mode", False), ("remember_snap", False), ("mode", "orbit"), ("snap", False)]
+
+
 def test_project_location_is_saved_and_can_return_to_default(
     preferences_panel_module,
 ):
@@ -1267,6 +1313,17 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
 
     assert panel._keymap._rows_built is True
     assert records["binding_rows"]
+
+
+def test_hiding_mounted_preferences_releases_gamepad_discovery(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    calls = []
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel.on_visibility_changed(True)
+    assert calls == []
+    panel.on_visibility_changed(False)
+    assert calls == ["release"]
 
 
 def test_input_pages_cancel_capture_and_release_diagnostic_device(preferences_panel_module):

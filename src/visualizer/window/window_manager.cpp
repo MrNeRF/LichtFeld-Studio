@@ -722,9 +722,30 @@ namespace lfs::vis {
         input_router_.setInputController(ic);
         if (input_controller_) {
             input_controller_->setInputRouter(&input_router_);
-            if (window_)
-                gamepads_.initialize();
         }
+        updateGamepadService(input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
+    }
+
+    void WindowManager::updateGamepadService(bool navigation_enabled) {
+        // Preference callbacks can run inside SDL's event watch. Apply their
+        // demand after the pump returns, before sampling or entering a wait.
+        if (watching_event_ || pumping_events_)
+            return;
+        const bool active = window_ && (navigation_enabled || gamepad_diagnostics_active_);
+        gamepads_.setActive(active);
+        if (!active) {
+            gamepad_events_.clear();
+            gamepad_wake_sample_ = {};
+        }
+    }
+
+    void WindowManager::setGamepadDiagnosticsActive(bool active) {
+        if (gamepad_diagnostics_active_ == active)
+            return;
+        gamepad_diagnostics_active_ = active;
+        updateGamepadService(input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
+        if (!active)
+            (void)gamepads_.select(0);
     }
 
     bool WindowManager::init() {
@@ -964,6 +985,7 @@ namespace lfs::vis {
         case SDL_EVENT_GAMEPAD_REMOVED:
         case SDL_EVENT_GAMEPAD_REMAPPED:
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION:
             gamepad_events_.push_back(event);
             break;
         default:
@@ -989,15 +1011,21 @@ namespace lfs::vis {
     }
 
     void WindowManager::flushGamepadEvents() {
+        const bool navigation_enabled = input_controller_ && input_controller_->gamepadNavigationSettings().enabled;
+        updateGamepadService(navigation_enabled);
+        if (!navigation_enabled && !gamepad_diagnostics_active_) {
+            gamepad_events_.clear();
+            return;
+        }
         bool devices_changed = false;
         for (const auto& event : gamepad_events_) {
             gamepads_.handleEvent(event);
-            devices_changed |= event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+            devices_changed |= event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.type != SDL_EVENT_GAMEPAD_AXIS_MOTION;
         }
         gamepad_events_.clear();
-        const bool sample_changed = gamepads_.sample();
+        const bool sample_changed = gamepads_.sample(navigation_enabled);
         bool navigation_changed = false;
-        if (input_controller_ && input_controller_->gamepadNavigationSettings().enabled) {
+        if (navigation_enabled) {
             navigation_changed = input::GamepadNavigationSession::needsSampleUpdate(
                 gamepad_wake_sample_, gamepads_.navigationSample(), input_controller_->gamepadNavigationSettings().dead_zone);
         }
@@ -1017,6 +1045,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::pollEvents() {
+        updateGamepadService(input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
         frame_input_.beginFrame();
         SDL_Event event;
         // Drain previously queued events before pumping new native events.
@@ -1037,6 +1066,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::waitEvents(std::optional<double> timeout_seconds) {
+        updateGamepadService(input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
         if (gui::preserveNativeDragInput()) {
             // SDL's native pump removes WM_LBUTTONUP from OLE's message queue.
             // Keep rendering during a hover-time export, but let DoDragDrop

@@ -15,11 +15,13 @@ namespace lfs::vis::input {
         struct Connection {
             GamepadDevice device;
             std::unique_ptr<SDL_Gamepad, HandleDeleter> handle;
+            std::array<bool, 2> trigger_down{};
         };
         std::vector<Connection> connections;
         GamepadSnapshot state;
         uint64_t generation = 0;
         bool initialized = false;
+        bool requested = false;
 
         void selectOnlyNavigation() {
             if (state.navigation_selected)
@@ -82,7 +84,16 @@ namespace lfs::vis::input {
     GamepadService::GamepadService() : impl_(std::make_unique<Impl>()) {}
     GamepadService::~GamepadService() { shutdown(); }
 
+    bool GamepadService::setActive(bool active) {
+        if (impl_->requested == active)
+            return !active || impl_->state.available;
+        const bool success = active ? initialize() : (shutdown(), true);
+        impl_->requested = active;
+        return success;
+    }
+
     bool GamepadService::initialize() {
+        impl_->requested = true;
         if (impl_->initialized)
             return true;
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
@@ -108,6 +119,7 @@ namespace lfs::vis::input {
     }
 
     void GamepadService::shutdown() {
+        impl_->requested = false;
         impl_->state.navigation_selected = 0;
         impl_->state.navigation_sample = {};
         impl_->state.selected = 0;
@@ -157,6 +169,24 @@ namespace lfs::vis::input {
                 event.gbutton.button < SDL_GAMEPAD_BUTTON_COUNT)
                 impl_->state.sample.pressed[event.gbutton.button] = true;
             break;
+        case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+            if (event.gaxis.axis < SDL_GAMEPAD_AXIS_LEFT_TRIGGER || event.gaxis.axis > SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
+                break;
+            const auto found = std::find_if(impl_->connections.begin(), impl_->connections.end(),
+                                            [&](const auto& c) { return c.device.id == event.gaxis.which && c.handle; });
+            if (found == impl_->connections.end())
+                break;
+            const auto index = event.gaxis.axis - SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+            const bool down = event.gaxis.value > 16383;
+            if (down && !found->trigger_down[index]) {
+                if (event.gaxis.which == impl_->state.navigation_selected)
+                    impl_->state.navigation_sample.trigger_pressed[index] = true;
+                if (event.gaxis.which == impl_->state.selected)
+                    impl_->state.sample.trigger_pressed[index] = true;
+            }
+            found->trigger_down[index] = down;
+            break;
+        }
         default:
             break;
         }
@@ -164,16 +194,19 @@ namespace lfs::vis::input {
 
     void GamepadService::beginFrame() {
         impl_->state.sample.pressed.fill(false);
+        impl_->state.sample.trigger_pressed.fill(false);
         consumeNavigationPresses();
     }
 
     void GamepadService::consumeNavigationPresses() {
         impl_->state.navigation_sample.pressed.fill(false);
+        impl_->state.navigation_sample.trigger_pressed.fill(false);
     }
 
     GamepadSnapshot GamepadService::takeDiagnosticSnapshot() {
         auto result = snapshot();
         impl_->state.sample.pressed.fill(false);
+        impl_->state.sample.trigger_pressed.fill(false);
         return result;
     }
 
@@ -190,11 +223,11 @@ namespace lfs::vis::input {
         return true;
     }
 
-    bool GamepadService::sample() {
+    bool GamepadService::sample(bool navigation_enabled) {
         if (!impl_->initialized)
             return false;
         const bool diagnostic_changed = readSample(impl_->state.selected, impl_->state.sample);
-        return readSample(impl_->state.navigation_selected, impl_->state.navigation_sample) || diagnostic_changed;
+        return (navigation_enabled && readSample(impl_->state.navigation_selected, impl_->state.navigation_sample)) || diagnostic_changed;
     }
 
     bool GamepadService::selectNavigation(SDL_JoystickID id) {
@@ -215,6 +248,10 @@ namespace lfs::vis::input {
         return impl_->state.selected;
     }
 
+    SDL_JoystickID GamepadService::navigationSelected() const {
+        return impl_->state.navigation_selected;
+    }
+
     bool GamepadService::readSample(SDL_JoystickID id, GamepadSample& sample) {
         const auto previous = sample;
         auto found = std::find_if(impl_->connections.begin(), impl_->connections.end(),
@@ -231,6 +268,8 @@ namespace lfs::vis::input {
             sample.has_axis[i] = SDL_GamepadHasAxis(pad, axis);
             const auto raw = SDL_GetGamepadAxis(pad, axis);
             sample.axes[i] = sample.has_axis[i] ? float(raw) / (raw < 0 ? 32768.0f : 32767.0f) : 0.0f;
+            if (i >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER)
+                found->trigger_down[i - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = sample.axes[i] > 0.5f;
         }
         for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
             const auto button = static_cast<SDL_GamepadButton>(i);

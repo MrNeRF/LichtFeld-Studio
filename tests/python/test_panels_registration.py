@@ -417,6 +417,24 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
         ], spec_name
 
 
+def test_lazy_panel_delegates_visibility_changes_to_the_retained_implementation(panels_module, monkeypatch):
+    module, state = panels_module
+    events = []
+    monkeypatch.setattr(state.lf.ui.Panel, "on_visibility_changed", lambda _self, visible: events.append("base"), raising=False)
+    implementation = ModuleType("lfs_plugins.preferences_panel")
+    class PreferencesPanel:
+        def on_visibility_changed(self, visible):
+            events.append(visible)
+    implementation.PreferencesPanel = PreferencesPanel
+    monkeypatch.setitem(sys.modules, implementation.__name__, implementation)
+    module._register_lazy_panel(state.lf, "preferences")
+    proxy = state.registered_classes[-1]()
+    assert proxy._implementation is None
+    proxy.on_visibility_changed(False)
+    proxy.on_visibility_changed(True)
+    assert events == [False, True]
+
+
 def test_preferences_refreshes_external_keymap_changes(panels_module):
     module, _state = panels_module
     spec = module.PANEL_SPECS["preferences"]

@@ -48,6 +48,37 @@ TEST_F(NavigationTest, ConnectionAndHeldSticksCannotArmWithoutViewportClickAndSt
     EXPECT_STREQ(session.status(), "ready");
 }
 
+TEST_F(NavigationTest, ShortTriggerCommandsAreConsumedEvenAfterTheAxisReturnsToZero) {
+    settings.bindings.common[actionIndex(GamepadAction::Vertical)] = {};
+    settings.bindings.common[actionIndex(GamepadAction::NextNavigation)] = {SDL_GAMEPAD_AXIS_LEFT_TRIGGER};
+    arm();
+    sample.trigger_pressed[0] = true;
+    EXPECT_EQ(tick().navigation_step, 1);
+    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, sample, settings.dead_zone));
+    sample.trigger_pressed.fill(false);
+    EXPECT_EQ(tick().navigation_step, 0);
+    sample.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = .8f;
+    EXPECT_EQ(tick().navigation_step, 1);
+    EXPECT_EQ(tick().navigation_step, 0);
+}
+
+TEST_F(NavigationTest, SequencerTriggerCrossingDoesNotReplayAfterBlockedTimelineEditing) {
+    context.sequencer_open = true;
+    settings.bindings.common[actionIndex(GamepadAction::Vertical)] = {};
+    settings.bindings.common[actionIndex(GamepadAction::AddKeyframe)] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER};
+    arm();
+    sample.trigger_pressed[1] = true;
+    EXPECT_TRUE(tick().add_keyframe);
+    sample.trigger_pressed.fill(false);
+    EXPECT_FALSE(tick().add_keyframe);
+    context.sequencer_commands_allowed = false;
+    sample.trigger_pressed[1] = true;
+    EXPECT_FALSE(tick().add_keyframe);
+    sample.trigger_pressed.fill(false);
+    context.sequencer_commands_allowed = true;
+    EXPECT_FALSE(tick().add_keyframe);
+}
+
 TEST_F(NavigationTest, SequencerButtonsDoNotRequireCameraProjectionOrStickMapping) {
     context.sequencer_open = true;
     context.supported_projection = false;

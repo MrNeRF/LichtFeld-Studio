@@ -107,6 +107,8 @@ namespace lfs::vis {
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
         [[nodiscard]] input::GamepadService& gamepads() { return gamepads_; }
+        void updateGamepadService(bool navigation_enabled);
+        void setGamepadDiagnosticsActive(bool active);
 
     private:
         friend class WindowInputDispatchTest;
@@ -135,6 +137,7 @@ namespace lfs::vis {
         SDL_Window* window_ = nullptr;
         input::GamepadService gamepads_;
         input::GamepadSample gamepad_wake_sample_;
+        bool gamepad_diagnostics_active_ = false;
         std::unique_ptr<VulkanContext> vulkan_context_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;

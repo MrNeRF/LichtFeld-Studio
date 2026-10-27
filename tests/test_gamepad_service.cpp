@@ -73,6 +73,102 @@ TEST_F(GamepadServiceTest, TwoIdenticalPadsNeverAutomaticallyAcquireSelection) {
     EXPECT_TRUE(service.select(replacement));
 }
 
+TEST_F(GamepadServiceTest, InactiveServiceClosesMappedHandlesAndReenumeratesOnDemand) {
+    ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_JOYSTICK));
+    const auto id = attach();
+    ASSERT_NE(id, 0u);
+    pump();
+    ASSERT_NE(SDL_GetGamepadFromID(id), nullptr);
+    ASSERT_TRUE(service.selectNavigation(id));
+    const auto generation = service.navigationSample().generation;
+    ASSERT_TRUE(service.setActive(false));
+    EXPECT_EQ(SDL_GetGamepadFromID(id), nullptr);
+    EXPECT_FALSE(service.snapshot().available);
+    EXPECT_TRUE(service.snapshot().devices.empty());
+    EXPECT_EQ(service.navigationSelected(), 0u);
+    EXPECT_EQ(service.diagnosticSelected(), 0u);
+    ASSERT_TRUE(service.setActive(false));
+    EXPECT_EQ(SDL_GetGamepadFromID(id), nullptr);
+    ASSERT_TRUE(service.setActive(true));
+    EXPECT_NE(SDL_GetGamepadFromID(id), nullptr);
+    ASSERT_TRUE(service.selectNavigation(id));
+    EXPECT_EQ(service.navigationSelected(), id);
+    EXPECT_GT(service.navigationSample().generation, generation);
+    EXPECT_EQ(service.diagnosticSelected(), 0u);
+    SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
+}
+
+TEST_F(GamepadServiceTest, DiagnosticsCanSampleWithoutReadingTheNavigationDevice) {
+    const auto id = attach();
+    ASSERT_NE(id, 0u);
+    auto* joystick = SDL_OpenJoystick(id);
+    ASSERT_NE(joystick, nullptr);
+    handles.push_back(joystick);
+    pump();
+    ASSERT_TRUE(service.select(id));
+    const auto previous = service.navigationSample();
+    ASSERT_TRUE(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, 32767));
+    SDL_UpdateJoysticks();
+    ASSERT_TRUE(service.sample(false));
+    EXPECT_EQ(service.navigationSample(), previous);
+    EXPECT_FLOAT_EQ(service.snapshot().sample.axes[SDL_GAMEPAD_AXIS_LEFTX], 1.f);
+}
+
+TEST_F(GamepadServiceTest, TriggerCrossingsSurviveReleaseAndHaveIndependentConsumers) {
+    const auto id = attach();
+    ASSERT_NE(id, 0u);
+    pump();
+    ASSERT_TRUE(service.select(id));
+    ASSERT_TRUE(service.selectNavigation(id));
+    for (int axis : {SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER}) {
+        const auto index = axis - SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+        SDL_Event event{};
+        event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        event.gaxis.which = id;
+        event.gaxis.axis = static_cast<Uint8>(axis);
+        event.gaxis.value = 20000;
+        service.handleEvent(event);
+        event.gaxis.value = 0;
+        service.handleEvent(event);
+        pump();
+        pump();
+        EXPECT_FLOAT_EQ(service.navigationSample().axes[axis], 0.f);
+        ASSERT_TRUE(service.navigationSample().trigger_pressed[index]);
+        ASSERT_TRUE(service.takeDiagnosticSnapshot().sample.trigger_pressed[index]);
+        EXPECT_FALSE(service.takeDiagnosticSnapshot().sample.trigger_pressed[index]);
+        EXPECT_TRUE(service.navigationSample().trigger_pressed[index]);
+        service.consumeNavigationPresses();
+        EXPECT_FALSE(service.navigationSample().trigger_pressed[index]);
+    }
+}
+
+TEST_F(GamepadServiceTest, TriggerThresholdAndHeldMotionDoNotGenerateRepeatedCommands) {
+    const auto id = attach();
+    ASSERT_NE(id, 0u);
+    pump();
+    ASSERT_TRUE(service.selectNavigation(id));
+    SDL_Event event{};
+    event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+    event.gaxis.which = id;
+    event.gaxis.axis = SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+    event.gaxis.value = 16383;
+    service.handleEvent(event);
+    EXPECT_FALSE(service.navigationSample().trigger_pressed[0]);
+    event.gaxis.value = 16384;
+    service.handleEvent(event);
+    ASSERT_TRUE(service.navigationSample().trigger_pressed[0]);
+    service.consumeNavigationPresses();
+    event.gaxis.value = 25000;
+    service.handleEvent(event);
+    EXPECT_FALSE(service.navigationSample().trigger_pressed[0]);
+    ASSERT_TRUE(service.selectNavigation(0));
+    event.gaxis.value = 0;
+    service.handleEvent(event);
+    event.gaxis.value = 32767;
+    service.handleEvent(event);
+    EXPECT_FALSE(service.navigationSample().trigger_pressed[0]);
+}
+
 TEST_F(GamepadServiceTest, PressesSurviveRepeatedPumpsUntilTheirOwnConsumerAcknowledges) {
     const auto id = attach();
     ASSERT_NE(id, 0u);
