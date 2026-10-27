@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "chapter_binary_utils.hpp"
-#include "core/collision.hpp"
+#include "core/collision_volume.hpp"
 #include <memory>
 #include <stdexcept>
 
