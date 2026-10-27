@@ -169,6 +169,50 @@ TEST_F(GamepadServiceTest, TriggerThresholdAndHeldMotionDoNotGenerateRepeatedCom
     EXPECT_FALSE(service.navigationSample().trigger_pressed[0]);
 }
 
+TEST_F(GamepadServiceTest, TriggerLatchSurvivesThresholdNoiseAndBothSampleConsumers) {
+    const auto id = attach();
+    const auto other = attach();
+    ASSERT_NE(id, 0u);
+    ASSERT_NE(other, 0u);
+    pump();
+    auto* joystick = SDL_OpenJoystick(id);
+    ASSERT_NE(joystick, nullptr);
+    handles.push_back(joystick);
+    ASSERT_TRUE(service.selectNavigation(id));
+    ASSERT_TRUE(service.select(id));
+    for (int axis : {SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER}) {
+        const auto index = axis - SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+        const auto move = [&](Sint16 raw) {
+            EXPECT_TRUE(SDL_SetJoystickVirtualAxis(joystick, axis, raw));
+            SDL_UpdateJoysticks();
+            pump();
+        };
+        move(512); // just above half of the mapped 0..32767 trigger range
+        ASSERT_TRUE(service.navigationSample().trigger_pressed[index]);
+        ASSERT_TRUE(service.navigationSample().trigger_down[index]);
+        service.consumeNavigationPresses();
+        for (const Sint16 raw : {-128, 128, -128, 512, -9000}) {
+            move(raw); // 8-bit noise near .5, then a partial release above .35
+            EXPECT_FALSE(service.navigationSample().trigger_pressed[index]);
+            EXPECT_TRUE(service.navigationSample().trigger_down[index]);
+            EXPECT_TRUE(service.takeDiagnosticSnapshot().sample.trigger_down[index]);
+            service.sample(); // neither diagnostic nor navigation reads may reset the latch
+            EXPECT_TRUE(service.navigationSample().trigger_down[index]);
+        }
+        move(-11000); // below .35: a real release rearms the command
+        EXPECT_FALSE(service.navigationSample().trigger_down[index]);
+        move(512);
+        EXPECT_TRUE(service.navigationSample().trigger_pressed[index]);
+        service.consumeNavigationPresses();
+        ASSERT_TRUE(service.selectNavigation(other));
+        EXPECT_FALSE(service.navigationSample().trigger_down[index]);
+        ASSERT_TRUE(service.selectNavigation(id));
+        EXPECT_TRUE(service.navigationSample().trigger_down[index]);
+        move(-32768);
+        service.consumeNavigationPresses();
+    }
+}
+
 TEST_F(GamepadServiceTest, PressesSurviveRepeatedPumpsUntilTheirOwnConsumerAcknowledges) {
     const auto id = attach();
     ASSERT_NE(id, 0u);

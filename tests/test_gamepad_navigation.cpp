@@ -58,6 +58,7 @@ TEST_F(NavigationTest, ShortTriggerCommandsAreConsumedEvenAfterTheAxisReturnsToZ
     sample.trigger_pressed.fill(false);
     EXPECT_EQ(tick().navigation_step, 0);
     sample.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = .8f;
+    sample.trigger_down[0] = true;
     EXPECT_EQ(tick().navigation_step, 1);
     EXPECT_EQ(tick().navigation_step, 0);
 }
@@ -79,16 +80,19 @@ TEST_F(NavigationTest, ProgressiveTriggerSqueezeGeneratesOnlyOneCommandUntilRele
                 return action == GamepadAction::AddKeyframe ? intent.add_keyframe : intent.rendering_step != 0;
             };
             input.axes[control] = .51f;
+            input.trigger_down[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
             input.trigger_pressed[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
             EXPECT_TRUE(command(resolver.update(input, mapped, context, .05f)));
             input.trigger_pressed.fill(false); // acknowledged by the input-frame consumer
-            for (const float value : {.52f, .60f, 1.0f, .51f}) {
+            for (const float value : {.52f, .60f, 1.0f, .498f, .51f, .35f}) {
                 input.axes[control] = value;
                 EXPECT_FALSE(command(resolver.update(input, mapped, context, .05f)));
             }
-            input.axes[control] = .49f;
+            input.axes[control] = .34f;
+            input.trigger_down[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = false;
             EXPECT_FALSE(command(resolver.update(input, mapped, context, .05f)));
             input.axes[control] = .51f;
+            input.trigger_down[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
             input.trigger_pressed[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
             EXPECT_TRUE(command(resolver.update(input, mapped, context, .05f)));
         }
@@ -417,11 +421,14 @@ TEST_F(NavigationTest, DiscreteTriggerActionFiresOncePerPress) {
     settings.validate();
     arm();
     sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
+    sample.trigger_down[1] = true;
     EXPECT_EQ(tick().navigation_step, 1);
     EXPECT_EQ(tick().navigation_step, 0);
     sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 0;
+    sample.trigger_down[1] = false;
     tick();
     sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = 1;
+    sample.trigger_down[1] = true;
     EXPECT_EQ(tick().navigation_step, 1);
 }
 

@@ -15,9 +15,11 @@ union SDL_Event;
 
 namespace lfs::vis::input {
 
-    // Commands use the raw SDL trigger range. Keep event edges and held state
-    // on the same threshold; movement conditioning has a separate dead zone.
-    inline constexpr bool gamepadCommandTriggerDown(float value) { return value > 0.5f; }
+    // Latch command presses in the raw SDL range, independently of movement.
+    // Noise near the press threshold must not rearm a partly held trigger.
+    inline constexpr bool gamepadCommandTriggerDown(float value, bool was_down) {
+        return was_down ? value >= 0.35f : value > 0.5f;
+    }
 
     struct GamepadDevice {
         SDL_JoystickID id = 0;
@@ -38,6 +40,7 @@ namespace lfs::vis::input {
         std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> has_button{};
         std::array<bool, SDL_GAMEPAD_BUTTON_COUNT> pressed{};
         std::array<bool, 2> trigger_pressed{};
+        std::array<bool, 2> trigger_down{};
         std::array<SDL_GamepadButtonLabel, 4> labels{};
         bool operator==(const GamepadSample&) const = default;
     };

@@ -253,7 +253,7 @@ namespace lfs::vis::input {
                 const bool enabled = allowedGamepadAction(scope, a) &&
                                      (sequencer_action ? context.sequencer_open : navigation_supported && !reserved(b.positive));
                 const bool trigger_control = b.positive >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER && b.positive < SDL_GAMEPAD_AXIS_COUNT;
-                const bool held = enabled && (trigger_control ? gamepadCommandTriggerDown(axis(b.positive)) : read_control(b.positive) > 0.5f);
+                const bool held = enabled && (trigger_control ? sample.has_axis[b.positive] && sample.trigger_down[b.positive - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] : read_control(b.positive) > 0.5f);
                 const bool short_press = enabled &&
                                          ((b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
                                            sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT]) ||
