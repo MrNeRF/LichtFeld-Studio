@@ -7,6 +7,7 @@
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cub/device/device_scan.cuh>
+#include <cuda/std/functional>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 
@@ -223,7 +224,7 @@ namespace lfs::core::tensor_ops {
                 weights_ptr, weights_ptr + n,
                 multinomial_weight_to_double{},
                 0.0,
-                thrust::plus<double>());
+                cuda::std::plus<double>{});
         }
 
         LFS_ASSERT_MSG(invalid_count == 0,
@@ -267,7 +268,7 @@ namespace lfs::core::tensor_ops {
                 sync_policy,
                 keys.begin(), keys.end(),
                 indices.begin(),
-                thrust::greater<float>());
+                cuda::std::greater<float>{});
 
             thrust::copy_n(
                 sync_policy,

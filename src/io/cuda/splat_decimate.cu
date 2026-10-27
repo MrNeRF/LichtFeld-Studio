@@ -5,7 +5,7 @@
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <thrust/device_ptr.h>
-#include <thrust/reduce.h>
+#include <thrust/extrema.h>
 #include <thrust/scan.h>
 
 namespace lfs::io::decimate {
@@ -329,7 +329,7 @@ namespace lfs::io::decimate {
                 grid_counts<<<(d.n + threads - 1) / threads, threads>>>(keys.ptr<int64_t>(), counts, d.n, grid.shift);
                 check(cudaGetLastError());
                 thrust::device_ptr<uint32_t> first(counts);
-                const auto maximum = thrust::reduce(first, first + cells, 0u, thrust::maximum<uint32_t>());
+                const uint32_t maximum = *thrust::max_element(first, first + cells);
                 if (maximum <= 128) {
                     thrust::exclusive_scan(first, first + cells + 1, first);
                     grid.offsets = counts;

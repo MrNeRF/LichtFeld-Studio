@@ -134,7 +134,6 @@ namespace lfs::core::tensor_ops {
 
     /**
      * Scalar operation: Applies binary operation with a scalar value
-     * OPTIMIZED: Uses scalar_right_op for unary transform
      */
     template <typename T, typename OutputT, typename Op>
     void launch_scalar_op_generic(const T* data, T scalar, OutputT* result, size_t n,
@@ -153,7 +152,7 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        // FALLBACK: Use unary transform with scalar_right_op for unaligned or non-float types
+        // FALLBACK: unaligned or non-float data binds the scalar into a unary transform
         auto data_ptr = thrust::device_pointer_cast(data);
         auto result_ptr = thrust::device_pointer_cast(result);
 
