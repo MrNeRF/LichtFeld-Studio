@@ -22,12 +22,13 @@ namespace gsplat_lfs {
         uint32_t layout_degree,
         const float* dirs,             // [..., 3] flattened
         const float* sh0,              // [N, 1, 3] / [N, 3]
-        const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
+        const float* sh_rest_swizzled, // FP32 swizzle, or q16 codes when bounds are supplied
         const bool* masks,             // [...] optional (can be nullptr)
         int64_t total_elements,        // total batch size
         float* colors,                 // [..., 3] output (pre-allocated)
         uint32_t color_stride = 3,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* sh_value_bounds = nullptr);
 
     void spherical_harmonics_swizzled_bwd(
         uint32_t K,
@@ -35,7 +36,7 @@ namespace gsplat_lfs {
         uint32_t layout_degree,
         const float* dirs,             // [..., 3]
         const float* sh0,              // [N, 1, 3] / [N, 3]
-        const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
+        const float* sh_rest_swizzled, // FP32 swizzle, or q16 codes when bounds are supplied
         const bool* masks,             // [...] optional
         const float* v_colors,         // [..., 3] gradient
         int64_t total_elements,
@@ -43,7 +44,8 @@ namespace gsplat_lfs {
         float* v_coeffs, // [..., K, 3] canonical output for accumulation
         float* v_dirs,   // [..., 3] optional output
         uint32_t color_stride = 3,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* sh_value_bounds = nullptr);
 
     //=========================================================================
     // Tile Intersection
@@ -298,7 +300,7 @@ namespace gsplat_lfs {
         const float* scales,    // [N, 3]
         const float* opacities, // [N]
         const float* sh0,       // [N, 1, 3]
-        const float* shN,       // swizzled SH-rest storage
+        const float* shN,       // FP32 swizzle, or q16 codes when bounds are supplied
         uint32_t sh_degree,
         uint32_t sh_layout_degree,
         const float* backgrounds, // [C, channels] optional - solid color
@@ -331,7 +333,8 @@ namespace gsplat_lfs {
         const float* thin_prism_coeffs, // optional
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* sh_value_bounds = nullptr);
 
     void rasterize_from_world_with_sh_bwd(
         // Gaussian parameters
@@ -340,7 +343,7 @@ namespace gsplat_lfs {
         const float* scales,    // [N, 3]
         const float* opacities, // [N]
         const float* sh0,       // [N, 1, 3]
-        const float* shN,       // swizzled SH-rest storage
+        const float* shN,       // FP32 swizzle, or q16 codes when bounds are supplied
         uint32_t sh_degree,
         uint32_t sh_layout_degree,
         const float* backgrounds, // [C, channels] optional - solid color
@@ -397,6 +400,7 @@ namespace gsplat_lfs {
         const float* edge_weight_map,         // [H, W] or nullptr
         float* edge_score_out,                // [N] or nullptr
         cudaStream_t stream = nullptr,
-        const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr);
+        const std::vector<TileBatch>& batches = {}, int32_t* tiles_per_gauss = nullptr,
+        const float* sh_value_bounds = nullptr);
 
 } // namespace gsplat_lfs

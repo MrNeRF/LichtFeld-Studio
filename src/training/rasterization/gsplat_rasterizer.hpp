@@ -61,8 +61,11 @@ namespace lfs::training {
         lfs::core::Tensor scales;    // [N, 3]
         lfs::core::Tensor opacities; // [N]
         lfs::core::Tensor sh0;       // [N, 1, 3]
-        lfs::core::Tensor shN;       // swizzled 1D SH-rest buffer
-        lfs::core::Tensor bg_color;  // [3] or [C, 3]
+        lfs::core::Tensor shN;       // Resident FP32 or q16 SH-rest buffer
+        lfs::core::Tensor shN_value_bounds;
+        const float* shN_ptr = nullptr;
+        const float* shN_bounds_ptr = nullptr;
+        lfs::core::Tensor bg_color; // [3] or [C, 3]
 
         // Camera pointers (kept alive by K_tensor)
         const float* viewmat_ptr = nullptr; // [C, 4, 4]
