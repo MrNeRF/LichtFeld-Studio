@@ -389,7 +389,7 @@ body {
     font-size: 12dp;
 }
 
-#sequence-strip {
+#sequence-strip, #reveal-strip {
     display: block;
     position: absolute;
     left: 0;
@@ -400,6 +400,17 @@ body {
     overflow: hidden;
     pointer-events: none;
 }
+
+#track-area.two-clips { min-height: 46dp; }
+#track-area.two-clips #reveal-strip { top: 0; margin-top: 0; }
+#track-area.two-clips #sequence-strip { top: 24dp; margin-top: 0; }
+#ply-sequence-clip { pointer-events: auto; }
+#ply-sequence-clip.selected { border-color: rgba(240, 245, 255, 255); }
+
+#reveal-settings { position: absolute; left: 20dp; top: 102dp; display: flex; align-items: center; gap: 4dp; }
+#reveal-settings.hidden { display: none; }
+#reveal-settings input { width: 42dp; height: 20dp; font-size: 11dp; }
+.reveal-clip { pointer-events: auto; background-color: rgba(150, 90, 190, 180); border-color: rgba(210, 160, 255, 220); }
 
 .sequence-clip {
     display: block;

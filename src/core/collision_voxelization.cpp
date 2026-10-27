@@ -26,7 +26,8 @@ namespace lfs::core::cuda {
         template <class T>
         struct Buffer {
             tensor_ops::ScopedDeviceBuffer storage;
-            explicit Buffer(size_t n = 0) { reserve(n); }
+            Buffer() = default;
+            explicit Buffer(size_t n) { reserve(n); }
             T* data() const { return storage.template as<T>(); }
             size_t capacity() const { return storage.size() / sizeof(T); }
             void reserve(size_t n) {

@@ -13,6 +13,7 @@
 #include "training/dataset.hpp"
 
 #include <gtest/gtest.h>
+#include <limits>
 
 #include <algorithm>
 #include <array>
@@ -329,7 +330,9 @@ TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
     ASSERT_GE(paths.size(), 3u);
     paths.resize(3);
 
-    PipelinedImageLoader loader(config());
+    auto settings = config();
+    settings.min_spill_free_bytes = 0;
+    PipelinedImageLoader loader(settings);
     const auto load = [&loader](const size_t sequence_id, const std::filesystem::path& path) {
         ImageRequest input;
         input.sequence_id = sequence_id;
@@ -363,6 +366,50 @@ TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
     EXPECT_EQ(after_all.jpeg_cache_bytes, 0u);
     EXPECT_EQ(after_all.spill_cache_entries, cached.spill_cache_entries + paths.size());
     EXPECT_EQ(loader.release_host_cache(1), 0u);
+
+    for (size_t i = 0; i < paths.size(); ++i)
+        EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
+// Fails if the run spill writes below its volume's free-space floor, or if an image it could not spill is lost
+// instead of being decoded again.
+TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheNeverSpillsBelowTheFreeSpaceFloor) {
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::directory_iterator(image_path_.parent_path())) {
+        if (entry.path().extension() == ".JPG")
+            paths.push_back(entry.path());
+    }
+    std::ranges::sort(paths);
+    ASSERT_GE(paths.size(), 3u);
+    paths.resize(3);
+
+    auto settings = config();
+    settings.min_spill_free_bytes = std::numeric_limits<std::uintmax_t>::max();
+    PipelinedImageLoader loader(settings);
+    const auto load = [&loader](const size_t sequence_id, const std::filesystem::path& path) {
+        ImageRequest input;
+        input.sequence_id = sequence_id;
+        input.path = path;
+        input.params.resize_factor = 1;
+        input.params.max_width = 0;
+        input.params.output_uint8 = true;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.error.empty()) << ready.error;
+        return ready.tensor.to(DataType::Float32).cpu().to_vector();
+    };
+
+    std::vector<std::vector<float>> first_pass;
+    for (size_t i = 0; i < paths.size(); ++i)
+        first_pass.push_back(load(i, paths[i]));
+    const auto cached = loader.get_stats();
+    ASSERT_EQ(cached.jpeg_cache_entries, paths.size());
+
+    EXPECT_EQ(loader.release_host_cache(cached.jpeg_cache_bytes), cached.jpeg_cache_bytes);
+    const auto released = loader.get_stats();
+    EXPECT_EQ(released.jpeg_cache_entries, 0u);
+    EXPECT_EQ(released.spill_cache_entries, 0u);
+    EXPECT_EQ(released.spill_cache_bytes, 0u);
 
     for (size_t i = 0; i < paths.size(); ++i)
         EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];

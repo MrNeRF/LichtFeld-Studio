@@ -1,5 +1,9 @@
 #include "config.slang"
 
+#ifndef LFS_REVEAL
+#define LFS_REVEAL 0
+#endif
+
 import utils;
 import spherical_harmonics;
 
@@ -581,6 +585,11 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
     // 3DGUT uses the unscented transform for screen-space binning; final alpha
     // is evaluated against the pixel ray in the raster shader.
     float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g.rotations));
+#if LFS_REVEAL
+    float3 original_mean = model_transform_enabled
+        ? transform_point_rows(model_transform_rows, model_transform_base, g.xyz_ws) : g.xyz_ws;
+    float3 reveal_offset = mean_ws - original_mean;
+#endif
     float3 sigma_points[NUM_SIGMA_POINTS];
     sigma_points[0] = mean_ws;
     for (uint i = 0u; i < D; ++i) {
@@ -591,9 +600,15 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         sigma_points[1u + i] = model_transform_enabled
                                     ? transform_point_rows(model_transform_rows, model_transform_base, source_plus)
                                     : source_plus;
+#if LFS_REVEAL
+        sigma_points[1u + i] += reveal_offset;
+#endif
         sigma_points[1u + D + i] = model_transform_enabled
                                         ? transform_point_rows(model_transform_rows, model_transform_base, source_minus)
                                         : source_minus;
+#if LFS_REVEAL
+        sigma_points[1u + D + i] += reveal_offset;
+#endif
     }
 
     float2 image_points[NUM_SIGMA_POINTS];
@@ -1003,9 +1018,11 @@ void main(
         uniforms.shN_layout_slots
       );
     #endif
+#if !LFS_REVEAL
     if (lod_active && (uniforms.lod_enabled & 16u) != 0u) {
         gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
     }
+#endif
   #else
     #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD && !EARLY_RETURN_ON_ZERO_GRAD
     Gaussian_3D gauss = load_zero_gaussian();
@@ -1054,6 +1071,47 @@ void main(
         gauss.scales = lfsPortalCompactScales(gauss.scales);
         gauss.opacities = lfsPortalCompactOpacity(gauss.opacities);
     }
+#if LFS_REVEAL
+    float4 reveal = overlay_params[OVERLAY_PARAM_REVEAL];
+    float reveal_color = 1.0f;
+    float reveal_color_add = 0.0f;
+    float reveal_color_multiplier = 1.0f;
+    float3 reveal_edge_rgb = float3(0.0f);
+    float reveal_grayscale = 0.0f;
+    if (overlay_enabled(reveal.x)) {
+        float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS];
+        LfsRevealEffect effect = lfs_reveal_effect(mean_ws, gauss.scales, reveal, bounds);
+        if (effect.scale_mix <= 0.0001f && effect.seed_scale <= 0.0001f) {
+          #if LFS_PROJECTION_SURVIVORS
+            return;
+          #else
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
+            return;
+          #endif
+        }
+        gauss.opacities = lerp(0.3f, gauss.opacities, effect.color_mix) * effect.opacity_multiplier + effect.color_add;
+        gauss.scales = gauss.scales * effect.scale_mix + effect.seed_scale;
+        float4 q = gauss.rotations;
+        float c = cos(effect.spin*0.5f), s = sin(effect.spin*0.5f);
+        gauss.rotations = float4(c*q.x-s*q.z, c*q.y+s*q.w, c*q.z+s*q.x, c*q.w-s*q.y);
+        reveal_color = effect.color_mix;
+        reveal_color_multiplier = effect.opacity_multiplier;
+        reveal_color_add = effect.color_add;
+        reveal_edge_rgb = effect.edge_rgb;
+        reveal_grayscale = effect.grayscale;
+        if (int(round(bounds.x)) == 11 && reveal.w < 1.0f) {
+            // The light follows the viewing position.
+            float4x3 view = transpose(cam.world_view_transform);
+            float3 eye = -mul(float3x3(view), view[3]);
+            float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);
+            float fade = saturate((length(mean_ws - eye) - range * 0.1f) / (range * 0.02f));
+            reveal_grayscale = fade * (1.0f - smoothstep(0.9f, 1.0f, reveal.w));
+        }
+        mean_ws = effect.position;
+    }
+    if (lod_active && (uniforms.lod_enabled & 16u) != 0u)
+        gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
+#endif // LFS_REVEAL
 #endif
 
     // projection (differentiable)
@@ -1271,6 +1329,11 @@ void main(
 
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
+#if LFS_REVEAL
+    splat.rgb = lerp(float3(0.3f), splat.rgb, reveal_color) * reveal_color_multiplier + reveal_color_add;
+    float luminance = dot(splat.rgb, float3(0.299f, 0.587f, 0.114f));
+    splat.rgb = lerp(splat.rgb, float3(0.3f * luminance), reveal_grayscale) + reveal_edge_rgb;
+#endif
     if ((uniforms.lod_enabled & 2u) != 0u) {
         const float3 debug_rgb = lod_debug_color(lod_levels[render_idx]);
         splat.rgb *= debug_rgb;

@@ -705,7 +705,10 @@ namespace {
 
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
-        lfs::core::param::TrainingParameters& params) {
+        lfs::core::param::TrainingParameters& params,
+        const bool create_output_directory = true,
+        const bool validate_only = false,
+        const std::function<void(::args::ArgumentParser&)>& inspect = {}) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -718,6 +721,7 @@ namespace {
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
+                "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -725,6 +729,8 @@ namespace {
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
+                "lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n"
+                "lichtfeld-studio batch-train --manifest batch.json\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -1016,17 +1022,29 @@ namespace {
             ::args::Group extensions_group(parser, "EXTENSIONS:");
             ::args::ValueFlagList<std::string> python_scripts(extensions_group, "path", "Python script(s) for custom training callbacks", {"python-script"});
 
+            if (inspect) {
+                inspect(parser);
+                return std::make_tuple(ParseResult::Help, std::function<void()>{});
+            }
+
             // Parse arguments
             try {
                 parser.Prog(args.front());
                 parser.ParseArgs(std::vector<std::string>(args.begin() + 1, args.end()));
             } catch (const ::args::Help&) {
-                std::print("{}", parser.Help());
+                if (!validate_only) {
+                    std::print("{}", parser.Help());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::Completion& e) {
-                std::print("{}", e.what());
+                if (!validate_only) {
+                    std::print("{}", e.what());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
+                if (validate_only) {
+                    return std::unexpected(std::format("Parse error: {}", e.what()));
+                }
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
             }
 
@@ -1059,7 +1077,7 @@ namespace {
             }
 
             // Initialize logger (CLI args override environment variable)
-            {
+            if (!validate_only) {
                 auto level = lfs::core::LogLevel::Info;
                 std::string log_file_path;
                 std::string filter_pattern;
@@ -1102,6 +1120,13 @@ namespace {
                 }
                 if (!log_file_path.empty()) {
                     LOG_DEBUG("Logging to file: {}", log_file_path);
+                }
+            } else {
+                if (log_level) {
+                    auto level = lfs::core::LogLevel::Info;
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
             }
 
@@ -1390,13 +1415,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
@@ -1412,13 +1439,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory if provided
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory if provided
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             }
@@ -2058,8 +2087,35 @@ namespace {
 } // anonymous namespace
 
 // Public interface
+std::vector<lfs::core::args::TrainingFlag> lfs::core::args::training_flags() {
+    std::vector<TrainingFlag> flags;
+    lfs::core::param::TrainingParameters params;
+    (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
+        for (const auto* const flag : parser.Group::GetAllFlags()) {
+            const auto first = flags.size();
+            for (const auto& name : flag->GetMatcher().GetFlagStrings()) {
+                const auto spelling = name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag;
+                flags.push_back({spelling, flag->NumberOfArguments().max > 0,
+                                 flags.size() == first ? spelling : flags[first].canonical_name});
+            }
+        }
+    });
+    return flags;
+}
+
+const lfs::core::args::TrainingFlag* lfs::core::args::training_flag(const std::string_view argument) {
+    static const auto flags = training_flags();
+    const auto name = argument.substr(0, argument.find('='));
+    for (const auto& flag : flags) {
+        if (name == flag.name || (flag.takes_value && flag.name.size() == 2 &&
+                                  argument.starts_with(flag.name)))
+            return &flag;
+    }
+    return nullptr;
+}
+
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
+lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory, const bool validate_only) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
@@ -2074,7 +2130,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             args.insert(args.begin() + 1, "-v");
     }
 
-    auto parse_result = parse_arguments(args, *params);
+    auto parse_result = parse_arguments(args, *params, create_output_directory, validate_only);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -2084,6 +2140,9 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     const auto [result, apply_overrides] = *parse_result;
     if (result == ParseResult::Help) {
+        if (validate_only) {
+            return std::unexpected("Help requested in training arguments");
+        }
         std::exit(0);
     }
 
@@ -2699,7 +2758,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
-        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
+        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 6; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
@@ -2830,6 +2889,186 @@ dataset options work as in training; see the Evaluation page of the docs.
         }
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
     }
+
+    std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
+        const int argc, const char* const argv[], std::string& error) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        constexpr const char* BATCH_TRAIN_HELP_HEADER =
+            "LichtFeld Studio - Batch Training\n"
+            "Sequentially train Gaussian Splatting models on multiple datasets with isolated CUDA\n"
+            "processes, live progress monitoring, failure resilience, and comprehensive reporting.\n";
+
+        constexpr const char* BATCH_TRAIN_HELP_FOOTER =
+            "\nEXAMPLES:\n"
+            "  # Train all dataset subdirectories found in ./datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n\n"
+            "  # Train specific datasets:\n"
+            "  lichtfeld-studio batch-train scene1/ scene2/ scene3/ -o ./outputs/\n\n"
+            "  # Train recursively scanning for datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --recursive\n\n"
+            "  # Train from a JSON batch manifest with per-scene overrides:\n"
+            "  lichtfeld-studio batch-train --manifest batch_manifest.json\n\n"
+            "  # Preview the resolved job queue without running (dry run):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --dry-run\n\n"
+            "  # Stop immediately if any dataset fails (default is to continue):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n\n"
+            "Every other option is a training option (see LichtFeld-Studio --help) and is passed to\n"
+            "each job. -d/--data-path adds a dataset and -o/--output-path sets the output root.\n";
+
+        ::args::ArgumentParser parser(BATCH_TRAIN_HELP_HEADER, BATCH_TRAIN_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch manifest");
+        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir", "output-path"});
+        ::args::ValueFlag<std::string> manifest(parser, "path", "Batch manifest JSON file", {"manifest"});
+        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {"recursive"});
+        ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
+        ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
+        ::args::ValueFlag<int> timeout(parser, "minutes", "Timeout per training job in minutes (default: 0 = disabled)", {"timeout"});
+        ::args::ValueFlag<std::string> summary_path(parser, "path", "Custom path for the batch JSON summary file", {"summary"});
+        ::args::ValueFlag<std::string> report_path(parser, "path", "Custom path for the batch text report file", {"report"});
+        LogLevelFlag log_level(parser);
+
+        std::vector<std::string> batch_args;
+        std::vector<std::string> shared_training_args;
+        batch_args.push_back(std::string(argv[0]) + " batch-train");
+
+        // Only batch-train's own options stay here, so every training option reaches the jobs.
+        static constexpr std::string_view batch_switches[] = {"-h", "--help", "--recursive", "--stop-on-failure", "--fail-fast", "--dry-run"};
+        static constexpr std::string_view batch_values[] = {"-o", "--output", "--output-dir", "--output-path", "--manifest",
+                                                            "--timeout", "--summary", "--report", "--log-level"};
+        const auto is_one_of = [](const auto& names, const std::string_view name) {
+            return std::ranges::find(names, name) != std::end(names);
+        };
+        bool after_double_dash = false;
+        int manifest_count = 0;
+        for (int i = 2; i < argc; ++i) {
+            const std::string_view arg = argv[i];
+            const auto* flag = core_args::training_flag(arg);
+            const std::string_view name = flag ? std::string_view(flag->name) : arg.substr(0, arg.find('='));
+            const bool joined = name != arg;
+            if (after_double_dash) {
+                shared_training_args.emplace_back(arg);
+            } else if (arg == "--") {
+                after_double_dash = true;
+            } else if (is_one_of(batch_switches, arg) || !arg.starts_with('-')) {
+                batch_args.emplace_back(arg);
+            } else if (name == "-d" || name == "--data-path") {
+                if (joined)
+                    batch_args.emplace_back(arg.substr(name.size() + (arg[name.size()] == '=' ? 1 : 0)));
+                else if (i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                else {
+                    error = "Missing value for batch input option";
+                    return std::nullopt;
+                }
+            } else if (is_one_of(batch_values, name)) {
+                if (name == "--manifest")
+                    ++manifest_count;
+                const auto first = batch_args.size();
+                batch_args.emplace_back(arg);
+                if (!joined && i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                if (name == "--log-level")
+                    shared_training_args.insert(shared_training_args.end(), batch_args.begin() + first, batch_args.end());
+            } else {
+                shared_training_args.emplace_back(arg);
+                // Known flags own their value even when it looks like another option.
+                if (!joined && i + 1 < argc &&
+                    (flag ? flag->takes_value : argv[i + 1][0] != '-'))
+                    shared_training_args.emplace_back(argv[++i]);
+            }
+        }
+
+        parser.Prog(batch_args[0]);
+        try {
+            parser.ParseArgs(std::vector<std::string>(batch_args.begin() + 1, batch_args.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            error = std::format("{}\n\n{}", e.what(), parser.Help());
+            return std::nullopt;
+        }
+
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error)) {
+            error = std::move(log_level_error);
+            return std::nullopt;
+        }
+
+        param::BatchTrainingParameters params;
+        std::filesystem::path manifest_path;
+        if (manifest)
+            manifest_path = lfs::core::utf8_to_path(::args::get(manifest));
+        std::vector<std::filesystem::path> input_paths;
+        for (const auto& in_str : ::args::get(inputs)) {
+            auto input = lfs::core::utf8_to_path(in_str);
+            if (input.extension() == ".json") {
+                ++manifest_count;
+                manifest_path = std::move(input);
+            } else {
+                input_paths.push_back(std::move(input));
+            }
+        }
+        if (manifest_count > 1) {
+            error = "Only one batch manifest is allowed (positional or --manifest)";
+            return std::nullopt;
+        }
+        if (manifest_count == 1) {
+            auto loaded = param::read_batch_training_parameters_from_json(manifest_path);
+            if (!loaded) {
+                error = std::format("Error reading batch manifest: {} {}", loaded.error().user_message(), loaded.error().detail());
+                return std::nullopt;
+            }
+            params = std::move(*loaded);
+        }
+        params.input_paths = std::move(input_paths);
+
+        if (output_dir) {
+            params.output_dir = lfs::core::utf8_to_path(::args::get(output_dir));
+        }
+
+        if (recursive) {
+            params.recursive = true;
+        }
+
+        if (stop_on_failure) {
+            params.continue_on_failure = false;
+        }
+
+        if (dry_run) {
+            params.dry_run = true;
+        }
+
+        if (timeout) {
+            params.timeout_minutes = ::args::get(timeout);
+            if (params.timeout_minutes < 0) {
+                error = "Batch timeout must be nonnegative";
+                return std::nullopt;
+            }
+        }
+
+        if (summary_path) {
+            params.summary_file = lfs::core::utf8_to_path(::args::get(summary_path));
+        }
+
+        if (report_path) {
+            params.report_file = lfs::core::utf8_to_path(::args::get(report_path));
+        }
+
+        for (auto&& a : shared_training_args) {
+            params.shared_args.push_back(std::move(a));
+        }
+
+        if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
+            error = std::format("Missing input datasets or batch config\n\n{}", parser.Help());
+            return std::nullopt;
+        }
+
+        return core_args::BatchTrainingMode{std::move(params)};
+    }
 } // namespace
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
@@ -2894,6 +3133,12 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             }
         } else if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
+        } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
+            std::string err;
+            if (auto parsed = parseBatchTrainArgs(argc, argv, err)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(err));
         } else if (arg1 == "eval") {
             std::string error;
             if (auto parsed = parseEvalArgs(argc, argv, error)) {

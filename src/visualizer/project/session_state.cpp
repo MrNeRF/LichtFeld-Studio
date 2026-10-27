@@ -3056,6 +3056,12 @@ namespace lfs::vis::project {
             !merged) {
             return std::move(merged).error();
         }
+        // Omission means removal for this live-owned optional field; retain
+        // the other timeline members, including extensions from newer writers.
+        if (!controller.timeline().revealClip()) {
+            if (auto removed = result.sequencer.dom().remove("timeline.reveal_clip"); !removed)
+                return std::move(removed).error();
+        }
         // The live timeline owns the key list. The additive merge preserves
         // extension fields on surviving keys, but must not retain removed tails.
         const auto keyframe_count = sequencer_known["timeline"]["keyframes"].size();

@@ -43,6 +43,11 @@ namespace lfs::sequencer {
             return std::isfinite(time) && std::abs(time) <= MAX_SEQUENCER_TIME_SECONDS;
         }
 
+        [[nodiscard]] bool validRevealEffect(RevealEffect effect) {
+            const auto value = static_cast<int>(effect);
+            return value >= 1 && value <= 11;
+        }
+
         [[nodiscard]] glm::quat normalizedRotation(const glm::quat& rotation) {
             if (!finiteQuat(rotation))
                 throw std::invalid_argument("Sequencer rotation must be finite");
@@ -91,6 +96,21 @@ namespace lfs::sequencer {
                               lfs::rendering::MAX_FOCAL_LENGTH_MM);
         }
     } // namespace
+
+    float RevealClip::progress(const float time) const {
+        return std::clamp((time - start) / (end - start), 0.0f, 1.0f);
+    }
+
+    void Timeline::setRevealClip(std::optional<RevealClip> clip) {
+        if (clip && (!validTime(clip->start) || !validTime(clip->end) ||
+                     clip->start < 0.0f || clip->end <= clip->start ||
+                     !std::isfinite(clip->softness) || clip->softness <= 0.0f || clip->softness > 1.0f ||
+                     !validRevealEffect(clip->effect)))
+            throw std::invalid_argument("Invalid reveal clip");
+        reveal_clip_ = clip;
+        if (clip)
+            clip_duration_ = std::max(clip_duration_, clip->end);
+    }
 
     KeyframeId Timeline::addKeyframe(const Keyframe& keyframe) {
         Keyframe inserted = keyframe;
@@ -211,6 +231,7 @@ namespace lfs::sequencer {
     void Timeline::clear() {
         keyframes_.clear();
         clip_.reset();
+        reveal_clip_.reset();
         next_keyframe_id_ = 1;
         clip_duration_ = DEFAULT_CLIP_DURATION_SECONDS;
     }
@@ -244,7 +265,8 @@ namespace lfs::sequencer {
     void Timeline::setClipDuration(const float duration) {
         if (!std::isfinite(duration) || duration < 0.0f || duration > MAX_SEQUENCER_TIME_SECONDS)
             throw std::invalid_argument("Timeline duration is outside the supported range");
-        clip_duration_ = std::max({MIN_CLIP_DURATION_SECONDS, duration, realEndTime()});
+        clip_duration_ = std::max({MIN_CLIP_DURATION_SECONDS, duration, realEndTime(),
+                                   reveal_clip_ ? reveal_clip_->end : 0.0f});
     }
 
     CameraState Timeline::evaluate(const float time) const {
@@ -314,6 +336,8 @@ namespace lfs::sequencer {
         }
         if (clip_)
             json["animation_clip"] = clip_->toJson();
+        if (reveal_clip_)
+            json["reveal_clip"] = {{"start", reveal_clip_->start}, {"end", reveal_clip_->end}, {"softness", reveal_clip_->softness}, {"effect", static_cast<int>(reveal_clip_->effect)}};
         return json;
     }
 
@@ -408,6 +432,23 @@ namespace lfs::sequencer {
                         AnimationClip::fromJson(json["animation_clip"]));
             }
 
+            std::optional<RevealClip> loaded_reveal;
+            if (json.contains("reveal_clip")) {
+                const auto& value = json.at("reveal_clip");
+                RevealClip reveal{jsonFloat(value.at("start"), "Reveal start"),
+                                  jsonFloat(value.at("end"), "Reveal end"),
+                                  jsonFloat(value.at("softness"), "Reveal softness")};
+                if (value.contains("effect")) {
+                    if (!value.at("effect").is_number_integer())
+                        throw std::runtime_error("Invalid reveal effect");
+                    reveal.effect = static_cast<RevealEffect>(value.at("effect").get<int>());
+                }
+                if (!validTime(reveal.start) || !validTime(reveal.end) || reveal.start < 0.0f ||
+                    reveal.end <= reveal.start || reveal.softness <= 0.0f || reveal.softness > 1.0f || !validRevealEffect(reveal.effect))
+                    throw std::runtime_error("Invalid reveal clip");
+                loaded_reveal = reveal;
+            }
+
             // IDs were assigned in file order, so use them to preserve ties
             // without allocating a second keyframe buffer for a stable sort.
             if (!std::is_sorted(loaded_keyframes.begin(), loaded_keyframes.end()))
@@ -436,10 +477,11 @@ namespace lfs::sequencer {
                 }
             }
             const float final_duration = std::max(
-                {MIN_CLIP_DURATION_SECONDS, loaded_duration, real_end_time});
+                {MIN_CLIP_DURATION_SECONDS, loaded_duration, real_end_time, loaded_reveal ? loaded_reveal->end : 0.0f});
 
             keyframes_ = std::move(loaded_keyframes);
             clip_ = std::move(loaded_clip);
+            reveal_clip_ = loaded_reveal;
             next_keyframe_id_ = next_keyframe_id;
             clip_duration_ = final_duration;
             return true;
@@ -502,7 +544,7 @@ namespace lfs::sequencer {
     float Timeline::totalDuration() const {
         float camera_duration = duration();
         float clip_duration = clip_ ? clip_->duration() : 0.0f;
-        return std::max(camera_duration, clip_duration);
+        return std::max({camera_duration, clip_duration, reveal_clip_ ? reveal_clip_->end : 0.0f});
     }
 
 } // namespace lfs::sequencer
