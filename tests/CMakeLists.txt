@@ -258,6 +258,12 @@ if(BUILD_VISUALIZER_TESTS)
         SDL3::SDL3
         ZLIB::ZLIB
     )
+    if(MSVC)
+        # Static training/I/O objects also bring driver imports into this EXE.
+        # CPU-only CI has the toolkit, but no NVIDIA display driver.
+        target_link_options(lichtfeld_visualizer_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_visualizer_tests PRIVATE delayimp)
+    endif()
     # Exercise sidebar gestures through the SDL dispatcher without building the
     # full CUDA test suite or unrelated transform/LSP/project test helpers.
     add_executable(lichtfeld_sidebar_input_tests test_sidebar_input_dispatch.cpp)
