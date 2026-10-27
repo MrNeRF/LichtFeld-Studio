@@ -10,6 +10,7 @@
 #include "git_version.h"
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
+#include "source_metadata_internal.hpp"
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -172,7 +173,7 @@ namespace lfs::media::detail {
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
         if (output_.preserve_source_metadata)
-            identity_["source_metadata_policy"] = "preserve_static_container_v1";
+            identity_["source_metadata_policy"] = source_metadata_preservation_policy;
         if (r.float_color_profile != FloatColorProfile::Sdr)
             identity_["float_color_profile"] = static_cast<int>(r.float_color_profile);
         if (session.output.color.units != ColorUnits::Relative)

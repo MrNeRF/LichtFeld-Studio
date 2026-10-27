@@ -1521,7 +1521,7 @@ namespace lfs::io {
                             failure_ = summary.error();
                             throw std::runtime_error(std::string(failure_->detail()));
                         }
-                        source_metadata = {{"schema_version", 1}, {"success", true}, {"metadata", media::json_detail::sourceMetadata(*catalog)}, {"summary", media::json_detail::metadataSummary(*summary)}};
+                        source_metadata = media::json_detail::sourceMetadataResult(*catalog, *summary);
                     } catch (const std::bad_alloc&) {
                         failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata snapshot allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
                         throw;
@@ -2582,7 +2582,7 @@ namespace lfs::io {
                         nlohmann::json root;
                         root["schema_version"] = 2;
                         if (params.preserve_source_metadata) {
-                            root["source_metadata_policy"] = "preserve_static_container_v1";
+                            root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);
                         }
                         root["provenance"] = {{"ffmpeg_version", av_version_info()},

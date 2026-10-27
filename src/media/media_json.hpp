@@ -347,4 +347,7 @@ namespace lfs::media::json_detail {
         }
         return result;
     }
+    inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
+        return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
+    }
 } // namespace lfs::media::json_detail

@@ -4,5 +4,6 @@
 #include "media/source_metadata.hpp"
 
 namespace lfs::media::detail {
+    inline constexpr char source_metadata_preservation_policy[] = "preserve_static_container_v1";
     [[nodiscard]] MetadataSourceLocator sourceMetadataLocator(const std::filesystem::path&);
-}
+} // namespace lfs::media::detail
