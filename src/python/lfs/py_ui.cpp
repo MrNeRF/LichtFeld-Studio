@@ -5098,6 +5098,43 @@ namespace lfs::python {
             nb::rv_policy::reference,
             "Get sequencer UI state for modification");
 
+        m.def("get_reveal_clip", []() {
+            const auto result = invoke_on_viewer([]() -> std::string {
+                auto* gui = get_gui_manager();
+                if (!gui) return "null";
+                const auto& clip = gui->sequencer().timeline().revealClip();
+                return clip ? nlohmann::json{{"start", clip->start}, {"end", clip->end},
+                    {"softness", clip->softness}, {"effect", static_cast<int>(clip->effect)}}.dump() : "null";
+            }, std::string("null"));
+            return nb::module_::import_("json").attr("loads")(result); }, "Read the live sequencer reveal clip, or None if absent");
+
+        m.def("set_reveal_clip", [](nb::dict value) {
+            const auto serialized = nb::cast<std::string>(nb::module_::import_("json").attr("dumps")(value));
+            return invoke_on_viewer([serialized]() -> bool {
+                auto* gui = get_gui_manager();
+                if (!gui) return false;
+                try {
+                    const auto data = nlohmann::json::parse(serialized);
+                    if (!data.at("effect").is_number_integer()) return false;
+                    const lfs::sequencer::RevealClip clip{data.at("start").get<float>(), data.at("end").get<float>(),
+                        data.at("softness").get<float>(), static_cast<lfs::sequencer::RevealEffect>(data.at("effect").get<int>())};
+                    gui->sequencer().setRevealClip(clip);
+                    return true;
+                } catch (const std::exception& e) {
+                    LOG_WARN("set_reveal_clip rejected the clip: {}", e.what());
+                    return false;
+                }
+            }, false); }, nb::arg("value"), "Set the live sequencer reveal clip; returns false for invalid input");
+
+        m.def("remove_reveal_clip", []() { return invoke_on_viewer([]() -> bool {
+                                               auto* gui = get_gui_manager();
+                                               if (!gui)
+                                                   return false;
+                                               gui->sequencer().setRevealClip(std::nullopt);
+                                               return true;
+                                           },
+                                                                   false); }, "Remove the live sequencer reveal clip");
+
         m.def("has_keyframes", &has_keyframes,
               "Check if sequencer has any keyframes");
 

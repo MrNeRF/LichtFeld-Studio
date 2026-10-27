@@ -2629,6 +2629,15 @@ class SequencerUIState:
 def get_sequencer_state() -> SequencerUIState:
     """Get sequencer UI state for modification"""
 
+def get_reveal_clip() -> object:
+    """Read the live sequencer reveal clip, or None if absent"""
+
+def set_reveal_clip(value: dict) -> bool:
+    """Set the live sequencer reveal clip; returns false for invalid input"""
+
+def remove_reveal_clip() -> bool:
+    """Remove the live sequencer reveal clip"""
+
 def has_keyframes() -> bool:
     """Check if sequencer has any keyframes"""
 

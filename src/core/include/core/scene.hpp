@@ -239,6 +239,7 @@ namespace lfs::core {
         };
         mutable std::mutex model_bounds_mutex_;
         mutable ModelBoundsCache model_bounds_cache_;
+        mutable ModelBoundsCache reveal_bounds_cache_;
         Scene* scene_ = nullptr;
     };
 
@@ -443,6 +444,8 @@ namespace lfs::core {
         [[nodiscard]] bool isNodeEffectivelyLocked(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
         [[nodiscard]] bool getNodeBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
+        // Robust local bounds for reveal timing; ignores the most distant sampled splats.
+        [[nodiscard]] bool getNodeRevealBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
         [[nodiscard]] NodeId getCropBoxForSplat(NodeId splat_id) const;
         [[nodiscard]] NodeId getOrCreateCropBoxForSplat(NodeId splat_id);

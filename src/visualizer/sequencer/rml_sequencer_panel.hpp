@@ -88,6 +88,7 @@ namespace lfs::vis {
 
     struct TimelineContextMenuState {
         bool open = false;
+        bool reveal = false;
         float time = 0.0f;
         std::optional<size_t> keyframe;
     };
@@ -99,6 +100,7 @@ namespace lfs::vis {
                             PLY,
                             SNAP,
                             PREVIEW,
+                            REVEAL,
                             PROJECTION,
                             CAMERA_ASPECT };
         Target target = Target::NONE;
@@ -189,6 +191,7 @@ namespace lfs::vis {
         void updateTransportSettings();
         void rebuildKeyframes();
         void rebuildPlySequenceClip();
+        void selectReveal(bool selected);
         LFS_VIS_API void rebuildRuler();
         LFS_VIS_API void rebuildEasingStripe(float timeline_x, float timeline_width);
         LFS_VIS_API void rebuildFilmStrip(float timeline_x, float timeline_width,
@@ -228,6 +231,11 @@ namespace lfs::vis {
         };
 
         struct DurationEditListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        struct RevealEditListener : Rml::EventListener {
             RmlSequencerPanel* panel = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
@@ -298,6 +306,14 @@ namespace lfs::vis {
         gui::RmlUIManager* rml_manager_;
         TransportClickListener transport_listener_;
         DurationEditListener duration_listener_;
+        RevealEditListener reveal_listener_;
+        bool reveal_selected_ = false;
+        bool ply_sequence_selected_ = false;
+        int reveal_drag_edge_ = 0;
+        float reveal_drag_origin_x_ = 0.0f;
+        float reveal_drag_origin_start_ = 0.0f;
+        float reveal_drag_origin_end_ = 0.0f;
+        float reveal_drag_seconds_per_pixel_ = 0.0f;
         SequenceFpsEditListener sequence_fps_listener_;
         bool duration_editing_ = false;
         bool sequence_fps_editing_ = false;
@@ -442,6 +458,7 @@ namespace lfs::vis {
 
         // Context menu state
         bool context_menu_open_ = false;
+        bool context_menu_reveal_ = false;
         float context_menu_time_ = 0.0f;
         float context_menu_x_ = 0.0f;
         float context_menu_y_ = 0.0f;

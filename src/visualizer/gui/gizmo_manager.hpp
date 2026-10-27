@@ -118,12 +118,12 @@ namespace lfs::vis {
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
             // Pie menu
-            void openPieMenu(glm::vec2 cursor_pos);
+            LFS_VIS_API void openPieMenu(glm::vec2 cursor_pos);
             void closePieMenu();
             void renderPieMenu();
             void onPieMenuKeyRelease();
-            void onPieMenuMouseMove(glm::vec2 pos);
-            void onPieMenuClick(glm::vec2 pos);
+            LFS_VIS_API void onPieMenuMouseMove(glm::vec2 pos);
+            LFS_VIS_API void onPieMenuClick(glm::vec2 pos);
             [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:

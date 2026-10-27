@@ -21,6 +21,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using lfs::core::DataType;
@@ -305,6 +306,57 @@ protected:
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     lfs::vis::SelectionService* service_ = nullptr;
 };
+
+TEST_F(SelectionServiceInteractionsTest, RevealBlocksRectangleSelectionForMovedOrShrunkSplats) {
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    set_initial_selection({0, 1});
+
+    for (const int effect : {1, 2, 3, 4, 5, 6, 7, 8, 10}) {
+        SCOPED_TRACE(effect);
+        rendering_manager_->setSequencerReveal(lfs::rendering::GaussianRevealState{
+            .progress = 0.5f,
+            .effect = effect});
+
+        const auto result = service_->selectRect(
+            0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.affected_count, 0u);
+        EXPECT_FALSE(service_->beginInteractiveSelection(
+            lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace,
+            {0.0f, 0.0f}, 0.0f));
+        EXPECT_FALSE(service_->isInteractiveSelectionActive());
+        EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+    }
+}
+
+TEST_F(SelectionServiceInteractionsTest, RevealAllowsRectangleSelectionForColorOnlyEffectsOrNoClip) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+
+    for (const int effect : {9, 11, 0}) {
+        SCOPED_TRACE(effect);
+        if (effect == 0) {
+            rendering_manager_->setSequencerReveal(std::nullopt);
+        } else {
+            rendering_manager_->setSequencerReveal(lfs::rendering::GaussianRevealState{
+                .progress = 0.5f,
+                .effect = effect});
+        }
+        set_initial_selection({0, 1});
+        const auto result = service_->selectRect(
+            0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace);
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+        ASSERT_TRUE(service_->beginInteractiveSelection(
+            lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace,
+            {0.0f, 0.0f}, 0.0f));
+        service_->cancelInteractiveSelection();
+    }
+}
 
 TEST_F(SelectionServiceInteractionsTest, DeleteInSelectionToolDoesNotRemoveNodeWithoutGaussianSelection) {
     const auto node_id = scene_manager_->getScene().getNodeIdByName("test");
