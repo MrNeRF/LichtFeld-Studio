@@ -31,7 +31,6 @@
 #include <thrust/execution_policy.h>
 #include <thrust/fill.h>
 #include <thrust/functional.h>
-#include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/reduce.h>
@@ -2909,7 +2908,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_binary_op_generic<unsigned char, unsigned char, ops::not_equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*, size_t, ops::not_equal_op, cudaStream_t);
 
-    // Scalar operations (uses constant_iterator, different from scalar_right_op!)
+    // Scalar operations (instantiations for launch_scalar_op_generic)
     template LFS_CORE_API void launch_scalar_op_generic<float, float, ops::add_op>(
         const float*, float, float*, size_t, ops::add_op, cudaStream_t);
     template LFS_CORE_API void launch_scalar_op_generic<float, float, ops::sub_op>(
