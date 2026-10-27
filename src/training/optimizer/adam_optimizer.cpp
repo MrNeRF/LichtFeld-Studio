@@ -58,30 +58,21 @@ namespace lfs::training {
             return (tensor.capacity() > 0 ? tensor.capacity() : tensor.shape()[0]) * row_size;
         }
 
-        struct ShMomentUnits {
-            int bits;
-            uint32_t rest;
+        // SH-rest moment capacity is counted in float-layout cells; the joint
+        // codec stores each cell in bytes_per_cell(bits) bytes.
+        size_t sh_moment_cells(const size_t packed_bytes, const int bits) {
+            const auto bpc = static_cast<size_t>(joint_adam::bytes_per_cell(bits));
+            LFS_DEBUG_ASSERT_MSG(bpc > 0 && packed_bytes % bpc == 0,
+                                 "SH moment capacity must contain whole packed cells");
+            return packed_bytes / bpc;
+        }
 
-            size_t packed_bytes(const size_t cells) const {
-                return cells * static_cast<size_t>(joint_adam::bytes_per_cell(bits));
-            }
-
-            size_t float_cells(const size_t bytes) const {
-                const auto bpc = static_cast<size_t>(joint_adam::bytes_per_cell(bits));
-                LFS_DEBUG_ASSERT_MSG(bpc > 0 && bytes % bpc == 0,
-                                     "SH moment capacity must contain whole packed cells");
-                return bytes / bpc;
-            }
-
-            size_t primitives(const size_t cells) const {
-                const size_t cells_per_block = lfs::core::sh_swizzled_float_count(
-                    lfs::core::kShReorderSize, rest);
-                // Only complete swizzle blocks can hold additional primitives.
-                return cells_per_block > 0
-                           ? (cells / cells_per_block) * lfs::core::kShReorderSize
-                           : 0;
-            }
-        };
+        // Primitives that fit in `cells` float-layout cells. Only complete
+        // swizzle blocks can hold additional primitives.
+        size_t sh_cell_primitives(const size_t cells, const uint32_t rest) {
+            const size_t block = lfs::core::sh_swizzled_float_count(lfs::core::kShReorderSize, rest);
+            return block > 0 ? cells / block * lfs::core::kShReorderSize : 0;
+        }
 
         // Grow a 1D/2D tensor to `cap_rows` along dim0 (or total elems for 1D packed),
         // preserving the live prefix. zeros_direct tensors reject Tensor::reserve, so
@@ -652,8 +643,8 @@ namespace lfs::training {
         if (type == ParamType::ShN) {
             // 1D: one packed cell per swizzled float element (float layout, not q16).
             packed_shape = lfs::core::TensorShape(
-                {ShMomentUnits{bits, layout_rest}.packed_bytes(shN_float_rows)});
-            packed_cap_rows = ShMomentUnits{bits, layout_rest}.packed_bytes(moment_capacity);
+                {joint_adam::packed_bytes(shN_float_rows, bits)});
+            packed_cap_rows = joint_adam::packed_bytes(moment_capacity, bits);
         } else {
             // Contiguous [N, C] → [N, C * bpc]
             size_t row_elems = 1;
@@ -1013,9 +1004,8 @@ namespace lfs::training {
                 // q16 param numel ≠ float_layout; only compare state.size to float_layout.
                 // state.capacity is float cells; joint exp_avg.capacity is packed bytes
                 // (float_cells * bpc) — never compare those units directly.
-                const ShMomentUnits units{state.joint_bits, layout_rest};
-                const size_t moment_cap_floats = units.float_cells(
-                    std::max(state.exp_avg.capacity(), state.exp_avg.numel()));
+                const size_t moment_cap_floats = sh_moment_cells(
+                    std::max(state.exp_avg.capacity(), state.exp_avg.numel()), state.joint_bits);
                 state.capacity = moment_cap_floats;
                 if (state.size != float_layout) {
                     if (moment_cap_floats >= float_layout && state.size < float_layout) {
@@ -1064,7 +1054,7 @@ namespace lfs::training {
                     const size_t nb = joint_adam::n_bounds_for_prims(n_live);
                     const size_t prim_cap = std::max(
                         n_live,
-                        units.primitives(state.capacity));
+                        sh_cell_primitives(state.capacity, layout_rest));
                     const size_t nb_cap = std::max(nb, joint_adam::n_bounds_for_prims(prim_cap));
                     const size_t cur_nb =
                         state.joint_bounds.is_valid() && state.joint_bounds.ndim() >= 1
@@ -1441,7 +1431,7 @@ namespace lfs::training {
         // for append along the 1D dim when shape is [floats*bpc].
         size_t packed_growth = growth;
         if (state.is_joint() && type == ParamType::ShN) {
-            packed_growth = ShMomentUnits{state.joint_bits, 0}.packed_bytes(growth);
+            packed_growth = joint_adam::packed_bytes(growth, state.joint_bits);
         }
         const size_t new_size = state.size + growth;
 
@@ -1484,7 +1474,7 @@ namespace lfs::training {
                 alloc_quantized_state(type, state, param, moment_cap, prim_cap);
                 // Ensure tensor capacity is recorded (zeros_direct path).
                 const size_t packed_cap = type == ParamType::ShN
-                                              ? ShMomentUnits{state.joint_bits, 0}.packed_bytes(moment_cap)
+                                              ? joint_adam::packed_bytes(moment_cap, state.joint_bits)
                                               : moment_cap;
                 if (state.exp_avg.is_valid() && state.exp_avg.capacity() < packed_cap) {
                     state.exp_avg.reserve(packed_cap);
@@ -1503,12 +1493,13 @@ namespace lfs::training {
                 }
             }
             const size_t prim_n = static_cast<size_t>(splat_data_.size());
-            const ShMomentUnits units{state.joint_bits,
-                                      static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())};
             const size_t packed_cap = std::max(state.exp_avg.capacity(), state.exp_avg.shape()[0]);
-            state.capacity = type == ParamType::ShN ? units.float_cells(packed_cap) : packed_cap;
+            state.capacity = type == ParamType::ShN ? sh_moment_cells(packed_cap, state.joint_bits) : packed_cap;
             const size_t prim_cap = std::max(
-                prim_n, type == ParamType::ShN ? units.primitives(state.capacity) : state.capacity);
+                prim_n, type == ParamType::ShN
+                            ? sh_cell_primitives(state.capacity,
+                                                 static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
+                            : state.capacity);
             ensure_joint_bounds_capacity(state.joint_bounds, prim_n, prim_cap,
                                          param.device(), /*zero_all=*/false);
             state.size = new_size;
@@ -1797,8 +1788,7 @@ namespace lfs::training {
 
                 // Joint states grow packed exp_avg directly.
                 if (state.is_joint() && state.exp_avg.is_valid()) {
-                    const ShMomentUnits units{state.joint_bits, layout_rest};
-                    const size_t packed_growth = units.packed_bytes(growth);
+                    const size_t packed_growth = joint_adam::packed_bytes(growth, state.joint_bits);
                     const size_t packed_new = state.exp_avg.shape()[0] + packed_growth;
                     const bool fits = state.exp_avg.capacity() > 0 &&
                                       packed_new <= state.exp_avg.capacity();
@@ -1824,11 +1814,11 @@ namespace lfs::training {
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                         }
                     }
-                    state.capacity = units.float_cells(
-                        std::max(state.exp_avg.capacity(), state.exp_avg.numel()));
+                    state.capacity = sh_moment_cells(
+                        std::max(state.exp_avg.capacity(), state.exp_avg.numel()), state.joint_bits);
                     grow_grad_rows(state.grad, name, state.size, new_floats, state.capacity);
                     ensure_joint_bounds_capacity(state.joint_bounds, new_N,
-                                                 std::max(new_N, units.primitives(state.capacity)),
+                                                 std::max(new_N, sh_cell_primitives(state.capacity, layout_rest)),
                                                  param_now.device(), /*zero_all=*/false);
                     state.size = new_floats;
                     // Zero-encode new prim rows under (possibly non-zero) block bounds.
@@ -2162,8 +2152,8 @@ namespace lfs::training {
                 if (is_shN) {
                     // Packed 1D: one cell per float4-swizzle float, bpc bytes each.
                     const size_t expected_bytes =
-                        ShMomentUnits{state.joint_bits, layout_rest}.packed_bytes(
-                            lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest));
+                        joint_adam::packed_bytes(
+                            lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest), state.joint_bits);
                     if (state.exp_avg.ndim() != 1 || state.exp_avg.numel() != expected_bytes ||
                         state.joint_bits != 8) {
                         throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint shN packed shape mismatch");
@@ -2258,7 +2248,7 @@ namespace lfs::training {
                     if (state.exp_avg.is_valid() && bpc > 0) {
                         if (is_shN) {
                             // Packed 1D: capacity is in packed bytes (floats * bpc).
-                            reserve_tensor_rows(state.exp_avg, ShMomentUnits{state.joint_bits, 0}.packed_bytes(target_capacity));
+                            reserve_tensor_rows(state.exp_avg, joint_adam::packed_bytes(target_capacity, state.joint_bits));
                         } else {
                             // Contiguous [N, C*bpc]: capacity is in rows.
                             reserve_tensor_rows(state.exp_avg, target_capacity);
