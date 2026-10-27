@@ -113,6 +113,19 @@ extern char** environ;
 
 namespace lfs::python {
 
+    namespace {
+        std::optional<vis::op::OperatorResult> dispatchPointPickUiAction(
+            const vis::op::BuiltinOp id, vis::PointPickState& state,
+            const vis::PointPickState::UiAction action, const float value = 0.0f) {
+            if (vis::op::operators().activeModalId() != vis::op::to_string(id))
+                return std::nullopt;
+            state.requestUiAction(action, value);
+            vis::op::ModalEvent event{};
+            event.type = vis::op::ModalEvent::Type::NONE;
+            return vis::op::operators().dispatchModalEvent(event);
+        }
+    } // namespace
+
     using lfs::training::CommandCenter;
 
     namespace {
@@ -4499,7 +4512,7 @@ namespace lfs::python {
             []() -> bool {
                 const auto* scene = lfs::vis::services().sceneOrNull();
                 return scene &&
-                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
                        lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
             },
             "True when the align tool has 3 non-degenerate points ready to apply");
@@ -4507,41 +4520,23 @@ namespace lfs::python {
         m.def(
             "apply_align",
             []() -> bool {
-                if (lfs::vis::op::operators().activeModalId() !=
-                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                    return false;
-                }
-                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
-                lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-                lfs::vis::op::operators().dispatchModalEvent(evt);
-                return true;
+                return dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                 vis::services().alignPointPick(), vis::PointPickState::UiAction::Apply)
+                    .has_value();
             },
             "Request the running align modal to apply the current triangle");
 
         m.def(
             "clear_align_points",
             []() {
-                if (lfs::vis::op::operators().activeModalId() !=
-                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                    return;
-                }
-                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
-                lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-                lfs::vis::op::operators().dispatchModalEvent(evt);
+                (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                vis::services().alignPointPick(), vis::PointPickState::UiAction::Clear);
             },
             "Request the running align modal to clear all picked points");
 
         m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
-        m.def("toggle_align_preview", [] {
-            if (lfs::vis::op::operators().activeModalId() !=
-                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                return;
-            }
-            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
-            lfs::vis::op::ModalEvent event{};
-            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
+        m.def("toggle_align_preview", [] { (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                                           vis::services().alignPointPick(), vis::PointPickState::UiAction::TogglePreview); }, "Switch between the original scene and the alignment preview");
 
         m.def(
             "get_align_axis_snap",
@@ -4553,7 +4548,7 @@ namespace lfs::python {
             [](const bool enabled) {
                 lfs::vis::services().setAlignAxisSnapEnabled(enabled);
                 if (lfs::vis::services().getAlignPreviewEnabled()) {
-                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::services().alignPointPick().requestUiAction(lfs::vis::PointPickState::UiAction::RefreshPreview);
                     lfs::vis::op::ModalEvent event{};
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
@@ -4574,7 +4569,7 @@ namespace lfs::python {
             [](const bool enabled) {
                 lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
                 if (lfs::vis::services().getAlignPreviewEnabled()) {
-                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::services().alignPointPick().requestUiAction(lfs::vis::PointPickState::UiAction::RefreshPreview);
                     lfs::vis::op::ModalEvent event{};
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
@@ -4586,7 +4581,7 @@ namespace lfs::python {
             "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
 
         auto can_apply_scale_distance_fn = []() -> bool {
-            const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
             if (pts.size() != 2)
                 return false;
             const float dist = glm::length(pts[1] - pts[0]);
@@ -4595,7 +4590,7 @@ namespace lfs::python {
         m.def("can_apply_scale_distance", can_apply_scale_distance_fn, "True when 2 valid points are picked for scale distance");
 
         auto get_scale_distance_measured_fn = []() -> float {
-            const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
             if (pts.size() != 2)
                 return 0.0f;
             const float dist = glm::length(pts[1] - pts[0]);
@@ -4604,34 +4599,20 @@ namespace lfs::python {
         m.def("get_scale_distance_measured", get_scale_distance_measured_fn, "Get measured distance between 2 picked points");
 
         auto apply_scale_distance_fn = [](const float target_distance) -> bool {
-            if (lfs::vis::op::operators().activeModalId() !=
-                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::ScaleDistancePickPoint)) {
-                return false;
-            }
-            lfs::vis::services().requestScaleDistanceUiAction(
-                lfs::vis::Services::ScaleDistanceUiAction::Apply, target_distance);
-            lfs::vis::op::ModalEvent evt{};
-            evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-            const auto result = lfs::vis::op::operators().dispatchModalEvent(evt);
-            return result == lfs::vis::op::OperatorResult::FINISHED;
+            return dispatchPointPickUiAction(vis::op::BuiltinOp::ScaleDistancePickPoint,
+                                             vis::services().scaleDistancePointPick(), vis::PointPickState::UiAction::Apply,
+                                             target_distance) == vis::op::OperatorResult::FINISHED;
         };
         m.def("apply_scale_distance", apply_scale_distance_fn, nb::arg("target_distance"), "Request scale distance modal to rescale scene");
 
         auto clear_scale_distance_fn = []() {
-            if (lfs::vis::op::operators().activeModalId() !=
-                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::ScaleDistancePickPoint)) {
-                return;
-            }
-            lfs::vis::services().requestScaleDistanceUiAction(
-                lfs::vis::Services::ScaleDistanceUiAction::Clear);
-            lfs::vis::op::ModalEvent evt{};
-            evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-            lfs::vis::op::operators().dispatchModalEvent(evt);
+            (void)dispatchPointPickUiAction(vis::op::BuiltinOp::ScaleDistancePickPoint,
+                                            vis::services().scaleDistancePointPick(), vis::PointPickState::UiAction::Clear);
         };
         m.def("clear_scale_distance", clear_scale_distance_fn, "Request scale distance modal to clear picked points");
 
         auto get_scale_distance_points_fn = []() -> std::vector<std::array<float, 3>> {
-            const auto& pts = lfs::vis::services().getScaleDistancePickedPoints();
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
             std::vector<std::array<float, 3>> out;
             out.reserve(pts.size());
             for (const auto& p : pts) {

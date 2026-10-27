@@ -7,13 +7,9 @@
 
 namespace lfs::vis {
 
-    void Services::notifyAlignStateChanged() {
-        publish_align_state_generation();
-    }
-
-    void Services::notifyScaleDistanceStateChanged() {
-        publish_scale_distance_state_generation();
-    }
+    Services::Services()
+        : align_point_pick_(publish_align_state_generation, false),
+          scale_distance_point_pick_(publish_scale_distance_state_generation, true) {}
 
     Services& Services::instance() {
         static Services s;

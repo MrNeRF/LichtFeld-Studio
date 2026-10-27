@@ -2212,7 +2212,8 @@ body {
 }
 
 /* Keep labeled alignment options inside narrow viewport panes. */
-.toolbar-hcenter .align-toolbar {
+.toolbar-hcenter .align-toolbar,
+.toolbar-hcenter .scale-distance-toolbar {
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: center;
@@ -2233,32 +2234,25 @@ body {
 
 /* Scale distance toolbar styling */
 .toolbar-hcenter .scale-distance-toolbar {
-    max-width: 100%;
-    flex-wrap: wrap;
-    justify-content: center;
     gap: 6dp;
     padding: 4dp 10dp;
 }
 
-.scale-distance-title {
+.scale-distance-title,
+.scale-distance-label,
+.scale-distance-value {
     font-size: 13dp;
-    font-weight: bold;
     white-space: nowrap;
     align-self: center;
 }
 
-.scale-distance-label {
-    font-size: 13dp;
-    white-space: nowrap;
-    align-self: center;
+.scale-distance-title,
+.scale-distance-value {
+    font-weight: bold;
 }
 
 .scale-distance-value {
-    font-size: 13dp;
-    font-weight: bold;
-    white-space: nowrap;
     min-width: 44dp;
-    align-self: center;
 }
 
 .scale-distance-input {
