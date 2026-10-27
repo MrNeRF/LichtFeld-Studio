@@ -22,6 +22,7 @@ namespace lfs::vis::input {
         bool mapped = false;
         SDL_GamepadType type = SDL_GAMEPAD_TYPE_UNKNOWN;
         std::string error;
+        std::string profile_key; // SDL model GUID; never the connection ID
     };
 
     struct GamepadSample {
@@ -65,6 +66,7 @@ namespace lfs::vis::input {
         [[nodiscard]] bool selectNavigation(SDL_JoystickID id);
         [[nodiscard]] const GamepadSample& navigationSample() const;
         [[nodiscard]] SDL_JoystickID diagnosticSelected() const;
+        [[nodiscard]] std::string navigationProfileKey() const;
         [[nodiscard]] GamepadSnapshot snapshot() const;
 
     private:

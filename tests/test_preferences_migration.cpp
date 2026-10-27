@@ -8,6 +8,7 @@
 #include "gui/layout_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "input/gamepad_navigation.hpp"
+#include "input/gamepad_profiles.hpp"
 #include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
@@ -838,4 +839,111 @@ TEST(PreferencesMigration, InvalidGamepadProfileDoesNotOverwriteSavedPreferences
     settings.bindings.common[8] = settings.bindings.common[10];
     EXPECT_FALSE(preferences.setGamepadNavigation(settings.json().dump()));
     EXPECT_EQ(readPreferences(*paths), before);
+}
+
+TEST(PreferencesMigration, NamedGamepadProfilesMigrateAndSwitchAtomicallyWithoutChangingEnablement) {
+    const auto home = makeHome("lfs_named_gamepad_profiles");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    lfs::vis::input::GamepadNavigationSettings legacy{true};
+    legacy.move_speed = 2.4f;
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"gamepad_navigation", legacy.json()}, {"unrelated", 42}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    auto library = json::parse(preferences.gamepadProfiles());
+    EXPECT_EQ(library["profiles"][0]["name"], "Personal");
+    EXPECT_FALSE(library["profiles"][0]["settings"].contains("enabled"));
+    EXPECT_FLOAT_EQ(library["profiles"][0]["settings"]["move_speed"].get<float>(), 2.4f);
+    auto second = library["profiles"][0];
+    second["id"] = "second";
+    second["name"] = "Second";
+    second["settings"]["move_speed"] = 0.7;
+    library["profiles"].push_back(second);
+    library["active"] = "second";
+    library["device_profiles"][std::string(32, 'b')] = "second";
+    ASSERT_TRUE(preferences.setGamepadProfiles(library.dump(), true));
+    const auto saved = readPreferences(*paths);
+    EXPECT_EQ(saved["gamepad_profiles"]["active"], "second");
+    EXPECT_TRUE(saved["gamepad_navigation"]["enabled"].get<bool>());
+    EXPECT_EQ(saved["unrelated"], 42);
+    EXPECT_FLOAT_EQ(json::parse(preferences.gamepadNavigation())["move_speed"].get<float>(), 0.7f);
+    // Ordinary slider/binding writes update only the selected layout.
+    auto settings = lfs::vis::input::GamepadNavigationSettings::fromJson(json::parse(preferences.gamepadNavigation()));
+    settings.look_speed = 2.2f;
+    ASSERT_TRUE(preferences.setGamepadNavigation(settings.json().dump()));
+    const auto updated = json::parse(preferences.gamepadProfiles());
+    EXPECT_EQ(updated["profiles"][0], library["profiles"][0]);
+    EXPECT_EQ(updated["device_profiles"], library["device_profiles"]);
+    const auto other_home = makeHome("lfs_named_gamepad_profiles_other");
+    { const ScopedLfsHome other(other_home); (void)preferences.gamepadProfiles(); }
+    EXPECT_EQ(json::parse(preferences.gamepadProfiles()), updated);
+}
+
+TEST(PreferencesMigration, StaleGamepadProfileEditsCannotOverwriteConcurrentChanges) {
+    const ScopedLfsHome scoped_home(makeHome("lfs_named_gamepad_stale"));
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    const auto expected = preferences.gamepadProfiles();
+    auto library = json::parse(expected);
+    ASSERT_TRUE(preferences.setGamepadProfiles(library.dump(), false, expected));
+    const auto old = preferences.gamepadProfiles();
+    lfs::vis::input::GamepadNavigationSettings changed;
+    changed.move_speed = 3.0f;
+    ASSERT_TRUE(preferences.setGamepadNavigation(changed.json().dump()));
+    const auto paths = lfs::core::UserPaths::resolve();
+    const auto before = readPreferences(*paths);
+    library["profiles"][0]["name"] = "Stale rename";
+    EXPECT_FALSE(preferences.setGamepadProfiles(library.dump(), false, old));
+    EXPECT_EQ(readPreferences(*paths), before);
+}
+
+TEST(PreferencesMigration, FutureGamepadLibraryIsNeverReplacedByEditingOrReset) {
+    const ScopedLfsHome scoped_home(makeHome("lfs_named_gamepad_future"));
+    const auto paths = lfs::core::UserPaths::resolve();
+    auto library = lfs::vis::input::GamepadProfiles::migrate({}).value;
+    auto future = library;
+    future["schema_version"] = 2;
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"project_location", ""}, {"gamepad_profiles", future}});
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    const auto before = readPreferences(*paths);
+    EXPECT_FALSE(preferences.setGamepadProfiles(library.dump(), false));
+    EXPECT_FALSE(preferences.setGamepadNavigation(lfs::vis::input::GamepadNavigationSettings{}.json().dump()));
+    EXPECT_EQ(readPreferences(*paths), before);
+}
+
+TEST(PreferencesMigration, SafeModeCannotModifyOrResetSavedGamepadProfiles) {
+    const ScopedLfsHome scoped_home(makeHome("lfs_named_gamepad_safe_mode"));
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    const auto library = preferences.gamepadProfiles();
+    ASSERT_TRUE(preferences.setGamepadProfiles(library, true));
+    const auto paths = lfs::core::UserPaths::resolve();
+    const auto before = readPreferences(*paths);
+    struct SafeMode {
+        std::optional<std::string> previous;
+        SafeMode() {
+            if (const auto* value = std::getenv("LFS_SAFE_MODE")) previous = value;
+#ifdef _WIN32
+            (void)_putenv_s("LFS_SAFE_MODE", "1");
+#else
+            (void)setenv("LFS_SAFE_MODE", "1", 1);
+#endif
+        }
+        ~SafeMode() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_SAFE_MODE", previous ? previous->c_str() : "");
+#else
+            if (previous) (void)setenv("LFS_SAFE_MODE", previous->c_str(), 1);
+            else (void)unsetenv("LFS_SAFE_MODE");
+#endif
+        }
+    };
+    {
+        const SafeMode safe_mode;
+        EXPECT_FALSE(preferences.setGamepadProfiles(library, false));
+        EXPECT_FALSE(preferences.setGamepadNavigation(lfs::vis::input::GamepadNavigationSettings{}.json().dump()));
+        EXPECT_EQ(readPreferences(*paths), before);
+    }
+    EXPECT_EQ(json::parse(preferences.gamepadProfiles()), json::parse(library));
+    EXPECT_TRUE(json::parse(preferences.gamepadNavigation())["enabled"].get<bool>());
 }

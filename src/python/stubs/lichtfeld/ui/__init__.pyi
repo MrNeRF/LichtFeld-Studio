@@ -3148,3 +3148,16 @@ def get_gamepad_binding_catalog_json() -> str: ...
 def set_gamepad_profile_json(serialized: str) -> bool:
     """Validate and atomically save assignments, suspending navigation until rearmed."""
     ...
+
+
+def get_gamepad_profiles_json() -> str:
+    """Get the named controller layouts and optional model associations, independent of keymaps."""
+    ...
+
+def set_gamepad_profiles_json(serialized: str, expected: str = "") -> bool:
+    """Validate and atomically apply profiles without changing global enablement or device selection."""
+    ...
+
+def reset_gamepad_profiles() -> bool:
+    """Reset all joypad profiles/associations and disable navigation; keyboard profiles are preserved."""
+    ...

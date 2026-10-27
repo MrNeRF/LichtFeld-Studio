@@ -38,6 +38,9 @@ namespace lfs::vis::input {
                 return;
             Connection connection;
             connection.device.id = id;
+            char guid[33]{};
+            SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), guid, sizeof(guid));
+            connection.device.profile_key = guid;
             connection.device.generation = ++generation;
             if (const auto* name = SDL_GetJoystickNameForID(id))
                 connection.device.name = name;
@@ -223,6 +226,12 @@ namespace lfs::vis::input {
                 sample.labels[i] = SDL_GetGamepadButtonLabel(pad, button);
         }
         return previous != sample || std::any_of(sample.pressed.begin(), sample.pressed.end(), [](bool pressed) { return pressed; });
+    }
+
+    std::string GamepadService::navigationProfileKey() const {
+        for (const auto& connection : impl_->connections)
+            if (connection.device.id == impl_->state.navigation_selected) return connection.device.profile_key;
+        return {};
     }
 
     GamepadSnapshot GamepadService::snapshot() const {

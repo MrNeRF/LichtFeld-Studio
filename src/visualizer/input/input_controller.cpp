@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_controller.hpp"
+#include "input/gamepad_profiles.hpp"
 #include "core/collision.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -2663,6 +2664,19 @@ namespace lfs::vis {
         return true;
     }
 
+    bool InputController::configureGamepadProfiles(const std::string& serialized, const bool disable, const std::string& expected) {
+        const auto profiles = input::GamepadProfiles::fromJson(nlohmann::json::parse(serialized));
+        auto settings = profiles.activeSettings(disable ? false : gamepad_settings_.enabled);
+        if (auto result = UserPreferences::instance().setGamepadProfiles(profiles.value.dump(), settings.enabled, expected); !result)
+            throw std::runtime_error(lfs::format_for_developer(result.error()));
+        suspendGamepadNavigation();
+        settings.revision = gamepad_settings_.revision + 1;
+        gamepad_settings_ = std::move(settings);
+        gamepad_configuration_error_.clear();
+        python::request_redraw();
+        return true;
+    }
+
     void InputController::stopGamepadMotion() {
         if (gamepad_owned_) {
             auto& target = *gamepad_motion_viewport_;
@@ -2706,6 +2720,28 @@ namespace lfs::vis {
     }
 
     bool InputController::updateGamepadNavigation(float delta_time) {
+        // Selection/generation is session-local. A remembered model only chooses
+        // settings; it never enables navigation or grants viewport ownership.
+        if (auto* window = services().windowOrNull()) {
+            const auto& sample = window->gamepads().navigationSample();
+            if (sample.id != gamepad_profile_device_ || sample.generation != gamepad_profile_generation_) {
+                gamepad_profile_device_ = sample.id;
+                gamepad_profile_generation_ = sample.generation;
+                suspendGamepadNavigation();
+                try {
+                    auto profiles = input::GamepadProfiles::fromJson(nlohmann::json::parse(UserPreferences::instance().gamepadProfiles()));
+                    const auto& links = profiles.value["device_profiles"];
+                    const auto match = links.find(window->gamepads().navigationProfileKey());
+                    if (match != links.end() && *match != profiles.value["active"]) {
+                        profiles.value["active"] = *match;
+                        configureGamepadProfiles(profiles.value.dump());
+                    }
+                } catch (const std::exception& error) {
+                    gamepad_configuration_error_ = error.what();
+                    LOG_WARN("Gamepad device profile was not loaded: {}", error.what());
+                }
+            }
+        }
         if (!gamepad_settings_.enabled) {
             stopGamepadMotion();
             return false;

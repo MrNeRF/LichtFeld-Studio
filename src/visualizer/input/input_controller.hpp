@@ -147,6 +147,7 @@ namespace lfs::vis {
         bool configureGamepadNavigation(input::GamepadNavigationSettings settings, SDL_JoystickID device);
         [[nodiscard]] const std::string& gamepadConfigurationError() const { return gamepad_configuration_error_; }
         void suspendGamepadNavigation();
+        bool configureGamepadProfiles(const std::string& serialized, bool disable = false, const std::string& expected = {});
         [[nodiscard]] const input::GamepadNavigationSettings& gamepadNavigationSettings() const { return gamepad_settings_; }
         [[nodiscard]] const char* gamepadNavigationStatus() const { return gamepad_settings_.enabled ? gamepad_session_.status() : "disabled"; }
         [[nodiscard]] SDL_JoystickID gamepadNavigationDevice() const;
@@ -225,6 +226,8 @@ namespace lfs::vis {
         input::GamepadNavigationSession gamepad_session_;
         uint64_t gamepad_click_epoch_ = 0;
         uint64_t gamepad_dialog_epoch_ = 0;
+        SDL_JoystickID gamepad_profile_device_ = 0;
+        uint64_t gamepad_profile_generation_ = 0;
         SplitViewPanelId gamepad_panel_ = SplitViewPanelId::Left;
         Viewport* gamepad_motion_viewport_ = nullptr; // same lifetime as the existing WASD/coast viewport references
         bool gamepad_owned_ = false;

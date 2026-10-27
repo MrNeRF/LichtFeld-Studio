@@ -255,3 +255,25 @@ TEST_F(GamepadServiceTest, ReconnectIsPreselectedButExplicitDeselectIsStableAcro
     EXPECT_NE(first, replacement);
     EXPECT_EQ(service.navigationSample().id, existing ? 0u : replacement);
 }
+
+TEST_F(GamepadServiceTest, ModelIdentitySurvivesReconnectAndIsSharedByIdenticalControllers) {
+    const auto first = attach();
+    pump();
+    ASSERT_TRUE(service.selectNavigation(first));
+    const auto key = service.navigationProfileKey();
+    ASSERT_EQ(key.size(), 32);
+    EXPECT_NE(key, std::string(32, '0'));
+    const auto second = attach();
+    pump();
+    ASSERT_TRUE(service.selectNavigation(second));
+    EXPECT_EQ(service.navigationProfileKey(), key);
+    ASSERT_TRUE(SDL_DetachVirtualJoystick(first));
+    ASSERT_TRUE(SDL_DetachVirtualJoystick(second));
+    pump();
+    EXPECT_TRUE(service.navigationProfileKey().empty());
+    const auto replacement = attach();
+    pump();
+    ASSERT_TRUE(service.selectNavigation(replacement));
+    EXPECT_NE(replacement, first);
+    EXPECT_EQ(service.navigationProfileKey(), key);
+}

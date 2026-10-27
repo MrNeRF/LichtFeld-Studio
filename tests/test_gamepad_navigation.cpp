@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/gamepad_navigation.hpp"
+#include "input/gamepad_profiles.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 #include <string_view>
@@ -408,4 +409,59 @@ TEST_F(NavigationTest, BlockingDialogBetweenFramesRequiresNeutralAgain) {
     sample.axes.fill(0);
     for (int i = 0; i < 3; ++i) tick();
     EXPECT_STREQ(session.status(), "ready");
+}
+
+TEST(GamepadProfiles, MigrationKeepsTuningAndModeOverridesButExcludesEnablement) {
+    using namespace lfs::vis::input;
+    GamepadNavigationSettings settings{true};
+    settings.move_speed = 2.7f;
+    settings.bindings.modes[2][0] = GamepadBinding{};
+    const auto profiles = GamepadProfiles::migrate(settings);
+    EXPECT_EQ(profiles.value["active"], "personal");
+    EXPECT_FALSE(profiles.value["profiles"][0]["settings"].contains("enabled"));
+    EXPECT_TRUE(profiles.value["device_profiles"].empty());
+    EXPECT_FALSE(profiles.activeSettings(false).enabled);
+    EXPECT_FLOAT_EQ(profiles.activeSettings(true).move_speed, 2.7f);
+    EXPECT_TRUE(profiles.activeSettings(true).bindings.modes[2][0].has_value());
+}
+
+TEST(GamepadProfiles, LibraryRejectsDuplicateIdentitiesNamesAndDanglingAssociations) {
+    using namespace lfs::vis::input;
+    const auto original = GamepadProfiles::migrate({}).value;
+    auto value = original;
+    value["profiles"].push_back(value["profiles"][0]);
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+    value["profiles"][1]["id"] = "second";
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+    value["profiles"][1]["name"] = "Second";
+    EXPECT_NO_THROW(GamepadProfiles::fromJson(value));
+    value["device_profiles"][std::string(32, 'a')] = "missing";
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+    value["device_profiles"] = {{"123", "personal"}};
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+    value = original;
+    value["profiles"][0]["settings"]["enabled"] = true;
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+    value = original;
+    value["schema_version"] = 2;
+    EXPECT_THROW(GamepadProfiles::fromJson(value), std::invalid_argument);
+}
+
+TEST(GamepadProfiles, EditsAndResetAreConfinedToActiveProfile) {
+    using namespace lfs::vis::input;
+    auto profiles = GamepadProfiles::migrate({});
+    auto other = profiles.value["profiles"][0];
+    other["id"] = "second";
+    other["name"] = "Second";
+    other["settings"]["move_speed"] = 3.0;
+    profiles.value["profiles"].push_back(other);
+    auto edited = profiles.activeSettings(true);
+    edited.look_speed = 2.1f;
+    profiles.updateActive(edited);
+    EXPECT_EQ(profiles.value["profiles"][1], other);
+    profiles.value["active"] = "second";
+    EXPECT_FLOAT_EQ(profiles.activeSettings(false).move_speed, 3.0f);
+    profiles.updateActive({});
+    EXPECT_FLOAT_EQ(profiles.value["profiles"][0]["settings"]["look_speed"].get<float>(), 2.1f);
+    EXPECT_EQ(GamepadProfiles::fromJson(profiles.value).value, profiles.value);
 }
