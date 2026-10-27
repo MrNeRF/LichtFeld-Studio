@@ -80,6 +80,15 @@ namespace lfs::vis::input {
             status_ = "suspended";
         }
 
+        // Temporary UI/app interruption: retain the deliberate viewport grant.
+        void pause() {
+            pending_ = pending_ || armed_;
+            armed_ = false;
+            neutral_seconds_ = 0;
+            action_down_.fill(false);
+            status_ = "suspended";
+        }
+
         [[nodiscard]] const char* status() const { return status_; }
         [[nodiscard]] bool awaitingNeutral() const { return pending_ && neutral_seconds_ > 0 && !armed_; }
 
@@ -116,10 +125,10 @@ namespace lfs::vis::input {
             }
             if (!context.supported_projection)
                 return blocked("projection");
-            if (!context.allowed || !context.target || !std::isfinite(delta_time) || delta_time <= 0)
+            if (!context.target)
                 return blocked("suspended");
             if (sample.id != id_ || sample.generation != generation_ ||
-                context.target != target_ || context.mode != mode_ || settings.revision != revision_) {
+                context.target != target_ || settings.revision != revision_) {
                 armed_ = pending_ = false;
                 neutral_seconds_ = 0;
                 id_ = sample.id;
@@ -128,6 +137,15 @@ namespace lfs::vis::input {
                 mode_ = context.mode;
                 revision_ = settings.revision;
                 action_down_.fill(false);
+            }
+            if (context.mode != mode_) {
+                pause();
+                mode_ = context.mode;
+            }
+            if (!context.allowed || !std::isfinite(delta_time) || delta_time <= 0) {
+                pause();
+                last_click_ = context.click_epoch;
+                return result;
             }
             if (context.click_epoch != last_click_) {
                 pending_ = true;

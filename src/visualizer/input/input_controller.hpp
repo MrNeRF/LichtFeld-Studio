@@ -215,13 +215,18 @@ namespace lfs::vis {
         void resetHome();
 
     private:
-        bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure);
+        bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure, Viewport* target = nullptr);
+        void pauseGamepadNavigation();
+        Viewport& gamepadViewport() const;
         bool updateGamepadNavigation(float delta_time);
         void stopGamepadMotion();
         input::GamepadNavigationSettings gamepad_settings_;
         std::string gamepad_configuration_error_;
         input::GamepadNavigationSession gamepad_session_;
         uint64_t gamepad_click_epoch_ = 0;
+        uint64_t gamepad_dialog_epoch_ = 0;
+        SplitViewPanelId gamepad_panel_ = SplitViewPanelId::Left;
+        Viewport* gamepad_motion_viewport_ = nullptr; // same lifetime as the existing WASD/coast viewport references
         bool gamepad_owned_ = false;
         bool gamepad_frame_demand_ = false;
         bool gamepad_click_candidate_ = false;

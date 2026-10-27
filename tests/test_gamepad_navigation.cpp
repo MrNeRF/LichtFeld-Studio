@@ -47,14 +47,13 @@ TEST_F(NavigationTest, ConnectionAndHeldSticksCannotArmWithoutViewportClickAndSt
     EXPECT_STREQ(session.status(), "ready");
 }
 
-TEST_F(NavigationTest, FocusAndTargetChangesRequireNewClick) {
+TEST_F(NavigationTest, TemporaryInterruptionRetainsAssignmentButTargetAndDeviceChangesRequireClick) {
     arm();
     context.allowed = false;
     EXPECT_FALSE(tick().active);
     context.allowed = true;
-    tick();
-    EXPECT_STREQ(session.status(), "viewport");
-    arm();
+    for (int i = 0; i < 3; ++i) tick();
+    EXPECT_STREQ(session.status(), "ready");
     context.target = 456;
     tick();
     EXPECT_STREQ(session.status(), "viewport");
@@ -67,12 +66,13 @@ TEST_F(NavigationTest, FocusAndTargetChangesRequireNewClick) {
     EXPECT_STREQ(session.status(), "no_device");
 }
 
-TEST_F(NavigationTest, ModeChangesAndExplicitSuspensionInvalidatePendingInput) {
+TEST_F(NavigationTest, ModeChangesRequireNeutralButExplicitSuspensionRevokesAssignment) {
     arm();
     context.mode = GamepadNavigationMode::Drone;
     EXPECT_FALSE(tick().active);
-    EXPECT_STREQ(session.status(), "viewport");
-    arm();
+    EXPECT_STREQ(session.status(), "neutral");
+    for (int i = 0; i < 2; ++i) tick();
+    EXPECT_STREQ(session.status(), "ready");
     session.suspend(context.click_epoch);
     sample.axes[SDL_GAMEPAD_AXIS_LEFTX] = 1;
     EXPECT_FALSE(tick().active);
@@ -322,9 +322,8 @@ TEST_F(NavigationTest, DeliberateControllerModeChangeRearmsOnlyAfterNeutralWitho
     arm();
     sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
     EXPECT_EQ(tick().navigation_step, 1);
-    session.suspend(context.click_epoch);
+    session.pause();
     context.mode = GamepadNavigationMode::Trackball;
-    ++context.click_epoch; // trusted mode command from the previously armed target
     for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "neutral");
     sample.buttons.fill(false);
@@ -360,4 +359,53 @@ TEST(GamepadModeCycle, OrthographicCyclesOnlySupportedModesAndFailureIsBounded) 
     int attempts = 0;
     EXPECT_FALSE(cycleGamepadNavigation(GamepadNavigationMode::Orbit, 1, false, [&](auto) { ++attempts; return false; }));
     EXPECT_EQ(attempts, 4);
+}
+
+TEST_F(NavigationTest, ModalPauseCannotQueueMovementOrShoulderCommands) {
+    arm();
+    context.allowed = false;
+    sample.axes[SDL_GAMEPAD_AXIS_LEFTX] = 1;
+    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    for (int i = 0; i < 5; ++i) EXPECT_FALSE(tick().active);
+    context.allowed = true;
+    for (int i = 0; i < 5; ++i) EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "neutral");
+    sample.axes.fill(0);
+    sample.buttons.fill(false);
+    sample.pressed[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    EXPECT_FALSE(tick().active);
+    sample.pressed.fill(false);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(tick().rendering_step, 0);
+    EXPECT_STREQ(session.status(), "ready");
+    sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
+    EXPECT_EQ(tick().rendering_step, 1);
+}
+
+TEST_F(NavigationTest, PauseDoesNotGrantAnUnassignedViewport) {
+    tick();
+    session.pause();
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "viewport");
+}
+
+TEST_F(NavigationTest, ReconnectDuringPauseRevokesPreviousGrant) {
+    arm();
+    context.allowed = false;
+    tick();
+    ++sample.generation;
+    tick();
+    context.allowed = true;
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "viewport");
+    arm();
+}
+
+TEST_F(NavigationTest, BlockingDialogBetweenFramesRequiresNeutralAgain) {
+    arm();
+    session.pause(); // native picker opened and closed while the UI loop was blocked
+    sample.axes[SDL_GAMEPAD_AXIS_RIGHTX] = 0.9f;
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    sample.axes.fill(0);
+    for (int i = 0; i < 3; ++i) tick();
+    EXPECT_STREQ(session.status(), "ready");
 }

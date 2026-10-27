@@ -34,6 +34,12 @@ namespace lfs::vis::gui {
     namespace {
 
         std::atomic_uint native_dialog_block_count{0};
+        std::atomic_uint native_dialog_active_count{0};
+        std::atomic_uint64_t native_dialog_epoch{0};
+        struct NativeDialogActivity {
+            NativeDialogActivity() { ++native_dialog_active_count; ++native_dialog_epoch; }
+            ~NativeDialogActivity() { --native_dialog_active_count; ++native_dialog_epoch; }
+        };
         thread_local bool native_dialog_block_attempted = false;
 
         enum class DialogKind : uint8_t {
@@ -350,6 +356,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
+            const NativeDialogActivity activity;
             const FilterListStorage filters(request.filters);
             const std::filesystem::path defaultDirectory =
                 normalizeDefaultDirectory(request.default_path);
@@ -434,6 +441,7 @@ namespace lfs::vis::gui {
             if (!ensureDialogBackendInitialized())
                 return false;
 
+            const NativeDialogActivity activity;
             const FilterListStorage filters(request.filters);
             const std::filesystem::path default_directory = normalizeDefaultDirectory(request.default_path);
             const std::string default_directory_utf8 =
@@ -572,6 +580,7 @@ namespace lfs::vis::gui {
                 return {};
             }
 
+            const NativeDialogActivity activity;
             const char* const acceptLabel =
                 action == GTK_FILE_CHOOSER_ACTION_OPEN ? "_Open" : "_Select";
             GtkWidget* const dialog = gtk_file_chooser_dialog_new(
@@ -627,6 +636,9 @@ namespace lfs::vis::gui {
     void warmupNativeFileDialogBackend() {
         (void)ensureDialogBackendInitialized();
     }
+
+    bool nativeFileDialogActive() noexcept { return native_dialog_active_count.load() != 0; }
+    uint64_t nativeFileDialogEpoch() noexcept { return native_dialog_epoch.load(); }
 
     ScopedNativeFileDialogBlock::ScopedNativeFileDialogBlock() noexcept {
         if (native_dialog_block_count.fetch_add(1, std::memory_order_acq_rel) == 0)

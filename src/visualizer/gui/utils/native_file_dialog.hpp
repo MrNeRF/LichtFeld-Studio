@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -18,6 +19,9 @@ namespace lfs::vis::gui {
         ScopedNativeFileDialogBlock(const ScopedNativeFileDialogBlock&) = delete;
         ScopedNativeFileDialogBlock& operator=(const ScopedNativeFileDialogBlock&) = delete;
     };
+
+    LFS_VIS_API bool nativeFileDialogActive() noexcept;
+    LFS_VIS_API uint64_t nativeFileDialogEpoch() noexcept;
 
     LFS_VIS_API bool nativeFileDialogsBlocked() noexcept;
     LFS_VIS_API bool nativeFileDialogAttempted() noexcept;
