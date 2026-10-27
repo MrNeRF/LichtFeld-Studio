@@ -109,6 +109,7 @@ jobs:
             --output-on-failure --no-tests=error -L cpu
 
   build-ubuntu:
+    needs: hip-native-changes
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
     container:
@@ -367,6 +368,42 @@ jobs:
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+
+      # Reuse the Release job's dependencies; this is the real Core adapter,
+      # not the isolated SDK-only module. No GPU execution is requested.
+      - name: Cache HIP adapter SDK downloads
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: hip-adapter-sdk-${{ runner.os }}-${{ hashFiles('cmake/hip-native/ci-requirements.txt') }}
+
+      - name: Install pinned SDK for the HIP Tensor adapter
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hip-adapter-sdk"
+          "$RUNNER_TEMP/hip-adapter-sdk/bin/python" -m pip install -r cmake/hip-native/ci-requirements.txt
+          sdk_root="$("$RUNNER_TEMP/hip-adapter-sdk/bin/rocm-sdk" path --root)"
+          echo "LFS_CI_HIP_ROOT=$sdk_root" >> "$GITHUB_ENV"
+
+      - name: Compile HIP Tensor facade and run CPU contracts
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        env:
+          HIP_VISIBLE_DEVICES: '-1'
+          ROCR_VISIBLE_DEVICES: '-1'
+          CUDA_VISIBLE_DEVICES: ''
+        run: |
+          python3 tools/ci_retry_configure.py -- cmake -S . -B build-hip-adapter -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVCPKG_INSTALLED_DIR="$PWD/build/vcpkg_installed" \
+            -DVCPKG_MANIFEST_INSTALL=OFF \
+            -DLFS_ENABLE_CUDA=OFF -DLFS_TENSOR_HIP=ON -DLFS_BUILD_TRAINER=OFF \
+            -DLFS_HIP_ROOT="$LFS_CI_HIP_ROOT" -DLFS_HIP_ARCHITECTURE=gfx1150 \
+            -DBUILD_PYTHON_STUBS=OFF \
+            -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF
+          cmake --build build-hip-adapter --target tensor_operation_contracts tensor_binding_contracts --parallel 2
+          ctest --test-dir build-hip-adapter --output-on-failure --no-tests=error \
+            -R '^(TensorOperationContracts[.](CPU|Runner)|TensorPythonBindings[.]CPU)$'
 
   idle-e2e:
     name: GPU idle E2E (optional)

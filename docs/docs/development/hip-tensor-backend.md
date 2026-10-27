@@ -50,6 +50,9 @@ to a different GPU or CPU backend.
 
 The adapter owns one nonblocking HIP queue for the selected device and serializes
 host submissions. It rejects CUDA streams and foreign storage before dispatch.
+Checked index and mask-cardinality failures have distinct private error codes.
+They are reported after synchronization; queue destruction logs them and releases
+its lease. A native synchronization failure still retains the queue ownership.
 Each native call restores the calling thread's previous HIP device. Tensor
 readback, upload, fences, completion and timestamp facilities use HIP-owned
 resources; CUDA availability is irrelevant to those paths.
@@ -81,6 +84,14 @@ use. Borrowed raw views require a live allocation and retain the existing raw-vi
 lifetime contract. External-owner views retain the supplied owner and do not
 account the same borrowed allocation twice.
 
+Before native shutdown, cached buffers are released individually and removed
+from the cache only after successful release. A later teardown failure cannot
+leave cached handles referring to already destroyed native buffers.
+
+Python identifies HIP tensors as `hip`. Both DLPack protocol entry points reject
+HIP export explicitly; callers can use `.cpu()` before exporting. HIP storage is
+never passed to CUDA's pointer or stream APIs for DLPack export.
+
 The private C ABI is exact-versioned. The loader checks the revision before
 resolving the typed export inventory and accepts only absolute module paths.
 Windows uses Unicode paths and explicit module/default dependency directories;
@@ -108,3 +119,19 @@ The HIP compile CI is path-filtered, uses a pinned SDK and source-generation
 compiler, builds declared native targets, and checks module exports without a
 GPU. Windows hardware execution and Linux compilation cover different properties;
 compilation alone does not validate device results or driver behavior.
+The existing Linux Release job also configures the main tree with HIP enabled,
+CUDA and training disabled, reuses its installed dependencies, and builds the
+Tensor contracts plus the production Python Tensor binding contracts. It runs
+only their CPU checks on the hosted runner. The HIP hardware tests remain
+explicitly separate.
+
+`tensor_binding_contracts` builds a small test extension from the production
+`PyTensor` source. `TensorPythonBindings.CPU` checks the CPU bridge;
+`TensorPythonBindings.HIP` requires an AMD device and checks HIP identity and
+DLPack rejection, including empty tensors.
+
+For adapter cleanup fault tests, build the instrumented native module as described
+in `cmake/hip-native/README.md`, configure the main tree with
+`LFS_HIP_ADAPTER_FAULT_MODULE` pointing to that absolute module path, build
+`hip_adapter_recovery`, and run `HipAdapter.Recovery` on a compatible AMD device.
+These hooks exist only in the separately instrumented module.

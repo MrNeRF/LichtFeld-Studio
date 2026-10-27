@@ -169,7 +169,8 @@ enum LfsHipRandomKind { LFS_HIP_RANDOM_UNIFORM,
                         LFS_HIP_RANDOM_BERNOULLI,
                         LFS_HIP_RANDOM_INTEGER,
                         LFS_HIP_RANDOM_NORMAL };
-enum { LFS_HIP_ERROR_INVALID_INDEX = -2 };
+enum { LFS_HIP_ERROR_INVALID_INDEX = -2,
+       LFS_HIP_ERROR_MASK_COUNT = -3 };
 /* Invalid device indices are skipped and reported by context synchronization or
  * blocking host reads. Valid lanes may complete before that asynchronous error. */
 LFS_HIP_API int lfs_hip_clamp_i32(LfsHipContext*, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError*);

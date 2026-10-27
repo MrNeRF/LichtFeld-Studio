@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "matrix_product_runtime.hpp"
 #include "nn_api.h"
 namespace hip_nn {
     __device__ inline float activate(float x, uint32_t mode) {
@@ -39,15 +40,8 @@ namespace hip_nn {
         const size_t column = size_t(blockIdx.x) * 256 + threadIdx.x, row = blockIdx.y, batch = blockIdx.z;
         if (column >= n)
             return;
-        float value = 0;
         const size_t ai = batch * a_stride + row * k, wi = batch * weight_stride;
-        for (size_t t = 0; t < k; ++t) {
-            if constexpr (Masked) {
-                if (!validity[t * n + column])
-                    continue;
-            }
-            value = fmaf(float(a[ai + t]), float(w[wi + (Transpose ? column * k + t : t * n + column)]), value);
-        }
+        const float value = hip_matrix::dot<Transpose, Masked>(k ? a + ai : a, k ? w + wi : w, column, n, k, validity);
         linear_store(output, batch * output_stride + row * output_pitch + column, row_affine ? row : column, value, bias, scale, residual, activation);
     }
     template <class T, bool Transpose, class Weight = T, class Out = T, bool Masked = false>
@@ -55,39 +49,14 @@ namespace hip_nn {
                                  size_t m, size_t n, size_t k, size_t weight_stride, uint32_t activation, size_t output_pitch, bool row_affine, size_t a_stride, size_t output_stride, const uint8_t* validity = nullptr) {
         __shared__ float aa[16][64], bb[16][64];
         __shared__ uint8_t valid[Masked ? 16 : 1][Masked ? 64 : 1];
-        const unsigned tx = threadIdx.x, ty = threadIdx.y, lane = ty * 16 + tx;
+        const unsigned tx = threadIdx.x, ty = threadIdx.y;
         const size_t row = size_t(blockIdx.y) * 64, col = size_t(blockIdx.x) * 64, batch = blockIdx.z;
         if (k) {
             a += batch * a_stride;
             w += batch * weight_stride;
         }
         float sums[4][4]{};
-        for (size_t first = 0; first < k; first += 16) {
-            for (unsigned i = lane; i < 1024; i += 256) {
-                const size_t inner = i / 64, outer = i % 64;
-                aa[inner][outer] = row + outer < m && first + inner < k ? float(a[(row + outer) * k + first + inner]) : 0;
-                bb[inner][outer] = col + outer < n && first + inner < k ? float(w[Transpose ? (col + outer) * k + first + inner : (first + inner) * n + col + outer]) : 0;
-                if constexpr (Masked)
-                    valid[inner][outer] = col + outer < n && first + inner < k && validity[(first + inner) * n + col + outer];
-            }
-            __syncthreads();
-            for (unsigned inner = 0; inner < 16; ++inner) {
-                float av[4], bv[4];
-                for (unsigned i = 0; i < 4; ++i) {
-                    av[i] = aa[inner][ty + i * 16];
-                    bv[i] = bb[inner][tx + i * 16];
-                }
-                for (unsigned i = 0; i < 4; ++i)
-                    for (unsigned j = 0; j < 4; ++j) {
-                        if constexpr (Masked) {
-                            if (!valid[inner][tx + j * 16])
-                                continue;
-                        }
-                        sums[i][j] = fmaf(av[i], bv[j], sums[i][j]);
-                    }
-            }
-            __syncthreads();
-        }
+        hip_matrix::tile<Transpose, Masked>(a, w, m, n, k, row, col, aa, bb, sums, &valid[0][0], validity);
         for (unsigned i = 0; i < 4; ++i)
             for (unsigned j = 0; j < 4; ++j) {
                 const size_t r = row + ty + i * 16, c = col + tx + j * 16;

@@ -1700,6 +1700,9 @@ namespace lfs::core::internal {
 #ifdef LFS_HIP_EXPRESSION_JIT
         impl_->expressions.clear();
 #endif
+        // Release cached handles individually before native close can partially
+        // destroy its buffer registry and then fail on a later resource.
+        impl_->trim_cache();
         impl_->runtime->close();
         impl_->context = nullptr;
         impl_->active.store(false, std::memory_order_release);

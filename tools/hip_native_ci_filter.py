@@ -7,10 +7,15 @@ import re
 import subprocess
 
 
-PREFIXES = ("cmake/hip-native/", "cmake/hip-host/", "src/core/tensor/backend/hip/", "tests/hip/",
+PREFIXES = ("cmake/hip-native/", "cmake/hip-host/", "src/core/tensor/", "src/core/nn/", "src/core/include/core/", "tests/hip/",
             "src/core/tensor/backend/vulkan/shaders/", "src/core/cuda/undistort/",
             "src/core/cuda/lanczos_resize/")
 FILES = {
+    "CMakeLists.txt", "src/core/CMakeLists.txt", "src/core/error.cpp",
+    "src/core/memory_domain.cpp", "src/core/memory_pressure.cpp",
+    "tests/TensorOperationContracts.cmake", "tests/python_tensor_contracts.cpp", "tests/test_tensor_operation_contracts.cpp",
+    "tests/test_tensor_backend_semantics.cpp", "tests/tensor_test_support.hpp",
+    "src/python/lfs/py_tensor.cpp", "vcpkg.json", "vcpkg-configuration.json",
     "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",

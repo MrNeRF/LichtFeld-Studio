@@ -65,6 +65,10 @@ class Gemm(c.Structure):
                 ("batch", c.c_uint64), ("m", c.c_uint64), ("n", c.c_uint64), ("k", c.c_uint64)]
 
 
+class Linear(c.Structure):
+    _fields_ = [(name, c.c_uint64) for name in ("batch", "m", "n", "k")] + [(name, c.c_uint32) for name in ("dtype", "transpose_b", "batched_b", "activation")]
+
+
 class Where(c.Structure):
     _fields_ = [("struct_bytes", c.c_uint32), ("dtype", c.c_uint32),
                 ("condition", Layout), ("x", Layout), ("y", Layout), ("output", Layout)]
@@ -127,6 +131,7 @@ class TensorOperations(native.RuntimeContract):
             "index_update": [P, View, View, View, c.POINTER(IndexUpdate), E],
             "index_fill": [P, View, View, c.POINTER(IndexFill), E],
             "gemm_f32": [P, View, View, View, View, c.POINTER(Gemm), E],
+            "nn_linear": [P, c.POINTER(View), View, c.POINTER(Linear), E],
             "cdist_f32": [P, View, View, View, Z, Z, Z, c.c_float, E],
             "memory_info": [P, c.POINTER(MemoryInfo), E],
             "trim_workspace": [P, E],
@@ -760,13 +765,13 @@ class TensorOperations(native.RuntimeContract):
             source = self.tensor(context, [7])
             self.checked("masked_scatter", context, output, mask, source, 0, 3, 1)
             self.checked("readback_enqueue", context, slot, output.buffer, 0, 12)
-            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -1)
+            self.assertEqual(self.reject("readback_wait", context, slot).native_code, -3)
             destination, ready = (c.c_float * 3)(-7, -8, -9), c.c_int32(9)
-            self.assertEqual(self.reject("readback_poll", context, slot, destination, 12, c.byref(ready)).native_code, -1)
+            self.assertEqual(self.reject("readback_poll", context, slot, destination, 12, c.byref(ready)).native_code, -3)
             self.assertEqual(ready.value, 0)
             self.assertEqual(list(destination), [-7, -8, -9])
-            self.assertEqual(self.reject("context_synchronize", context).native_code, -1)
-            self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -1)
+            self.assertEqual(self.reject("context_synchronize", context).native_code, -3)
+            self.assertEqual(self.reject("readback_poll", context, slot, None, 0, c.byref(ready)).native_code, -3)
 
     def test_empty_readback_and_ordering_marker_capture_index_errors(self):
         for marker in (False, True):
@@ -920,6 +925,39 @@ class TensorOperations(native.RuntimeContract):
             a, b, output = self.tensor(context, [0, 0, 3, 4]), self.tensor(context, [0, 4]), self.tensor(context, [99, 99])
             self.checked("cdist_f32", context, a, b, output, 2, 1, 2, 2)
             self.assertEqual(self.read(context, output, 2), [4, 3])
+
+    def test_nn_linear_shared_product_preserves_epilogues(self):
+        with self.resources() as context:
+            for dtype in (0, 1):
+                for m, n, k, batches in ((2, 3, 4, 2), (17, 19, 21, 1), (5, 7, 0, 1), (65, 67, 17, 1)):
+                    for transpose in (False, True):
+                        for activation in range(5):
+                            with self.subTest(dtype=dtype, m=m, transpose=transpose, activation=activation):
+                                batched = activation % 2
+                                a = [(i % 7 - 3) / 8 for i in range(batches*m*k)]
+                                b = [(i % 5 - 2) / 8 for i in range((batches if batched else 1)*k*n)]
+                                bias = [(i % 3 - 1) / 8 for i in range(n)]
+                                scale = [(i % 3 + 1) / 4 for i in range(n)]
+                                residual = [(i % 5 - 2) / 8 for i in range(batches*m*n)]
+                                inputs = (View * 5)(self.tensor(context, a, dtype), self.tensor(context, b, dtype),
+                                    self.tensor(context, bias, dtype), self.tensor(context, scale, dtype), self.tensor(context, residual, dtype))
+                                output = self.tensor(context, [99]*(batches*m*n), dtype)
+                                descriptor = Linear(batches,m,n,k,dtype,transpose,batched,activation)
+                                self.checked("nn_linear",context,inputs,output,c.byref(descriptor))
+                                expected=[]
+                                for batch in range(batches):
+                                    for row in range(m):
+                                        for col in range(n):
+                                            value=sum(a[(batch*m+row)*k+i]*b[(batch if batched else 0)*k*n+(col*k+i if transpose else i*n+col)] for i in range(k))+bias[col]
+                                            if activation==1: value=max(0,value)
+                                            elif activation==2: value=.5*value*(1+math.tanh(.7978845608028654*(value+.044715*value**3)))
+                                            elif activation==3: value=.5*value*(1+math.erf(value/math.sqrt(2)))
+                                            elif activation==4: value=value/(1+math.exp(-value))
+                                            expected.append(value*scale[col]+residual[(batch*m+row)*n+col])
+                                result=self.read(context,output,len(expected),dtype)
+                                tolerance=0.002 if dtype else 0.00001
+                                for actual,reference in zip(result,expected):
+                                    self.assertAlmostEqual(actual,reference,delta=tolerance*max(1,abs(reference)))
 
 
 class TensorFaultRecovery(TensorOperations):

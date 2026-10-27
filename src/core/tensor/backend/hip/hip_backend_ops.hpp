@@ -17,6 +17,9 @@ namespace lfs::core::internal {
         int native_code;
         HipBackendError(int code, const std::string& message)
             : std::runtime_error(message), native_code(code) {}
+        bool checked_execution_error() const noexcept {
+            return native_code == LFS_HIP_ERROR_INVALID_INDEX || native_code == LFS_HIP_ERROR_MASK_COUNT;
+        }
     };
     struct ExpressionCacheStats;
     LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
@@ -67,9 +70,9 @@ namespace lfs::core::internal {
     };
     class HipBackendOps final : public GpuBackendOps {
     public:
-        HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
+        LFS_CORE_API HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
         ~HipBackendOps() override;
-        void ensure_initialized();
+        LFS_CORE_API void ensure_initialized();
         std::unique_ptr<HipUploadBuffer> create_upload_buffer();
         std::unique_ptr<HipFence> create_fence();
         std::unique_ptr<HipTimestamps> create_timestamps(size_t count);

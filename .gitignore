@@ -53,6 +53,7 @@ tests/data/nn/*
 !src/python/scripts/manage_stubs.py
 !tests/real_bicycle_sh_degree_training.py
 !tests/python/**/*.py
+!tests/hip/test_python_tensor_bindings.py
 !tests/media/test_fixture_preparation.py
 !tests/media/source_exif_fixture.py
 !tests/media/test_extraction_contracts.py

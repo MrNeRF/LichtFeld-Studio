@@ -75,6 +75,9 @@ namespace {
     struct InvalidIndex : std::invalid_argument {
         using std::invalid_argument::invalid_argument;
     };
+    struct InvalidMaskCount : std::invalid_argument {
+        using std::invalid_argument::invalid_argument;
+    };
 
     void check(hipError_t status) {
         if (status != hipSuccess)
@@ -103,7 +106,7 @@ namespace {
     }
     void check_execution_error(uint32_t invalid) {
         if (invalid & 2u)
-            throw std::invalid_argument("HIP masked scatter source count does not match mask");
+            throw InvalidMaskCount("HIP masked scatter source count does not match mask");
         if (invalid & 1u)
             throw InvalidIndex("HIP index is negative or outside its extent");
     }
@@ -144,6 +147,12 @@ namespace {
         } catch (const HipFailure& failure) {
             if (error) {
                 error->native_code = static_cast<int32_t>(failure.code);
+                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
+            }
+            return 1;
+        } catch (const InvalidMaskCount& failure) {
+            if (error) {
+                error->native_code = LFS_HIP_ERROR_MASK_COUNT;
                 std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
             }
             return 1;

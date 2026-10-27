@@ -239,6 +239,26 @@ namespace {
 #ifdef LFS_TENSOR_HIP
     class HipReadbackSnapshots : public lfs::test::TensorBackendContract {};
 
+    TEST_P(HipReadbackSnapshots, QueueDestructionReleasesUnconsumedExecutionFaults) {
+        for (const int mode : {0, 1, 2}) {
+            SCOPED_TRACE(mode);
+            {
+                const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+                const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+                Tensor invalid;
+                TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+                if (mode)
+                    (void)queue.execute([&] { invalid = input.index_select(0, indices); });
+                else
+                    invalid = input.index_select(0, indices);
+                // Mode 2 consumes the context fault, leaving only last.wait() to fail.
+                if (mode == 2)
+                    EXPECT_ANY_THROW(queue.wait());
+            }
+            EXPECT_TRUE(tensor_backend_selftest(*GetParam().backend));
+        }
+    }
+
     TEST_P(HipReadbackSnapshots, EmptyBufferedReadbackRetainsExecutionFault) {
         const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
         const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());

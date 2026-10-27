@@ -1185,6 +1185,17 @@ namespace lfs::core {
                 wait();
 #endif
             impl_->last.wait();
+#ifdef LFS_TENSOR_HIP
+        } catch (const internal::HipBackendError& e) {
+            if (impl_->backend == GpuBackend::HIP && e.checked_execution_error()) {
+                // These errors are reported only after the native work drained.
+                // The lease and saved completion can therefore be destroyed.
+                LOG_ERROR("HIP tensor queue completed with an execution error: {}", e.what());
+            } else {
+                LOG_ERROR("Tensor queue retained after incomplete work: {}", e.what());
+                (void)impl_.release();
+            }
+#endif
         } catch (const std::exception& e) {
             LOG_ERROR("Tensor queue retained after incomplete work: {}", e.what());
             (void)impl_.release();

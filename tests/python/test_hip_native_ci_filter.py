@@ -45,7 +45,10 @@ class HipCiFilter(unittest.TestCase):
         self.assertFalse(selector.needs_compile(self.repo, "pull_request", self.base, self.commit()))
 
     def test_direct_and_supporting_changes_require_sdk(self):
-        for path in ("src/core/tensor/backend/hip/runtime.hip", "cmake/hip-native/ci-requirements.txt",
+        for path in ("src/core/tensor/tensor_upload.cpp", "src/core/tensor/expression_program.cpp",
+                     "src/core/include/core/tensor.hpp", "src/core/CMakeLists.txt",
+                     "src/python/lfs/py_tensor.cpp", "tests/TensorOperationContracts.cmake",
+                     "src/core/tensor/backend/hip/runtime.hip", "cmake/hip-native/ci-requirements.txt",
                      "tests/hip/test_native_runtime.py", "cmake/HipArchitectures.cmake",
                      "cmake/HipOffloadCompression.cmake", ".github/workflows/ubuntu.yml",
                      "tools/hip_native_ci_filter.py", "tests/python/test_hip_native_ci_filter.py",

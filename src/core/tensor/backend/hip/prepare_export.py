@@ -61,6 +61,7 @@ def expand(path,seen):
             text=text[:body]+'{ precise float value = a '+op+' b; return value; }'+text[end:]
     return re.sub(r'^\s*#include "([^"]+)"',lambda m:expand(path.parent/m[1],seen),text,flags=re.M)
 result='/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors\n * SPDX-License-Identifier: GPL-3.0-or-later */\n#pragma once\n'
+result+='namespace hip_export_common {\n'+prelude+'\n}\n'
 for name in ('export_kmeans','export_kmeans_accumulate','export_kmeans_group','export_radix','export_morton','export_decimate','export_decimate_cost','export_decimate_merge','point_raster'):
     source=expand(a.source/(name+'.slang'),set())
     token='spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); }'
@@ -84,5 +85,5 @@ for name in ('export_kmeans','export_kmeans_accumulate','export_kmeans_group','e
     unknown=set(re.findall(r'\b(?:F32|I32|U32|I64|U64)_[A-Za-z0-9_]+',text))-{'F32_asuint','F32_fma','F32_min','F32_max','F32_abs','F32_exp','F32_log','F32_sqrt','F32_pow','F32_round','F32_isfinite','F32_isinf','F32_isnan','U32_asfloat','U32_min','I32_max','I32_min','F32_ceil','F32_asin','F32_atan2'}
     if unknown:raise RuntimeError('Missing export intrinsic: '+str(unknown))
     text=re.sub(r'((?:__device__|__global__)[^;{}]*\{)',r'\1\n#pragma clang fp contract(off)\n',text)
-    result+='\nnamespace hip_'+name+' {\n'+prelude+text+'\n}\n'
+    result+='\nnamespace hip_'+name+' {\n'+'using namespace hip_export_common;\n'+text+'\n}\n'
 a.output.write_text(result,encoding='utf-8')
