@@ -1,12 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "collision_fixture.hpp"
-#include "cuda_backend_test.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "io/project_document.hpp"
@@ -15,7 +15,6 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include <cuda_runtime.h>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
