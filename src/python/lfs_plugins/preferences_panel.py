@@ -1833,7 +1833,7 @@ class PreferencesPanel(Panel):
             if section in ("input", "input_shortcuts"):
                 self._keymap.reset_to_default()
             if section in ("input", "input_gamepad"):
-                self._gamepad_test.deactivate()
+                self._gamepad_test.deactivate(release_discovery=False)
                 reset_error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
             if section != "input" and section != "input_navigation":
                 self._refresh_selection()

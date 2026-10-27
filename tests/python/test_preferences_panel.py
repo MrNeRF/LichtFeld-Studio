@@ -1369,6 +1369,55 @@ def test_input_page_reset_does_not_reset_other_pages(preferences_panel_module, p
     assert state.navigation_speed == (10 if page == "navigation" else 73)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("section", ["input_gamepad", "input"])
+def test_gamepad_reset_preserves_second_controller_and_discovery(preferences_panel_module, monkeypatch, enabled, section):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    owner = panel._gamepad_test
+    navigation = dict(enabled=enabled, selected=22, dead_zone=.3, look_speed=2., move_speed=3.)
+    discovery = []
+    state = dict(available=True, selected=0, devices=[
+        dict(id=11, name="Pad", mapped=True), dict(id=22, name="Pad", mapped=True)])
+
+    def active(value):
+        discovery.append(value)
+        state["available"] = value or navigation["enabled"]
+        if not state["available"]:
+            navigation["selected"] = 0
+
+    def configure(enabled, selected, dead_zone, look_speed, move_speed):
+        navigation.update(enabled=enabled, selected=selected if state["available"] else 0,
+                          dead_zone=dead_zone, look_speed=look_speed, move_speed=move_speed)
+        return True
+
+    def reset_library():
+        return configure(False, navigation["selected"], .15, 1.5, 1.)
+
+    for name, value in dict(set_gamepad_test_active=active,
+                            get_gamepad_test_state=lambda: dict(state),
+                            get_gamepad_navigation_state=lambda: dict(navigation),
+                            set_gamepad_navigation=configure,
+                            set_gamepad_profile_json=lambda _value: True,
+                            get_gamepad_default_profile_json=lambda: "{}",
+                            reset_gamepad_profiles=reset_library).items():
+        monkeypatch.setattr(module.lf.ui, name, value, raising=False)
+    owner.handle = SimpleNamespace(dirty=lambda _name: None, update_record_list=lambda *_args: None)
+    owner.activate()
+    owner.sync()
+    panel._refresh_selection = lambda: None
+    assert panel._reset_section(section) is None
+    owner.activate()
+    owner.sync()
+    assert navigation["selected"] == owner.navigation["selected"] == 22
+    assert navigation["enabled"] is False
+    assert (navigation["dead_zone"], navigation["look_speed"], navigation["move_speed"]) == (.15, 1.5, 1.)
+    assert discovery == [True]
+    panel.on_visibility_changed(False)
+    assert discovery == [True, False]
+    assert navigation["selected"] == 0
+
+
 def test_shortcut_search_keeps_matching_sections_and_typed_bindings(preferences_panel_module):
     module, _state = preferences_panel_module
     keymap = module.PreferencesPanel()._keymap
