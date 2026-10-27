@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "geometry/apriltag_scaling.hpp"
+#include "core/distortion_model.hpp"
 #include "core/utc_time.hpp"
 
 #include <algorithm>
@@ -27,110 +28,6 @@ namespace lfs::geometry::apriltag {
 
         [[nodiscard]] bool isFiniteVec3(const glm::dvec3& v) noexcept {
             return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-        }
-
-        void applyPinholeDistortion(
-            const double x,
-            const double y,
-            const std::span<const double> dist,
-            double& dx,
-            double& dy) noexcept {
-            const double r2 = x * x + y * y;
-            const double r4 = r2 * r2;
-            const double r6 = r4 * r2;
-
-            const double k1 = dist.size() > 0 ? dist[0] : 0.0;
-            const double k2 = dist.size() > 1 ? dist[1] : 0.0;
-            const double k3 = dist.size() > 2 ? dist[2] : 0.0;
-            const double numerator = 1.0 + k1 * r2 + k2 * r4 + k3 * r6;
-            double radial = numerator;
-            if (dist.size() >= 6) {
-                const double denominator = 1.0 + dist[3] * r2 + dist[4] * r4 + dist[5] * r6;
-                if (std::abs(denominator) > kEpsilon) {
-                    radial = numerator / denominator;
-                }
-            }
-
-            const std::size_t tangential_offset = dist.size() >= 6 ? 6 : 3;
-            const double p1 = dist.size() > tangential_offset ? dist[tangential_offset] : 0.0;
-            const double p2 = dist.size() > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0;
-
-            dx = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x);
-            dy = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
-        }
-
-        void applyFisheyeDistortion(
-            const double x,
-            const double y,
-            const std::span<const double> dist,
-            double& dx,
-            double& dy) noexcept {
-            const double r = std::sqrt(x * x + y * y);
-            if (r < 1e-8) {
-                dx = x;
-                dy = y;
-                return;
-            }
-
-            const double theta = std::atan(r);
-            const double theta2 = theta * theta;
-            const double theta4 = theta2 * theta2;
-            const double theta6 = theta4 * theta2;
-            const double theta8 = theta4 * theta4;
-
-            const double k1 = dist.size() > 0 ? dist[0] : 0.0;
-            const double k2 = dist.size() > 1 ? dist[1] : 0.0;
-            const double k3 = dist.size() > 2 ? dist[2] : 0.0;
-            const double k4 = dist.size() > 3 ? dist[3] : 0.0;
-
-            const double theta_d = theta * (1.0 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-            const double scale = theta_d / r;
-            dx = x * scale;
-            dy = y * scale;
-        }
-
-        void applyThinPrismFisheyeDistortion(
-            const double x,
-            const double y,
-            const std::span<const double> dist,
-            double& dx,
-            double& dy) noexcept {
-            const double r = std::sqrt(x * x + y * y);
-            if (r < 1e-8) {
-                dx = x;
-                dy = y;
-                return;
-            }
-
-            const double theta_over_r = std::atan(r) / r;
-            const double uu = x * theta_over_r;
-            const double vv = y * theta_over_r;
-
-            const double k1 = dist.size() > 0 ? dist[0] : 0.0;
-            const double k2 = dist.size() > 1 ? dist[1] : 0.0;
-            const double k3 = dist.size() > 2 ? dist[2] : 0.0;
-            const double k4 = dist.size() > 3 ? dist[3] : 0.0;
-            const double p1 = dist.size() > 4 ? dist[4] : 0.0;
-            const double p2 = dist.size() > 5 ? dist[5] : 0.0;
-            const double sx1 = dist.size() > 6 ? dist[6] : 0.0;
-            const double sx2 = dist.size() > 7 ? dist[7] : 0.0;
-            const double sy1 = dist.size() > 8 ? dist[8] : 0.0;
-            const double sy2 = dist.size() > 9 ? dist[9] : 0.0;
-
-            const double u2 = uu * uu;
-            const double uv = uu * vv;
-            const double v2 = vv * vv;
-            const double r2 = u2 + v2;
-            const double r4 = r2 * r2;
-            const double r6 = r4 * r2;
-            const double r8 = r4 * r4;
-
-            const double radial = k1 * r2 + k2 * r4 + k3 * r6 + k4 * r8;
-            const double tx = 2.0 * p1 * uv + p2 * (r2 + 2.0 * u2) + sx1 * r2 + sx2 * r4;
-            const double ty = 2.0 * p2 * uv + p1 * (r2 + 2.0 * v2) + sy1 * r2 + sy2 * r4;
-
-            dx = uu + uu * radial + tx;
-            dy = vv + vv * radial + ty;
         }
 
         [[nodiscard]] bool hasNonZeroDistortion(const std::span<const double> coeffs) noexcept {
@@ -223,20 +120,8 @@ namespace lfs::geometry::apriltag {
 
         double dx = normalized_xy.x;
         double dy = normalized_xy.y;
-        switch (model) {
-        case core::CameraModelType::PINHOLE:
-            applyPinholeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
-            break;
-        case core::CameraModelType::FISHEYE:
-            applyFisheyeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
-            break;
-        case core::CameraModelType::THIN_PRISM_FISHEYE:
-            applyThinPrismFisheyeDistortion(normalized_xy.x, normalized_xy.y, coeffs, dx, dy);
-            break;
-        case core::CameraModelType::ORTHO:
-        case core::CameraModelType::EQUIRECTANGULAR:
-            break;
-        }
+        core::detail::apply_distortion(normalized_xy.x, normalized_xy.y, model,
+                                       coeffs.data(), static_cast<int>(coeffs.size()), dx, dy);
         return {dx, dy};
     }
 
@@ -726,50 +611,59 @@ namespace lfs::geometry::apriltag {
             return rel_err <= rel_thresh || (abs_thresh > 0.0 && abs_err <= abs_thresh);
         };
 
-        std::vector<double> hypotheses;
-        hypotheses.reserve(valid_indices.size() * 2);
+        std::vector<double> candidates;
+        std::vector<std::pair<double, int>> endpoints;
+        candidates.reserve(valid_indices.size());
+        endpoints.reserve(valid_indices.size() * 2);
+        const auto scaleInterval = [&](const EvaluatedDistanceConstraint& eval) {
+            const double radius = std::max(rel_thresh * eval.candidate_scale,
+                                           abs_thresh / eval.unscaled_distance);
+            return std::pair{eval.candidate_scale - radius, eval.candidate_scale + radius};
+        };
         for (const std::size_t idx : valid_indices) {
-            hypotheses.push_back(result.evaluated_constraints[idx].candidate_scale);
-        }
-        if (valid_indices.size() <= 64) {
-            for (std::size_t i = 0; i < valid_indices.size(); ++i) {
-                for (std::size_t j = i + 1; j < valid_indices.size(); ++j) {
-                    const double s1 = result.evaluated_constraints[valid_indices[i]].candidate_scale;
-                    const double s2 = result.evaluated_constraints[valid_indices[j]].candidate_scale;
-                    hypotheses.push_back(0.5 * (s1 + s2));
-                }
-            }
-        }
-
-        double best_truncated_loss = std::numeric_limits<double>::infinity();
-        std::vector<std::size_t> best_inliers;
-
-        for (const double candidate_s : hypotheses) {
-            if (!std::isfinite(candidate_s) || candidate_s <= 1e-9) {
+            const auto& eval = result.evaluated_constraints[idx];
+            if (!std::isfinite(eval.candidate_scale))
                 continue;
+            candidates.push_back(eval.candidate_scale);
+            const auto [lower, upper] = scaleInterval(eval);
+            endpoints.emplace_back(lower, 1);
+            endpoints.emplace_back(upper, -1);
+        }
+        std::sort(candidates.begin(), candidates.end());
+        const double median = candidates.empty()
+                                  ? 0.0
+                                  : std::midpoint(candidates[(candidates.size() - 1) / 2], candidates[candidates.size() / 2]);
+        std::sort(endpoints.begin(), endpoints.end(), [](const auto& a, const auto& b) {
+            // Closed intervals: arrivals precede departures at a shared endpoint.
+            return a.first < b.first || (a.first == b.first && a.second > b.second);
+        });
+
+        int overlap = 0;
+        int best_overlap = 0;
+        double best_scale = 0.0;
+        double best_distance = std::numeric_limits<double>::infinity();
+        for (std::size_t i = 0; i + 1 < endpoints.size(); ++i) {
+            overlap += endpoints[i].second;
+            const double lower = std::max(endpoints[i].first, std::nextafter(1e-9, 1.0));
+            const double upper = endpoints[i + 1].first;
+            if (lower > upper)
+                continue;
+            const double scale = std::clamp(median, lower, upper);
+            const double distance = std::abs(scale - median);
+            // Break consensus ties by the interval nearest the median candidate.
+            if (overlap > best_overlap || (overlap == best_overlap && distance < best_distance)) {
+                best_overlap = overlap;
+                best_distance = distance;
+                best_scale = scale;
             }
+        }
 
-            std::vector<std::size_t> current_inliers;
-            double truncated_loss = 0.0;
-
-            for (const std::size_t idx : valid_indices) {
-                const auto& eval = result.evaluated_constraints[idx];
-                const double abs_err = std::abs(candidate_s * eval.unscaled_distance - eval.target_distance);
-                const double rel_err = abs_err / eval.target_distance;
-
-                if (isConstraintInlier(abs_err, rel_err)) {
-                    current_inliers.push_back(idx);
-                    truncated_loss += rel_err * rel_err;
-                } else {
-                    truncated_loss += rel_thresh * rel_thresh;
-                }
-            }
-
-            if (current_inliers.size() > best_inliers.size() ||
-                (current_inliers.size() == best_inliers.size() && truncated_loss < best_truncated_loss)) {
-                best_truncated_loss = truncated_loss;
-                best_inliers = std::move(current_inliers);
-            }
+        std::vector<std::size_t> best_inliers;
+        for (const std::size_t idx : valid_indices) {
+            const auto& eval = result.evaluated_constraints[idx];
+            const auto [lower, upper] = scaleInterval(eval);
+            if (std::isfinite(eval.candidate_scale) && lower <= best_scale && best_scale <= upper)
+                best_inliers.push_back(idx);
         }
 
         const auto refineScaleWls = [&](const std::span<const std::size_t> inlier_set) -> std::optional<double> {
@@ -793,6 +687,7 @@ namespace lfs::geometry::apriltag {
             return result;
         }
 
+        // Refit on the constraints that agree with the first fit, so one the fit rejects does not pull the scale.
         std::vector<std::size_t> polished_inliers;
         for (const std::size_t idx : valid_indices) {
             const auto& eval = result.evaluated_constraints[idx];
@@ -801,11 +696,8 @@ namespace lfs::geometry::apriltag {
                 polished_inliers.push_back(idx);
             }
         }
-        if (!polished_inliers.empty()) {
-            if (const auto second_pass = refineScaleWls(polished_inliers);
-                second_pass && *second_pass > 1e-9) {
-                refined_scale = second_pass;
-            }
+        if (const auto second_pass = refineScaleWls(polished_inliers); second_pass && *second_pass > 1e-9) {
+            refined_scale = second_pass;
         }
 
         const double final_scale = *refined_scale;

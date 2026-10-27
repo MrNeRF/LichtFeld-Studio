@@ -198,6 +198,19 @@ TEST(AprilTagScalingTest, LensDistortionRoundTripMatchesModels) {
     EXPECT_NEAR(tp_inv->y, pt.y, 1e-7);
 }
 
+TEST(AprilTagScalingTest, RationalPinholePreservesDenominatorAndRejectsSingularity) {
+    std::array<double, 6> coefficients{0.0, 0.0, 0.0, -0.5, 0.0, 0.0};
+    const auto model = lfs::core::CameraModelType::PINHOLE;
+    const auto projected = applyForwardDistortion({1.0, 0.0}, model, coefficients);
+    EXPECT_DOUBLE_EQ(projected.x, 2.0);
+    EXPECT_DOUBLE_EQ(projected.y, 0.0);
+    coefficients[3] = -1.0;
+    const auto singular = applyForwardDistortion({1.0, 0.0}, model, coefficients);
+    EXPECT_FALSE(std::isfinite(singular.x));
+    EXPECT_FALSE(std::isfinite(singular.y));
+    EXPECT_FALSE(invertDistortion({1.0, 0.0}, model, coefficients).has_value());
+}
+
 TEST(AprilTagScalingTest, TriangulatesMultiViewAndRejectsOutlierObservation) {
     const std::vector<std::pair<int, glm::dvec3>> ground_truth_tags = {
         {1, {-1.0, 0.2, 4.0}},
@@ -293,6 +306,65 @@ TEST(AprilTagScalingTest, RansacScaleSolverRejectsOutlierDistanceConstraints) {
     EXPECT_TRUE(res.evaluated_constraints[3].inlier);
     EXPECT_FALSE(res.evaluated_constraints[4].inlier);
     EXPECT_FALSE(res.evaluated_constraints[5].inlier);
+}
+
+TEST(AprilTagScalingTest, ScaleSweepFindsConsensusBetweenCandidates) {
+    const std::vector<TriangulatedTag3D> tags{
+        {.tag_id = 0, .position = {0, 0, 0}},
+        {.tag_id = 1, .position = {1, 0, 0}}};
+    for (const int count : {2, 66}) {
+        SCOPED_TRACE(count);
+        std::vector<TagDistanceConstraint> constraints;
+        for (int i = 0; i < count; ++i)
+            constraints.push_back({.tag_a = 0, .tag_b = 1, .target_distance = i % 2 ? 1.03 : 1.0});
+        ScaleSolverConfig config;
+        config.min_inliers = count;
+        config.min_inlier_ratio = 1.0;
+        for (const bool absolute : {false, true}) {
+            config.inlier_relative_threshold = absolute ? 1e-6 : 0.02;
+            config.inlier_absolute_threshold = absolute ? 0.02 : 0.0;
+            const auto result = solveGlobalScale(tags, constraints, config);
+            ASSERT_TRUE(result.success) << result.error_message;
+            EXPECT_EQ(result.inlier_count, count);
+            EXPECT_NEAR(result.scale_factor, (1.0 + 1.0 / 1.03) / (1.0 + 1.0 / (1.03 * 1.03)), 1e-12);
+        }
+    }
+}
+
+TEST(AprilTagScalingTest, ScaleSweepIncludesTouchingEndpoints) {
+    const std::vector<TriangulatedTag3D> tags{
+        {.tag_id = 0, .position = {0, 0, 0}},
+        {.tag_id = 1, .position = {1, 0, 0}}};
+    const std::vector<TagDistanceConstraint> constraints{
+        {.tag_a = 0, .tag_b = 1, .target_distance = 1.0},
+        {.tag_a = 0, .tag_b = 1, .target_distance = 3.0}};
+    ScaleSolverConfig config;
+    config.inlier_absolute_threshold = 1.0;
+    const auto result = solveGlobalScale(tags, constraints, config);
+    ASSERT_TRUE(result.success) << result.error_message;
+    // Both closed intervals meet at 2. The first fit uses both (1.2); the refit keeps only the first.
+    EXPECT_NEAR(result.scale_factor, 1.0, 1e-12);
+    EXPECT_EQ(result.inlier_count, 1);
+    EXPECT_FALSE(result.evaluated_constraints[1].inlier);
+}
+
+TEST(AprilTagScalingTest, ScaleSweepBreaksTiesByDistanceToMedian) {
+    const std::vector<TriangulatedTag3D> tags{
+        {.tag_id = 0, .position = {0, 0, 0}},
+        {.tag_id = 1, .position = {1, 0, 0}}};
+    std::vector<TagDistanceConstraint> constraints{
+        {.tag_a = 0, .tag_b = 1, .target_distance = 1.0},
+        {.tag_a = 0, .tag_b = 1, .target_distance = 1.0},
+        {.tag_a = 0, .tag_b = 1, .target_distance = 3.0},
+        {.tag_a = 0, .tag_b = 1, .target_distance = 3.0}};
+    for (const bool reverse : {false, true}) {
+        if (reverse)
+            std::reverse(constraints.begin(), constraints.end());
+        const auto result = solveGlobalScale(tags, constraints);
+        ASSERT_TRUE(result.success) << result.error_message;
+        EXPECT_NEAR(result.scale_factor, 3.0, 1e-12);
+        EXPECT_EQ(result.inlier_count, 2);
+    }
 }
 
 TEST(AprilTagScalingTest, EndToEndPhotogrammetricDetectionTriangulationAndRescaling) {
