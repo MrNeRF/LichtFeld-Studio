@@ -66,6 +66,8 @@ class GamepadBindingsSection:
         self._rows = None
         self.expanded_action = None
         self._scope_records = None
+        self._view_values = {}
+        self._rows_key = None
         self.catalog = json.loads(lf.ui.get_gamepad_binding_catalog_json())
         model.bind_record_list("gamepad_binding_rows")
         model.bind_record_list("gamepad_binding_scopes")
@@ -85,6 +87,9 @@ class GamepadBindingsSection:
         return lf.ui.tr(f"gamepad.binding.{key}")
 
     def profile_token(self):
+        state = getattr(lf.ui, "get_gamepad_navigation_state", None)
+        if state:
+            return state().get("profile_revision")
         getter = getattr(lf.ui, "get_gamepad_profiles_json", None)
         return getter() if getter else None
 
@@ -107,6 +112,8 @@ class GamepadBindingsSection:
             self.sync()
 
     def cancel(self):
+        if not self.capture and not self.message:
+            return
         if self.capture:
             lf.ui.set_gamepad_test_device(0)
         self.capture = None
@@ -115,9 +122,20 @@ class GamepadBindingsSection:
         self.handle.dirty("gamepad_binding_can_skip")
         self.handle.dirty("gamepad_binding_message")
 
-    def save(self, profile):
+    def save(self, profile, expected=None):
+        if expected is not None and not self.unchanged(expected):
+            return
         try:
-            if not lf.ui.set_gamepad_profile_json(json.dumps(profile)):
+            setter = getattr(lf.ui, "set_gamepad_bindings_json", None)
+            if setter:
+                saved = setter(json.dumps(profile["bindings"]), expected if expected is not None else self.profile_token())
+            else:
+                # Compatibility with older hosts: never restore stale global
+                # enablement or tuning from a modal's captured configuration.
+                current = self.profile()
+                current["bindings"] = profile["bindings"]
+                saved = lf.ui.set_gamepad_profile_json(json.dumps(current))
+            if not saved:
                 raise RuntimeError("Unavailable viewer")
             self.message = ""
         except (ValueError, RuntimeError):
@@ -135,7 +153,7 @@ class GamepadBindingsSection:
             target[action] = binding
         clashes = conflicts(profile, self.catalog)
         if not clashes:
-            self.save(profile)
+            self.save(profile, token)
             return
         label = self.tr("replace")
         detail = "\n".join(self.tr(mode) + ": " + self.tr(a if b == action else b) for mode, a, b in clashes)
@@ -145,10 +163,13 @@ class GamepadBindingsSection:
             for mode, a, b in clashes:
                 other = a if b == action else b
                 profile["bindings"].setdefault("modes", {}).setdefault(mode, {})[other] = dict(EMPTY)
-            self.save(profile)
+            self.save(profile, token)
         lf.ui.confirm_dialog(self.tr("conflict"), detail, [lf.ui.tr("common.cancel"), label], answer)
 
     def edit(self, action, operation):
+        flush = getattr(self.owner, "flush_tuning", None)
+        if flush:
+            flush()
         if action not in [a["id"] for a in self.catalog["actions"]]:
             return
         self.cancel()
@@ -168,6 +189,8 @@ class GamepadBindingsSection:
             if not identifier or not lf.ui.set_gamepad_test_device(identifier):
                 self.message = self.tr("select_device")
             else:
+                reader = getattr(lf.ui, "take_gamepad_test_state", None) or lf.ui.get_gamepad_test_state
+                self.owner.state = reader()
                 profile = self.profile()
                 current = profile["bindings"]["common"][action] if self.scope == "common" else effective(profile, self.scope, action)
                 self.capture = {"action": action, "id": identifier, "generation": None, "neutral": None,
@@ -189,7 +212,11 @@ class GamepadBindingsSection:
         capture = self.capture
         if not capture or not self.unchanged(capture.get("profile_token")):
             return
-        state = lf.ui.get_gamepad_test_state()
+        if self.owner.navigation.get("selected", 0) != capture["id"]:
+            self.cancel()
+            return
+        # The owner consumes diagnostic edges once and shares this snapshot.
+        state = self.owner.state
         if state.get("selected") != capture["id"] or (capture["generation"] is not None and state.get("generation") != capture["generation"]):
             self.cancel()
             return
@@ -247,7 +274,7 @@ class GamepadBindingsSection:
                 return
             self.cancel()
             self.expanded_action = None
-            self.save(shoulder_navigation_preset(self.profile(), self.catalog, scope))
+            self.save(shoulder_navigation_preset(self.profile(), self.catalog, scope), token)
         lf.ui.confirm_dialog(self.tr("shoulder_preset"),
                              self.tr("shoulder_preset_all" if scope == "common" else "shoulder_preset_mode"),
                              [lf.ui.tr("common.cancel"), label], answer)
@@ -269,7 +296,7 @@ class GamepadBindingsSection:
                 profile["bindings"].setdefault("modes", {})[scope] = {
                     a["id"]: copy.deepcopy(effective(defaults, scope, a["id"]))
                     for a in self.catalog["actions"] if scope in a["modes"]}
-            self.save(profile)
+            self.save(profile, token)
         lf.ui.confirm_dialog(label, self.tr("reset_all" if scope == "common" else "reset_mode"),
                              [lf.ui.tr("common.cancel"), label], answer)
 
@@ -279,6 +306,18 @@ class GamepadBindingsSection:
             self._scope_records = scopes
             self.handle.update_record_list("gamepad_binding_scopes", scopes)
         self.sample()
+        values = {"scope": self.scope, "message": self.message,
+                  "capturing": self.capture is not None,
+                  "can_skip": bool(self.capture and self.capture["phase"] == "negative")}
+        for key, value in values.items():
+            if self._view_values.get(key) != value:
+                self.handle.dirty("gamepad_binding_" + key)
+        self._view_values = values
+        revision = self.owner.navigation.get("profile_revision")
+        rows_key = (revision, self.scope, self.expanded_action, tuple(s["label"] for s in scopes))
+        if revision is not None and self._rows is not None and rows_key == self._rows_key:
+            return
+        self._rows_key = rows_key
         profile = self.profile()
         rows = []
         for action in self.catalog["actions"]:
@@ -299,5 +338,3 @@ class GamepadBindingsSection:
         if rows != self._rows:
             self._rows = rows
             self.handle.update_record_list("gamepad_binding_rows", rows)
-        for key in ("scope", "message", "capturing", "can_skip"):
-            self.handle.dirty("gamepad_binding_" + key)

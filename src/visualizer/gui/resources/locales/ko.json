@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "새 프로필",
   "gamepad.profile.copy_name": "{name} 복사본",
   "gamepad.profile.imported": "가져온 프로필",
-  "gamepad.profile.remember": "이 컨트롤러 모델에 이 프로필 사용",
+  "gamepad.profile.remember": "이 컨트롤러 모델의 설정 기억",
   "gamepad.profile.remember_help": "SDL에서 인식하는 컨트롤러 모델의 프로필을 기억합니다. 탐색을 활성화하거나 여러 컨트롤러 중 장치를 선택하지 않습니다.",
   "gamepad.profile.help": "변경 사항은 활성 프로필에 자동 저장됩니다. 키보드 및 마우스 프로필은 별개입니다.",
   "gamepad.profile.delete_confirm": "“{name}” 및 컨트롤러 연결 설정을 삭제할까요? 다른 프로필은 유지됩니다.",

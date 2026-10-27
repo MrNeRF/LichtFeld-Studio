@@ -5426,11 +5426,11 @@ namespace lfs::python {
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
 
-        m.def("get_gamepad_test_state", [] {
-            const auto state = invoke_on_viewer([] {
+        const auto gamepad_test_state = [](bool consume_presses) {
+            const auto state = invoke_on_viewer([consume_presses] {
                 if (get_visualizer())
                     if (auto* window = vis::services().windowOrNull())
-                        return window->gamepads().snapshot();
+                        return consume_presses ? window->gamepads().takeDiagnosticSnapshot() : window->gamepads().snapshot();
                 return vis::input::GamepadSnapshot{};
             }, vis::input::GamepadSnapshot{});
             nb::dict result;
@@ -5476,7 +5476,12 @@ namespace lfs::python {
             result["raw_buttons"] = raw_buttons;
             result["raw_pressed"] = raw_pressed;
             result["has_buttons"] = has_buttons;
-            return result; }, "Read connected controllers and the selected diagnostic sample; never moves the camera.");
+            return result;
+        };
+        m.def("get_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(false); },
+              "Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.");
+        m.def("take_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(true); },
+              "Read and consume diagnostic presses, independently of navigation commands.");
 
         m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
                                                                if (get_visualizer())
@@ -5564,6 +5569,19 @@ namespace lfs::python {
             }, std::string("{}"));
         });
         m.def("get_gamepad_default_profile_json", [] { return vis::input::GamepadNavigationSettings{}.json().dump(); });
+        m.def("set_gamepad_bindings_json", [](const std::string& serialized, uint64_t expected_revision) {
+            if (serialized.size() > 256 * 1024) throw nb::value_error("Gamepad bindings are too large");
+            const auto bindings = vis::input::GamepadBindings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([bindings, expected_revision] {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                auto settings = controller->gamepadNavigationSettings();
+                if (settings.revision != expected_revision)
+                    throw std::runtime_error("Gamepad configuration changed during editing");
+                settings.bindings = bindings;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false);
+        }, nb::arg("serialized"), nb::arg("expected_revision"), "Atomically edit bindings without replacing enablement or tuning.");
         m.def("set_gamepad_profile_json", [](const std::string& serialized) {
             const auto settings = vis::input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(serialized));
             return invoke_on_viewer([settings] {

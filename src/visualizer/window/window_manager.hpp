@@ -134,6 +134,7 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         input::GamepadService gamepads_;
+        input::GamepadSample gamepad_wake_sample_;
         std::unique_ptr<VulkanContext> vulkan_context_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;

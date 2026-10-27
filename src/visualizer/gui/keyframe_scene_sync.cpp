@@ -75,6 +75,34 @@ namespace lfs::vis::gui {
         }
     }
 
+    bool KeyframeSceneSync::goToKeyframe(size_t index, Viewport* target) {
+        auto& timeline = controller_.timeline();
+        if (index >= timeline.size())
+            return false;
+
+        if (!controller_.selectKeyframe(index))
+            return false;
+        if (auto* sm = viewer_->getSceneManager())
+            sm->clearSelection();
+
+        const auto* kf = timeline.getKeyframe(index);
+        if (!kf)
+            return false;
+
+        controller_.seek(kf->time);
+
+        auto& vp = target ? *target : viewer_->getViewport();
+        vp.setViewMatrix(glm::mat3_cast(kf->rotation), kf->position);
+
+        if (auto* rm = viewer_->getRenderingManager()) {
+            rm->setFocalLength(kf->focal_length_mm);
+            rm->markCameraPoseChanged();
+        }
+
+        emitNodeSelectedForKeyframe(index);
+        return true;
+    }
+
     void KeyframeSceneSync::setupEvents() {
         using namespace lfs::core::events;
 
@@ -83,30 +111,7 @@ namespace lfs::vis::gui {
         });
 
         cmd::SequencerGoToKeyframe::when([this](const auto& e) {
-            auto& timeline = controller_.timeline();
-            if (e.keyframe_index >= timeline.size())
-                return;
-
-            if (!controller_.selectKeyframe(e.keyframe_index))
-                return;
-            if (auto* sm = viewer_->getSceneManager())
-                sm->clearSelection();
-
-            const auto* kf = timeline.getKeyframe(e.keyframe_index);
-            if (!kf)
-                return;
-
-            controller_.seek(kf->time);
-
-            auto& vp = viewer_->getViewport();
-            vp.setViewMatrix(glm::mat3_cast(kf->rotation), kf->position);
-
-            if (auto* rm = viewer_->getRenderingManager()) {
-                rm->setFocalLength(kf->focal_length_mm);
-                rm->markCameraPoseChanged();
-            }
-
-            emitNodeSelectedForKeyframe(e.keyframe_index);
+            goToKeyframe(e.keyframe_index);
         });
 
         cmd::SequencerSelectKeyframe::when([this](const auto& e) {

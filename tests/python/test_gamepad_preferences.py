@@ -45,6 +45,26 @@ def test_empty_state_and_no_calls_to_camera_api(section):
     assert dirty == []
 
 
+def test_diagnostics_are_consumed_once_and_shared_with_binding_capture(section, monkeypatch):
+    subject, state, _selected, _records, _dirty = section
+    ui = sys.modules['lichtfeld'].ui
+    reads = []
+    state.update(selected=7, raw_pressed=[True])
+    def take():
+        reads.append('take')
+        snapshot = dict(state)
+        state['raw_pressed'] = [False]
+        return snapshot
+    monkeypatch.setattr(ui, 'take_gamepad_test_state', take, raising=False)
+    monkeypatch.setattr(ui, 'get_gamepad_test_state', lambda: pytest.fail('use the consuming reader'))
+    captured = []
+    subject.bindings = SimpleNamespace(sync=lambda: captured.append(subject.state['raw_pressed']))
+    subject.sync()
+    subject.sync()
+    assert reads == ['take', 'take']
+    assert captured == [[True], [False]]
+
+
 def test_identical_names_stay_distinct_and_removal_clears_sample(section):
     subject, state, selected, records, dirty = section
     state.update(devices=[dict(id=11, name="Pad", mapped=True), dict(id=22, name="Pad", mapped=True)],
@@ -249,3 +269,45 @@ def test_general_reset_uses_library_reset_without_touching_device_selection(sect
     monkeypatch.setattr(sys.modules["lichtfeld"].ui, "reset_gamepad_profiles", lambda: calls.append("library") or True, raising=False)
     assert subject.reset(all_profiles=True) is None
     assert calls == ["library"]
+
+
+def test_slider_gesture_is_coalesced_and_final_value_is_flushed_on_close(section, monkeypatch):
+    subject, _state, _selected, _records, _dirty = section
+    ui = sys.modules['lichtfeld'].ui
+    navigation = dict(enabled=True, selected=7, dead_zone=.15, look_speed=1.5, move_speed=1., profile_revision=1)
+    calls = []
+    now = [10.]
+    monkeypatch.setitem(subject.sync.__globals__, 'time', SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(ui, 'get_gamepad_navigation_state', lambda: dict(navigation), raising=False)
+    def apply(enabled, selected, dead_zone, look_speed, move_speed):
+        calls.append((enabled, selected, dead_zone, look_speed, move_speed))
+        navigation.update(dead_zone=dead_zone, look_speed=look_speed, move_speed=move_speed)
+        navigation['profile_revision'] += 1
+        return True
+    monkeypatch.setattr(ui, 'set_gamepad_navigation', apply, raising=False)
+    subject.sync()
+    for value in (.2, .25, .3):
+        subject.stage_tuning('dead_zone', value)
+        subject.sync()
+    assert calls == []
+    assert subject.navigation['dead_zone'] == .3
+    now[0] += .3
+    subject.sync()
+    assert calls == [(True, 7, .3, 1.5, 1.)]
+    subject.stage_tuning('move_speed', 2.)
+    subject.close()
+    assert calls[-1] == (True, 7, .3, 1.5, 2.)
+
+
+def test_slider_draft_cannot_overwrite_a_new_profile_revision(section, monkeypatch):
+    subject, _state, _selected, _records, _dirty = section
+    ui = sys.modules['lichtfeld'].ui
+    navigation = dict(enabled=False, selected=7, profile_revision=1, move_speed=1.)
+    calls = []
+    monkeypatch.setattr(ui, 'get_gamepad_navigation_state', lambda: dict(navigation), raising=False)
+    monkeypatch.setattr(ui, 'set_gamepad_navigation', lambda *args: calls.append(args), raising=False)
+    subject.sync()
+    subject.stage_tuning('move_speed', 3.)
+    navigation.update(profile_revision=2, move_speed=2.)
+    subject.close()
+    assert not calls

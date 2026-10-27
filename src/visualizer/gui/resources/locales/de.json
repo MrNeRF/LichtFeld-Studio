@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "Neues Profil",
   "gamepad.profile.copy_name": "Kopie von {name}",
   "gamepad.profile.imported": "Importiertes Profil",
-  "gamepad.profile.remember": "Dieses Profil für dieses Controller-Modell verwenden",
+  "gamepad.profile.remember": "Für dieses Controller-Modell merken",
   "gamepad.profile.remember_help": "Merkt sich das Profil für dieses SDL-Controller-Modell. Aktiviert weder die Navigation noch die Geräteauswahl bei mehreren angeschlossenen Controllern.",
   "gamepad.profile.help": "Änderungen werden automatisch im aktiven Profil gespeichert. Tastatur- und Mausprofile sind unabhängig.",
   "gamepad.profile.delete_confirm": "„{name}“ und seine Controller-Zuordnungen löschen? Andere Profile bleiben erhalten.",

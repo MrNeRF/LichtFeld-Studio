@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "新配置",
   "gamepad.profile.copy_name": "{name} 的副本",
   "gamepad.profile.imported": "导入的配置",
-  "gamepad.profile.remember": "为此控制器型号使用此配置",
+  "gamepad.profile.remember": "记住此控制器型号的设置",
   "gamepad.profile.remember_help": "记住 SDL 识别的控制器型号所用的配置。不会启用导航，也不会在连接多个控制器时选择设备。",
   "gamepad.profile.help": "更改会自动保存到当前配置中。键盘和鼠标配置相互独立。",
   "gamepad.profile.delete_confirm": "删除“{name}”及其控制器关联？其他配置将保留。",

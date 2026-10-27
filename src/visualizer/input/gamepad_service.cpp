@@ -160,7 +160,17 @@ namespace lfs::vis::input {
 
     void GamepadService::beginFrame() {
         impl_->state.sample.pressed.fill(false);
+        consumeNavigationPresses();
+    }
+
+    void GamepadService::consumeNavigationPresses() {
         impl_->state.navigation_sample.pressed.fill(false);
+    }
+
+    GamepadSnapshot GamepadService::takeDiagnosticSnapshot() {
+        auto result = snapshot();
+        impl_->state.sample.pressed.fill(false);
+        return result;
     }
 
     bool GamepadService::select(SDL_JoystickID id) {

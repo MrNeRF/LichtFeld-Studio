@@ -235,6 +235,8 @@ namespace lfs::vis {
         bool gamepad_click_candidate_ = false;
         glm::dvec2 gamepad_press_pos_{0};
         core::WalkState walk_state_;
+        Viewport* walk_viewport_ = nullptr;
+        void ensureWalkViewport(Viewport& target);
         core::CapsuleQuery walkQuery() const;
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;

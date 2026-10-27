@@ -106,6 +106,23 @@ namespace lfs::vis::input {
             return value / length * ((std::min(length, 1.0f) - dead_zone) / (1.0f - dead_zone));
         }
 
+        // Compare effective samples, including the narrower neutral threshold.
+        // Sensor noise inside it must not keep the viewer awake.
+        [[nodiscard]] static bool needsSampleUpdate(GamepadSample previous, GamepadSample current, float dead_zone) {
+            const auto condition = [dead_zone](GamepadSample& sample) {
+                for (int i : {0, 2}) {
+                    const auto stick = filterStick({sample.axes[i], sample.axes[i + 1]}, dead_zone * 0.8f);
+                    sample.axes[i] = stick.x;
+                    sample.axes[i + 1] = stick.y;
+                }
+                for (int i : {4, 5})
+                    if (std::abs(sample.axes[i]) <= 0.04f) sample.axes[i] = 0;
+            };
+            condition(previous);
+            condition(current);
+            return previous != current;
+        }
+
         GamepadNavigationIntent update(const GamepadSample& sample, const GamepadNavigationSettings& settings,
                                        const GamepadNavigationContext& context, float delta_time) {
             GamepadNavigationIntent result;
@@ -121,14 +138,18 @@ namespace lfs::vis::input {
             if (std::any_of(sample.axes.begin(), sample.axes.end(), [](float value) { return !std::isfinite(value); }))
                 return blocked("suspended");
             const auto mode_index = static_cast<size_t>(context.mode);
+            bool mapped_navigation = true;
             for (size_t a = 0; a <= static_cast<size_t>(GamepadAction::Vertical); ++a) {
                 if (!allowedGamepadAction(mode_index, a)) continue;
                 const auto& binding = settings.bindings.resolve(mode_index, a);
                 for (int c : {binding.positive, binding.negative})
-                    if (c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER && !sample.has_axis[c]) return blocked("mapping");
+                    if (c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER && !sample.has_axis[c]) mapped_navigation = false;
             }
-            if (!context.supported_projection)
+            if (!mapped_navigation && !context.sequencer_open)
+                return blocked("mapping");
+            if (!context.supported_projection && !context.sequencer_open)
                 return blocked("projection");
+            const bool navigation_supported = mapped_navigation && context.supported_projection;
             if (!context.target)
                 return blocked("suspended");
             if (sample.id != id_ || sample.generation != generation_ ||
@@ -202,40 +223,40 @@ namespace lfs::vis::input {
             };
             const auto navigation_control = [&](int control) { return reserved(control) ? 0.0f : read_control(control); };
             const auto analog = [&](size_t a) {
-                if (!allowedGamepadAction(mode_index, a)) return 0.0f;
+                if (!navigation_supported || !allowedGamepadAction(mode_index, a)) return 0.0f;
                 const auto& b = settings.bindings.resolve(mode_index, a);
                 return std::clamp(navigation_control(b.positive) - navigation_control(b.negative), -1.0f, 1.0f) * (b.inverted ? -1.0f : 1.0f);
             };
             std::array<bool, gamepad_action_count> edge{};
-            for (size_t a = 5; a < gamepad_action_count; ++a) {
+            for (size_t a = actionIndex(GamepadAction::Precision); a < gamepad_action_count; ++a) {
                 const bool sequencer_action = a >= gamepad_first_sequencer_action;
                 const auto scope = sequencer_action ? gamepad_sequencer_scope : mode_index;
                 const auto& b = settings.bindings.resolve(scope, a);
                 const bool enabled = allowedGamepadAction(scope, a) &&
-                                     (sequencer_action ? context.sequencer_open : !reserved(b.positive));
+                                     (sequencer_action ? context.sequencer_open : navigation_supported && !reserved(b.positive));
                 const bool held = enabled && read_control(b.positive) > 0.5f;
                 const bool short_press = enabled && b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
                                          sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT];
                 edge[a] = short_press || (held && !action_down_[a]);
                 action_down_[a] = held;
             }
-            const bool precision = action_down_[5];
-            const bool fast = action_down_[6];
+            const bool precision = action_down_[actionIndex(GamepadAction::Precision)];
+            const bool fast = action_down_[actionIndex(GamepadAction::Fast)];
             result.speed = settings.move_speed * (precision ? 0.35f : fast ? 1.6f
                                                                            : 1.0f);
-            result.move = {analog(0), analog(1)};
-            result.look = glm::vec2(analog(2), analog(3)) * settings.look_speed * (precision ? 0.35f : 1.0f);
-            result.vertical = analog(4);
-            result.exit_walk = edge[7];
-            result.navigation_step = static_cast<int>(edge[8]) - static_cast<int>(edge[9]);
-            result.rendering_step = static_cast<int>(edge[10]) - static_cast<int>(edge[11]);
+            result.move = {analog(actionIndex(GamepadAction::MoveX)), analog(actionIndex(GamepadAction::MoveY))};
+            result.look = glm::vec2(analog(actionIndex(GamepadAction::LookX)), analog(actionIndex(GamepadAction::LookY))) * settings.look_speed * (precision ? 0.35f : 1.0f);
+            result.vertical = analog(actionIndex(GamepadAction::Vertical));
+            result.exit_walk = edge[actionIndex(GamepadAction::ExitWalk)];
+            result.navigation_step = static_cast<int>(edge[actionIndex(GamepadAction::NextNavigation)]) - static_cast<int>(edge[actionIndex(GamepadAction::PreviousNavigation)]);
+            result.rendering_step = static_cast<int>(edge[actionIndex(GamepadAction::NextRendering)]) - static_cast<int>(edge[actionIndex(GamepadAction::PreviousRendering)]);
             // Ambiguous simultaneous editing commands are ignored, particularly
             // add + delete: never delete a key just created by the same sample.
             const auto commands = std::count(edge.begin() + gamepad_first_sequencer_action, edge.end(), true);
             if (commands == 1) {
-                result.add_keyframe = edge[12];
-                result.remove_selected_keyframe = edge[13];
-                result.keyframe_step = static_cast<int>(edge[15]) - static_cast<int>(edge[14]);
+                result.add_keyframe = edge[actionIndex(GamepadAction::AddKeyframe)];
+                result.remove_selected_keyframe = edge[actionIndex(GamepadAction::RemoveSelectedKeyframe)];
+                result.keyframe_step = static_cast<int>(edge[actionIndex(GamepadAction::NextKeyframe)]) - static_cast<int>(edge[actionIndex(GamepadAction::PreviousKeyframe)]);
             }
             result.active = result.add_keyframe || result.remove_selected_keyframe || result.keyframe_step || result.move != glm::vec2(0) || result.look != glm::vec2(0) || result.vertical != 0 || result.exit_walk || result.navigation_step || result.rendering_step;
             status_ = result.active ? "moving" : "ready";

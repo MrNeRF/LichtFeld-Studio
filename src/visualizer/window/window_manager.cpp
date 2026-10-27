@@ -996,9 +996,13 @@ namespace lfs::vis {
         }
         gamepad_events_.clear();
         const bool sample_changed = gamepads_.sample();
-        const bool needs_samples = gamepads_.diagnosticSelected() != 0 ||
-                                   (input_controller_ && input_controller_->gamepadNavigationSettings().enabled);
-        if (devices_changed || (sample_changed && needs_samples))
+        bool navigation_changed = false;
+        if (input_controller_ && input_controller_->gamepadNavigationSettings().enabled) {
+            navigation_changed = input::GamepadNavigationSession::needsSampleUpdate(
+                gamepad_wake_sample_, gamepads_.navigationSample(), input_controller_->gamepadNavigationSettings().dead_zone);
+        }
+        gamepad_wake_sample_ = gamepads_.navigationSample();
+        if (devices_changed || navigation_changed || (sample_changed && gamepads_.diagnosticSelected() != 0))
             lfs::python::request_redraw();
     }
 
@@ -1014,7 +1018,6 @@ namespace lfs::vis {
 
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
-        gamepads_.beginFrame();
         SDL_Event event;
         // Drain previously queued events before pumping new native events.
         drainQueuedEvents();
@@ -1047,7 +1050,6 @@ namespace lfs::vis {
         if (native_drag_scheduler_ && native_drag_scheduler_->busy())
             timeout_seconds = timeout_seconds ? std::min(*timeout_seconds, 0.025) : std::optional<double>{0.025};
         frame_input_.beginFrame();
-        gamepads_.beginFrame();
         SDL_Event event;
         if (vulkan_context_ &&
             vulkan_context_->hasPendingSwapchainResize()) {

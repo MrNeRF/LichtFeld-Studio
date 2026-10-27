@@ -60,6 +60,8 @@ namespace lfs::vis::input {
         bool initialize();
         void shutdown();
         void beginFrame();
+        void consumeNavigationPresses();
+        [[nodiscard]] GamepadSnapshot takeDiagnosticSnapshot();
         void handleEvent(const SDL_Event& event);
         bool sample();
         [[nodiscard]] bool select(SDL_JoystickID id);

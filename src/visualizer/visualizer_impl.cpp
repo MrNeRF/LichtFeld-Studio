@@ -2794,6 +2794,9 @@ namespace lfs::vis {
                 input_controller_->update(delta_time);
             }
         }
+        // Event pumps may run more than once before an input update. Acknowledge
+        // navigation edges only here; diagnostics has its own consuming reader.
+        window_manager_->gamepads().consumeNavigationPresses();
 
         if (gui_manager_) {
             gui_manager_->updateInteractiveTransitions();

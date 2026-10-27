@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "New profile",
   "gamepad.profile.copy_name": "{name} copy",
   "gamepad.profile.imported": "Imported profile",
-  "gamepad.profile.remember": "Use this profile for this controller model",
+  "gamepad.profile.remember": "Remember for this controller model",
   "gamepad.profile.remember_help": "Remember the profile for this SDL controller model. Does not enable navigation or select a device when several controllers are connected.",
   "gamepad.profile.help": "Edits are saved automatically in the active profile. Keyboard and mouse profiles are independent.",
   "gamepad.profile.delete_confirm": "Delete “{name}” and its controller associations? Other profiles are preserved.",

@@ -20,6 +20,9 @@ class GamepadTestSection:
         self._selection_intent = set()
         self.bindings = None
         self.profiles = None
+        self._tuning_draft = {}
+        self._tuning_revision = None
+        self._tuning_deadline = 0.0
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
@@ -37,7 +40,7 @@ class GamepadTestSection:
                    lambda value: self._select_from_input("navigation", value))
         for name, default in (("dead_zone", 0.15), ("look_speed", 1.5), ("move_speed", 1.0)):
             model.bind("gamepad_" + name, lambda n=name, d=default: self.navigation.get(n, d),
-                       lambda value, n=name: self.configure(**{n: float(value)}))
+                       lambda value, n=name: self.stage_tuning(n, float(value)))
         model.bind_func("gamepad_navigation_status", self.navigation_status)
         model.bind_func("gamepad_navigation_show_status", self.show_navigation_status)
         model.bind_func("gamepad_navigation_preset", lambda: lf.ui.tr("gamepad.binding.open_hint"))
@@ -91,6 +94,7 @@ class GamepadTestSection:
         self._pressed = []
 
     def deactivate(self):
+        self.flush_tuning()
         if self.profiles:
             self.profiles._intent(False)
         if self.bindings:
@@ -117,6 +121,10 @@ class GamepadTestSection:
         self.sync()
 
     def configure(self, **changes):
+        if self._tuning_draft:
+            self.flush_tuning()
+        if self.bindings and ("selected" in changes or "enabled" in changes):
+            self.bindings.cancel()
         settings = {"enabled": False, "selected": 0, "dead_zone": 0.15, "look_speed": 1.5, "move_speed": 1.0}
         settings.update({key: self.navigation[key] for key in settings if key in self.navigation})
         settings.update(changes)
@@ -133,7 +141,29 @@ class GamepadTestSection:
             self.handle.dirty("gamepad_navigation_status")
             self.handle.dirty("gamepad_navigation_show_status")
 
+    def stage_tuning(self, name, value):
+        if not self._tuning_draft:
+            self._tuning_revision = (self.navigation.get("profile_revision"), self.navigation.get("selected"))
+        self._tuning_draft[name] = value
+        self.navigation[name] = value
+        self._tuning_deadline = time.monotonic() + .25
+        if self.handle:
+            self.handle.dirty("gamepad_" + name)
+
+    def flush_tuning(self):
+        if not self._tuning_draft:
+            return
+        draft, self._tuning_draft = self._tuning_draft, {}
+        getter = getattr(lf.ui, "get_gamepad_navigation_state", None)
+        current = getter() if getter else self.navigation
+        # A profile/device/API edit supersedes an unfinished slider gesture.
+        if (current.get("profile_revision"), current.get("selected")) != self._tuning_revision:
+            return
+        self.navigation = current
+        self.configure(**draft)
+
     def reset(self, all_profiles=False):
+        self._tuning_draft.clear()
         if not callable(getattr(lf.ui, "set_gamepad_navigation", None)):
             return None
         if all_profiles and hasattr(lf.ui, "reset_gamepad_profiles"):
@@ -170,9 +200,17 @@ class GamepadTestSection:
     def sync(self):
         if self.handle is None:
             return
-        state = getattr(lf.ui, "get_gamepad_test_state", lambda: {})()
+        if self._tuning_draft and time.monotonic() >= self._tuning_deadline:
+            self.flush_tuning()
+        reader = getattr(lf.ui, "take_gamepad_test_state", None) or getattr(lf.ui, "get_gamepad_test_state", lambda: {})
+        state = reader()
         changed = state != self.state
         navigation = getattr(lf.ui, "get_gamepad_navigation_state", lambda: {})()
+        if self._tuning_draft:
+            if (navigation.get("profile_revision"), navigation.get("selected")) == self._tuning_revision:
+                navigation.update(self._tuning_draft)
+            else:
+                self._tuning_draft.clear()
         changed |= navigation != self.navigation
         self.navigation = navigation
         if (state.get("selected"), state.get("generation")) != (

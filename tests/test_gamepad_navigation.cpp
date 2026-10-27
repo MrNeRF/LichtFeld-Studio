@@ -48,6 +48,37 @@ TEST_F(NavigationTest, ConnectionAndHeldSticksCannotArmWithoutViewportClickAndSt
     EXPECT_STREQ(session.status(), "ready");
 }
 
+TEST_F(NavigationTest, SequencerButtonsDoNotRequireCameraProjectionOrStickMapping) {
+    context.sequencer_open = true;
+    context.supported_projection = false;
+    context.mode = GamepadNavigationMode::FPV;
+    sample.has_axis.fill(false);
+    arm();
+    sample.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
+    const auto command = tick();
+    EXPECT_TRUE(command.add_keyframe);
+    EXPECT_EQ(command.move, glm::vec2(0));
+    EXPECT_EQ(command.look, glm::vec2(0));
+    context.allowed = false;
+    EXPECT_FALSE(tick().add_keyframe);
+}
+
+TEST_F(NavigationTest, WakeFilteringIgnoresNoiseButRetainsNeutralAndButtonTransitions) {
+    auto next = sample;
+    next.axes[0] = .02f;
+    next.axes[2] = -.03f;
+    next.axes[4] = .01f;
+    EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+    next.axes[0] = .13f; // crosses the arming hysteresis threshold
+    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+    next = sample;
+    next.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+    next = sample;
+    ++next.generation;
+    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+}
+
 TEST_F(NavigationTest, TemporaryInterruptionRetainsAssignmentButTargetAndDeviceChangesRequireClick) {
     arm();
     context.allowed = false;

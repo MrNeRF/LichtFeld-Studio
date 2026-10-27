@@ -122,6 +122,57 @@ def test_controller_switch_cancels_capture_without_saving(editor):
     assert e.subject.capture is None and not e.saves and e.selected[-1]==0
 
 
+def test_navigation_device_switch_cancels_capture_even_if_diagnostics_still_uses_old_pad(editor):
+    e = editor
+    e.subject.edit('next_rendering', 'assign')
+    e.subject.owner.navigation['selected'] = 8
+    e.state['raw_buttons'][0] = True
+    e.subject.sync()
+    assert e.subject.capture is None and not e.saves
+
+
+def test_delayed_conflict_confirmation_preserves_current_global_enablement(editor):
+    e = editor
+    e.profile['enabled'] = True
+    e.profile['bindings']['common']['next_rendering']['positive'] = 'button.south'
+    e.subject.change('move_x', {'positive': 'button.south', 'negative': 'none', 'inverted': False})
+    e.profile['enabled'] = False
+    e.choices[-1][-1]('gamepad.binding.replace')
+    assert e.saves and e.profile['enabled'] is False
+
+
+def test_unchanged_binding_sync_does_not_dirty_model_or_reload_profile(editor):
+    e = editor
+    e.subject.owner.navigation['profile_revision'] = 4
+    e.subject.sync()
+    dirty = []
+    e.subject.handle.dirty = dirty.append
+    e.ui.get_gamepad_profile_json = lambda: pytest.fail('unchanged rows must use the cache')
+    e.subject.sync()
+    assert not dirty
+    e.subject.cancel()
+    e.subject.cancel()
+    assert not dirty
+
+
+def test_binding_only_api_uses_the_captured_revision_and_excludes_global_settings(editor):
+    e = editor
+    revision = [5]
+    e.ui.get_gamepad_navigation_state = lambda: {'profile_revision': revision[0]}
+    writes = []
+    e.ui.set_gamepad_bindings_json = lambda raw, expected: writes.append((json.loads(raw), expected)) or True
+    e.profile['enabled'] = False
+    e.subject.change('next_rendering', {'positive': 'button.north', 'negative': 'none', 'inverted': False})
+    assert len(writes) == 1 and writes[0][1] == 5
+    assert set(writes[0][0]) == {'common', 'modes'}
+    assert not e.saves
+    e.profile['bindings']['common']['next_rendering']['positive'] = 'button.south'
+    e.subject.change('move_x', {'positive': 'button.south', 'negative': 'none', 'inverted': False})
+    revision[0] += 1
+    e.choices[-1][-1]('gamepad.binding.replace')
+    assert len(writes) == 1
+
+
 def test_opposite_button_capture_requires_neutral_between_inputs(editor):
     e=editor;e.subject.edit('move_x','assign');e.now[0]+=.13;e.subject.sync()
     e.state['raw_buttons'][0]=True;e.subject.sync()

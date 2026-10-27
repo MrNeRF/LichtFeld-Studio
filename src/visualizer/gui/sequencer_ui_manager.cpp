@@ -617,11 +617,11 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    bool SequencerUIManager::selectAdjacentKeyframe(const int direction) {
+    bool SequencerUIManager::selectAdjacentKeyframe(const int direction, Viewport* target) {
         const auto index = controller_.adjacentKeyframeIndex(direction);
         if (!index) return false;
-        lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
-        return true;
+        endViewportKeyframeEdit();
+        return scene_sync_->goToKeyframe(*index, target);
     }
 
     void SequencerUIManager::setupEvents() {

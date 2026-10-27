@@ -62,7 +62,7 @@ namespace lfs::vis {
             void setupEvents();
             void addKeyframeFromView(const Viewport& source, std::optional<float> time = {});
             bool removeSelectedKeyframe();
-            bool selectAdjacentKeyframe(int direction);
+            bool selectAdjacentKeyframe(int direction, Viewport* target = nullptr);
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);

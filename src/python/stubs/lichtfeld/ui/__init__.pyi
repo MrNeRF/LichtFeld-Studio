@@ -2856,6 +2856,10 @@ def get_gamepad_test_state() -> dict:
     """Read connected controllers and the selected input-test sample; does not move the camera."""
     ...
 
+def take_gamepad_test_state() -> dict:
+    """Read and consume diagnostic presses without consuming navigation commands."""
+    ...
+
 def set_gamepad_test_device(device_id: int) -> bool:
     """Select a connected mapped controller for diagnostics; zero clears selection."""
     ...
@@ -3147,6 +3151,13 @@ def get_gamepad_default_profile_json() -> str: ...
 def get_gamepad_binding_catalog_json() -> str: ...
 def set_gamepad_profile_json(serialized: str) -> bool:
     """Validate and atomically save assignments, suspending navigation until rearmed."""
+    ...
+
+def set_gamepad_bindings_json(serialized: str, expected_revision: int) -> bool:
+    """Atomically edit bindings, preserving global enablement and tuning.
+
+    Rejects edits if the live configuration revision has changed.
+    """
     ...
 
 

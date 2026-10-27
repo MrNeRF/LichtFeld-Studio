@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "Nouveau profil",
   "gamepad.profile.copy_name": "Copie de {name}",
   "gamepad.profile.imported": "Profil importé",
-  "gamepad.profile.remember": "Utiliser ce profil pour ce modèle de manette",
+  "gamepad.profile.remember": "Mémoriser pour ce modèle de manette",
   "gamepad.profile.remember_help": "Mémorise le profil pour ce modèle de manette SDL. N’active pas la navigation et ne choisit pas de périphérique si plusieurs manettes sont connectées.",
   "gamepad.profile.help": "Les modifications sont enregistrées automatiquement dans le profil actif. Les profils du clavier et de la souris sont indépendants.",
   "gamepad.profile.delete_confirm": "Supprimer « {name} » et ses associations aux manettes ? Les autres profils seront conservés.",

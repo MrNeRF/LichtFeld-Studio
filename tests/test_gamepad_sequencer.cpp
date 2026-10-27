@@ -116,6 +116,27 @@ namespace {
         EXPECT_EQ(controller.timeline().realKeyframeCount(), 1u);
     }
 
+    TEST_F(GamepadSequencerTest, AdjacentNavigationAndCaptureShareTheAssignedViewport) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& ui = viewer.getGuiManager()->sequencerUI();
+        auto& controller = ui.controller();
+        Viewport secondary(200, 200);
+        auto first = makeKeyframe(0);
+        auto second = makeKeyframe(2);
+        first.position = {3, 5, 7};
+        second.position = {9, 8, 7};
+        const auto first_id = controller.addKeyframe(first);
+        controller.addKeyframe(second);
+        ASSERT_TRUE(controller.selectKeyframeById(first_id));
+        const auto primary_before = viewer.getViewport().camera.t;
+        ASSERT_TRUE(ui.selectAdjacentKeyframe(1, &secondary));
+        EXPECT_EQ(secondary.camera.t, second.position);
+        EXPECT_EQ(viewer.getViewport().camera.t, primary_before);
+        ui.addKeyframeFromView(secondary);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 2u);
+        EXPECT_EQ(controller.timeline().getKeyframe(1)->position, second.position);
+    }
+
     TEST_F(GamepadSequencerTest, ControllerDeleteRequiresActualSelectionAndCanBeUndone) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& ui = viewer.getGuiManager()->sequencerUI();

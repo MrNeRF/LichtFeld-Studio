@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "新しいプロファイル",
   "gamepad.profile.copy_name": "{name} のコピー",
   "gamepad.profile.imported": "インポートしたプロファイル",
-  "gamepad.profile.remember": "このコントローラーモデルにこのプロファイルを使用",
+  "gamepad.profile.remember": "このコントローラーモデルの設定を記憶",
   "gamepad.profile.remember_help": "SDLが認識するモデルごとにプロファイルを記憶します。ナビゲーションは有効化せず、複数接続時のデバイス選択も行いません。",
   "gamepad.profile.help": "変更は使用中のプロファイルに自動保存されます。キーボードとマウスのプロファイルは独立しています。",
   "gamepad.profile.delete_confirm": "「{name}」とコントローラーへの関連付けを削除しますか？他のプロファイルは保持されます。",

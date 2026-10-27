@@ -676,10 +676,22 @@ namespace lfs::vis {
         };
     }
 
+    void InputController::ensureWalkViewport(Viewport& target) {
+        if (walk_viewport_ == &target && walk_state_.presentation == target.camera.t)
+            return;
+        // Validate the handoff before replacing the previous owner's physics.
+        core::WalkState candidate{.eye = target.camera.t, .presentation = target.camera.t};
+        core::settleWalk(candidate, walk_settings, target.camera.navigationUp(), walkQuery());
+        walk_state_ = candidate;
+        walk_viewport_ = &target;
+    }
+
     void InputController::setWalkSettings(core::WalkSettings settings) {
         settings.validate();
         if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
-            auto& camera = activeKeyboardViewport().camera;
+            auto& target = walk_viewport_ ? *walk_viewport_ : activeKeyboardViewport();
+            ensureWalkViewport(target);
+            auto& camera = target.camera;
             const auto up = camera.navigationUp();
             const auto feet = walk_state_.feet;
             if (walkQuery()(feet, up, settings.height, settings.radius))
@@ -731,6 +743,7 @@ namespace lfs::vis {
                 return false;
             }
             walk_state_ = candidate;
+            walk_viewport_ = &navigation_viewport;
             camera.t = walk_state_.eye;
             camera.clearTransientMotion();
             walk_error.clear();
@@ -739,6 +752,8 @@ namespace lfs::vis {
         pauseGamepadNavigation();
         const bool leaving_drone = camera_navigation_mode_ == CameraNavigationMode::Drone;
         camera_navigation_mode_ = mode;
+        if (mode != CameraNavigationMode::Walk)
+            walk_viewport_ = nullptr;
         // The pivot is left untouched: orbit modes work with any pivot and FPV
         // re-seeds it on every look drag, so switching modes must not discard a
         // user-set pivot.
@@ -2805,9 +2820,15 @@ namespace lfs::vis {
             auto& sequencer_ui = gui->sequencerUI();
             if (intent.add_keyframe) sequencer_ui.addKeyframeFromView(target);
             else if (intent.remove_selected_keyframe) sequencer_ui.removeSelectedKeyframe();
-            else sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step);
+            else sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step, &target);
             gamepad_frame_demand_ = true;
             return true;
+        }
+        if (!context.supported_projection) {
+            // Editing remains available, but old perspective-camera momentum
+            // must not continue after switching to an incompatible projection.
+            stopGamepadMotion();
+            return false;
         }
         if (intent.exit_walk) {
             setCameraNavigationMode(CameraNavigationMode::Orbit);
@@ -2895,10 +2916,7 @@ namespace lfs::vis {
         case CameraNavigationMode::Walk:
             camera.advanceLook(dt, intent.look);
             try {
-                if (acquiring) {
-                    walk_state_ = core::WalkState{.eye = camera.t, .presentation = camera.t};
-                    core::settleWalk(walk_state_, walk_settings, camera.navigationUp(), walkQuery());
-                }
+                ensureWalkViewport(target);
                 core::advanceWalk(walk_state_, walk_settings, camera.navigationUp(),
                                   camera.walkVelocity(movement, walk_settings.speed * intent.speed), dt, walkQuery());
                 const auto delta = walk_state_.presentation - camera.t;
@@ -3106,7 +3124,7 @@ namespace lfs::vis {
         // Handle continuous WASD movement. The camera carries a damped velocity,
         // so motion eases in on press and glides to rest on release. Drive it
         // every frame while momentum remains so a released key decays to zero.
-        auto* const active_movement_viewport = &activeKeyboardViewport();
+        auto* active_movement_viewport = &activeKeyboardViewport();
         const bool camera_can_move = shouldCameraHandleInput() &&
                                      drag_mode_ != DragMode::Gizmo && drag_mode_ != DragMode::Splitter;
         const bool keys_active = camera_can_move &&
@@ -3125,8 +3143,13 @@ namespace lfs::vis {
             (keys_active && (getModifierKeys() & input::KEYMOD_SHIFT) != 0) ? kWasdShiftSpeedBonus : 0.0f;
 
         if (camera_navigation_mode_ == CameraNavigationMode::Walk) {
+            // Neutral input continues the current owner's gravity/settling. Only
+            // deliberate keyboard motion may hand Walk over to the keyboard view.
+            if (!keys_active && walk_viewport_)
+                active_movement_viewport = walk_viewport_;
             auto& camera = active_movement_viewport->camera;
             try {
+                ensureWalkViewport(*active_movement_viewport);
                 const auto up = camera.navigationUp();
                 const auto movement = input::NavigationMovement::fromKeys(
                     keys_active && keys_movement_[0], keys_active && keys_movement_[2],
@@ -3823,6 +3846,9 @@ namespace lfs::vis {
     }
 
     void InputController::resetSplitPanelFocus() {
+        // Split-layout and scene changes may replace the secondary view's pose.
+        // Do not keep integrating physics owned by that old layout.
+        walk_viewport_ = nullptr;
         focusSplitPanel(SplitViewPanelId::Left);
         if (selection_tool_) {
             selection_tool_->setFilterPanel(SplitViewPanelId::Left);

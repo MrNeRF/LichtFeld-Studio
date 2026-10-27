@@ -124,9 +124,13 @@ class GamepadProfilesSection:
             return
         self._selection_intent = False
         try:
+            self.owner.deactivate()
             expected, library = self.snapshot()
             if identifier != library["active"] and any(p["id"] == identifier for p in library["profiles"]):
                 library["active"] = identifier
+                key = self.owner.navigation.get("device_key", "")
+                if key in library["device_profiles"]:
+                    library["device_profiles"][key] = identifier
                 self.save(library, expected)
         except (ValueError, RuntimeError):
             self.error("load_error")
@@ -138,18 +142,19 @@ class GamepadProfilesSection:
 
     def remembered(self):
         key = self.owner.navigation.get("device_key", "")
-        return self.valid_device() and self.library.get("device_profiles", {}).get(key) == self.library.get("active")
+        return self.valid_device() and key in self.library.get("device_profiles", {})
 
     def remember(self, enabled):
         if not self.valid_device() or bool(enabled) == bool(self.remembered()):
             return
         try:
+            self.owner.deactivate()
             expected, library = self.snapshot()
             key = self.owner.navigation["device_key"]
             if enabled:
                 library["device_profiles"][key] = library["active"]
-            elif library["device_profiles"].get(key) == library["active"]:
-                del library["device_profiles"][key]
+            else:
+                library["device_profiles"].pop(key, None)
             self.save(library, expected)
         except (ValueError, RuntimeError):
             self.error("save_error")
@@ -163,6 +168,7 @@ class GamepadProfilesSection:
         try:
             expected, library = self.snapshot()
             current = next(p for p in library["profiles"] if p["id"] == library["active"])
+            associated_model = self.owner.navigation.get("device_key", "")
             if operation == "delete":
                 if len(library["profiles"]) <= 1:
                     return
@@ -217,6 +223,9 @@ class GamepadProfilesSection:
                     identifier = uuid.uuid4().hex
                     library["profiles"].append({"id": identifier, "name": name, "settings": settings})
                     library["active"] = identifier
+                    key = self.owner.navigation.get("device_key", "")
+                    if key == associated_model and key in library["device_profiles"]:
+                        library["device_profiles"][key] = identifier
                 self.save(library, expected)
             lf.ui.input_dialog(self.tr(operation), self.tr("name"), default_name, named)
         except (OSError, ValueError, RuntimeError, UnicodeError, StopIteration):

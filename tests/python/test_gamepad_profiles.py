@@ -134,6 +134,34 @@ def test_delayed_modal_cannot_overwrite_a_newer_profile_edit(profiles):
     assert p.subject.message == "gamepad.profile.save_error"
 
 
+def test_remembered_model_follows_explicit_profile_selection_and_can_always_be_unlinked(profiles):
+    p = profiles
+    p.subject.remember(True)
+    named(p, 'new', 'Other')
+    p.subject._intent(True)
+    p.subject.select('personal')
+    p.subject.sync(force=True)
+    assert p.subject.remembered()
+    assert p.library['device_profiles']['a' * 32] == 'personal'
+    # An external profile switch can leave a different profile linked. The UI
+    # must still expose and allow clearing that model association.
+    p.library['active'] = p.library['profiles'][-1]['id']
+    p.subject.sync(force=True)
+    assert p.subject.remembered()
+    p.subject.remember(False)
+    assert not p.library['device_profiles']
+
+
+def test_profile_name_prompt_does_not_reassign_a_different_connected_model(profiles):
+    p = profiles
+    p.subject.remember(True)
+    p.library['device_profiles']['b' * 32] = 'personal'
+    p.subject.action('new')
+    p.navigation['device_key'] = 'b' * 32
+    p.prompts[-1][-1]('Other')
+    assert p.library['device_profiles'] == {'a' * 32: 'personal', 'b' * 32: 'personal'}
+
+
 def test_duplicate_name_is_not_published(profiles):
     p = profiles
     named(p, "new", "Personal")

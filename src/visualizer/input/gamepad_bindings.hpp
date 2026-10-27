@@ -16,9 +16,10 @@ namespace lfs::vis::input {
     enum class GamepadAction { MoveX, MoveY, LookX, LookY, Vertical, Precision, Fast,
                                ExitWalk, NextNavigation, PreviousNavigation, NextRendering, PreviousRendering,
                                AddKeyframe, RemoveSelectedKeyframe, PreviousKeyframe, NextKeyframe, Count };
+    inline constexpr size_t actionIndex(GamepadAction action) { return static_cast<size_t>(action); }
     inline constexpr size_t gamepad_action_count = static_cast<size_t>(GamepadAction::Count);
     inline constexpr std::array<std::string_view, 5> gamepad_modes{"orbit", "trackball", "fpv", "drone", "walk"};
-    inline constexpr size_t gamepad_sequencer_scope = 5;
+    inline constexpr size_t gamepad_sequencer_scope = gamepad_modes.size();
     inline constexpr size_t gamepad_first_sequencer_action = static_cast<size_t>(GamepadAction::AddKeyframe);
     inline constexpr std::array<std::string_view, 6> gamepad_binding_contexts{"orbit", "trackball", "fpv", "drone", "walk", "sequencer"};
     inline constexpr std::array<std::string_view, gamepad_action_count> gamepad_actions{
@@ -53,8 +54,9 @@ namespace lfs::vis::input {
     inline bool allowedGamepadAction(size_t mode, size_t action) {
         if (mode == gamepad_sequencer_scope) return action >= gamepad_first_sequencer_action;
         if (action >= gamepad_first_sequencer_action) return false;
-        if (action == static_cast<size_t>(GamepadAction::ExitWalk)) return mode == 4;
-        return mode != 4 || (action != static_cast<size_t>(GamepadAction::Vertical) && action != static_cast<size_t>(GamepadAction::Fast));
+        constexpr auto walk = static_cast<size_t>(GamepadNavigationMode::Walk);
+        if (action == actionIndex(GamepadAction::ExitWalk)) return mode == walk;
+        return mode != walk || (action != actionIndex(GamepadAction::Vertical) && action != actionIndex(GamepadAction::Fast));
     }
     // Try each other mode once. The activation callback performs the real
     // capability/spawn check without committing failed candidates.
@@ -103,18 +105,18 @@ namespace lfs::vis::input {
         std::array<GamepadBinding, gamepad_action_count> common{};
         std::array<std::array<std::optional<GamepadBinding>, gamepad_action_count>, gamepad_binding_contexts.size()> modes{};
         GamepadBindings() {
-            common[0] = {SDL_GAMEPAD_AXIS_LEFTX};
-            common[1] = {SDL_GAMEPAD_AXIS_LEFTY, -1, true};
-            common[2] = {SDL_GAMEPAD_AXIS_RIGHTX, -1, true};
-            common[3] = {SDL_GAMEPAD_AXIS_RIGHTY, -1, true};
-            common[4] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_GAMEPAD_AXIS_LEFT_TRIGGER};
-            common[8] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_LEFT_SHOULDER};
-            common[10] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER};
-            common[12] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_WEST};
-            common[13] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_NORTH};
-            common[14] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_LEFT};
-            common[15] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_RIGHT};
-            modes[4][7] = GamepadBinding{int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_EAST};
+            common[actionIndex(GamepadAction::MoveX)] = {SDL_GAMEPAD_AXIS_LEFTX};
+            common[actionIndex(GamepadAction::MoveY)] = {SDL_GAMEPAD_AXIS_LEFTY, -1, true};
+            common[actionIndex(GamepadAction::LookX)] = {SDL_GAMEPAD_AXIS_RIGHTX, -1, true};
+            common[actionIndex(GamepadAction::LookY)] = {SDL_GAMEPAD_AXIS_RIGHTY, -1, true};
+            common[actionIndex(GamepadAction::Vertical)] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_GAMEPAD_AXIS_LEFT_TRIGGER};
+            common[actionIndex(GamepadAction::NextNavigation)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_LEFT_SHOULDER};
+            common[actionIndex(GamepadAction::NextRendering)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER};
+            common[actionIndex(GamepadAction::AddKeyframe)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_WEST};
+            common[actionIndex(GamepadAction::RemoveSelectedKeyframe)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_NORTH};
+            common[actionIndex(GamepadAction::PreviousKeyframe)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_LEFT};
+            common[actionIndex(GamepadAction::NextKeyframe)] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_RIGHT};
+            modes[static_cast<size_t>(GamepadNavigationMode::Walk)][actionIndex(GamepadAction::ExitWalk)] = GamepadBinding{int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_EAST};
         }
         const GamepadBinding& resolve(size_t mode, size_t action) const {
             return modes.at(mode).at(action) ? *modes[mode][action] : common.at(action);

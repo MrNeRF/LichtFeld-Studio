@@ -3584,7 +3584,7 @@
   "gamepad.profile.new_name": "Nuevo perfil",
   "gamepad.profile.copy_name": "Copia de {name}",
   "gamepad.profile.imported": "Perfil importado",
-  "gamepad.profile.remember": "Usar este perfil para este modelo de mando",
+  "gamepad.profile.remember": "Recordar para este modelo de mando",
   "gamepad.profile.remember_help": "Recuerda el perfil para este modelo de mando SDL. No activa la navegación ni selecciona un dispositivo cuando hay varios mandos conectados.",
   "gamepad.profile.help": "Los cambios se guardan automáticamente en el perfil activo. Los perfiles de teclado y ratón son independientes.",
   "gamepad.profile.delete_confirm": "¿Eliminar «{name}» y sus asociaciones con mandos? Se conservarán los demás perfiles.",

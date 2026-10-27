@@ -73,6 +73,27 @@ TEST_F(GamepadServiceTest, TwoIdenticalPadsNeverAutomaticallyAcquireSelection) {
     EXPECT_TRUE(service.select(replacement));
 }
 
+TEST_F(GamepadServiceTest, PressesSurviveRepeatedPumpsUntilTheirOwnConsumerAcknowledges) {
+    const auto id = attach();
+    ASSERT_NE(id, 0u);
+    pump();
+    ASSERT_TRUE(service.selectNavigation(id));
+    ASSERT_TRUE(service.select(id));
+    SDL_Event event{};
+    event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    event.gbutton.which = id;
+    event.gbutton.button = SDL_GAMEPAD_BUTTON_WEST;
+    service.handleEvent(event);
+    pump();
+    pump();
+    ASSERT_TRUE(service.navigationSample().pressed[SDL_GAMEPAD_BUTTON_WEST]);
+    ASSERT_TRUE(service.takeDiagnosticSnapshot().sample.pressed[SDL_GAMEPAD_BUTTON_WEST]);
+    EXPECT_FALSE(service.takeDiagnosticSnapshot().sample.pressed[SDL_GAMEPAD_BUTTON_WEST]);
+    EXPECT_TRUE(service.navigationSample().pressed[SDL_GAMEPAD_BUTTON_WEST]);
+    service.consumeNavigationPresses();
+    EXPECT_FALSE(service.navigationSample().pressed[SDL_GAMEPAD_BUTTON_WEST]);
+}
+
 TEST_F(GamepadServiceTest, StartupEnumerationAndDuplicateAddedEventsKeepTheSelection) {
     const auto id = attach();
     ASSERT_NE(id, 0u);
