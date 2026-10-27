@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,24 @@ namespace {
     private:
         fs::path path_;
     };
+
+    auto parse_batch(std::vector<std::string> args) {
+        args.insert(args.begin(), {"lichtfeld-studio", "batch-train"});
+        std::vector<const char*> argv;
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        return lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+    }
+
+    auto parse_child(const lfs::core::param::BatchJobItem& job,
+                     const lfs::core::param::BatchTrainingParameters& params) {
+        auto args = lfs::app::build_child_args(job, params);
+        args.insert(args.begin(), "lichtfeld-studio");
+        std::vector<const char*> argv;
+        for (const auto& arg : args)
+            argv.push_back(arg.c_str());
+        return lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data(), false, true);
+    }
 
     TEST(BatchTrainerTest, ReadBatchConfigObject) {
         TempDirectoryGuard temp;
@@ -104,13 +124,18 @@ namespace {
             {"jobs", {{{"dataset", scene.string()}, {"args", nlohmann::json::array({"--strategy", "mcmc"})}}}}}
                                        .dump();
 
-        lfs::core::param::BatchTrainingParameters params;
-        params.input_paths = {manifest};
-        params.output_dir = temp.path() / "outputs";
+        auto parsed = parse_batch({manifest.string(), "-o", (temp.path() / "outputs").string()});
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*parsed).params;
         const auto jobs = lfs::app::resolve_batch_jobs(params);
 
         ASSERT_EQ(jobs.size(), 1u);
-        EXPECT_EQ(jobs[0].extra_args, (std::vector<std::string>{"--iter", "7000", "--strategy", "mcmc"}));
+        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--iter", "7000"}));
+        EXPECT_EQ(jobs[0].extra_args, (std::vector<std::string>{"--strategy", "mcmc"}));
+        auto child = parse_child(jobs[0], params);
+        ASSERT_TRUE(child) << child.error();
+        EXPECT_EQ((*child)->optimization.iterations, 7000u);
+        EXPECT_EQ((*child)->optimization.strategy, "mcmc");
     }
 
     TEST(BatchTrainerTest, ReadBatchConfigArray) {
@@ -278,11 +303,10 @@ namespace {
         job.config_file = fs::path("job.json");
         job.extra_args = {"--iter", "7000"};
         lfs::core::param::BatchTrainingParameters params;
-        params.shared_args = {"--config", "shared.json", "--iter", "30000"};
+        params.shared_args = {"--strategy", "mcmc", "--config", "shared.json", "--iter", "30000"};
 
         EXPECT_EQ(lfs::app::build_child_args(job, params),
-                  (std::vector<std::string>{"--headless", "-d", "scene", "-o", "out", "--config", "shared.json", "--iter", "30000",
-                                            "--config", "job.json", "--iter", "7000"}));
+                  (std::vector<std::string>{"--headless", "-d", "scene", "-o", "out", "--strategy", "mcmc", "--config", "job.json", "--iter", "7000"}));
     }
 
     TEST(BatchTrainerTest, ParseBatchTrainFreezeFlag) {
@@ -441,6 +465,322 @@ namespace {
         EXPECT_TRUE(valid);
         EXPECT_FALSE(fs::exists(log_path));
         EXPECT_FALSE(fs::exists(job.output_path));
+    }
+
+    TEST(BatchTrainerTest, PositionalManifestAppliesAllSettingsAndCliOverrides) {
+        TempDirectoryGuard temp;
+        const auto scene = temp.path() / "scene";
+        fs::create_directories(scene);
+        const auto manifest = temp.path() / "batch.json";
+        std::ofstream(manifest) << R"({"dry_run":true,"timeout_minutes":12,"continue_on_failure":false,
+            "recursive":true,"output_dir":"out","summary_file":"summary.json","report_file":"report.txt",
+            "args":["--iter","1000"],"jobs":[{"dataset":"scene"}]})";
+        for (const bool positional : {true, false}) {
+            auto args = positional ? std::vector<std::string>{manifest.string()}
+                                   : std::vector<std::string>{"--manifest", manifest.string()};
+            auto parsed = parse_batch(args);
+            ASSERT_TRUE(parsed) << parsed.error();
+            const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*parsed).params;
+            EXPECT_TRUE(params.dry_run);
+            EXPECT_TRUE(params.recursive);
+            EXPECT_FALSE(params.continue_on_failure);
+            EXPECT_EQ(params.timeout_minutes, 12);
+            EXPECT_EQ(params.output_dir, temp.path() / "out");
+            EXPECT_EQ(params.summary_file, temp.path() / "summary.json");
+            EXPECT_EQ(params.report_file, temp.path() / "report.txt");
+            EXPECT_TRUE(params.input_paths.empty());
+            ASSERT_EQ(params.jobs.size(), 1u);
+            EXPECT_EQ(params.jobs[0].dataset_path, scene);
+            EXPECT_EQ(lfs::app::run_batch_training(params), 0);
+            EXPECT_FALSE(fs::exists(params.output_dir));
+
+            args.insert(args.end(), {"--timeout", "3", "-o", "cli-out", "--summary", "cli.json", "--report", "cli.txt", "-i2000"});
+            auto overridden = parse_batch(args);
+            ASSERT_TRUE(overridden) << overridden.error();
+            const auto& cli = std::get<lfs::core::args::BatchTrainingMode>(*overridden).params;
+            EXPECT_EQ(cli.timeout_minutes, 3);
+            EXPECT_EQ(cli.output_dir, fs::path("cli-out"));
+            EXPECT_EQ(cli.summary_file, fs::path("cli.json"));
+            EXPECT_EQ(cli.report_file, fs::path("cli.txt"));
+            auto child = parse_child(lfs::app::resolve_batch_jobs(cli).front(), cli);
+            ASSERT_TRUE(child) << child.error();
+            EXPECT_EQ((*child)->optimization.iterations, 2000u);
+
+            std::ofstream(manifest) << R"({"dry_run":false,"continue_on_failure":true,"recursive":false,
+                "jobs":[{"dataset":"scene"}]})";
+            auto switches = parse_batch({manifest.string(), "--dry-run", "--recursive", "--stop-on-failure"});
+            ASSERT_TRUE(switches) << switches.error();
+            const auto& switched = std::get<lfs::core::args::BatchTrainingMode>(*switches).params;
+            EXPECT_TRUE(switched.dry_run);
+            EXPECT_TRUE(switched.recursive);
+            EXPECT_FALSE(switched.continue_on_failure);
+            // Restore the settings for the second invocation spelling.
+            std::ofstream(manifest) << R"({"dry_run":true,"timeout_minutes":12,"continue_on_failure":false,
+                "recursive":true,"output_dir":"out","summary_file":"summary.json","report_file":"report.txt",
+                "args":["--iter","1000"],"jobs":[{"dataset":"scene"}]})";
+        }
+    }
+
+    TEST(BatchTrainerTest, RejectsMultipleManifestsInEveryCombination) {
+        for (const auto& args : std::vector<std::vector<std::string>>{
+                 {"a.json", "b.json"},
+                 {"--manifest", "a.json", "b.json"},
+                 {"a.json", "--manifest=b.json"},
+                 {"--manifest", "a.json", "--manifest=b.json"}}) {
+            auto parsed = parse_batch(args);
+            ASSERT_FALSE(parsed);
+            EXPECT_NE(parsed.error().find("Only one batch manifest"), std::string::npos);
+        }
+    }
+
+    TEST(BatchTrainerTest, ManifestPathsResolveBesideFileRegardlessOfExistenceOrCwd) {
+        TempDirectoryGuard temp;
+        const auto config_dir = temp.path() / "configs";
+        const auto elsewhere = temp.path() / "elsewhere";
+        fs::create_directories(config_dir);
+        fs::create_directories(elsewhere / "scene");
+        std::ofstream(elsewhere / "train.json") << "{}";
+        struct RestoreCwd {
+            fs::path previous = fs::current_path();
+            ~RestoreCwd() { fs::current_path(previous); }
+        } restore;
+        fs::current_path(elsewhere);
+        const auto manifest = config_dir / "batch.json";
+        for (const bool absolute : {false, true}) {
+            const auto value = [&](const char* name) {
+                return (absolute ? temp.path() / name : fs::path(name)).string();
+            };
+            std::ofstream(manifest) << nlohmann::json{
+                {"output_dir", value("outputs")},
+                {"summary_file", value("summary.json")},
+                {"report_file", value("report.txt")},
+                {"jobs", {{{"dataset", value("scene")}, {"config", value("train.json")}, {"output", value("out")}}}}}
+                                           .dump();
+            auto loaded = lfs::core::param::read_batch_training_parameters_from_json(fs::path("../configs/batch.json"));
+            ASSERT_TRUE(loaded) << loaded.error().detail();
+            const auto base = absolute ? temp.path() : config_dir;
+            EXPECT_EQ(loaded->output_dir, base / "outputs");
+            EXPECT_EQ(loaded->summary_file, base / "summary.json");
+            EXPECT_EQ(loaded->report_file, base / "report.txt");
+            ASSERT_EQ(loaded->jobs.size(), 1u);
+            EXPECT_EQ(loaded->jobs[0].dataset_path, base / "scene");
+            EXPECT_EQ(loaded->jobs[0].config_file, base / "train.json");
+            EXPECT_EQ(loaded->jobs[0].output_path, base / "out");
+            EXPECT_THROW(lfs::app::resolve_batch_jobs(*loaded), std::runtime_error);
+        }
+    }
+
+    TEST(BatchTrainerTest, BadInputsFailBeforeDryRunCanSucceed) {
+        TempDirectoryGuard temp;
+        const auto scene = temp.path() / "scene";
+        fs::create_directories(scene);
+        std::ofstream(scene / "transforms.json") << "{}";
+        lfs::core::param::BatchTrainingParameters params;
+        params.input_paths = {scene, temp.path() / "missing"};
+        params.output_dir = temp.path() / "out";
+        params.dry_run = true;
+        EXPECT_THROW(lfs::app::resolve_batch_jobs(params), std::runtime_error);
+        EXPECT_NE(lfs::app::run_batch_training(params), 0);
+        EXPECT_FALSE(fs::exists(params.output_dir));
+        const auto manifest = temp.path() / "batch.json";
+        for (const auto contents : {"not json", "{\"jobs\":[{}]}", "{\"jobs\":[{\"dataset\":\"\"}]}"}) {
+            std::ofstream(manifest) << contents;
+            EXPECT_FALSE(parse_batch({scene.string(), manifest.string(), "--dry-run"}));
+            EXPECT_FALSE(parse_batch({scene.string(), "--manifest", manifest.string(), "--dry-run"}));
+        }
+        fs::remove(manifest);
+        EXPECT_FALSE(parse_batch({scene.string(), manifest.string()}));
+        EXPECT_FALSE(parse_batch({scene.string(), "--manifest", manifest.string()}));
+    }
+
+    TEST(BatchTrainerTest, KnownValuesKeepLeadingDashAndJoinedShortValuesKeepDataset) {
+        auto parsed = parse_batch({"first", "--cropbox", "-1,-1,-1,1,1,1", "-r4", "-i7000", "second", "-oout", "third", "-dfourth", "fifth"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto& params = std::get<lfs::core::args::BatchTrainingMode>(*parsed).params;
+        EXPECT_EQ(params.input_paths, (std::vector<fs::path>{"first", "second", "third", "fourth", "fifth"}));
+        EXPECT_EQ(params.output_dir, fs::path("out"));
+        EXPECT_EQ(params.shared_args, (std::vector<std::string>{"--cropbox", "-1,-1,-1,1,1,1", "-r4", "-i7000"}));
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "first";
+        job.output_path = "out";
+        auto child = parse_child(job, params);
+        ASSERT_TRUE(child) << child.error();
+        ASSERT_TRUE((*child)->cropbox);
+        EXPECT_EQ((*(*child)->cropbox)[0], -1.0f);
+        EXPECT_EQ((*child)->optimization.iterations, 7000u);
+        auto dash_value = parse_batch({"--images", "--help", "scene"});
+        ASSERT_TRUE(dash_value) << dash_value.error();
+        const auto& dash_params = std::get<lfs::core::args::BatchTrainingMode>(*dash_value).params;
+        EXPECT_EQ(dash_params.shared_args, (std::vector<std::string>{"--images", "--help"}));
+        EXPECT_EQ(dash_params.input_paths, (std::vector<fs::path>{"scene"}));
+        auto unknown = parse_batch({"scene", "--unknown", "value", "next"});
+        ASSERT_TRUE(unknown) << unknown.error();
+        const auto& unknown_params = std::get<lfs::core::args::BatchTrainingMode>(*unknown).params;
+        EXPECT_EQ(unknown_params.shared_args, (std::vector<std::string>{"--unknown", "value"}));
+        std::string error;
+        EXPECT_FALSE(lfs::app::validate_job_arguments(job, unknown_params, error));
+    }
+
+    TEST(BatchTrainerTest, ReservedPathOptionsAreRejectedInEveryArgumentLayerAndSpelling) {
+        for (const auto& option : std::vector<std::vector<std::string>>{
+                 {"-d", "other"},
+                 {"--data-path", "other"},
+                 {"-d=other"},
+                 {"--data-path=other"},
+                 {"-dother"},
+                 {"-o", "other"},
+                 {"--output-path", "other"},
+                 {"-o=other"},
+                 {"--output-path=other"},
+                 {"-oother"}}) {
+            SCOPED_TRACE(option.front());
+            for (const bool shared : {true, false}) {
+                lfs::core::param::BatchJobItem job;
+                job.dataset_path = "scene";
+                job.output_path = "out";
+                lfs::core::param::BatchTrainingParameters params;
+                (shared ? params.shared_args : job.extra_args) = option;
+                std::string error;
+                EXPECT_FALSE(lfs::app::validate_job_arguments(job, params, error));
+                EXPECT_NE(error.find("batch input/output"), std::string::npos);
+                EXPECT_NE(error.find("dataset/output"), std::string::npos);
+            }
+            std::vector<std::string> cli = {"scene", "--"};
+            cli.insert(cli.end(), option.begin(), option.end());
+            auto parsed = parse_batch(cli);
+            ASSERT_TRUE(parsed) << parsed.error();
+            lfs::core::param::BatchJobItem job;
+            job.dataset_path = "scene";
+            job.output_path = "out";
+            std::string error;
+            EXPECT_FALSE(lfs::app::validate_job_arguments(job, std::get<lfs::core::args::BatchTrainingMode>(*parsed).params, error));
+            EXPECT_NE(error.find("Reserved training option"), std::string::npos);
+        }
+    }
+
+    TEST(BatchTrainerTest, EffectivePathsRejectOverridesInShortOptionClusters) {
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "scene";
+        job.output_path = "out";
+        lfs::core::param::BatchTrainingParameters params;
+        for (const auto option : {"-qdother", "-qoother"}) {
+            job.extra_args = {option};
+            std::string error;
+            EXPECT_FALSE(lfs::app::validate_job_arguments(job, params, error));
+            EXPECT_NE(error.find("batch input/output"), std::string::npos);
+        }
+    }
+
+    TEST(BatchTrainerTest, JobOptionsReplaceSharedListsAndScalarAliases) {
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = "scene";
+        job.output_path = "out";
+        job.extra_args = {"--eval-steps=7000", "--eval-steps", "9000", "-i12000"};
+        lfs::core::param::BatchTrainingParameters params;
+        params.shared_args = {"--eval", "--eval-steps", "1000", "--eval-steps=2000", "--iter", "30000", "-i40000"};
+        EXPECT_EQ(lfs::app::build_child_args(job, params), (std::vector<std::string>{
+                                                               "--headless", "-d", "scene", "-o", "out", "--eval", "--eval-steps=7000", "--eval-steps", "9000", "-i12000"}));
+        auto child = parse_child(job, params);
+        ASSERT_TRUE(child) << child.error();
+        EXPECT_EQ((*child)->optimization.eval_steps, (std::vector<size_t>{7000, 9000}));
+        EXPECT_EQ((*child)->optimization.iterations, 12000u);
+    }
+
+    TEST(BatchTrainerTest, RejectsViewerResumeAndCameraOnlyModesAfterParsing) {
+        TempDirectoryGuard temp;
+        const auto model = temp.path() / "x.ply";
+        const auto checkpoint = temp.path() / "x.resume";
+        std::ofstream(model) << "ply\n";
+        std::ofstream(checkpoint) << "checkpoint";
+        lfs::core::param::BatchJobItem job;
+        job.dataset_path = temp.path();
+        job.output_path = temp.path() / "out";
+        lfs::core::param::BatchTrainingParameters params;
+        for (const auto& args : std::vector<std::vector<std::string>>{
+                 {"--view", model.string()},
+                 {"-v", model.string()},
+                 {"--resume", checkpoint.string()},
+                 {"--import-cameras", temp.path().string()}}) {
+            job.extra_args = args;
+            auto parsed = parse_child(job, params);
+            ASSERT_TRUE(parsed) << parsed.error();
+            std::string error;
+            EXPECT_FALSE(lfs::app::validate_job_arguments(job, params, error));
+            EXPECT_NE(error.find("headless training"), std::string::npos);
+        }
+    }
+
+    TEST(BatchTrainerTest, NegativeTimeoutIsRejectedInSeparateAndJoinedForms) {
+        for (const auto& args : std::vector<std::vector<std::string>>{
+                 {"scene", "--timeout", "-1"},
+                 {"scene", "--timeout=-1"}}) {
+            auto parsed = parse_batch(args);
+            ASSERT_FALSE(parsed);
+            EXPECT_NE(parsed.error().find("nonnegative"), std::string::npos);
+        }
+    }
+
+    TEST(BatchTrainerTest, ReportWritesCheckDirectoryOpenAndFlushFailures) {
+        TempDirectoryGuard temp;
+        const auto report = temp.path() / "new" / "report.txt";
+        ASSERT_TRUE(lfs::app::write_batch_report(report, "complete report"));
+        std::ifstream input(report);
+        EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), {}), "complete report");
+        EXPECT_FALSE(lfs::app::write_batch_report(report / "blocked.txt", "text"));
+        EXPECT_FALSE(lfs::app::write_batch_report(temp.path(), "text"));
+#ifdef __linux__
+        EXPECT_FALSE(lfs::app::write_batch_report("/dev/full", "text"));
+#endif
+    }
+
+    TEST(BatchTrainerTest, RejectsSummaryAndReportAliasesBeforeRunning) {
+        TempDirectoryGuard temp;
+        auto parsed = parse_batch({temp.path().string(), "--summary", (temp.path() / "result").string(),
+                                   "--report", (temp.path() / "./result").string(), "--dry-run"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        auto params = std::get<lfs::core::args::BatchTrainingMode>(*parsed).params;
+        std::string error;
+        EXPECT_FALSE(lfs::app::validate_batch_report_paths(params, error));
+        EXPECT_NE(error.find("different files"), std::string::npos);
+        EXPECT_NE(lfs::app::run_batch_training(params), 0);
+        EXPECT_FALSE(fs::exists(params.summary_file));
+        params.output_dir = temp.path();
+        params.summary_file.clear();
+        params.report_file = temp.path() / "BATCH_SUMMARY.JSON";
+        EXPECT_FALSE(lfs::app::validate_batch_report_paths(params, error));
+        params.report_file.clear();
+        EXPECT_TRUE(lfs::app::validate_batch_report_paths(params, error));
+    }
+
+    TEST(BatchTrainerTest, NamesAndExplicitOutputsCollideCaseInsensitively) {
+        TempDirectoryGuard temp;
+        lfs::core::param::BatchTrainingParameters params;
+        for (const auto name : {"Room", "room", "ROOM_2"}) {
+            lfs::core::param::BatchJobItem job;
+            job.name = name;
+            job.dataset_path = temp.path() / ("scene_" + std::to_string(params.jobs.size()));
+            fs::create_directories(job.dataset_path);
+            params.jobs.push_back(job);
+        }
+        params.output_dir = temp.path() / "out";
+        auto jobs = lfs::app::resolve_batch_jobs(params);
+        ASSERT_EQ(jobs.size(), 3u);
+        EXPECT_EQ(jobs[0].name, "Room");
+        EXPECT_EQ(jobs[1].name, "room_3");
+        EXPECT_EQ(jobs[2].name, "ROOM_2");
+        EXPECT_EQ(jobs[1].output_path, params.output_dir / "room_3");
+        params.jobs[0].output_path = params.output_dir / "Custom";
+        params.jobs[1].output_path = params.output_dir / "custom";
+        jobs = lfs::app::resolve_batch_jobs(params);
+        EXPECT_EQ(jobs[1].output_path, params.output_dir / "custom_2");
+    }
+
+    TEST(BatchTrainerTest, MainHelpUsesManifestInBatchExample) {
+        const char* argv[] = {"lichtfeld-studio", "--invalid-option-for-help-test"};
+        auto parsed = lfs::core::args::parse_args_and_params(2, argv, false);
+        ASSERT_FALSE(parsed);
+        EXPECT_NE(parsed.error().find("batch-train --manifest batch.json"), std::string::npos);
+        EXPECT_EQ(parsed.error().find("batch-train --config batch.json"), std::string::npos);
     }
 
     TEST(BatchTimeoutTest, OneMinuteUsesSingular) {

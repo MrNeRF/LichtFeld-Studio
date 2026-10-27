@@ -44,10 +44,12 @@ namespace lfs::core::args {
     struct TrainingFlag {
         std::string name; // "--iter" or "-i"
         bool takes_value = false;
+        std::string canonical_name; // Shared by aliases of the same parser option.
     };
 
     // Every option of the training command line, read from the parser itself.
     LFS_CORE_API std::vector<TrainingFlag> training_flags();
+    LFS_CORE_API const TrainingFlag* training_flag(std::string_view argument);
 
     // Parsed argument modes
     struct TrainingMode {

@@ -4,6 +4,7 @@
 #include "app/batch_process.hpp"
 #include <algorithm>
 #include <gtest/gtest.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,56 @@ namespace {
         EXPECT_EQ(forwarded, 0);
         EXPECT_TRUE(forward_pending_batch_cancel(1, forwarded, [](bool) { return true; }));
         EXPECT_EQ(forwarded, 1);
+    }
+
+    TEST(BatchProcessTest, TimeoutEscalatesAfterGraceAndOnlyOnce) {
+        using namespace std::chrono;
+        const steady_clock::time_point start{};
+        BatchTimeout timeout;
+        std::vector<bool> stops;
+        const auto stop = [&](bool force) {
+            stops.push_back(force);
+            return true;
+        };
+        EXPECT_TRUE(timeout.update(start, start + seconds{59}, 1, stop));
+        EXPECT_TRUE(stops.empty());
+        EXPECT_TRUE(timeout.update(start, start + minutes{1}, 1, stop));
+        EXPECT_EQ(stops, (std::vector<bool>{false}));
+        EXPECT_TRUE(timeout.update(start, start + minutes{1} + BATCH_STOP_GRACE - milliseconds{1}, 1, stop));
+        EXPECT_EQ(stops.size(), 1u);
+        EXPECT_TRUE(timeout.update(start, start + minutes{1} + BATCH_STOP_GRACE, 1, stop));
+        EXPECT_EQ(stops, (std::vector<bool>{false, true}));
+        EXPECT_TRUE(timeout.update(start, start + hours{1}, 1, stop));
+        EXPECT_EQ(stops.size(), 2u);
+    }
+
+    TEST(BatchProcessTest, DisabledAndLargeTimeoutDoNotOverflow) {
+        const std::chrono::steady_clock::time_point start{};
+        for (const int minutes : {0, std::numeric_limits<int>::max()}) {
+            BatchTimeout timeout;
+            EXPECT_TRUE(timeout.update(start, start + std::chrono::hours{24}, minutes, [](bool) {
+                ADD_FAILURE() << "Unexpected timeout";
+                return true;
+            }));
+            EXPECT_FALSE(timeout.stopped_at);
+        }
+    }
+
+    TEST(BatchProcessTest, FailedTimeoutForceStopIsReportedAndCanBeRetried) {
+        using namespace std::chrono;
+        const steady_clock::time_point start{};
+        BatchTimeout timeout;
+        ASSERT_TRUE(timeout.update(start, start + minutes{1}, 1, [](bool) { return true; }));
+        EXPECT_FALSE(timeout.update(start, start + minutes{1} + BATCH_STOP_GRACE, 1, [](bool force) {
+            EXPECT_TRUE(force);
+            return false;
+        }));
+        EXPECT_FALSE(timeout.forced);
+        EXPECT_TRUE(timeout.update(start, start + minutes{1} + BATCH_STOP_GRACE, 1, [](bool force) {
+            EXPECT_TRUE(force);
+            return true;
+        }));
+        EXPECT_TRUE(timeout.forced);
     }
 
 #ifdef _WIN32
@@ -301,7 +352,7 @@ namespace {
     }
 
 #ifdef __linux__
-    void force_stop_process_tree() {
+    void force_stop_process_tree(const int direct_exit = 0) {
         alarm(10);
         if (prctl(PR_SET_CHILD_SUBREAPER, 1) != 0)
             _exit(30);
@@ -323,9 +374,16 @@ namespace {
                 _exit(34);
             if (grandchild == 0) {
                 alarm(5);
+                ::signal(SIGTERM, SIG_IGN);
+                ::signal(SIGINT, SIG_IGN);
                 const pid_t self = getpid();
                 if (write(ready[1], &self, sizeof(self)) != sizeof(self))
                     _exit(35);
+            } else if (direct_exit == 1) {
+                _exit(0);
+            } else if (direct_exit == 2) {
+                raise(SIGTERM);
+                _exit(41);
             }
             while (true)
                 pause();
@@ -336,6 +394,15 @@ namespace {
             _exit(36);
         if (!register_batch_child(child) || getpgid(grandchild) != child)
             _exit(37);
+        if (direct_exit != 0) {
+            int child_status = 0, grandchild_status = 0;
+            if (waitpid(child, &child_status, 0) != child || !cleanup_batch_group(child) ||
+                waitpid(grandchild, &grandchild_status, 0) != grandchild)
+                _exit(42);
+            const bool child_ok = direct_exit == 1 ? WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0
+                                                   : WIFSIGNALED(child_status) && WTERMSIG(child_status) == SIGTERM;
+            _exit(child_ok && WIFSIGNALED(grandchild_status) && WTERMSIG(grandchild_status) == SIGKILL ? 0 : 43);
+        }
         int forwarded = 0;
         if (!forward_pending_batch_cancel(2, forwarded, [&](bool force) {
                 return signal_batch_child(child, force ? SIGKILL : SIGINT);
@@ -352,6 +419,14 @@ namespace {
 
     TEST(BatchProcessDeathTest, ForceStopReachesGrandchild) {
         ASSERT_EXIT(force_stop_process_tree(), ::testing::ExitedWithCode(0), "");
+    }
+
+    TEST(BatchProcessDeathTest, CleansGrandchildAfterDirectChildExitsNormally) {
+        ASSERT_EXIT(force_stop_process_tree(1), ::testing::ExitedWithCode(0), "");
+    }
+
+    TEST(BatchProcessDeathTest, CleansGrandchildAfterDirectChildDiesBySignal) {
+        ASSERT_EXIT(force_stop_process_tree(2), ::testing::ExitedWithCode(0), "");
     }
 #endif
 #endif

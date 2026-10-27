@@ -1761,9 +1761,8 @@ namespace lfs::core {
             };
             const auto near_manifest = [&](const nlohmann::json& value) {
                 auto resolved = utf8_to_path(value.get<std::string>());
-                if (resolved.is_relative() && path.has_parent_path() &&
-                    lfs::core::native_fs::exists(path.parent_path() / resolved))
-                    resolved = path.parent_path() / resolved;
+                if (resolved.is_relative())
+                    return (lfs::core::native_fs::current_path() / path.parent_path() / resolved).lexically_normal();
                 return resolved;
             };
 
@@ -1780,11 +1779,13 @@ namespace lfs::core {
                 }
                 if (!job_json.contains("dataset"))
                     return fail("Batch job is missing \"dataset\"");
+                if (job_json["dataset"].get<std::string>().empty())
+                    return fail("Batch job dataset must not be empty");
                 item.dataset_path = near_manifest(job_json["dataset"]);
                 if (job_json.contains("name"))
                     item.name = job_json["name"].get<std::string>();
                 if (job_json.contains("output"))
-                    item.output_path = utf8_to_path(job_json["output"].get<std::string>());
+                    item.output_path = near_manifest(job_json["output"]);
                 if (job_json.contains("config"))
                     item.config_file = near_manifest(job_json["config"]);
                 return item;
@@ -1822,7 +1823,7 @@ namespace lfs::core {
                     return fail(std::format("Batch configuration \"{}\" has the wrong type", key));
             }
             if (j.contains("output_dir"))
-                params.output_dir = utf8_to_path(j["output_dir"].get<std::string>());
+                params.output_dir = near_manifest(j["output_dir"]);
             if (j.contains("continue_on_failure"))
                 params.continue_on_failure = j["continue_on_failure"].get<bool>();
             if (j.contains("recursive"))
@@ -1832,9 +1833,9 @@ namespace lfs::core {
             if (j.contains("timeout_minutes"))
                 params.timeout_minutes = static_cast<int>(j["timeout_minutes"].get<int64_t>());
             if (j.contains("summary_file"))
-                params.summary_file = utf8_to_path(j["summary_file"].get<std::string>());
+                params.summary_file = near_manifest(j["summary_file"]);
             if (j.contains("report_file"))
-                params.report_file = utf8_to_path(j["report_file"].get<std::string>());
+                params.report_file = near_manifest(j["report_file"]);
             if (j.contains("jobs")) {
                 if (auto read = read_jobs(j["jobs"]); !read)
                     return std::unexpected(read.error());

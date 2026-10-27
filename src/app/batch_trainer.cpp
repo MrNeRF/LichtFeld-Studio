@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -24,6 +25,8 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <print>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -130,6 +133,35 @@ namespace lfs::app {
             return ss.str();
         }
 
+        std::string case_key(std::string value) {
+            std::ranges::transform(value, value.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return value;
+        }
+
+        path resolved_path(const path& value) {
+            return lfs::core::native_fs::weakly_canonical(lfs::core::native_fs::current_path() / value);
+        }
+
+        std::string path_key(const path& value) {
+            return case_key(lfs::core::path_to_utf8(resolved_path(value)));
+        }
+
+        std::pair<path, path> report_paths(const lfs::core::param::BatchTrainingParameters& params) {
+            return {params.summary_file.empty() ? params.output_dir / "batch_summary.json" : params.summary_file,
+                    params.report_file.empty() ? params.output_dir / "batch_report.txt" : params.report_file};
+        }
+
+        // Visit options with their values, recognizing aliases and joined short values.
+        template <typename Visit>
+        void visit_training_args(const std::vector<std::string>& args, Visit visit) {
+            for (size_t i = 0; i < args.size();) {
+                const auto* flag = lfs::core::args::training_flag(args[i]);
+                const size_t count = flag && flag->takes_value && args[i] == flag->name && i + 1 < args.size() ? 2 : 1;
+                visit(i, count, flag);
+                i += count;
+            }
+        }
+
         bool is_hidden_or_output_dir(const path& path) {
             const auto filename = lfs::core::path_to_utf8(path.filename());
             if (filename.empty())
@@ -173,25 +205,8 @@ namespace lfs::app {
             std::vector<path> candidate_paths;
 
             for (const auto& input : params.input_paths) {
-                if (!lfs::core::native_fs::exists(input)) {
-                    LOG_WARN("Batch input path does not exist: {}", lfs::core::path_to_utf8(input));
-                    continue;
-                }
-
-                // If input is a JSON file, load it as a batch manifest
-                if (lfs::core::native_fs::is_regular_file(input) && input.extension() == ".json") {
-                    auto config_res = lfs::core::param::read_batch_training_parameters_from_json(input);
-                    if (config_res) {
-                        for (auto& job : config_res->jobs) {
-                            job.extra_args.insert(job.extra_args.begin(), config_res->shared_args.begin(), config_res->shared_args.end());
-                            jobs.push_back(std::move(job));
-                        }
-                    } else {
-                        LOG_ERROR("Failed to load batch manifest {}: {} {}",
-                                  lfs::core::path_to_utf8(input), config_res.error().user_message(), config_res.error().detail());
-                    }
-                    continue;
-                }
+                if (!lfs::core::native_fs::exists(input))
+                    throw std::runtime_error(std::format("Batch input path does not exist: {}", lfs::core::path_to_utf8(input)));
 
                 // If input is directly a dataset (e.g. contains sparse/ or transforms.json)
                 if (lfs::io::Loader::isDatasetPath(input)) {
@@ -220,6 +235,8 @@ namespace lfs::app {
                             LOG_WARN("Could not read directory {}: {}", lfs::core::path_to_utf8(input), e.what());
                         }
                     }
+                } else {
+                    throw std::runtime_error(std::format("Batch input is not a dataset or directory: {}", lfs::core::path_to_utf8(input)));
                 }
             }
 
@@ -238,6 +255,8 @@ namespace lfs::app {
             std::vector<std::string> seen_canonical_paths;
 
             for (auto& job : jobs) {
+                if (job.dataset_path.empty() || !lfs::core::native_fs::exists(job.dataset_path))
+                    throw std::runtime_error(std::format("Batch dataset does not exist: {}", lfs::core::path_to_utf8(job.dataset_path)));
                 std::error_code ec;
                 auto canonical = lfs::core::native_fs::weakly_canonical(job.dataset_path, ec);
                 std::string path_str = lfs::core::path_to_utf8(ec ? job.dataset_path : canonical);
@@ -257,7 +276,7 @@ namespace lfs::app {
                     if (base.empty() || base == ".") {
                         base = "dataset";
                     }
-                    base_name_counts[base]++;
+                    base_name_counts[case_key(base)]++;
                 }
             }
 
@@ -265,7 +284,7 @@ namespace lfs::app {
             std::unordered_set<std::string> reserved_names;
             for (const auto& job : unique_jobs) {
                 if (!job.name.empty()) {
-                    reserved_names.insert(job.name);
+                    reserved_names.insert(case_key(job.name));
                 }
             }
 
@@ -277,7 +296,7 @@ namespace lfs::app {
                     if (base.empty() || base == ".") {
                         base = "dataset";
                     }
-                    if (base_name_counts[base] > 1) {
+                    if (base_name_counts[case_key(base)] > 1) {
                         auto parent = job.dataset_path.parent_path().stem();
                         std::string parent_str = lfs::core::path_to_utf8(parent);
                         if (!parent_str.empty() && parent_str != "." && parent_str != "/" && parent_str != "\\") {
@@ -286,33 +305,33 @@ namespace lfs::app {
                     }
 
                     std::string candidate = base;
-                    if (assigned_names.contains(candidate) || reserved_names.contains(candidate)) {
+                    if (assigned_names.contains(case_key(candidate)) || reserved_names.contains(case_key(candidate))) {
                         int suffix = 2;
                         while (true) {
                             candidate = base + "_" + std::to_string(suffix);
-                            if (!assigned_names.contains(candidate) && !reserved_names.contains(candidate)) {
+                            if (!assigned_names.contains(case_key(candidate)) && !reserved_names.contains(case_key(candidate))) {
                                 break;
                             }
                             ++suffix;
                         }
                     }
                     job.name = candidate;
-                    assigned_names.insert(candidate);
+                    assigned_names.insert(case_key(candidate));
                 } else {
                     // Disambiguate duplicate explicit names if any
                     std::string candidate = job.name;
-                    if (assigned_names.contains(candidate)) {
+                    if (assigned_names.contains(case_key(candidate))) {
                         int suffix = 2;
                         while (true) {
                             candidate = job.name + "_" + std::to_string(suffix);
-                            if (!assigned_names.contains(candidate) && !reserved_names.contains(candidate)) {
+                            if (!assigned_names.contains(case_key(candidate)) && !reserved_names.contains(case_key(candidate))) {
                                 break;
                             }
                             ++suffix;
                         }
                         job.name = candidate;
                     }
-                    assigned_names.insert(job.name);
+                    assigned_names.insert(case_key(job.name));
                 }
             }
 
@@ -328,8 +347,8 @@ namespace lfs::app {
                 }
 
                 std::error_code ec;
-                auto canonical_out = lfs::core::native_fs::weakly_canonical(job.output_path, ec);
-                std::string out_str = lfs::core::path_to_utf8(ec ? job.output_path : canonical_out);
+                auto canonical_out = lfs::core::native_fs::weakly_canonical(lfs::core::native_fs::current_path() / job.output_path, ec);
+                std::string out_str = case_key(lfs::core::path_to_utf8(ec ? job.output_path : canonical_out));
 
                 if (std::find(seen_output_paths.begin(), seen_output_paths.end(), out_str) != seen_output_paths.end()) {
                     int suffix = 2;
@@ -337,8 +356,8 @@ namespace lfs::app {
                     while (true) {
                         path cand = base_out;
                         cand += "_" + std::to_string(suffix);
-                        auto cand_canonical = lfs::core::native_fs::weakly_canonical(cand, ec);
-                        std::string cand_str = lfs::core::path_to_utf8(ec ? cand : cand_canonical);
+                        auto cand_canonical = lfs::core::native_fs::weakly_canonical(lfs::core::native_fs::current_path() / cand, ec);
+                        std::string cand_str = case_key(lfs::core::path_to_utf8(ec ? cand : cand_canonical));
                         if (std::find(seen_output_paths.begin(), seen_output_paths.end(), cand_str) == seen_output_paths.end()) {
                             job.output_path = cand;
                             seen_output_paths.push_back(cand_str);
@@ -498,7 +517,7 @@ namespace lfs::app {
             bool pipe_open = true;
             bool child_done = false;
             bool cancel_message_printed = false;
-            bool timeout_triggered = false;
+            detail::BatchTimeout timeout;
             constexpr DWORD MAX_DRAIN_PER_CYCLE = 64 * 1024;
 
             while (!child_done) {
@@ -597,29 +616,32 @@ namespace lfs::app {
                     }
                 }
 
-                if (!child_done && g_interrupt_count.load() == 0 && params.timeout_minutes > 0) {
-                    const auto elapsed_sec = std::chrono::duration<double>(
-                                                 std::chrono::steady_clock::now() - start_time)
-                                                 .count();
-                    if (elapsed_sec > params.timeout_minutes * 60) {
-                        if (!timeout_triggered) {
-                            timeout_triggered = true;
-                            result.timed_out = true;
-                            result.exit_code = 124;
-                            result.error_message = batch_timeout_message(params.timeout_minutes);
-                            std::println(stderr, "\n[Batch] {}. Sending a stop signal to the child process... (Press Ctrl+C to abort, twice to force kill)", result.error_message);
-                            BOOL stopped = GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId);
-                            if (!stopped) {
-                                if (!detail::stop_batch_child(pi.hProcess, hJob, 124)) {
-                                    result.error_message = std::format("Failed to stop child process (system error {})", GetLastError());
-                                    break;
-                                }
-                            }
-                        }
+                if (timeout.stopped_at || g_interrupt_count.load() == 0) {
+                    const bool stopped = timeout.update(start_time, std::chrono::steady_clock::now(), params.timeout_minutes,
+                                                        [&](const bool force) {
+                                                            return (!force && GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pi.dwProcessId)) ||
+                                                                   detail::stop_batch_child(pi.hProcess, hJob, 124);
+                                                        });
+                    if (timeout.stopped_at && !result.timed_out) {
+                        result.timed_out = true;
+                        result.exit_code = 124;
+                        result.error_message = batch_timeout_message(params.timeout_minutes);
+                        std::println(stderr, "\n[Batch] {}. Sending a stop signal; force termination follows after {} seconds.",
+                                     result.error_message, detail::BATCH_STOP_GRACE.count());
+                    }
+                    if (!stopped) {
+                        result.error_message = "Failed to stop timed-out child process";
+                        break;
                     }
                 }
             }
 
+            if (!child_done) {
+                if (detail::stop_batch_child(pi.hProcess, hJob, 1))
+                    WaitForSingleObject(pi.hProcess, INFINITE);
+                else
+                    LOG_ERROR("Failed to terminate child process (system error {})", GetLastError());
+            }
             DWORD exitCodeDword = 0;
             GetExitCodeProcess(pi.hProcess, &exitCodeDword);
             if (!result.timed_out && result.exit_code == 0) {
@@ -697,6 +719,7 @@ namespace lfs::app {
 
             if (!detail::register_batch_child(pid)) {
                 const int error = errno;
+                detail::cleanup_batch_group(pid);
                 kill(pid, SIGKILL);
                 while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR) {}
                 sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
@@ -722,7 +745,7 @@ namespace lfs::app {
             char buffer[4096];
             bool child_done = false;
             bool cancel_message_printed = false;
-            bool timeout_triggered = false;
+            detail::BatchTimeout timeout;
             constexpr size_t MAX_DRAIN_PER_CYCLE = 64 * 1024;
 
             while (!child_done) {
@@ -757,6 +780,13 @@ namespace lfs::app {
                 sigprocmask(SIG_BLOCK, &block_mask, nullptr);
                 int status = 0;
                 pid_t wait_res = waitpid(pid, &status, WNOHANG);
+                const int wait_error = errno;
+                if (wait_res < 0 && wait_error != EINTR) {
+                    sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
+                    result.exit_code = 1;
+                    result.error_message = std::format("Failed to wait for child process (system error {})", wait_error);
+                    break;
+                }
                 if (wait_res == pid) {
                     child_done = true;
                     sigprocmask(SIG_SETMASK, &orig_mask, nullptr);
@@ -811,24 +841,33 @@ namespace lfs::app {
                     }
                 }
 
-                // Timeout check: disarmed if interrupted
-                if (!child_done && g_interrupt_count.load() == 0 && params.timeout_minutes > 0) {
-                    const auto elapsed_sec = std::chrono::duration<double>(
-                                                 std::chrono::steady_clock::now() - start_time)
-                                                 .count();
-                    if (elapsed_sec > params.timeout_minutes * 60) {
-                        if (!timeout_triggered) {
-                            timeout_triggered = true;
-                            result.timed_out = true;
-                            result.exit_code = 124;
-                            result.error_message = batch_timeout_message(params.timeout_minutes);
-                            std::println(stderr, "\n[Batch] {}. Sending a stop signal to the child process... (Press Ctrl+C to abort, twice to force kill)", result.error_message);
-                            detail::signal_batch_child(pid, SIGTERM);
-                        }
+                if (timeout.stopped_at || g_interrupt_count.load() == 0) {
+                    const bool stopped = timeout.update(start_time, std::chrono::steady_clock::now(), params.timeout_minutes,
+                                                        [&](const bool force) {
+                                                            return detail::signal_batch_child(pid, force ? SIGKILL : SIGTERM);
+                                                        });
+                    if (timeout.stopped_at && !result.timed_out) {
+                        result.timed_out = true;
+                        result.exit_code = 124;
+                        result.error_message = batch_timeout_message(params.timeout_minutes);
+                        std::println(stderr, "\n[Batch] {}. Sending a stop signal; force termination follows after {} seconds.",
+                                     result.error_message, detail::BATCH_STOP_GRACE.count());
+                    }
+                    if (!stopped) {
+                        result.error_message = "Failed to stop timed-out child process";
+                        break;
                     }
                 }
             }
 
+            if (!detail::cleanup_batch_group(pid)) {
+                result.exit_code = 1;
+                result.error_message = std::format("Failed to clean up child process group (system error {})", errno);
+            }
+            if (!child_done) {
+                detail::signal_batch_child(pid, SIGKILL);
+                while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR) {}
+            }
             close(pipe_fds[0]);
 #endif
 
@@ -848,29 +887,13 @@ namespace lfs::app {
             return result;
         }
 
-        void write_summary_files(
+        bool write_summary_files(
             const lfs::core::param::BatchTrainingParameters& params,
             const std::vector<JobExecutionResult>& results,
             const double total_duration_seconds,
             const std::string& timestamp) {
 
-            path summary_path = params.summary_file;
-            if (summary_path.empty()) {
-                if (!params.output_dir.empty()) {
-                    summary_path = params.output_dir / "batch_summary.json";
-                } else {
-                    summary_path = "batch_summary.json";
-                }
-            }
-
-            path report_path = params.report_file;
-            if (report_path.empty()) {
-                if (!params.output_dir.empty()) {
-                    report_path = params.output_dir / "batch_report.txt";
-                } else {
-                    report_path = "batch_report.txt";
-                }
-            }
+            const auto [summary_path, report_path] = report_paths(params);
 
             json summary_json;
             summary_json["timestamp"] = timestamp;
@@ -911,55 +934,61 @@ namespace lfs::app {
             }
             summary_json["jobs"] = std::move(jobs_array);
 
-            try {
-                if (summary_path.has_parent_path()) {
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(summary_path.parent_path(), ec);
-                }
-                std::ofstream json_out(lfs::core::native_fs::native_path(summary_path));
-                if (json_out.is_open()) {
-                    json_out << summary_json.dump(2) << std::endl;
-                    LOG_INFO("Wrote batch summary to {}", lfs::core::path_to_utf8(summary_path));
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("Failed to write summary JSON: {}", e.what());
-            }
+            const bool summary_written = write_batch_report(summary_path, summary_json.dump(2) + "\n");
+            std::ostringstream txt_out;
+            txt_out << "================================================================================\n";
+            txt_out << "LichtFeld Studio - Batch Training Report\n";
+            txt_out << "Timestamp: " << timestamp << "\n";
+            txt_out << "Total Jobs: " << results.size() << " | Succeeded: " << succeeded
+                    << " | Failed: " << failed << " | Cancelled: " << cancelled << "\n";
+            txt_out << "Total Duration: " << format_duration(total_duration_seconds) << "\n";
+            txt_out << "================================================================================\n\n";
 
-            try {
-                if (report_path.has_parent_path()) {
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(report_path.parent_path(), ec);
+            for (size_t i = 0; i < results.size(); ++i) {
+                const auto& r = results[i];
+                const std::string status_str = r.cancelled ? "Cancelled" : (r.success ? "Success  " : "Failed   ");
+                txt_out << std::format("[{:2d}] {} {:<24} ({}) -> {}\n",
+                                       i + 1, status_str, r.name,
+                                       format_duration(r.duration_seconds),
+                                       lfs::core::path_to_utf8(r.output_path));
+                if (!r.success && !r.error_message.empty()) {
+                    txt_out << "     Error: " << r.error_message << "\n";
                 }
-                std::ofstream txt_out(lfs::core::native_fs::native_path(report_path));
-                if (txt_out.is_open()) {
-                    txt_out << "================================================================================\n";
-                    txt_out << "LichtFeld Studio - Batch Training Report\n";
-                    txt_out << "Timestamp: " << timestamp << "\n";
-                    txt_out << "Total Jobs: " << results.size() << " | Succeeded: " << succeeded
-                            << " | Failed: " << failed << " | Cancelled: " << cancelled << "\n";
-                    txt_out << "Total Duration: " << format_duration(total_duration_seconds) << "\n";
-                    txt_out << "================================================================================\n\n";
-
-                    for (size_t i = 0; i < results.size(); ++i) {
-                        const auto& r = results[i];
-                        const std::string status_str = r.cancelled ? "Cancelled" : (r.success ? "Success  " : "Failed   ");
-                        txt_out << std::format("[{:2d}] {} {:<24} ({}) -> {}\n",
-                                               i + 1, status_str, r.name,
-                                               format_duration(r.duration_seconds),
-                                               lfs::core::path_to_utf8(r.output_path));
-                        if (!r.success && !r.error_message.empty()) {
-                            txt_out << "     Error: " << r.error_message << "\n";
-                        }
-                    }
-                    txt_out << "\n================================================================================\n";
-                    LOG_INFO("Wrote batch report to {}", lfs::core::path_to_utf8(report_path));
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("Failed to write report text: {}", e.what());
             }
+            txt_out << "\n================================================================================\n";
+            const bool report_written = write_batch_report(report_path, txt_out.str());
+            return summary_written && report_written;
         }
 
     } // namespace
+
+    bool validate_batch_report_paths(const lfs::core::param::BatchTrainingParameters& params, std::string& error) {
+        const auto [summary, report] = report_paths(params);
+        std::error_code ec;
+        if (path_key(summary) == path_key(report) || lfs::core::native_fs::equivalent(summary, report, ec)) {
+            error = "Batch summary and report must point to different files";
+            return false;
+        }
+        return true;
+    }
+
+    bool write_batch_report(const path& destination, const std::string_view contents) {
+        try {
+            if (destination.has_parent_path())
+                lfs::core::native_fs::create_directories(destination.parent_path());
+            std::ofstream out;
+            out.exceptions(std::ios::failbit | std::ios::badbit);
+            out.open(lfs::core::native_fs::native_path(destination));
+            out << contents;
+            out.flush();
+            out.close();
+            LOG_INFO("Wrote batch report to {}", lfs::core::path_to_utf8(destination));
+            return true;
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to write batch report {}: {}", lfs::core::path_to_utf8(destination), e.what());
+            return false;
+        }
+    }
 
     std::vector<lfs::core::param::BatchJobItem> resolve_batch_jobs(
         const lfs::core::param::BatchTrainingParameters& params) {
@@ -978,19 +1007,17 @@ namespace lfs::app {
         args.push_back("-o");
         args.push_back(lfs::core::path_to_utf8(job.output_path));
 
-        // Append shared args, filtering out any conflicting dataset/output flags
-        for (size_t i = 0; i < params.shared_args.size(); ++i) {
-            const auto& arg = params.shared_args[i];
-            if (arg == "-d" || arg == "--data-path" || arg == "-o" || arg == "--output-path") {
-                if (i + 1 < params.shared_args.size() && !params.shared_args[i + 1].starts_with('-')) {
-                    ++i;
-                }
-                continue;
-            }
-            if (arg == "--headless")
-                continue;
-            args.push_back(arg);
-        }
+        std::unordered_set<std::string> overridden;
+        visit_training_args(job.extra_args, [&](size_t, size_t, const auto* flag) {
+            if (flag)
+                overridden.insert(flag->canonical_name);
+        });
+        if (job.config_file && !job.config_file->empty())
+            overridden.insert(lfs::core::args::training_flag("--config")->canonical_name);
+        visit_training_args(params.shared_args, [&](const size_t i, const size_t count, const auto* flag) {
+            if (!flag || !overridden.contains(flag->canonical_name))
+                args.insert(args.end(), params.shared_args.begin() + i, params.shared_args.begin() + i + count);
+        });
 
         // The job's own config and arguments come last so they win over shared ones
         if (job.config_file && !job.config_file->empty()) {
@@ -1008,6 +1035,21 @@ namespace lfs::app {
         const lfs::core::param::BatchJobItem& job,
         const lfs::core::param::BatchTrainingParameters& params,
         std::string& error) {
+        bool reserved = false;
+        const auto check_reserved = [&](const std::vector<std::string>& args) {
+            visit_training_args(args, [&](const size_t i, size_t, const auto* flag) {
+                if (flag && (flag->name == "-d" || flag->name == "--data-path" ||
+                             flag->name == "-o" || flag->name == "--output-path")) {
+                    error = std::format("Reserved training option '{}': use the batch input/output options or the job's dataset/output fields", args[i]);
+                    reserved = true;
+                }
+            });
+        };
+        check_reserved(params.shared_args);
+        check_reserved(job.extra_args);
+        if (reserved)
+            return false;
+
         const auto child_args = build_child_args(job, params);
         std::vector<std::string> validate_args;
         validate_args.reserve(child_args.size() + 1);
@@ -1025,6 +1067,20 @@ namespace lfs::app {
             static_cast<int>(validate_argv.size()), validate_argv.data(), /*create_output_directory=*/false, /*validate_only=*/true);
         if (!val_res) {
             error = val_res.error();
+            return false;
+        }
+        const auto& parsed = **val_res;
+        if (!parsed.optimization.headless || !parsed.view_paths.empty() || parsed.project_path ||
+            parsed.resume_checkpoint || parsed.resume_project || parsed.render_path ||
+            parsed.import_cameras_path || parsed.evaluate_only) {
+            error = "Batch jobs must select headless training of the job's dataset; viewer, resume and other modes are not supported";
+            return false;
+        }
+        // Also catch path overrides embedded in short-option clusters.
+        const auto& dataset = parsed.dataset_project ? *parsed.dataset_project : parsed.dataset.data_path;
+        if (resolved_path(dataset) != resolved_path(job.dataset_path) ||
+            resolved_path(parsed.dataset.output_path) != resolved_path(job.output_path)) {
+            error = "Reserved dataset/output override: use the batch input/output options or the job's dataset/output fields";
             return false;
         }
         return true;
@@ -1046,7 +1102,18 @@ namespace lfs::app {
             return 1;
         }
 
-        const auto jobs = resolve_batch_jobs(params);
+        std::vector<lfs::core::param::BatchJobItem> jobs;
+        try {
+            std::string error;
+            if (!validate_batch_report_paths(params, error)) {
+                LOG_ERROR("{}", error);
+                return 1;
+            }
+            jobs = resolve_batch_jobs(params);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to resolve batch inputs: {}", e.what());
+            return 1;
+        }
         if (jobs.empty()) {
             LOG_ERROR("Batch training: No valid datasets found.");
             std::println(stderr, "\nError: No valid datasets found.");
@@ -1190,9 +1257,9 @@ namespace lfs::app {
         }
         std::println("================================================================================");
 
-        write_summary_files(params, results, total_duration_seconds, timestamp);
+        const bool reports_written = write_summary_files(params, results, total_duration_seconds, timestamp);
 
-        return (failed_count > 0 || cancelled_count > 0) ? 1 : 0;
+        return (failed_count > 0 || cancelled_count > 0 || !reports_written) ? 1 : 0;
     }
 
 } // namespace lfs::app

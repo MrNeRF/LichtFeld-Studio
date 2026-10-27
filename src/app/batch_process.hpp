@@ -4,6 +4,8 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <optional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -14,6 +16,34 @@
 #endif
 
 namespace lfs::app::detail {
+
+    inline constexpr auto BATCH_STOP_GRACE = std::chrono::seconds{60};
+
+    struct BatchTimeout {
+        std::optional<std::chrono::steady_clock::time_point> stopped_at;
+        bool forced = false;
+
+        template <typename Stop>
+        bool update(const std::chrono::steady_clock::time_point start,
+                    const std::chrono::steady_clock::time_point now,
+                    const int minutes, Stop stop) {
+            if (!stopped_at) {
+                // A floating-duration deadline also accommodates INT_MAX minutes.
+                const auto deadline = std::chrono::time_point_cast<std::chrono::duration<double>>(start) +
+                                      std::chrono::minutes{minutes};
+                if (minutes <= 0 || now < deadline)
+                    return true;
+                stopped_at = now;
+                return stop(false);
+            }
+            if (!forced && now - *stopped_at >= BATCH_STOP_GRACE) {
+                if (!stop(true))
+                    return false;
+                forced = true;
+            }
+            return true;
+        }
+    };
 
     template <typename Stop>
     bool forward_pending_batch_cancel(const int count, int& forwarded, Stop stop) {
@@ -93,6 +123,11 @@ namespace lfs::app::detail {
     inline bool register_batch_child(const pid_t pid) {
         // Either side of fork may run first; exec/exit can also win this race.
         return setpgid(pid, pid) == 0 || errno == EACCES || errno == ESRCH;
+    }
+
+    // Group only: the direct child may already have been reaped.
+    inline bool cleanup_batch_group(const pid_t pid) {
+        return kill(-pid, SIGKILL) == 0 || errno == ESRCH;
     }
 
     inline bool signal_batch_child(const pid_t pid, const int signal) {

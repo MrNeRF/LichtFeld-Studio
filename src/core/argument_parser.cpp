@@ -730,7 +730,7 @@ namespace {
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
                 "lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n"
-                "lichtfeld-studio batch-train --config batch.json\n"
+                "lichtfeld-studio batch-train --manifest batch.json\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -2092,12 +2092,26 @@ std::vector<lfs::core::args::TrainingFlag> lfs::core::args::training_flags() {
     lfs::core::param::TrainingParameters params;
     (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
         for (const auto* const flag : parser.Group::GetAllFlags()) {
-            for (const auto& name : flag->GetMatcher().GetFlagStrings())
-                flags.push_back({name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag,
-                                 flag->NumberOfArguments().max > 0});
+            const auto first = flags.size();
+            for (const auto& name : flag->GetMatcher().GetFlagStrings()) {
+                const auto spelling = name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag;
+                flags.push_back({spelling, flag->NumberOfArguments().max > 0,
+                                 flags.size() == first ? spelling : flags[first].canonical_name});
+            }
         }
     });
     return flags;
+}
+
+const lfs::core::args::TrainingFlag* lfs::core::args::training_flag(const std::string_view argument) {
+    static const auto flags = training_flags();
+    const auto name = argument.substr(0, argument.find('='));
+    for (const auto& flag : flags) {
+        if (name == flag.name || (flag.takes_value && flag.name.size() == 2 &&
+                                  argument.starts_with(flag.name)))
+            return &flag;
+    }
+    return nullptr;
 }
 
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
@@ -2876,13 +2890,6 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
     }
 
-    // Unknown flags take a value; validate_job_arguments reports them before any job starts.
-    bool training_flag_takes_value(const std::string_view flag) {
-        static const auto flags = lfs::core::args::training_flags();
-        const auto it = std::ranges::find(flags, flag, &lfs::core::args::TrainingFlag::name);
-        return it == flags.end() || it->takes_value;
-    }
-
     std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
         const int argc, const char* const argv[], std::string& error) {
         namespace core_args = lfs::core::args;
@@ -2935,9 +2942,12 @@ dataset options work as in training; see the Evaluation page of the docs.
             return std::ranges::find(names, name) != std::end(names);
         };
         bool after_double_dash = false;
+        int manifest_count = 0;
         for (int i = 2; i < argc; ++i) {
             const std::string_view arg = argv[i];
-            const std::string_view name = arg.substr(0, arg.find('='));
+            const auto* flag = core_args::training_flag(arg);
+            const std::string_view name = flag ? std::string_view(flag->name) : arg.substr(0, arg.find('='));
+            const bool joined = name != arg;
             if (after_double_dash) {
                 shared_training_args.emplace_back(arg);
             } else if (arg == "--") {
@@ -2945,20 +2955,28 @@ dataset options work as in training; see the Evaluation page of the docs.
             } else if (is_one_of(batch_switches, arg) || !arg.starts_with('-')) {
                 batch_args.emplace_back(arg);
             } else if (name == "-d" || name == "--data-path") {
-                if (name != arg)
-                    batch_args.emplace_back(arg.substr(name.size() + 1));
+                if (joined)
+                    batch_args.emplace_back(arg.substr(name.size() + (arg[name.size()] == '=' ? 1 : 0)));
                 else if (i + 1 < argc)
                     batch_args.emplace_back(argv[++i]);
+                else {
+                    error = "Missing value for batch input option";
+                    return std::nullopt;
+                }
             } else if (is_one_of(batch_values, name)) {
+                if (name == "--manifest")
+                    ++manifest_count;
                 const auto first = batch_args.size();
                 batch_args.emplace_back(arg);
-                if (name == arg && i + 1 < argc && argv[i + 1][0] != '-')
+                if (!joined && i + 1 < argc)
                     batch_args.emplace_back(argv[++i]);
                 if (name == "--log-level")
                     shared_training_args.insert(shared_training_args.end(), batch_args.begin() + first, batch_args.end());
             } else {
                 shared_training_args.emplace_back(arg);
-                if (name == arg && training_flag_takes_value(arg) && i + 1 < argc && argv[i + 1][0] != '-')
+                // Known flags own their value even when it looks like another option.
+                if (!joined && i + 1 < argc &&
+                    (flag ? flag->takes_value : argv[i + 1][0] != '-'))
                     shared_training_args.emplace_back(argv[++i]);
             }
         }
@@ -2981,25 +2999,32 @@ dataset options work as in training; see the Evaluation page of the docs.
         }
 
         param::BatchTrainingParameters params;
-        if (manifest) {
-            params.config_file = lfs::core::utf8_to_path(::args::get(manifest));
-            if (!lfs::core::native_fs::exists(params.config_file)) {
-                error = std::format("Batch manifest not found: {}", lfs::core::path_to_utf8(params.config_file));
-                return std::nullopt;
+        std::filesystem::path manifest_path;
+        if (manifest)
+            manifest_path = lfs::core::utf8_to_path(::args::get(manifest));
+        std::vector<std::filesystem::path> input_paths;
+        for (const auto& in_str : ::args::get(inputs)) {
+            auto input = lfs::core::utf8_to_path(in_str);
+            if (input.extension() == ".json") {
+                ++manifest_count;
+                manifest_path = std::move(input);
+            } else {
+                input_paths.push_back(std::move(input));
             }
-            auto loaded = param::read_batch_training_parameters_from_json(params.config_file, params);
+        }
+        if (manifest_count > 1) {
+            error = "Only one batch manifest is allowed (positional or --manifest)";
+            return std::nullopt;
+        }
+        if (manifest_count == 1) {
+            auto loaded = param::read_batch_training_parameters_from_json(manifest_path);
             if (!loaded) {
                 error = std::format("Error reading batch manifest: {} {}", loaded.error().user_message(), loaded.error().detail());
                 return std::nullopt;
             }
             params = std::move(*loaded);
         }
-
-        if (inputs) {
-            for (const auto& in_str : ::args::get(inputs)) {
-                params.input_paths.push_back(lfs::core::utf8_to_path(in_str));
-            }
-        }
+        params.input_paths = std::move(input_paths);
 
         if (output_dir) {
             params.output_dir = lfs::core::utf8_to_path(::args::get(output_dir));
@@ -3019,6 +3044,10 @@ dataset options work as in training; see the Evaluation page of the docs.
 
         if (timeout) {
             params.timeout_minutes = ::args::get(timeout);
+            if (params.timeout_minutes < 0) {
+                error = "Batch timeout must be nonnegative";
+                return std::nullopt;
+            }
         }
 
         if (summary_path) {
