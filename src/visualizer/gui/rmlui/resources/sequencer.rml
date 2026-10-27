@@ -53,6 +53,7 @@
                     <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add" data-action="sequencer_add_keyframe">
                         <img class="transport-icon" src="../icon/sequencer/plus.png" />
                     </div>
+                    <div id="btn-add-reveal" class="transport-btn text"><span id="reveal-button-label" class="transport-label">@tr:sequencer.add_reveal</span></div>
                     <div id="btn-snap" class="transport-btn toggle" data-tooltip="tooltip.seq_snap">
                         <img class="transport-icon" src="../icon/magnet.png" />
                     </div>
@@ -116,6 +117,7 @@
                         <div id="track-bar">
                             <span id="hint" />
                         </div>
+                        <div id="reveal-strip" />
                         <div id="sequence-strip" />
                         <div id="keyframes" />
                         <div id="playhead">
@@ -141,6 +143,12 @@
                     <div id="film-strip-sprockets-top" />
                     <div id="film-strip-sprockets-bottom" />
                 </div>
+            </div>
+            <div id="reveal-settings" class="hidden">
+                <span>@tr:sequencer.reveal_start</span><input id="reveal-start" type="text" />
+                <span>@tr:sequencer.reveal_end</span><input id="reveal-end" type="text" />
+                <span data-tooltip="sequencer.reveal_softness_hint">@tr:sequencer.reveal_softness</span><input id="reveal-softness" type="text" data-tooltip="sequencer.reveal_softness_hint" />
+                <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">@tr:common.remove</span></div>
             </div>
         </div>
         <div id="panel-guides">

@@ -777,7 +777,7 @@ namespace lfs::core {
             int max_side = 518;
             std::int64_t num_tokens = 1800;
             int threads = 0;
-            int png_compression = 1;
+            int png_compression = 6;
             int bit_depth = 16;
             bool overwrite = false;
             bool no_download = false;

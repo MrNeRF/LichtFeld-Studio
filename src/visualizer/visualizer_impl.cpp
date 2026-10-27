@@ -748,7 +748,8 @@ namespace lfs::vis {
             []() -> bool {
                 auto* gm = python::get_gui_manager();
                 return gm ? (gm->sequencer().timeline().realKeyframeCount() > 0 ||
-                             gm->sequencer().timeline().hasAnimationClip())
+                             gm->sequencer().timeline().hasAnimationClip() ||
+                             gm->sequencer().timeline().revealClip().has_value())
                           : false;
             },
             [](const std::string& path) -> bool {

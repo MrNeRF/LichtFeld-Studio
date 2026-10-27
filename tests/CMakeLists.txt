@@ -235,6 +235,7 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_training
         lfs_sequencer
         lfs_io
+        lfs_sequencer
         lfs_visualizer
         lfs_core
         lfs_python_runtime
@@ -1556,6 +1557,8 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_reveal_license.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_reveal_ui_contract.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_depth_view_scrub.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_regressions.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_simplify.py
@@ -1682,6 +1685,23 @@ set_tests_properties(lichtfeld.python.nightly PROPERTIES
     TIMEOUT 1800
 )
 
+# Leave the baseline environment intact unless a directory is configured explicitly.
+set(LFS_SHADER_BASE_DIR "" CACHE PATH "PR base Slang source directory for reveal shader comparison")
+add_test(NAME lichtfeld.python.reveal_shader_default
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_reveal_shader_default_runtime.py
+)
+set_tests_properties(lichtfeld.python.reveal_shader_default PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "slow;integration"
+    TIMEOUT 300
+    ENVIRONMENT "LFS_SLANGC=${SLANGC}"
+)
+if(LFS_SHADER_BASE_DIR)
+    set_property(TEST lichtfeld.python.reveal_shader_default APPEND PROPERTY
+        ENVIRONMENT "LFS_SHADER_BASE_DIR=${LFS_SHADER_BASE_DIR}")
+endif()
+
 # App-backed lifetime coverage requires a real renderer and its own process.
 add_test(NAME lichtfeld.python.point_cloud_lifetime
     COMMAND ${Python_EXECUTABLE} -m pytest -q
@@ -1689,6 +1709,19 @@ add_test(NAME lichtfeld.python.point_cloud_lifetime
 )
 
 if(UNIX AND NOT APPLE AND TARGET LichtFeld-Studio)
+    # LFS_REVEAL_TEST_PROJECT is inherited; project coverage skips when it is absent.
+    add_test(NAME lichtfeld.python.reveal_mcp
+        COMMAND ${Python_EXECUTABLE} -m pytest -q
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/test_reveal_mcp_runtime.py
+    )
+    set_tests_properties(lichtfeld.python.reveal_mcp PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;integration"
+        TIMEOUT 600
+        RESOURCE_LOCK lfs_gui_gpu
+        ENVIRONMENT "LFS_EXECUTABLE=$<TARGET_FILE:LichtFeld-Studio>;LFS_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    )
+
     add_test(NAME lichtfeld.python.camera_set_view_validation
         COMMAND ${Python_EXECUTABLE} -m pytest -q
             ${CMAKE_CURRENT_SOURCE_DIR}/python/test_camera_set_view_validation.py

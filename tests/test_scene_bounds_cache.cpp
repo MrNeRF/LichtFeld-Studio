@@ -66,6 +66,37 @@ namespace {
         scene.notifyMutation(Scene::MutationType::MODEL_CHANGED);
         expectReferenceBounds(scene, id);
     }
+    TEST(SceneBoundsCacheTest, RevealBoundsIgnoreOutliersAndRefreshOnMutation) {
+        Scene scene;
+        auto model = boundsModel(200);
+        float* means = model->means_raw().ptr<float>();
+        means[0] = -100000.0f;
+        means[3] = 100000.0f;
+        const auto id = scene.addSplat("model", std::move(model));
+        glm::vec3 lo, hi;
+        ASSERT_TRUE(scene.getNodeRevealBounds(id, lo, hi));
+        EXPECT_GT(lo.x, -100.0f);
+        EXPECT_LT(hi.x, 100.0f);
+        scene.getNodeById(id)->model->means_raw().add_(10.0f);
+        scene.notifyMutation(Scene::MutationType::MODEL_CHANGED);
+        glm::vec3 moved_lo, moved_hi;
+        ASSERT_TRUE(scene.getNodeRevealBounds(id, moved_lo, moved_hi));
+        EXPECT_NEAR(moved_lo.x, lo.x + 10.0f, 1e-4f);
+        EXPECT_NEAR(moved_hi.x, hi.x + 10.0f, 1e-4f);
+        scene.getNodeById(id)->model->soft_delete(Tensor::ones_bool({200}, Device::CPU));
+        EXPECT_FALSE(scene.getNodeRevealBounds(id, moved_lo, moved_hi));
+    }
+    TEST(SceneBoundsCacheTest, RevealBoundsSampleGpuMeans) {
+        Scene scene;
+        auto model = boundsModel(20000);
+        model->means_raw() = model->means_raw().to(Device::CUDA);
+        const auto id = scene.addSplat("gpu_model", std::move(model));
+        glm::vec3 lo, hi;
+        ASSERT_TRUE(scene.getNodeRevealBounds(id, lo, hi));
+        EXPECT_GE(lo.x, 0.0f);
+        EXPECT_LE(hi.x, 10.0f);
+        EXPECT_GT(hi.x - lo.x, 5.0f);
+    }
     TEST(SceneBoundsCacheTest, DeletedMaskRevisionRefreshesBoundsIncludingEmptyResult) {
         Scene scene;
         const auto id = scene.addSplat("model", boundsModel(20));

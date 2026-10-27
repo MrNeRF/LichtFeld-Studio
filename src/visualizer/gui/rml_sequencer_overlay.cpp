@@ -374,7 +374,8 @@ namespace lfs::vis::gui {
     void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
                                               std::optional<size_t> keyframe_index,
                                               const float time,
-                                              const SequencerViewportEditMode edit_mode) {
+                                              const SequencerViewportEditMode edit_mode,
+                                              const bool reveal) {
         if (!ensureContextReady())
             return;
 
@@ -383,7 +384,10 @@ namespace lfs::vis::gui {
         context_menu_open_ = true;
         skip_next_click_ = true;
 
-        const std::string html = buildContextMenuHTML(keyframe_index, edit_mode);
+        const std::string html = reveal
+                                     ? fmt::format("<div class=\"context-menu-item\" id=\"ctx-remove-reveal\">{}</div>",
+                                                   Rml::StringUtilities::EncodeRml(LOC("common.remove")))
+                                     : buildContextMenuHTML(keyframe_index, edit_mode);
         el_context_menu_->SetInnerRML(html);
         el_context_menu_->SetClass("visible", true);
         el_menu_backdrop_->SetProperty("display", "block");
@@ -788,7 +792,10 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (id == "ctx-add") {
+        if (id == "ctx-remove-reveal") {
+            overlay->pending_actions_.push_back({RmlSequencerOverlay::Action::REMOVE_REVEAL});
+            overlay->hideContextMenu();
+        } else if (id == "ctx-add") {
             overlay->pending_actions_.push_back({RmlSequencerOverlay::Action::ADD_KEYFRAME, 0, 0, overlay->context_menu_time_});
             overlay->hideContextMenu();
         } else if (id == "ctx-update") {
