@@ -1510,7 +1510,14 @@ namespace lfs::core::internal {
                     context_->release(staging_);
             }
 
-            void enqueue(const StorageRef source, const size_t bytes, ExecContext) override {
+            void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget) override
+            {
+                auto storage = storage_ref(source);
+                storage.byte_offset += offset;
+                enqueue(storage, bytes, {});
+            }
+            void enqueue(const StorageRef source, const size_t bytes, ExecContext) override
+            {
                 LFS_FACADE_TRACE(service_enqueue_readback);
                 LFS_ASSERT_MSG(!pending_, "Readback staging is already in use");
                 if (bytes > capacity_) {
@@ -1522,6 +1529,10 @@ namespace lfs::core::internal {
                 }
                 bytes_ = bytes;
                 pending_ = true;
+                if (!bytes) {
+                    serial_ = context_->flush();
+                    return;
+                }
                 if (bytes <= kHostCopyBytes && context_->idle()) {
                     host_copy(context_->host(staging_), context_->host(source), bytes);
                     serial_ = 0;
@@ -1532,7 +1543,8 @@ namespace lfs::core::internal {
                 context_->flush();
             }
 
-            void wait() override {
+            void wait() override
+            {
                 context_->wait(serial_);
             }
 
@@ -1540,7 +1552,7 @@ namespace lfs::core::internal {
                 LFS_FACADE_TRACE(service_readback_poll);
                 if (context_->completed() < serial_)
                     return false;
-                if (destination)
+                if (destination && bytes_)
                     host_copy(static_cast<std::byte*>(destination), context_->host(staging_), bytes_);
                 pending_ = false;
                 return true;
@@ -1548,7 +1560,7 @@ namespace lfs::core::internal {
 
         private:
             std::shared_ptr<Context> context_;
-            StorageRef staging_{};
+            StorageRef staging_ {};
             size_t capacity_ = 0, bytes_ = 0;
             uint64_t serial_ = 0;
             bool pending_ = false;
@@ -2153,7 +2165,7 @@ namespace lfs::core::internal {
     }
 
     // Every element draws its own Philox block, so odd counts need no scratch.
-    void MetalBackendOps::normal(const StorageRef output, StorageRef, const RandomProgram& program, ExecContext) {
+    void MetalBackendOps::normal(const StorageRef output, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(normal);
         draw_elements(kNormal, output, program);
     }

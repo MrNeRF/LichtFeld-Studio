@@ -35,6 +35,11 @@ namespace lfs::core::internal {
                     context_->memory().deallocate(storage_);
             }
 
+            void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget) override {
+                auto storage = storage_ref(source);
+                storage.byte_offset += offset;
+                enqueue(storage, bytes, {});
+            }
             void enqueue(StorageRef source, size_t bytes, ExecContext) override {
                 LFS_FACADE_TRACE(service_enqueue_readback);
                 LFS_ASSERT_MSG(!pending_, "Readback staging is already in use");
@@ -48,8 +53,9 @@ namespace lfs::core::internal {
                 bytes_ = bytes;
                 completion_ = {};
                 pending_ = true;
-                completion_ = TensorCompletionAccess::vulkan(
-                    context_->memory().copy_to_readback(source, storage_, bytes));
+                completion_ = TensorCompletionAccess::vulkan(bytes
+                                                                 ? context_->memory().copy_to_readback(source, storage_, bytes)
+                                                                 : context_->recorders().flush_current());
             }
 
             void wait() override {
@@ -66,7 +72,7 @@ namespace lfs::core::internal {
                 if (!completion_.ready())
                     return false;
                 context_->check_fault_buffer();
-                if (destination)
+                if (destination && bytes_)
                     context_->memory().copy_mapped(storage_, destination, bytes_);
                 pending_ = false;
                 return true;

@@ -33,6 +33,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #endif
+#include "backend/backend_driver.hpp"
 #include "backend/gpu_backend_ops.hpp"
 #include <exception>
 #include <format>
@@ -77,91 +78,11 @@ namespace lfs::core::tensor_ops {
 
 namespace lfs::core {
     std::vector<VulkanHardwareDevice> enumerate_vulkan_hardware() {
-        std::vector<VulkanHardwareDevice> result;
-#ifdef LFS_TENSOR_VULKAN
-        VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-        app.pApplicationName = "LichtFeld hardware discovery";
-        app.apiVersion = VK_API_VERSION_1_3;
-        VkInstance instance = VK_NULL_HANDLE;
-        if (create_vulkan_instance(app, {}, {}, nullptr, 0, &instance) != VK_SUCCESS)
-            return result;
-        struct InstanceGuard {
-            VkInstance instance;
-            ~InstanceGuard() { vkDestroyInstance(instance, nullptr); }
-        } guard{instance};
-        const auto devices = enumerate_vulkan_physical_devices(instance);
-        if (devices.count_result != VK_SUCCESS || devices.devices_result != VK_SUCCESS)
-            return result;
-        for (uint32_t index = 0; index < devices.devices.size(); ++index) {
-            VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-            VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-            props.pNext = &ids;
-            vkGetPhysicalDeviceProperties2(devices.devices[index], &props);
-            std::string uuid;
-            constexpr char hex[] = "0123456789abcdef";
-            for (const auto byte : ids.deviceUUID) {
-                uuid += hex[byte >> 4];
-                uuid += hex[byte & 15];
-            }
-            auto tensor = check_vulkan_feature_requirements(devices.devices[index]);
-            auto rendering = check_vulkan_feature_requirements(
-                devices.devices[index], {.viewer_shaders = true, .window_renderer = true});
-            if (props.properties.apiVersion < VK_API_VERSION_1_3) {
-                tensor.missing = "Vulkan 1.3 is required";
-                rendering.missing = tensor.missing;
-            }
-            result.push_back({props.properties.deviceName, std::move(uuid),
-                              std::move(tensor.missing), std::move(rendering.missing), index,
-                              props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU});
-            auto& entry = result.back();
-            entry.vendor_id = props.properties.vendorID;
-            entry.software = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
-
-            entry.shared_memory = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
-            VkPhysicalDeviceMemoryProperties memory{};
-            vkGetPhysicalDeviceMemoryProperties(devices.devices[index], &memory);
-            for (uint32_t heap = 0; heap < memory.memoryHeapCount; ++heap)
-                if (memory.memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-                    entry.total_memory_bytes += memory.memoryHeaps[heap].size;
-        }
-#endif
-        return result;
+        return internal::backend_driver(GpuBackend::Vulkan).enumerate_hardware();
     }
 
     std::vector<VulkanHardwareDevice> enumerate_cuda_hardware() {
-        std::vector<VulkanHardwareDevice> devices;
-#if LFS_HAS_CUDA
-        int count = 0;
-        if (cudaGetDeviceCount(&count) != cudaSuccess) {
-            (void)cudaGetLastError();
-            return devices;
-        }
-        constexpr char hex[] = "0123456789abcdef";
-        for (int index = 0; index < count; ++index) {
-            cudaDeviceProp properties{};
-            if (cudaGetDeviceProperties(&properties, index) != cudaSuccess) {
-                (void)cudaGetLastError();
-                continue;
-            }
-            VulkanHardwareDevice item;
-            item.name = properties.name;
-            item.vendor_id = 0x10de;
-            item.index = index;
-            item.discrete = !properties.integrated;
-            item.shared_memory = properties.integrated;
-            item.total_memory_bytes = properties.totalGlobalMem;
-            for (const unsigned char byte : properties.uuid.bytes) {
-                item.uuid += hex[byte >> 4];
-                item.uuid += hex[byte & 15];
-            }
-#ifdef LFS_MIN_SM
-            if (properties.major * 10 + properties.minor < LFS_MIN_SM)
-                item.tensor_unavailable_reason = std::format("Requires compute capability {}.{}", LFS_MIN_SM / 10, LFS_MIN_SM % 10);
-#endif
-            devices.push_back(std::move(item));
-        }
-#endif
-        return devices;
+        return internal::backend_driver(GpuBackend::CUDA).enumerate_hardware();
     }
 
     void gpu_trim_cached_memory(const GpuBackend backend) {
@@ -174,28 +95,7 @@ namespace lfs::core {
     }
 
     int gpu_device_count(const GpuBackend backend) {
-        if (backend == GpuBackend::HIP)
-            return internal::optional_backend_device_count(GpuBackend::HIP);
-        if (backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            int count = 0;
-            LFS_CUDA_CHECK_MSG(cudaGetDeviceCount(&count), "tensor CUDA device count");
-            return count;
-#else
-            return 0;
-#endif
-        }
-#ifdef LFS_TENSOR_VULKAN
-        if (backend == GpuBackend::Vulkan) {
-            return internal::vulkan_device_count();
-        }
-#endif
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal) {
-            return internal::metal_backend_available() ? 1 : 0;
-        }
-#endif
-        return 0;
+        return internal::backend_driver(backend).device_count();
     }
 
     std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
@@ -220,18 +120,7 @@ namespace lfs::core {
     }
 
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
-        // The native HIP allocator caches exact requested byte sizes; unlike
-        // CUDA's bucketed pool it does not expand the logical allocation.
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
-            return bytes;
-        if (backend == GpuBackend::CUDA)
-            return cuda_allocation_size(bytes);
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal)
-            return internal::metal_allocation_bytes(bytes);
-#endif
-        throw std::invalid_argument(
-            std::format("Allocation sizes are unknown on the {} backend", gpu_backend_name(backend)));
+        return internal::backend_driver(backend).allocation_bytes(bytes);
     }
 
     PinnedAllocatorStats pinned_allocator_stats() {
@@ -259,45 +148,8 @@ namespace lfs::core {
         internal::TensorVulkanInteropBackend& backend(GpuBackend backend) {
             std::lock_guard lock(mutex);
             auto& result = backends[static_cast<size_t>(backend)];
-            if (!result && backend == GpuBackend::Metal) {
-#if defined(LFS_TENSOR_METAL) && defined(LFS_TENSOR_VULKAN)
-                result = internal::make_metal_vulkan_interop(device);
-#else
-                throw TensorError("Metal tensor interop is unavailable in this build");
-#endif
-            }
-            if (gpu_backend_compiled(GpuBackend::HIP) && !result && backend == GpuBackend::HIP) {
-#ifdef LFS_TENSOR_VULKAN
-                result = internal::make_host_vulkan_interop(device, backend);
-#else
-                throw TensorError("HIP/Vulkan tensor interop is unavailable in this build");
-#endif
-            }
-            if (!result) {
-#ifdef LFS_TENSOR_VULKAN
-#if LFS_HAS_CUDA
-                if (backend == GpuBackend::CUDA) {
-                    const auto cuda = gpu_backend_device_info(GpuBackend::CUDA, selected_cuda_device());
-                    VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-                    VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-                    properties.pNext = &identity;
-                    vkGetPhysicalDeviceProperties2(static_cast<VkPhysicalDevice>(device.physical_device), &properties);
-                    const bool direct = device.external_memory && device.external_semaphore && cuda &&
-                                        std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID);
-                    result = direct ? internal::make_cuda_vulkan_interop(device)
-                                    : internal::make_host_vulkan_interop(device, backend);
-                } else {
-                    result = internal::make_vulkan_vulkan_interop(device);
-                }
-#else
-                if (backend == GpuBackend::CUDA)
-                    throw TensorError("CUDA tensor interop is not available in this build");
-                result = internal::make_vulkan_vulkan_interop(device);
-#endif
-#else
-                throw TensorError("Vulkan tensor interop is unavailable in this build");
-#endif
-            }
+            if (!result)
+                result = internal::backend_driver(backend).make_vulkan_interop(device);
             return *result;
         }
     };
@@ -327,15 +179,7 @@ namespace lfs::core {
     }
 
     SplatPublication splat_publication(const GpuBackend backend) {
-        switch (backend) {
-        case GpuBackend::Vulkan:
-            return SplatPublication::Shared;
-        case GpuBackend::CUDA:
-            return cuda_vulkan_direct_interop() ? SplatPublication::RendererStorage : SplatPublication::Copied;
-        default:
-            // Metal storage readiness includes its readers.
-            return SplatPublication::Copied;
-        }
+        return internal::backend_driver(backend).publication();
     }
 
     std::function<Tensor(TensorShape, size_t, DataType, std::string_view)>
@@ -462,31 +306,7 @@ namespace lfs::core {
             where_into(output, condition, value, snapshot);
             return;
         }
-        if (gpu_backend_compiled(GpuBackend::HIP) && *backend == GpuBackend::HIP) {
-            auto& ops = internal::backend_ops(GpuBackend::HIP);
-            pin_operands({&output, &condition, &source});
-            ops.where_scalar(internal::storage_ref(condition), internal::storage_ref(source), internal::storage_ref(output), output.numel(), value, {});
-            return;
-        }
-        if (*backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            internal::cuda_where_into(output, condition, value, source);
-#else
-            throw TensorError("CUDA tensor backend is unavailable");
-#endif
-        } else if (*backend == GpuBackend::Metal) {
-#ifdef LFS_TENSOR_METAL
-            internal::metal_where_into(output, condition, value, source);
-#else
-            throw TensorError("Metal tensor backend is unavailable");
-#endif
-        } else {
-#ifdef LFS_TENSOR_VULKAN
-            internal::vulkan_where_into(output, condition, value, source);
-#else
-            throw TensorError("Vulkan tensor backend is unavailable");
-#endif
-        }
+        internal::backend_ops(*backend).where_scalar(output, condition, value, source);
     }
 
     namespace {
@@ -499,8 +319,6 @@ namespace lfs::core {
         std::mutex options_mutex;
         TensorBackendOptions backend_options;
         bool options_frozen = false;
-        std::atomic<int> explicit_cuda_device{-1};
-        int selected_hip_ordinal = -1; // Protected by options_mutex.
 
         bool is_resolved(const int state) {
             return state >= 0 && state < static_cast<int>(kGpuBackendCount);
@@ -517,19 +335,10 @@ namespace lfs::core {
         // Without a configuration: CUDA where it is built, else Metal where the
         // GPU supports it, else Vulkan.
         GpuBackend automatic_backend() {
-            if (LFS_HAS_CUDA)
-                return GpuBackend::CUDA;
-#ifdef LFS_TENSOR_METAL
-            if (internal::metal_backend_available())
-                return GpuBackend::Metal;
-#endif
-#ifdef LFS_TENSOR_VULKAN
-            return GpuBackend::Vulkan;
-#elif defined(LFS_TENSOR_METAL)
-            return GpuBackend::Metal;
-#else
-            return gpu_backend_compiled(GpuBackend::HIP) ? GpuBackend::HIP : GpuBackend::CUDA;
-#endif
+            for (size_t i = 0; i + 1 < kDefaultGpuBackends.size(); ++i)
+                if (internal::backend_driver(kDefaultGpuBackends[i]).available())
+                    return kDefaultGpuBackends[i];
+            return kDefaultGpuBackends.back();
         }
 
         GpuBackend backend_of_state(const int state) {
@@ -539,19 +348,7 @@ namespace lfs::core {
         }
 
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {
-#ifdef LFS_TENSOR_VULKAN
-            if (backend == GpuBackend::Vulkan && internal::vulkan_backend_lost()) {
-                throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::DeviceLost,
-                    .domain = lfs::ErrorDomain::Vulkan,
-                    .user_message = "Vulkan tensor backend device lost; shut the backend down "
-                                    "to create a new context",
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
-            }
-#endif
-            throw TensorError(std::format(
-                "GPU backend '{}' is unavailable", gpu_backend_name(backend)));
+            internal::backend_driver(backend).throw_unavailable();
         }
 
     } // namespace
@@ -567,76 +364,35 @@ namespace lfs::core {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        int cuda_ordinal = -1;
-#if LFS_HAS_CUDA
-        if (!options.cuda_device.empty()) {
-            const auto devices = enumerate_cuda_hardware();
-            const auto selected = find_gpu_device<VulkanHardwareDevice>(devices, options.cuda_device);
-            if (!selected || !devices[*selected].tensor_unavailable_reason.empty())
+        std::array<int, kGpuBackendCount> selections;
+        selections.fill(-1);
+        for (const auto backend : kCompiledGpuBackends) {
+            auto& ordinal = selections[static_cast<size_t>(backend)];
+            if (const auto error = internal::backend_driver(backend).validate_options(options, ordinal))
                 return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::InvalidArgument,
                     .domain = lfs::ErrorDomain::Core,
-                    .user_message = "Selected CUDA GPU is unavailable or incompatible",
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
-            cuda_ordinal = devices[*selected].index;
-        }
-#endif
-        if (!options.hip_device.empty()) {
-            int ordinal = -1;
-            const auto& value = options.hip_device;
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), ordinal);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || ordinal < 0)
-                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::InvalidArgument,
-                    .domain = lfs::ErrorDomain::Core,
-                    .user_message = "HIP Tensor device selection requires a nonnegative device ordinal",
+                    .user_message = *error,
                     .detection = LFS_SOURCE_SITE_CURRENT(),
                 }));
         }
         backend_options = options;
-        explicit_cuda_device.store(cuda_ordinal, std::memory_order_release);
-        selected_hip_ordinal = -1;
+        for (const auto backend : kCompiledGpuBackends)
+            internal::backend_driver(backend).set_selection(selections[static_cast<size_t>(backend)]);
+        internal::clear_backend_activation_cache();
         return {};
     }
 
     int selected_hip_device() {
-        std::lock_guard lock(options_mutex);
-        if (selected_hip_ordinal >= 0)
-            return selected_hip_ordinal;
-        int requested = -1;
-        if (!backend_options.hip_device.empty()) {
-            const auto& value = backend_options.hip_device;
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), requested);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || requested < 0)
-                throw TensorError("HIP Tensor device selection requires a nonnegative device ordinal");
-        }
-        selected_hip_ordinal = internal::select_optional_backend_device(GpuBackend::HIP, requested);
-        return selected_hip_ordinal;
+        return internal::backend_driver(GpuBackend::HIP).selected_device();
     }
 
     int selected_cuda_device() {
-        const int selected = explicit_cuda_device.load(std::memory_order_acquire);
-        if (selected >= 0)
-            return selected;
-        int current = 0;
-#if LFS_HAS_CUDA
-        if (cudaGetDevice(&current) != cudaSuccess)
-            (void)cudaGetLastError();
-#endif
-        return current;
+        return internal::backend_driver(GpuBackend::CUDA).selected_device();
     }
 
     void activate_selected_cuda_device() {
-#if LFS_HAS_CUDA
-        const int selected = explicit_cuda_device.load(std::memory_order_acquire);
-        if (selected < 0)
-            return; // Preserve the existing automatic/default device behavior.
-        int current = -1;
-        LFS_CUDA_CHECK_MSG(cudaGetDevice(&current), "query selected CUDA worker device");
-        if (current != selected)
-            LFS_CUDA_CHECK_MSG(cudaSetDevice(selected), "activate selected CUDA worker device");
-#endif
+        internal::backend_driver(GpuBackend::CUDA).bind_thread();
     }
 
     TensorBackendOptions tensor_backend_options() {
@@ -651,13 +407,7 @@ namespace lfs::core {
     }
 
     const char* gpu_backend_name(const GpuBackend backend) {
-        switch (backend) {
-        case GpuBackend::CUDA: return "CUDA";
-        case GpuBackend::Vulkan: return "Vulkan";
-        case GpuBackend::Metal: return "Metal";
-        case GpuBackend::HIP: return "HIP";
-        }
-        return "Unknown";
+        return internal::backend_driver(backend).name();
     }
 
     GpuBackend default_gpu_backend() {
@@ -708,77 +458,11 @@ namespace lfs::core {
     }
 
     bool gpu_backend_available(const GpuBackend backend) {
-        if (backend == GpuBackend::HIP) {
-            if (!gpu_backend_compiled(backend))
-                return false;
-            try {
-                return selected_hip_device() >= 0;
-            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */
-                return false;
-            }
-        }
-        if (backend == GpuBackend::Vulkan) {
-#ifdef LFS_TENSOR_VULKAN
-            return internal::vulkan_backend_probe_available();
-#else
-            return false;
-#endif
-        }
-        if (backend == GpuBackend::Metal) {
-#ifdef LFS_TENSOR_METAL
-            return internal::metal_backend_available();
-#else
-            return false;
-#endif
-        }
-
-#if LFS_HAS_CUDA
-        static const bool cuda_available = [] {
-            int device_count = 0;
-            const cudaError_t status = cudaGetDeviceCount(&device_count);
-            if (status != cudaSuccess) {
-                (void)cudaGetLastError();
-                return false;
-            }
-            return device_count > 0;
-        }();
-        return cuda_available;
-#else
-        return false;
-#endif
+        return internal::backend_driver(backend).available();
     }
 
     bool gpu_backend_live(const GpuBackend backend) {
-        if (backend == GpuBackend::HIP)
-            return internal::optional_backend_live(GpuBackend::HIP);
-        if (backend == GpuBackend::Vulkan) {
-#ifdef LFS_TENSOR_VULKAN
-            return internal::vulkan_backend_live();
-#else
-            return false;
-#endif
-        }
-        if (backend == GpuBackend::Metal) {
-#ifdef LFS_TENSOR_METAL
-            return internal::metal_backend_live();
-#else
-            return false;
-#endif
-        }
-#if LFS_HAS_CUDA
-        if (!gpu_backend_available(GpuBackend::CUDA))
-            return false;
-        int ordinal = 0;
-        CUdevice device{};
-        unsigned flags = 0;
-        int active = 0;
-        if (cudaGetDevice(&ordinal) != cudaSuccess || LFS_CUDA_DRIVER(cuDeviceGet)(&device, ordinal) != CUDA_SUCCESS ||
-            LFS_CUDA_DRIVER(cuDevicePrimaryCtxGetState)(device, &flags, &active) != CUDA_SUCCESS || active == 0)
-            return false;
-        return true;
-#else
-        return false;
-#endif
+        return internal::backend_driver(backend).live();
     }
 
     std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor) {
@@ -795,8 +479,7 @@ namespace lfs::core {
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)
         : previous_(scoped_backend) {
-        if (backend == GpuBackend::CUDA)
-            activate_selected_cuda_device();
+        internal::backend_driver(backend).bind_thread();
         scoped_backend = backend;
     }
 
@@ -805,159 +488,86 @@ namespace lfs::core {
     }
 
     MemoryInfo gpu_backend_memory_info(const GpuBackend backend, const bool include_pool_stats) {
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
-            return internal::backend_ops(backend).stats();
-        if (backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            MemoryInfo result = MemoryInfo::cuda();
-#if CUDART_VERSION >= 12080
-            if (include_pool_stats) {
-                int device = 0;
-                cudaMemPool_t pool = nullptr;
-                if (cudaGetDevice(&device) == cudaSuccess &&
-                    cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess && pool != nullptr) {
-                    uint64_t value = 0;
-                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &value) == cudaSuccess)
-                        result.pool_used_current = static_cast<size_t>(value);
-                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &value) == cudaSuccess)
-                        result.pool_reserved_current = static_cast<size_t>(value);
-                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &value) == cudaSuccess)
-                        result.pool_used_high = static_cast<size_t>(value);
-                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &value) == cudaSuccess)
-                        result.pool_reserved_high = static_cast<size_t>(value);
-                }
-            }
-#else
-            (void)include_pool_stats;
-#endif
-            return result;
-#else
-            return {};
-#endif
-        }
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal)
-            return internal::backend_ops(GpuBackend::Metal).stats();
-#endif
-#ifdef LFS_TENSOR_VULKAN
-        return internal::backend_ops(GpuBackend::Vulkan).stats();
-#else
-        return {};
-#endif
+        return internal::backend_driver(backend).memory_info(include_pool_stats);
     }
 
     struct TensorCompletion::Impl {
         std::mutex mutex;
         std::array<bool, kGpuBackendCount> backends{};
+        std::array<std::unique_ptr<internal::BackendCompletion>, kGpuBackendCount> captures;
         VulkanTimelinePoint point;
-        void* device = nullptr;
         bool settle_on_release = true;
-        void wait();
-        ~Impl();
-        std::vector<std::pair<cudaStream_t, cudaEvent_t>> events;
-#ifdef LFS_TENSOR_VULKAN
-        std::shared_ptr<internal::VulkanContext> context;
-        uint64_t value = 0;
-#endif
-        uint64_t metal_value = 0;
-        [[no_unique_address]] internal::CompiledBackendState<GpuBackend::HIP, std::vector<std::pair<std::unique_ptr<internal::ReadbackBuffer>, bool>>> hip_markers;
 
-        void capture(const std::span<const Tensor* const> tensors) {
-            std::vector<cudaStream_t> streams;
-            bool capture_hip = false;
-#ifdef LFS_TENSOR_VULKAN
-            internal::StorageRef latest{};
-            uint64_t pending = 0;
-#endif
+        internal::BackendCompletion& completion(GpuBackend backend, internal::BackendCompletionTarget target = {}) {
+            auto& item = captures[static_cast<size_t>(backend)];
+            if (!item) {
+                item = internal::backend_ops(backend).create_completion(std::move(target));
+                if (!item)
+                    throw TensorError("Tensor backend does not support the requested completion target");
+            }
+            return *item;
+        }
+        void capture(std::span<const Tensor* const> tensors) {
+            std::array<std::vector<const Tensor*>, kGpuBackendCount> selected;
             for (const auto* tensor : tensors) {
                 if (!tensor || !tensor->is_valid())
                     continue;
-                const auto backend = gpu_backend_of(*tensor);
-                if (!backend)
-                    continue;
-                const auto storage = internal::storage_ref(*tensor);
-                capture_hip |= gpu_backend_compiled(GpuBackend::HIP) && *backend == GpuBackend::HIP;
-                if (*backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-                    if (std::find(streams.begin(), streams.end(), tensor->stream()) == streams.end())
-                        streams.push_back(tensor->stream());
-#endif
+                if (const auto backend = gpu_backend_of(*tensor))
+                    selected[static_cast<size_t>(*backend)].push_back(tensor);
+            }
+            for (size_t i = 0; i < selected.size(); ++i)
+                if (!selected[i].empty())
+                    completion(kGpuBackends[i]).capture(selected[i]);
+        }
+        void wait() {
+            std::lock_guard lock(mutex);
+            std::exception_ptr failure;
+            const auto settle = [&](auto&& operation) {
+                try {
+                    operation();
+                } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): Settle every obligation before rethrowing its first failure.
+                    if (!failure)
+                        failure = std::current_exception();
                 }
-                if (*backend == GpuBackend::Metal && storage.meta)
-                    metal_value = std::max(metal_value, storage.meta->pending_value.load(std::memory_order_acquire));
-#ifdef LFS_TENSOR_VULKAN
-                if (*backend == GpuBackend::Vulkan) {
-                    if (!storage.meta)
-                        continue;
-                    const auto storage_value = storage.meta->pending_value.load(std::memory_order_acquire);
-                    if (storage_value > pending) {
-                        latest = storage;
-                        pending = storage_value;
-                    }
-                }
-#endif
+            };
+            for (size_t i = 0; i < backends.size(); ++i)
+                if (std::exchange(backends[i], false))
+                    settle([&] { internal::backend_ops(kGpuBackends[i]).synchronize_device(); });
+            for (auto& capture : captures)
+                if (capture)
+                    settle([&] { capture->wait(); });
+            if (failure)
+                std::rethrow_exception(failure);
+        }
+        ~Impl() {
+            if (!settle_on_release)
+                return;
+            try {
+                wait();
+            } catch (const std::exception& error) { LOG_WARN("Tensor work cleanup failed: {}", error.what()); } catch (...) {
+                LOG_WARN("Tensor work cleanup failed");
             }
-            if (capture_hip) {
-                auto marker = internal::backend_ops(GpuBackend::HIP).create_readback_buffer();
-                marker->enqueue({GpuBackend::HIP, nullptr, 0, DataType::Float32, nullptr}, 0, {});
-                hip_markers.get().emplace_back(std::move(marker), false);
-            }
-#if LFS_HAS_CUDA
-            for (const auto stream : streams) {
-                auto found = std::find_if(events.begin(), events.end(),
-                                          [stream](const auto& event) { return event.first == stream; });
-                if (found == events.end()) {
-                    events.emplace_back(stream, nullptr);
-                    found = std::prev(events.end());
-                    found->second = CudaEventPool::instance().acquire();
-                    if (!found->second) {
-                        // A failed capture must still settle the submitted work.
-                        const auto status = cudaStreamSynchronize(stream);
-                        events.pop_back();
-                        ensure_cuda_success(status, "cudaStreamSynchronize(completion cleanup)", {}, LFS_SOURCE_SITE_CURRENT());
-                        throw TensorError("Cannot acquire tensor completion event");
-                    }
-                }
-                ensure_cuda_success(cudaEventRecord(found->second, stream), "cudaEventRecord(completion)", {}, LFS_SOURCE_SITE_CURRENT());
-            }
-#endif
-#ifdef LFS_TENSOR_VULKAN
-            if (pending != 0) {
-                context = internal::acquire_vulkan_context();
-                value = std::max(value, pending);
-                context->recorders().flush_storage(latest);
-            }
-#endif
-#ifdef LFS_TENSOR_METAL
-            if (metal_value != 0)
-                internal::metal_flush();
-#endif
         }
     };
-
-    TensorCompletion::TensorCompletion(const std::span<const Tensor* const> tensors)
-        : impl_(std::make_shared<Impl>()) {
+    TensorCompletion::TensorCompletion(std::span<const Tensor* const> tensors) : impl_(std::make_shared<Impl>()) {
         try {
             impl_->capture(tensors);
         } catch (...) {
             const auto failure = std::current_exception();
             try {
                 wait();
-            } catch (const std::exception& error) {
-                LOG_WARN("Tensor capture cleanup failed: {}", error.what());
-            }
+            } catch (const std::exception& error) { LOG_WARN("Tensor capture cleanup failed: {}", error.what()); }
             std::rethrow_exception(failure);
         }
     }
-
-    void TensorCompletion::include(const GpuBackend backend) {
+    void TensorCompletion::include(GpuBackend backend) {
         if (!impl_)
             impl_ = std::make_shared<Impl>();
         std::lock_guard lock(impl_->mutex);
         impl_->settle_on_release = true;
         impl_->backends[static_cast<size_t>(backend)] = true;
     }
-
     void TensorCompletion::include(const Tensor& tensor) {
         if (!impl_)
             impl_ = std::make_shared<Impl>();
@@ -966,342 +576,86 @@ namespace lfs::core {
         const Tensor* tensors[] = {&tensor};
         impl_->capture(tensors);
     }
-
-    void TensorCompletion::include_current_gpu() {
-        include(internal::resolve_new_gpu_storage_backend());
-    }
-
+    void TensorCompletion::include_current_gpu() { include(internal::resolve_new_gpu_storage_backend()); }
     bool TensorCompletion::ready() const {
         if (!impl_)
             return true;
         std::lock_guard lock(impl_->mutex);
         if (std::ranges::any_of(impl_->backends, [](bool pending) { return pending; }))
             return false;
-#if LFS_HAS_CUDA
-        for (const auto& [stream, event] : impl_->events) {
-            const auto status = cudaEventQuery(event);
-            if (status == cudaErrorNotReady)
+        for (auto& capture : impl_->captures)
+            if (capture && !capture->ready())
                 return false;
-            ensure_cuda_success(status, "cudaEventQuery(completion)", {}, LFS_SOURCE_SITE_CURRENT());
-        }
-#endif
-#ifdef LFS_TENSOR_VULKAN
-        if (impl_->device && impl_->point.value) {
-            uint64_t completed = 0;
-            const auto status = vkGetSemaphoreCounterValue(static_cast<VkDevice>(impl_->device),
-                                                           static_cast<VkSemaphore>(impl_->point.semaphore), &completed);
-            if (status != VK_SUCCESS)
-                throw TensorError("Cannot query tensor completion timeline");
-            if (completed < impl_->point.value)
-                return false;
-        }
-        if (impl_->value != 0) {
-            if (impl_->context->dead())
-                throw_backend_unavailable(GpuBackend::Vulkan);
-            if (impl_->context->completed_timeline() < impl_->value)
-                return false;
-        }
-#endif
-#ifdef LFS_TENSOR_METAL
-        if (impl_->metal_value != 0 && internal::metal_completed_serial() < impl_->metal_value)
-            return false;
-#endif
-        if constexpr (gpu_backend_compiled(GpuBackend::HIP)) {
-            for (auto& [marker, complete] : impl_->hip_markers.get()) {
-                if (!complete)
-                    complete = marker->poll(nullptr);
-                if (!complete)
-                    return false;
-            }
-        }
         return true;
     }
-
     void TensorCompletion::wait() const {
         if (impl_)
             impl_->wait();
     }
-
-    VulkanTimelinePoint TensorCompletion::timeline() const {
-        return impl_ ? impl_->point : VulkanTimelinePoint{};
-    }
-
-    void TensorCompletion::Impl::wait() {
-        std::lock_guard lock(mutex);
-        auto* impl_ = this;
-        std::exception_ptr failure;
-        const auto settle = [&](auto&& operation) {
-            try {
-                operation();
-            } catch (...) {
-                // LFS-CENSUS-OK(empty-catch): Rethrow after settling every captured obligation.
-                if (!failure)
-                    failure = std::current_exception();
-            }
-        };
-        for (size_t i = 0; i < impl_->backends.size(); ++i) {
-            if (std::exchange(impl_->backends[i], false))
-                settle([&] { internal::backend_ops(kGpuBackends[i]).synchronize_device(); });
-        }
-#if LFS_HAS_CUDA
-        for (const auto& [stream, event] : impl_->events) {
-            settle([&] {
-                ensure_cuda_success(cudaEventSynchronize(event), "cudaEventSynchronize(completion)", {}, LFS_SOURCE_SITE_CURRENT());
-                device_fault_registry_consume_or_throw(LFS_SOURCE_SITE_CURRENT(), false);
-            });
-            CudaEventPool::instance().release(event);
-        }
-#endif
-        impl_->events.clear();
-        if constexpr (gpu_backend_compiled(GpuBackend::HIP)) {
-            for (auto& [marker, complete] : impl_->hip_markers.get())
-                if (!complete)
-                    settle([&] { marker->wait(); complete = marker->poll(nullptr); });
-            impl_->hip_markers.get().clear();
-        }
-
-#ifdef LFS_TENSOR_VULKAN
-        if (impl_->device && impl_->point.value) {
-            settle([&] {
-                const auto semaphore = static_cast<VkSemaphore>(impl_->point.semaphore);
-                VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-                info.semaphoreCount = 1;
-                info.pSemaphores = &semaphore;
-                info.pValues = &impl_->point.value;
-                VkResult status;
-                do {
-                    status = vkWaitSemaphores(static_cast<VkDevice>(impl_->device), &info, 1'000'000'000);
-                } while (status == VK_TIMEOUT);
-                if (status != VK_SUCCESS)
-                    throw TensorError("Cannot wait for tensor completion timeline");
-                impl_->device = nullptr;
-            });
-        }
-        if (const auto value = std::exchange(impl_->value, 0))
-            settle([&] {
-                impl_->context->wait(value);
-                impl_->context->check_fault_buffer();
-            });
-        impl_->context.reset();
-#endif
-#ifdef LFS_TENSOR_METAL
-        if (const auto value = std::exchange(impl_->metal_value, 0))
-            settle([&] { internal::metal_wait(value); });
-#endif
-        if (failure)
-            std::rethrow_exception(failure);
-    }
-
+    VulkanTimelinePoint TensorCompletion::timeline() const { return impl_ ? impl_->point : VulkanTimelinePoint{}; }
     TensorCompletion::~TensorCompletion() = default;
-
-    TensorCompletion::Impl::~Impl() {
-        if (!settle_on_release)
-            return;
-        try {
-            wait();
-        } catch (const std::exception& error) {
-            LOG_WARN("Tensor work cleanup failed: {}", error.what());
-        } catch (...) {
-            LOG_WARN("Tensor work cleanup failed");
-        }
-    }
 
     TensorCompletion TensorCompletionAccess::hip() {
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        auto marker = internal::backend_ops(GpuBackend::HIP).create_readback_buffer();
-        marker->enqueue({GpuBackend::HIP, nullptr, 0, DataType::Float32, nullptr}, 0, {});
-        result.impl_->hip_markers.get().emplace_back(std::move(marker), false);
+        result.impl_->completion(GpuBackend::HIP).record({}, 0);
         return result;
     }
-
     TensorCompletion TensorCompletionAccess::cuda(cudaStream_t stream, VulkanTimelinePoint point) {
-#if LFS_HAS_CUDA
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
         result.impl_->point = std::move(point);
-        const auto event = CudaEventPool::instance().acquire();
-        if (!event) {
-            ensure_cuda_success(cudaStreamSynchronize(stream), "cudaStreamSynchronize(completion cleanup)", {}, LFS_SOURCE_SITE_CURRENT());
-            throw TensorError("Cannot acquire tensor completion event");
-        }
-        result.impl_->events.emplace_back(stream, event);
-        ensure_cuda_success(cudaEventRecord(event, stream), "cudaEventRecord(completion)", {}, LFS_SOURCE_SITE_CURRENT());
+        result.impl_->completion(GpuBackend::CUDA).record({stream}, 0);
         return result;
-#else
-        throw TensorError("CUDA tensor completion is not available in this build");
-#endif
     }
-
     TensorCompletion TensorCompletionAccess::vulkan(uint64_t value) {
         TensorCompletion result;
-#ifdef LFS_TENSOR_VULKAN
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
         result.impl_->settle_on_release = false;
-        result.impl_->context = internal::acquire_vulkan_context();
-        result.impl_->value = value;
-        result.impl_->point = {result.impl_->context->timeline(), value, result.impl_->context};
-#endif
+        auto& completion = result.impl_->completion(GpuBackend::Vulkan);
+        completion.record({}, value);
+        result.impl_->point = completion.timeline();
         return result;
     }
-
-    TensorCompletion TensorCompletionAccess::metal(const uint64_t serial, VulkanTimelinePoint point) {
+    TensorCompletion TensorCompletionAccess::metal(uint64_t serial, VulkanTimelinePoint point) {
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
         result.impl_->settle_on_release = false;
-        result.impl_->metal_value = serial;
         result.impl_->point = std::move(point);
+        result.impl_->completion(GpuBackend::Metal).record({}, serial);
         return result;
     }
-
     TensorCompletion TensorCompletionAccess::external(void* device, VulkanTimelinePoint point) {
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
         result.impl_->settle_on_release = false;
-        result.impl_->device = device;
-        result.impl_->point = std::move(point);
+        result.impl_->point = point;
+        result.impl_->completion(GpuBackend::Vulkan, {.external_device = device, .external_point = std::move(point)});
         return result;
     }
 
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend) {
-        if (backend == GpuBackend::HIP) {
-            try {
-                const auto ordinal = selected_hip_device();
-                return internal::optional_backend_device_info(GpuBackend::HIP, ordinal);
-            } catch (...) { /* LFS-CENSUS-OK(empty-catch): Availability probes return unavailable without initializing a Tensor context. */
-                return std::nullopt;
-            }
-        }
-        if (backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            return gpu_backend_device_info(backend, selected_cuda_device());
-#else
+
+        try {
+            return internal::backend_driver(backend).device_info(-1);
+        } catch (...) { /* LFS-CENSUS-OK(empty-catch): Device metadata discovery reports unavailable without constructing Tensor storage. */
             return std::nullopt;
-#endif
         }
-#ifdef LFS_TENSOR_VULKAN
-        if (backend == GpuBackend::Vulkan) {
-            const auto context = internal::try_live_vulkan_context();
-            if (!context || context->dead()) {
-                return std::nullopt;
-            }
-            VkPhysicalDeviceProperties properties{};
-            vkGetPhysicalDeviceProperties(context->physical_device(), &properties);
-            GpuDeviceInfo result{.name = properties.deviceName};
-            VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-            VkPhysicalDeviceProperties2 properties2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-            properties2.pNext = &identity;
-            vkGetPhysicalDeviceProperties2(context->physical_device(), &properties2);
-            std::copy_n(identity.deviceUUID, result.uuid.size(), result.uuid.begin());
-            const auto& memory = context->memory_properties();
-            for (uint32_t i = 0; i < memory.memoryHeapCount; ++i) {
-                if ((memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
-                    result.total_memory_bytes += memory.memoryHeaps[i].size;
-                }
-            }
-            // Process-budget support belongs to the physical device, independently
-            // of the allocator's enabled budget policy.
-            static std::mutex capability_mutex;
-            static uint64_t capability_context = 0;
-            static bool supports_budget = false;
-            {
-                std::lock_guard lock(capability_mutex);
-                if (capability_context != context->context_id()) {
-                    uint32_t count = 0;
-                    if (vkEnumerateDeviceExtensionProperties(context->physical_device(), nullptr, &count, nullptr) != VK_SUCCESS)
-                        return result;
-                    std::vector<VkExtensionProperties> extensions(count);
-                    if (vkEnumerateDeviceExtensionProperties(context->physical_device(), nullptr, &count, extensions.data()) != VK_SUCCESS)
-                        return result;
-                    supports_budget = std::any_of(extensions.begin(), extensions.begin() + count, [](const auto& extension) {
-                        return std::strcmp(extension.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0;
-                    });
-                    capability_context = context->context_id();
-                }
-                result.supports_process_memory_budget = supports_budget;
-            }
-            if (result.supports_process_memory_budget) {
-                VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
-                VkPhysicalDeviceMemoryProperties2 memory_info{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
-                memory_info.pNext = &budget;
-                vkGetPhysicalDeviceMemoryProperties2(context->physical_device(), &memory_info);
-                for (uint32_t i = 0; i < memory_info.memoryProperties.memoryHeapCount; ++i) {
-                    if ((memory_info.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
-                        result.process_memory_budget_bytes += budget.heapBudget[i];
-                        result.process_memory_used_bytes += budget.heapUsage[i];
-                    }
-                }
-            }
-            return result;
-        }
-#endif
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal)
-            return internal::metal_device_info();
-#endif
-        return std::nullopt;
     }
 
-#if !LFS_HAS_CUDA
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend,
                                                          const int device_index) {
-        if (backend == GpuBackend::HIP)
-            return internal::optional_backend_device_info(GpuBackend::HIP, device_index);
-        if (backend == GpuBackend::CUDA || device_index != 0)
+        if (device_index < 0)
             return std::nullopt;
-        return gpu_backend_device_info(backend);
+        return internal::backend_driver(backend).device_info(device_index);
     }
-#endif
 
     lfs::Status shutdown_gpu_backend(const GpuBackend backend) {
-        if (backend == GpuBackend::HIP) {
-            if (!internal::optional_backend_live(GpuBackend::HIP))
-                return {};
-            try {
-                internal::backend_ops(backend).shutdown();
-            } catch (const std::exception& error) {
-                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Internal,
-                    .domain = lfs::ErrorDomain::Core,
-                    .user_message = "HIP tensor backend shutdown failed",
-                    .detail = error.what(),
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
-            }
-            return {};
-        }
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal) {
-            try {
-                internal::shutdown_metal_backend();
-            } catch (...) {
-                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Internal,
-                    .domain = lfs::ErrorDomain::Core,
-                    .user_message = "Metal tensor backend shutdown failed",
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
-            }
-            return {};
-        }
-#endif
-#ifdef LFS_TENSOR_VULKAN
-        if (backend == GpuBackend::Vulkan) {
-            try {
-                internal::backend_ops(backend).shutdown();
-            } catch (...) {
-                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Internal,
-                    .domain = lfs::ErrorDomain::Vulkan,
-                    .user_message = "Vulkan tensor backend shutdown failed",
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
-            }
-        }
-#else
-        (void)backend;
-#endif
-        return {};
+
+        auto status = internal::backend_driver(backend).shutdown();
+        if (status)
+            internal::clear_backend_activation_cache();
+        return status;
     }
 
     lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles) {
@@ -1702,8 +1056,9 @@ namespace lfs::core {
             process_backend_state.store(kUnconfigured, std::memory_order_release);
             std::lock_guard lock(options_mutex);
             options_frozen = false;
-            explicit_cuda_device.store(-1, std::memory_order_release);
-            selected_hip_ordinal = -1;
+            for (const auto backend : kCompiledGpuBackends)
+                internal::backend_driver(backend).set_selection(-1);
+            internal::clear_backend_activation_cache();
             set_cuda_vulkan_direct_interop(true);
         }
 

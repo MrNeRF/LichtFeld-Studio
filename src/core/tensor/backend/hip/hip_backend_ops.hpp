@@ -37,7 +37,8 @@ namespace lfs::core::internal {
         ~HipBackendOps() override;
         LFS_CORE_API void ensure_initialized();
         std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
-        std::unique_ptr<BackendFence> create_fence() override;
+        std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
+        std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
         std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
         std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
         LFS_CORE_API BackendQueueLease execution_lease(ExecContext) override;
@@ -132,7 +133,7 @@ namespace lfs::core::internal {
         void bernoulli(StorageRef output, const RandomProgram& program, ExecContext context) override;
         void randint(StorageRef output, const RandomProgram& program, ExecContext context) override;
         void multinomial(StorageRef weights, StorageRef output, const RandomProgram& program, ExecContext context) override;
-        void normal(StorageRef output, StorageRef odd_count_scratch, const RandomProgram& program, ExecContext context) override;
+        void normal(StorageRef output, const RandomProgram& program, ExecContext context) override;
         void gather(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const StridedLayout& index_layout, const IndexProgram& program, ExecContext context) override;
         void gather_fused_unary(StorageRef input, StorageRef indices, StorageRef output, PointwiseOp unary, const IndexProgram& program, ExecContext context) override;
         void index_select(StorageRef input, StorageRef indices, StorageRef output, const StridedLayout& input_layout, const IndexProgram& program, ExecContext context) override;
@@ -181,7 +182,7 @@ namespace lfs::core::internal {
         PointerClass classify_pointer(const void* pointer) override;
         bool stream_is_capturing(ExecContext context) override;
 
-        void where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext) override;
+        void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;
         bool radius_connected_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) override;
         bool point_tree_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const PointTreeProgram&, ExecContext) override;
         bool point_tree_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, const PointTreeProgram&, ExecContext) override;

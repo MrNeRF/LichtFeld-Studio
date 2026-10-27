@@ -540,6 +540,7 @@ namespace lfs::core::internal {
         impl_->active.store(true, std::memory_order_release);
     }
     StorageRef HipBackendOps::allocate(size_t bytes, size_t alignment, ExecContext execution) {
+        ensure_initialized();
         queue(execution);
         require(bytes > 0 && alignment && alignment <= 256 && (alignment & (alignment - 1)) == 0, "Invalid HIP allocation size/alignment");
         const auto allocation_failure = [&] {
@@ -1044,7 +1045,7 @@ namespace lfs::core::internal {
         std::lock_guard lock(impl_->mutex);
         impl_->random(output, program, LFS_HIP_RANDOM_INTEGER);
     }
-    void HipBackendOps::normal(StorageRef output, StorageRef, const RandomProgram& program, ExecContext execution) {
+    void HipBackendOps::normal(StorageRef output, const RandomProgram& program, ExecContext execution) {
         queue(execution);
         std::lock_guard lock(impl_->mutex);
         impl_->random(output, program, LFS_HIP_RANDOM_NORMAL);
@@ -1183,6 +1184,7 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::rehome_stream(StorageRef storage, ExecContext execution) { record_stream(storage, execution); }
     std::unique_ptr<ReadbackBuffer> HipBackendOps::create_readback_buffer() {
+        ensure_initialized();
         class Staging final : public ReadbackBuffer {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* handle_ = nullptr;
@@ -1198,6 +1200,12 @@ namespace lfs::core::internal {
             ~Staging() override {
                 std::lock_guard lock(owner_->mutex);
                 owner_->runtime->release_readback(handle_, std::move(retirement_));
+            }
+            void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget target) override {
+                require(target.handle == nullptr, "HIP readback requires the native default queue");
+                auto storage = storage_ref(source);
+                storage.byte_offset += offset;
+                enqueue(storage, bytes, {});
             }
             void enqueue(StorageRef source, size_t bytes, ExecContext execution) override {
                 queue(execution);
@@ -1229,6 +1237,7 @@ namespace lfs::core::internal {
         return std::make_unique<Staging>(impl_);
     }
     std::unique_ptr<BackendUploadBuffer> HipBackendOps::create_upload_buffer() {
+        ensure_initialized();
         class Upload final : public BackendUploadBuffer {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* staging_ = nullptr;
@@ -1245,13 +1254,32 @@ namespace lfs::core::internal {
                 std::lock_guard lock(owner_->mutex);
                 owner_->runtime->release_readback(staging_, std::move(retirement_));
             }
-            void enqueue(StorageRef destination, const void* source, size_t bytes, ExecContext execution) override {
+            void enqueue_native(StorageRef destination, const void* source, size_t bytes, ExecContext execution) {
                 queue(execution);
                 std::lock_guard lock(owner_->mutex);
                 const auto view = !bytes && owner_->empty_view(destination) ? LfsHipView{} : owner_->view(destination, bytes);
                 LfsHipError error{};
                 check(owner_->api.staged_upload(owner_->context, staging_, view.buffer, view.offset, source, bytes, &error), error);
                 failure_.reset();
+            }
+            BackendUploadSubmission enqueue(Tensor& destination, const Tensor& source, BackendQueueTarget target, bool) override {
+                if (!target.current && target.handle)
+                    throw std::invalid_argument("HIP uploads require the native default queue");
+                destination.set_stream(nullptr);
+                enqueue_native(storage_ref(destination), source.data_ptr(), source.bytes(), {});
+                return {};
+            }
+            BackendUploadSubmission enqueue_bytes(Tensor& destination, std::span<const std::byte> source, BackendQueueTarget target, bool) override {
+                if (!target.current && target.handle)
+                    throw std::invalid_argument("HIP uploads require the native default queue");
+                destination.set_stream(nullptr);
+                enqueue_native(storage_ref(destination), source.data(), source.size(), {});
+                return {};
+            }
+            bool abandon_after_failure() noexcept override { return true; }
+            void settle_enqueue_failure() override {
+                std::lock_guard lock(owner_->mutex);
+                owner_->sync();
             }
             void wait() override {
                 std::lock_guard lock(owner_->mutex);
@@ -1279,6 +1307,7 @@ namespace lfs::core::internal {
         return std::make_unique<Upload>(impl_);
     }
     std::unique_ptr<BackendReadbackSlot> HipBackendOps::create_readback_slot(size_t bytes) {
+        ensure_initialized();
         class Slot final : public BackendReadbackSlot {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* staging_ = nullptr;
@@ -1319,7 +1348,13 @@ namespace lfs::core::internal {
                 owner_->runtime->release_readback(staging_, std::move(retirement_));
             }
             void* data() const override { return host_; }
-            void append(StorageRef source, size_t bytes, size_t destination_offset) override {
+            bool begin_append(const Tensor&, size_t, size_t, size_t, ExecContext execution) override {
+                queue(execution);
+                return false;
+            }
+            bool prefers_recycled_host_staging() const noexcept override { return false; }
+            void append(StorageRef source, size_t bytes, size_t destination_offset, ExecContext execution) override {
+                queue(execution);
                 std::lock_guard lock(owner_->mutex);
                 const auto input = owner_->view(source, bytes);
                 LfsHipError error{};
@@ -1489,6 +1524,7 @@ namespace lfs::core::internal {
         check(impl_->api.host_callback(impl_->context, callback, user, &error), error);
     }
     BackendQueueLease HipBackendOps::execution_lease(ExecContext execution) {
+        ensure_initialized();
         queue(execution);
         std::lock_guard lock(impl_->mutex);
         BackendQueueLease lease{impl_};
@@ -1497,6 +1533,7 @@ namespace lfs::core::internal {
         return lease;
     }
     std::unique_ptr<BackendTimestamps> HipBackendOps::create_timestamps(size_t count) {
+        ensure_initialized();
         class Timestamps final : public BackendTimestamps {
             std::shared_ptr<Impl> owner_;
             LfsHipTiming* pool_ = nullptr;
@@ -1557,11 +1594,20 @@ namespace lfs::core::internal {
                 return ready ? std::optional<float>(value) : std::nullopt;
             }
         };
-        require(count > 0 && count <= 65536, "Invalid HIP timestamp pool size");
-        return std::make_unique<Timestamps>(impl_, count);
+        try {
+            require(count > 0 && count <= 65536, "Invalid HIP timestamp pool size");
+            return std::make_unique<Timestamps>(impl_, count);
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): Optional profiling must not disrupt execution; report unavailability.
+            std::fprintf(stderr, "[warn] HIP GPU timestamps unavailable: %s\n", error.what());
+            return {};
+        }
     }
 
-    std::unique_ptr<BackendFence> HipBackendOps::create_fence() {
+    std::unique_ptr<BackendFence> HipBackendOps::create_fence(std::optional<void*> imported) {
+        ensure_initialized();
+        if (imported)
+            return {};
         class Fence final : public BackendFence {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* marker_ = nullptr;
@@ -1908,7 +1954,11 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.masked_fill(impl_->context, m, out, program.count, static_cast<uint32_t>(output.dtype), scalar_value(program.value), &error), error);
     }
-    void HipBackendOps::where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext execution) {
+    void HipBackendOps::where_scalar(Tensor& destination, const Tensor& condition, float value, const Tensor& input) {
+        pin_operands({&destination, &condition, &input});
+        const auto mask = storage_ref(condition), source = storage_ref(input), output = storage_ref(destination);
+        const auto count = destination.numel();
+        const ExecContext execution{};
         queue(execution);
         require(mask.dtype == DataType::Bool && source.dtype == output.dtype &&
                     (source.dtype == DataType::Float32 || source.dtype == DataType::Float16),
@@ -2850,5 +2900,55 @@ namespace lfs::core::internal {
         impl_->refresh_algorithm_workspace();
         check(status, error);
         return true;
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    std::unique_ptr<BackendCompletion> HipBackendOps::create_completion(BackendCompletionTarget target) {
+        if (target.external_device || target.external_point.semaphore)
+            return {};
+        ensure_initialized();
+        class Completion final : public BackendCompletion {
+            HipBackendOps& ops_;
+            std::vector<std::pair<std::unique_ptr<ReadbackBuffer>, bool>> markers_;
+
+        public:
+            explicit Completion(HipBackendOps& ops) : ops_(ops) {}
+            void capture(std::span<const Tensor* const>) override { record({}, 0); }
+            void record(ExecContext execution, uint64_t) override {
+                auto marker = ops_.create_readback_buffer();
+                marker->enqueue({GpuBackend::HIP, nullptr, 0, DataType::Float32, nullptr}, 0, execution);
+                markers_.emplace_back(std::move(marker), false);
+            }
+            VulkanTimelinePoint timeline() const override { return {}; }
+            bool ready() override {
+                for (auto& [marker, complete] : markers_) {
+                    if (!complete)
+                        complete = marker->poll(nullptr);
+                    if (!complete)
+                        return false;
+                }
+                return true;
+            }
+            void wait() override {
+                std::exception_ptr failure;
+                for (auto& [marker, complete] : markers_) {
+                    if (complete)
+                        continue;
+                    try {
+                        marker->wait();
+                        complete = marker->poll(nullptr);
+                    } catch (...) {
+                        // LFS-CENSUS-OK(empty-catch): Settle every zero-byte error snapshot before propagating its first failure.
+                        if (!failure)
+                            failure = std::current_exception();
+                    }
+                }
+                markers_.clear();
+                if (failure)
+                    std::rethrow_exception(failure);
+            }
+        };
+        return std::make_unique<Completion>(*this);
     }
 } // namespace lfs::core::internal

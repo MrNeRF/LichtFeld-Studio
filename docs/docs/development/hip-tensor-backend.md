@@ -51,11 +51,20 @@ checks do not create an execution context. Selection is frozen at startup with
 the existing backend options. An incompatible explicit selection does not switch
 to a different GPU or CPU backend.
 
-Shared Tensor code uses SDK-free ownership contracts through `GpuBackendOps`
-for optional native upload, fence, queue, timestamp and readback services.
-Concrete HIP types, native error classification and architecture compatibility
-checks stay in `backend/hip`. Hot optional paths use the constexpr compiled
-backend inventory so HIP-disabled builds eliminate them during compilation.
+CMake generates the compiled-backend inventory and its registration source from
+one set of build options. The shared indexed driver registry does not include
+backend SDK headers or construct concrete backend implementations. Hardware
+inventory, startup selection and activation belong to each backend driver.
+Activated operation pointers are cached per thread; steady Tensor dispatch uses
+that indexed pointer and the existing operation's virtual call. CUDA worker
+binding remains inside its driver.
+
+Upload buffers, fences, completion snapshots, timestamp pools and packed readback
+slots use SDK-free ownership contracts implemented by all four GPU backends.
+Each shared transfer owns one native implementation rather than separate fields
+for every GPU API. Concrete HIP types, native error classification and architecture
+compatibility checks stay in `backend/hip`. Unsupported optional timestamps and
+external imports are reported explicitly by the native factory.
 
 The adapter owns one nonblocking HIP queue for the selected device and serializes
 host submissions. It rejects CUDA streams and foreign storage before dispatch.
@@ -75,8 +84,8 @@ appends and check them before publishing bytes, including after a queue wait.
 Generic pointwise, strided, indexing, reduction, scan, sorting, GEMM and sampling
 operations use the private native operators. Image, geometry and NN operations
 are also implemented inside the Tensor backend. Shared source generators adapt
-project-owned mathematical kernels and Slang programs without changing the CUDA,
-Metal or Vulkan implementations. Fused expression source is lowered separately
+project-owned mathematical kernels and Slang programs. Each backend retains its
+native emitters and runtime ownership. Fused expression source is lowered separately
 and compiled with HIPRTC; unsupported inputs fail explicitly.
 
 ## Ownership and memory
@@ -97,9 +106,14 @@ Before native shutdown, cached buffers are released individually and removed
 from the cache only after successful release. A later teardown failure cannot
 leave cached handles referring to already destroyed native buffers.
 
-Python identifies HIP tensors as `hip`. Both DLPack protocol entry points reject
-HIP export explicitly; callers can use `.cpu()` before exporting. HIP storage is
-never passed to CUDA's pointer or stream APIs for DLPack export.
+Python identifies GPU tensors through their registered backend name. DLPack
+capability checks and export preparation belong to the Tensor library; CUDA
+pointer queries, stream ordering and Vulkan external-memory imports stay in
+native implementations selected by CMake. HIP and Metal currently report this
+protocol as unavailable. Both Python DLPack entry points reject HIP export
+explicitly; callers can use `.cpu()` before exporting. HIP storage is never passed
+to CUDA's pointer or stream APIs for DLPack export. CPU exports ignore GPU consumer
+streams.
 
 The private C ABI is exact-versioned. The loader checks the revision before
 resolving the typed export inventory and accepts only absolute module paths.

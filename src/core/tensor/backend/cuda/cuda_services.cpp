@@ -137,6 +137,12 @@ namespace lfs::core {
                         PinnedMemoryAllocator::instance().deallocate(host_);
                 }
 
+                void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget target) override {
+                    auto storage = storage_ref(source);
+                    storage.byte_offset += offset;
+                    const auto stream = prepare_inputs_for_stream({&source}, static_cast<cudaStream_t>(target.handle));
+                    enqueue(storage, bytes, ExecContext{stream});
+                }
                 void enqueue(StorageRef source, const size_t bytes, ExecContext context) override {
                     LFS_FACADE_TRACE(service_enqueue_readback);
                     LFS_ASSERT_MSG(!pending_, "Readback staging is already in use");
@@ -155,8 +161,9 @@ namespace lfs::core {
                     // Keep the source alive and drain the stream even when CUDA reports
                     // a failure after accepting the asynchronous copy.
                     pending_ = true;
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(host_, cuda_const_address(source), bytes,
-                                                   cudaMemcpyDeviceToHost, stream_));
+                    if (bytes)
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(host_, cuda_const_address(source), bytes,
+                                                       cudaMemcpyDeviceToHost, stream_));
                     completion_ = TensorCompletionAccess::cuda(stream_);
                 }
 
@@ -169,7 +176,7 @@ namespace lfs::core {
                     if (!completion_.ready())
                         return false;
                     device_fault_registry_consume_or_throw(LFS_SOURCE_SITE_CURRENT(), false);
-                    if (destination)
+                    if (destination && bytes_)
                         std::memcpy(destination, host_, bytes_);
                     pending_ = false;
                     return true;
@@ -470,22 +477,6 @@ namespace lfs::core {
         }
 
     } // namespace internal
-
-    std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend, const int device_index) {
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
-            return internal::optional_backend_device_info(GpuBackend::HIP, device_index);
-        if (backend != GpuBackend::CUDA || device_index < 0)
-            return std::nullopt;
-        cudaDeviceProp properties{};
-        if (cudaGetDeviceProperties(&properties, device_index) != cudaSuccess)
-            return std::nullopt;
-        GpuDeviceInfo result{.name = properties.name,
-                             .total_memory_bytes = properties.totalGlobalMem};
-        static_assert(sizeof(properties.uuid.bytes) == result.uuid.size());
-        std::memcpy(result.uuid.data(), properties.uuid.bytes, result.uuid.size());
-        result.compute_capability_major = properties.major;
-        return result;
-    }
 
     namespace internal {
 

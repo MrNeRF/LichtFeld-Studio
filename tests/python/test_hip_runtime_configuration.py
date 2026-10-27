@@ -43,6 +43,40 @@ class HipConfiguration(unittest.TestCase):
                 self.assertIn("--offload-arch=" + architecture, output)
         return output
 
+    def test_backend_registry_matches_each_build_configuration(self):
+        """Registration and public inventory must share the same CMake source."""
+        self.assertIsNotNone(CMAKE, "CMake is required for configuration tests")
+        names = ("CUDA", "Vulkan", "Metal", "HIP")
+        flags = ("LFS_HAS_CUDA", "LFS_TENSOR_VULKAN", "LFS_TENSOR_METAL", "LFS_TENSOR_HIP")
+        for mask in range(16):
+            enabled = [name for index, name in enumerate(names) if mask & (1 << index)]
+            with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                script = directory / "registry.cmake"
+                settings = "\n".join(f"set({flag} {'ON' if mask & (1 << index) else 'OFF'})"
+                                     for index, flag in enumerate(flags))
+                script.write_text(
+                    'cmake_minimum_required(VERSION 3.30)\n'
+                    f'set(CMAKE_BINARY_DIR "{directory.as_posix()}")\n'
+                    + settings + '\n'
+                    f'include("{(ROOT / "cmake/GpuBackendRegistry.cmake").as_posix()}")\n'
+                    'lfs_generate_backend_registry()\n', encoding="utf-8")
+                result = subprocess.run([CMAKE, "-P", str(script)], capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                header = (directory / "include/core/gpu_backend_config.hpp").read_text()
+                source = (directory / "generated_backend_registration.cpp").read_text()
+                compiled = ", ".join(f"GpuBackend::{name}" for name in enabled)
+                self.assertIn(f"kCompiledGpuBackends{{{compiled}}}", header)
+                for name in names:
+                    self.assertEqual(f"register_{name.lower()}_backend(registry);" in source,
+                                     name in enabled)
+                defaults = (["CUDA"] if "CUDA" in enabled else
+                            [name for name in ("Metal", "Vulkan") if name in enabled] or
+                            (["HIP"] if "HIP" in enabled else ["CUDA"]))
+                expected = ", ".join(f"GpuBackend::{name}" for name in defaults)
+                self.assertIn(f"kDefaultGpuBackends{{{expected}}}", header)
+
     def test_explicit_target(self):
         self.configure('set(LFS_HIP_ARCHITECTURE gfx1150)', 'gfx1150')
 

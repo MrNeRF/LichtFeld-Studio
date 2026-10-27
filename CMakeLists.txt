@@ -762,6 +762,7 @@ if(LFS_TENSOR_HIP)
     add_subdirectory(src/core/tensor/backend/hip)
     target_sources(lfs_core PRIVATE
         src/core/tensor/backend/hip/hip_backend_ops.cpp
+        src/core/tensor/backend/hip/hip_driver.cpp
         src/core/tensor/backend/hip/hip_image_ops.cpp
         src/core/tensor/backend/hip/hip_movement_ops.cpp
         src/core/tensor/backend/hip/runtime_module.cpp

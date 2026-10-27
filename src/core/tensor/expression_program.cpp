@@ -5,13 +5,6 @@
 #include "core/assert.hpp"
 #include "internal/expression_runtime.hpp"
 #include "internal/tensor_impl.hpp"
-#ifdef LFS_TENSOR_METAL
-#include "backend/metal/metal_context.hpp"
-#endif
-#ifdef LFS_TENSOR_VULKAN
-#include "backend/vulkan/vk_context.hpp"
-#include "backend/vulkan/vk_pipelines.hpp"
-#endif
 
 #include <algorithm>
 #include <bit>
@@ -501,23 +494,7 @@ namespace lfs::core::internal {
     }
 
     ExpressionCacheStats expression_cache_stats(const GpuBackend backend) {
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
-            return backend_ops(backend).expression_cache_stats();
-#ifdef LFS_TENSOR_METAL
-        if (backend == GpuBackend::Metal)
-            return metal_expression_cache_stats();
-#endif
-        if (backend == GpuBackend::CUDA)
-#if LFS_HAS_CUDA
-            return cuda_expression_cache().stats();
-#else
-            throw std::runtime_error("CUDA expression backend is unavailable");
-#endif
-#ifdef LFS_TENSOR_VULKAN
-        return acquire_vulkan_context()->pipelines().expressions().stats();
-#else
-        throw std::runtime_error("Vulkan expression backend is unavailable");
-#endif
+        return backend_ops(backend).expression_cache_stats();
     }
 
 } // namespace lfs::core::internal

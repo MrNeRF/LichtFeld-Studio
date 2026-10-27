@@ -12,9 +12,12 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_debug.hpp"
+#include "core/tensor_protocol_export.hpp"
 #include "core/tensor_vulkan_interop.hpp"
 #include "python/python_runtime.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #if LFS_HAS_CUDA
@@ -239,16 +242,9 @@ namespace lfs::python {
         if (tensor_.device() != Device::GPU) {
             return "cpu";
         }
-        const auto backend = lfs::core::gpu_backend_of(tensor_);
-        if (backend == lfs::core::GpuBackend::HIP)
-            return "hip";
-        if (backend == lfs::core::GpuBackend::Vulkan) {
-            return "vulkan";
-        }
-        if (backend == lfs::core::GpuBackend::Metal) {
-            return "metal";
-        }
-        return "cuda";
+        std::string name = lfs::core::gpu_backend_name(*lfs::core::gpu_backend_of(tensor_));
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return name;
     }
 
     std::string PyTensor::dtype() const {
@@ -1457,67 +1453,15 @@ namespace lfs::python {
         return oss.str();
     }
 
-#if LFS_HAS_CUDA
-    namespace {
-        int cuda_dlpack_device_id(const Tensor& tensor) {
-            const void* pointer = tensor.data_ptr();
-            // A storage-free CUDA tensor still belongs to the process device.
-            // CUDA reports device -1 for a null pointer, not a usable ordinal.
-            if (pointer == nullptr)
-                return lfs::core::selected_cuda_device();
-            cudaPointerAttributes attributes{};
-            if (const auto status = cudaPointerGetAttributes(&attributes, pointer); status != cudaSuccess)
-                throw std::runtime_error(std::string("DLPack CUDA device query failed: ") + cudaGetErrorString(status));
-            return attributes.device;
-        }
-    } // namespace
-#endif
-
     nb::tuple PyTensor::dlpack_device() const {
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::HIP)
-            throw std::runtime_error("HIP DLPack export is not supported; call .cpu() first");
-#if !LFS_HAS_CUDA
-        if (tensor_.device() == Device::GPU) {
-            throw std::runtime_error(
-                "GPU DLPack export is unavailable without CUDA; call .cpu() first");
-        }
-#else
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan &&
-            !lfs::core::vulkan_backend_exports_memory()) {
-            throw std::runtime_error(
-                "DLPack export of a Vulkan tensor requires CUDA external memory; call .cpu() first");
-        }
-#endif
-        const int32_t device_type = tensor_.device() == Device::GPU ? kDLCUDA : kDLCPU;
-        int device_id = 0;
-#if LFS_HAS_CUDA
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
-            device_id = lfs::core::selected_cuda_device();
-        } else if (tensor_.device() == Device::GPU) {
-            device_id = cuda_dlpack_device_id(tensor_);
-        }
-#endif
-        return nb::make_tuple(device_type, device_id);
+        const auto device = lfs::core::tensor_dlpack_device(tensor_);
+        return nb::make_tuple(device.type, device.ordinal);
     }
 
     namespace {
-        constexpr int64_t kDLPackNoSync = -1;
         constexpr int64_t kDLPackLegacyDefault = 1;
-        constexpr int64_t kDLPackPerThreadDefault = 2;
 
 #if LFS_HAS_CUDA
-        cudaStream_t dlpack_stream_to_cuda(int64_t s) {
-            switch (s) {
-            case 0:
-            case kDLPackLegacyDefault:
-                return nullptr;
-            case kDLPackPerThreadDefault:
-                return cudaStreamPerThread;
-            default:
-                return reinterpret_cast<cudaStream_t>(static_cast<uintptr_t>(s));
-            }
-        }
-
         int64_t cuda_stream_to_dlpack(cudaStream_t s) {
             const uintptr_t v = reinterpret_cast<uintptr_t>(s);
             return v == 0 ? kDLPackLegacyDefault : static_cast<int64_t>(v);
@@ -1563,62 +1507,16 @@ namespace lfs::python {
     } // namespace
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::HIP)
-            throw std::runtime_error("HIP DLPack export is not supported; call .cpu() first");
-        Tensor exported = tensor_;
-#if LFS_HAS_CUDA
-        if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
-            const cudaStream_t consumer = stream.is_none() ||
-                                                  nb::cast<int64_t>(stream) == kDLPackNoSync
-                                              ? lfs::core::getCurrentCUDAStream()
-                                              : dlpack_stream_to_cuda(nb::cast<int64_t>(stream));
-            auto view = lfs::core::cuda_view_of_vulkan_tensor(tensor_, consumer);
-            if (!view) {
-                throw std::runtime_error(
-                    "DLPack export of a Vulkan tensor requires CUDA external memory: " +
-                    lfs::format_for_developer(view.error()));
-            }
-            exported = std::move(*view);
-            if (stream.is_none()) {
-                if (const auto status = cudaStreamSynchronize(consumer); status != cudaSuccess) {
-                    throw std::runtime_error(std::string("DLPack CUDA synchronization failed: ") +
-                                             cudaGetErrorString(status));
-                }
-            }
-        } else if (tensor_.device() == Device::GPU) {
-            const cudaStream_t home = tensor_.stream();
-            if (stream.is_none()) {
-                if (const auto status = cudaStreamSynchronize(home); status != cudaSuccess) {
-                    throw std::runtime_error(std::string("DLPack CUDA synchronization failed: ") +
-                                             cudaGetErrorString(status));
-                }
-            } else if (const int64_t s = nb::cast<int64_t>(stream); s != kDLPackNoSync) {
-                const cudaStream_t consumer = dlpack_stream_to_cuda(s);
-                if (consumer != home) {
-                    lfs::core::bridgeStreams(home, consumer);
-                }
-            }
-        }
-#else
-        if (tensor_.device() == Device::GPU) {
-            throw std::runtime_error(
-                "GPU DLPack export is unavailable without CUDA; call .cpu() first");
-        }
-#endif
-
-        int exported_device = 0;
-#if LFS_HAS_CUDA
-        if (exported.device() == Device::GPU) {
-            exported_device = cuda_dlpack_device_id(exported);
-        }
-#endif
+        const auto consumer = tensor_.device() == Device::CPU || stream.is_none() ? std::optional<int64_t>{} : std::optional<int64_t>{nb::cast<int64_t>(stream)};
+        Tensor exported = lfs::core::prepare_tensor_dlpack_export(tensor_, consumer);
+        const auto exported_device = lfs::core::tensor_dlpack_device(exported);
         auto* ctx = new DLPackContext(std::move(exported));
         auto* managed = new DLManagedTensor{};
 
         DLTensor& dl = managed->dl_tensor;
         dl.data = const_cast<void*>(ctx->tensor.data_ptr());
-        dl.device.device_type = ctx->tensor.device() == Device::GPU ? kDLCUDA : kDLCPU;
-        dl.device.device_id = exported_device;
+        dl.device.device_type = static_cast<DLDeviceType>(exported_device.type);
+        dl.device.device_id = exported_device.ordinal;
         dl.ndim = static_cast<int32_t>(ctx->tensor.ndim());
         dl.dtype = to_dl_dtype(ctx->tensor.dtype());
         dl.shape = ctx->shape.data();

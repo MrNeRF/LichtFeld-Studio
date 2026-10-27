@@ -34,12 +34,6 @@ namespace lfs::core {
         struct ExpressionLaunch;
         struct ExpressionCacheStats;
 
-        // Inventory must not construct a backend or freeze startup options.
-        LFS_CORE_API int optional_backend_device_count(GpuBackend backend);
-        LFS_CORE_API std::optional<GpuDeviceInfo> optional_backend_device_info(GpuBackend backend, int ordinal);
-        LFS_CORE_API bool optional_backend_live(GpuBackend backend) noexcept;
-        LFS_CORE_API int select_optional_backend_device(GpuBackend backend, int requested);
-
         class LFS_CORE_API GpuBackendOps {
         public:
             virtual ~GpuBackendOps();
@@ -295,7 +289,7 @@ namespace lfs::core {
             virtual void multinomial(StorageRef weights, StorageRef output,
                                      const RandomProgram& program, ExecContext context) = 0;
             // Odd-sized normal generation synchronizes after copying from its scratch.
-            virtual void normal(StorageRef output, StorageRef odd_count_scratch,
+            virtual void normal(StorageRef output,
                                 const RandomProgram& program, ExecContext context) = 0;
 
             // Sub-lane C: index, masking, movement, allocation, copy and sync.
@@ -423,17 +417,18 @@ namespace lfs::core {
 
             // Optional native services. Existing backends retain their current
             // direct paths; only backends using these services dispatch here.
-            virtual std::unique_ptr<BackendUploadBuffer> create_upload_buffer();
-            virtual std::unique_ptr<BackendFence> create_fence();
-            virtual std::unique_ptr<BackendTimestamps> create_timestamps(size_t count);
-            virtual std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes);
+            virtual std::unique_ptr<BackendUploadBuffer> create_upload_buffer() = 0;
+            virtual std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) = 0;
+            virtual std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) = 0;
+            virtual std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) = 0;
+            virtual std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) = 0;
             virtual BackendQueueLease execution_lease(ExecContext);
             virtual StorageRef borrow_native_range(void* pointer, size_t bytes);
             virtual bool queue_ready(ExecContext);
             virtual bool drain_queue_for_destruction() noexcept;
             virtual void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext);
-            virtual void where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext);
-            virtual ExpressionCacheStats expression_cache_stats();
+            virtual void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) = 0;
+            virtual ExpressionCacheStats expression_cache_stats() = 0;
 
             virtual void push_range(const char* name);
             virtual void pop_range();
@@ -450,6 +445,13 @@ namespace lfs::core {
 
         class CudaBackendOps final : public GpuBackendOps {
         public:
+            std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
+            std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+            std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
+            std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
+            void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;
+            ExpressionCacheStats expression_cache_stats() override;
+            std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
             ~CudaBackendOps() override;
 
             void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;
@@ -651,7 +653,7 @@ namespace lfs::core {
                          ExecContext context) override;
             void multinomial(StorageRef weights, StorageRef output,
                              const RandomProgram& program, ExecContext context) override;
-            void normal(StorageRef output, StorageRef odd_count_scratch,
+            void normal(StorageRef output,
                         const RandomProgram& program, ExecContext context) override;
 
             // Sub-lane C: index, masking, movement, allocation, copy and sync.

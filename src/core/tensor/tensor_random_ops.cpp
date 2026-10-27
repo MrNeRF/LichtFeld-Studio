@@ -271,17 +271,8 @@ namespace lfs::core {
                 .first = mean,
                 .second = std,
                 .seed = seed};
-            if (n % 2 == 1 && (!gpu_backend_compiled(GpuBackend::HIP) || internal::gpu_backend_tag(*this) != GpuBackend::HIP)) {
-                auto scratch = internal::allocate_like(
-                    *this, TensorShape{n + 1}, DataType::Float32);
-                internal::backend_ops_for(*this).normal(
-                    internal::storage_ref(*this), internal::storage_ref(scratch),
-                    program, internal::ExecContext{stream()});
-            } else {
-                internal::backend_ops_for(*this).normal(
-                    internal::storage_ref(*this), internal::storage_ref(*this),
-                    program, internal::ExecContext{stream()});
-            }
+            internal::backend_ops_for(*this).normal(
+                internal::storage_ref(*this), program, internal::ExecContext{stream()});
         } else {
             // CPU uses stateful generator
             auto* impl = static_cast<RandomGeneratorImpl*>(

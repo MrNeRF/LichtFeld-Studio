@@ -454,8 +454,7 @@ namespace lfs::core {
         if (viewer_failure) {
             impl_->pressure_active.store(true);
             impl_->last_target_free.store(target);
-            if constexpr (gpu_backend_compiled(GpuBackend::HIP))
-                impl_->last_failure_domain.store(failure.domain);
+            impl_->last_failure_domain.store(failure.domain);
         }
 
         PressureRequest request{
@@ -613,10 +612,7 @@ namespace lfs::core {
 
         const size_t target = impl_->last_target_free.load();
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
-        auto recovery_domain = LFS_HAS_CUDA ? MemoryDomain::CudaDevice
-                                            : device_memory_domain(default_gpu_backend());
-        if (gpu_backend_compiled(GpuBackend::HIP) && impl_->last_failure_domain.load() == MemoryDomain::HipDevice)
-            recovery_domain = MemoryDomain::HipDevice;
+        const auto recovery_domain = impl_->last_failure_domain.load();
         if (impl_->query_free(recovery_domain) >= hysteresis) {
             impl_->pressure_active.store(false);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");

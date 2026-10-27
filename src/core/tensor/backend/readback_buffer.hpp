@@ -3,6 +3,7 @@
 #pragma once
 #include "core/tensor/internal/private_access.hpp"
 
+#include "core/detail/backend_runtime.hpp"
 #include "descriptors.hpp"
 
 namespace lfs::core::internal {
@@ -11,6 +12,7 @@ namespace lfs::core::internal {
     public:
         virtual ~ReadbackBuffer() = default;
         virtual void enqueue(StorageRef source, size_t bytes, ExecContext context) = 0;
+        virtual void enqueue_tensor(const Tensor&, size_t offset, size_t bytes, BackendQueueTarget) = 0;
         virtual void wait() = 0;
         // A null destination discards a completed result.
         virtual bool poll(void* destination) = 0;

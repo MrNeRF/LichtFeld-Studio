@@ -112,25 +112,16 @@ namespace lfs::core {
             state.buffer.reset();
             state.backend = backend;
         }
-        state.buffered_gpu_work = state.bytes != 0 && backend.has_value();
-        // An empty HIP transfer is still an execution snapshot: it must retain
-        // errors from preceding work, just like a native zero-byte readback.
-        state.buffered_gpu_work |= gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP;
+        // Every GPU download, including an empty one, snapshots preceding work.
+        state.buffered_gpu_work = backend.has_value();
         if (state.bytes != 0 || state.buffered_gpu_work) {
             if (backend) {
                 if (!state.buffer) {
                     state.buffer = internal::backend_ops_for(state.source).create_readback_buffer();
                 }
-                // A Vulkan queue handle is not a CUDA stream. The caller has
-                // already bound that queue; ordering stays on its timeline.
-                const auto stream = *backend == GpuBackend::CUDA
-                                        ? prepare_inputs_for_stream({&state.source}, static_cast<cudaStream_t>(target))
-                                        : prepare_inputs_for_stream({&state.source});
                 try {
-                    auto storage = internal::storage_ref(state.source);
-                    storage.byte_offset += byte_offset;
-                    state.buffer->enqueue(storage, state.bytes,
-                                          internal::ExecContext{stream});
+                    state.buffer->enqueue_tensor(state.source, byte_offset, state.bytes,
+                                                 {.handle = target, .current = false});
                 } catch (...) {
                     // Drain a partially queued transfer before releasing its input.
                     state.buffer.reset();

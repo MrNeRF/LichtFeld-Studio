@@ -5,6 +5,11 @@
 # core module - LibTorch-free core + tensor library (SHARED)
 # ============================================================================
 
+include("${CMAKE_SOURCE_DIR}/cmake/GpuBackendRegistry.cmake")
+lfs_generate_backend_registry()
+add_library(lfs_backend_configuration INTERFACE)
+target_include_directories(lfs_backend_configuration INTERFACE "${CMAKE_BINARY_DIR}/include")
+
 # Tensor CUDA kernels (STATIC, linked privately)
 if(LFS_HAS_CUDA)
     add_subdirectory(tensor)
@@ -39,6 +44,7 @@ add_subdirectory(image_codecs)
 
 # Tensor C++ sources (merged from src/core/tensor/)
 set(TENSOR_SOURCES
+        "${CMAKE_BINARY_DIR}/generated_backend_registration.cpp"
         tensor/backend/cuda/runtime/cuda_event_pool.cpp
         tensor/backend/cuda/runtime/cuda_stream_context.cpp
         tensor/backend/cuda/runtime/stream_lifetime.cpp
@@ -51,6 +57,8 @@ set(TENSOR_SOURCES
         tensor/expression_codegen.cpp
         tensor/expression_cache.cpp
         tensor/tensor_fused.cpp
+        tensor/tensor_protocol_export.cpp
+        tensor/backend/cuda/cuda_tensor_export.cpp
         tensor/tensor_backend.cpp
         tensor/tensor_gpu_elapsed.cpp
         tensor/tensor_execution.cpp
@@ -81,6 +89,8 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_index_mask.cpp
         tensor/backend/cuda/cuda_ops_movement.cpp
         tensor/backend/cuda/cuda_services.cpp
+        tensor/backend/cuda/cuda_driver.cpp
+        tensor/backend/cuda/cuda_runtime_services.cpp
         tensor/tensor.cpp
         tensor/tensor_label.cpp
         tensor/tensor_trace.cpp
@@ -142,6 +152,19 @@ if(NOT LFS_HAS_CUDA)
     list(REMOVE_ITEM TENSOR_SOURCES nn/models/romav1.cpp)
 endif()
 
+if(NOT LFS_TENSOR_VULKAN)
+    list(APPEND TENSOR_SOURCES tensor/backend/vulkan_interop_unavailable.cpp)
+else()
+    if(LFS_HAS_CUDA)
+        list(APPEND TENSOR_SOURCES tensor/backend/cuda/cuda_driver_interop.cpp tensor/backend/vulkan/vulkan_tensor_export_cuda.cpp)
+    else()
+        list(APPEND TENSOR_SOURCES tensor/backend/vulkan/vulkan_tensor_export_unavailable.cpp)
+    endif()
+    if(LFS_TENSOR_HIP)
+        list(APPEND TENSOR_SOURCES tensor/backend/hip/hip_driver_interop.cpp)
+    endif()
+endif()
+
 if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
         tensor/backend/vulkan/vma_implementation.cpp
@@ -172,6 +195,8 @@ if(LFS_TENSOR_VULKAN)
         tensor/backend/vulkan/vk_ops_filters.cpp
         tensor/backend/vulkan/vk_ops_export.cpp
         tensor/backend/vulkan/vk_services.cpp
+        tensor/backend/vulkan/vulkan_driver.cpp
+        tensor/backend/vulkan/vk_runtime_services.cpp
     )
     if(LFS_HAS_CUDA)
         list(APPEND TENSOR_SOURCES tensor/backend/vulkan/vk_cuda_bridge.cpp)
@@ -208,6 +233,8 @@ if(LFS_TENSOR_METAL)
         tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
+        tensor/backend/metal/metal_driver.mm
+        tensor/backend/metal/metal_runtime_services.mm
         tensor/backend/metal/metal_shared_image.mm
         tensor/backend/metal/metal_module.mm
         tensor/backend/metal/metal_program.mm

@@ -24,34 +24,11 @@ namespace lfs::core {
     inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal, GpuBackend::HIP};
     inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
 
-    // Availability/candidate enumeration excludes backends not compiled into
-    // this build. The Vulkan enum remains ABI-stable without being advertised.
-#if LFS_HAS_CUDA && defined(LFS_TENSOR_VULKAN)
-    inline constexpr std::array kStandardGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
-#elif LFS_HAS_CUDA
-    inline constexpr std::array kStandardGpuBackends{GpuBackend::CUDA};
-#elif defined(LFS_TENSOR_VULKAN) && defined(LFS_TENSOR_METAL)
-    inline constexpr std::array kStandardGpuBackends{GpuBackend::Vulkan, GpuBackend::Metal};
-#elif defined(LFS_TENSOR_VULKAN)
-    inline constexpr std::array kStandardGpuBackends{GpuBackend::Vulkan};
-#elif defined(LFS_TENSOR_METAL)
-    inline constexpr std::array kStandardGpuBackends{GpuBackend::Metal};
-#else
-    inline constexpr std::array<GpuBackend, 0> kStandardGpuBackends{};
-#endif
+} // namespace lfs::core
 
-#ifdef LFS_TENSOR_HIP
-    inline constexpr auto kCompiledGpuBackends = [] {
-        std::array<GpuBackend, kStandardGpuBackends.size() + 1> result{};
-        for (size_t i = 0; i < kStandardGpuBackends.size(); ++i)
-            result[i] = kStandardGpuBackends[i];
-        result.back() = GpuBackend::HIP;
-        return result;
-    }();
-#else
-    inline constexpr auto kCompiledGpuBackends = kStandardGpuBackends;
-#endif
+#include "core/gpu_backend_config.hpp"
 
+namespace lfs::core {
     // Allows optional backend paths to disappear at compile time in default
     // builds without making backend identity or declarations conditional.
     constexpr bool gpu_backend_compiled(GpuBackend backend) {

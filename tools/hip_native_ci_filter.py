@@ -16,7 +16,7 @@ FILES = {
     "tests/TensorOperationContracts.cmake", "tests/python_tensor_contracts.cpp", "tests/test_tensor_operation_contracts.cpp",
     "tests/test_tensor_backend_semantics.cpp", "tests/tensor_test_support.hpp",
     "src/python/lfs/py_tensor.cpp", "vcpkg.json", "vcpkg-configuration.json",
-    "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
+    "cmake/GpuBackendRegistry.cmake", "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",
     "tests/python/test_hip_runtime_configuration.py",

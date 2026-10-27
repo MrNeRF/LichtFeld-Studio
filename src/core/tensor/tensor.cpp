@@ -1813,26 +1813,19 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
-            if (gpu_backend_compiled(GpuBackend::HIP) && device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP) {
-                auto result = internal::allocate_like(*this, shape_, DataType::Bool);
-                if (numel() > 0)
-                    internal::backend_ops_for(*this).convert_type(
-                        internal::storage_ref(*this), internal::storage_ref(result),
-                        numel(), internal::ExecContext{result.stream()});
-                return result;
-            }
-            if (device_ == Device::GPU && numel() > 0) {
-                // != 0 on the device.
-                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
-            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            const int* src = ptr<int>();
-            unsigned char* dst = result.ptr<unsigned char>();
-            for (size_t i = 0; i < numel(); ++i) {
-                dst[i] = (src[i] != 0) ? 1 : 0;
+            if (device_ == Device::GPU) {
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
+            } else {
+                const int* src = ptr<int>();
+                unsigned char* dst = result.ptr<unsigned char>();
+                for (size_t i = 0; i < numel(); ++i)
+                    dst[i] = src[i] != 0 ? 1 : 0;
             }
             return result;
         }

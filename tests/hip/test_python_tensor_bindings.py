@@ -27,6 +27,11 @@ class TensorBindings(unittest.TestCase):
         # Import takes ownership of the capsule and its deleter.
         result = bindings.Tensor.from_dlpack(t)
         self.assertEqual(result.tolist(), [0, 0, 0])
+    def test_cpu_export_ignores_consumer_gpu_stream(self):
+        tensor = bindings.Tensor.zeros([2], device="cpu")
+        capsule = tensor.__dlpack__(stream=object())
+        result = bindings.Tensor.from_dlpack(capsule)
+        self.assertEqual(result.tolist(), [0, 0])
     @unittest.skipUnless(a.hip, "HIP hardware execution explicitly disabled")
     def test_hip_identity_and_reject_both_dlpack_entries(self):
         for empty in (False, True):

@@ -2,11 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/gpu_device_info.hpp"
 #include "core/gpu_device_runtime.hpp"
+#include "core/gpu_elapsed.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_fused.hpp"
+#include "core/tensor_protocol_export.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "tensor_backend_contract.hpp"
 #include <algorithm>
 #include <array>
@@ -62,6 +65,61 @@ namespace {
         if constexpr (!gpu_backend_compiled(GpuBackend::HIP)) {
             EXPECT_THROW((void)selected_hip_device(), std::runtime_error);
             EXPECT_FALSE(gpu_backend_live(GpuBackend::HIP));
+        }
+    }
+
+    TEST_P(TensorOperationContracts, ElapsedTimerUsesTheSameOptionalContractOnEveryBackend) {
+        if (!GetParam().backend) {
+            for (const auto backend : kGpuBackends) {
+                GpuElapsed empty(backend, 0);
+                EXPECT_FALSE(empty.ready());
+                EXPECT_FALSE(empty.mark(0, nullptr));
+                EXPECT_FALSE(empty.wait_event(0));
+                EXPECT_FALSE(empty.wait_queue(nullptr));
+                EXPECT_FALSE(empty.milliseconds(0, 1).has_value());
+            }
+            return;
+        }
+        const auto backend = *GetParam().backend;
+        const auto queue = TensorExecutionTarget::default_queue(backend);
+        GpuElapsed timer(backend, 2);
+        if (!timer.ready()) {
+            EXPECT_FALSE(timer.mark(0, queue));
+            EXPECT_FALSE(timer.wait_event(0));
+            EXPECT_FALSE(timer.milliseconds(0, 1).has_value());
+            return; // Explicitly unavailable optional instrumentation.
+        }
+        EXPECT_FALSE(timer.mark(2, queue));
+        ASSERT_TRUE(timer.mark(0, queue));
+        const auto result = values({1, 2, 3}, {3}).mul(2.f);
+        ASSERT_TRUE(timer.mark(1, queue));
+        ASSERT_TRUE(timer.wait_event(1));
+        ASSERT_TRUE(timer.wait_queue(queue));
+        const auto elapsed = timer.milliseconds(0, 1);
+        ASSERT_TRUE(elapsed.has_value());
+        EXPECT_GE(*elapsed, 0.f);
+        EXPECT_TRUE(std::isfinite(*elapsed));
+        expect_values(result, {3}, {2, 4, 6});
+        const auto other = backend == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA;
+        EXPECT_THROW((void)timer.mark(0, TensorExecutionTarget::default_queue(other)), std::invalid_argument);
+    }
+
+    TEST_P(TensorOperationContracts, Int32BooleanConversionKeepsNonzeroSemantics) {
+        const auto input = Tensor::from_vector(std::vector<int>{0, 1, -1, 256, -256, INT32_MAX, INT32_MIN}, {7}, device());
+        const auto converted = input.to(DataType::Bool).to(DataType::Int32);
+        expect_placement(converted);
+        EXPECT_EQ(converted.dtype(), DataType::Int32);
+        EXPECT_EQ(converted.to_vector_int(), (std::vector<int>{0, 1, 1, 1, 1, 1, 1}));
+    }
+
+    TEST_P(TensorOperationContracts, OddNormalDrawsKeepTheirShapeAndFiniteValues) {
+        for (const size_t count : {size_t{1}, size_t{3}, size_t{257}}) {
+            auto result = values(std::vector<float>(count, 0.f), {count});
+            result.normal_(1.f, 0.25f);
+            expect_placement(result);
+            EXPECT_EQ(result.shape(), TensorShape({count}));
+            for (const auto value : result.to_vector())
+                EXPECT_TRUE(std::isfinite(value));
         }
     }
 
@@ -214,6 +272,16 @@ namespace {
         EXPECT_EQ(result.to_vector_int64(), std::vector<int64_t>(17, 1));
     }
 
+    TEST_P(TensorOperationContracts, EmptyReadbackUsesTheSameCompletionContract) {
+        TensorReadback readback;
+        auto empty = Tensor::empty({0}, device());
+        readback.enqueue(empty);
+        empty = {};
+        EXPECT_TRUE(readback.pending());
+        EXPECT_NO_THROW(readback.wait(std::span<std::byte>{}));
+        EXPECT_FALSE(readback.pending());
+    }
+
     TEST_P(TensorOperationContracts, ReadbackRetainsStridedSourceAndCanBeReused) {
         TensorReadback download;
         for (const float offset : {0.f, 8.f}) {
@@ -224,6 +292,57 @@ namespace {
             download.wait(std::as_writable_bytes(std::span(actual)));
             EXPECT_FALSE(download.pending());
             EXPECT_EQ(actual, (std::array<float, 6>{1 + offset, 4 + offset, 2 + offset, 5 + offset, 3 + offset, 6 + offset}));
+        }
+    }
+
+    TEST_P(TensorOperationContracts, ProtocolExportReportsUnavailableWithoutActivatingOtherBackends) {
+        const auto input = values({1, 2, 3}, {3});
+        if (!GetParam().backend) {
+            const auto device = tensor_dlpack_device(input);
+            EXPECT_EQ(device.type, 1);
+            EXPECT_EQ(device.ordinal, 0);
+            EXPECT_EQ(prepare_tensor_dlpack_export(input, std::nullopt).data_ptr(), input.data_ptr());
+        } else if (!gpu_backend_export_capabilities(*GetParam().backend).dlpack) {
+            EXPECT_THROW((void)tensor_dlpack_device(input), std::runtime_error);
+            EXPECT_THROW((void)prepare_tensor_dlpack_export(input, -1), std::runtime_error);
+        }
+        for (const auto backend : kGpuBackends) {
+            const bool live = gpu_backend_live(backend);
+            (void)gpu_backend_export_capabilities(backend);
+            EXPECT_EQ(gpu_backend_live(backend), live);
+        }
+    }
+
+    TEST_P(TensorOperationContracts, PackedReadbackRetainsBorrowedStagingUntilCompletion) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Packed slots target GPU queues";
+        const auto backend = *GetParam().backend;
+        TensorWorkQueue queue(backend, TensorWorkQueue::Mode::Independent);
+        auto staging = Tensor::empty({4 * sizeof(float)}, device(), DataType::UInt8);
+        TensorReadbackRing ring(backend, 1, 4 * sizeof(float), queue, &staging);
+        auto source = values({9, 1, 2, 3, 4, 8}, {6});
+        ring.enqueue(source, sizeof(float), 4 * sizeof(float), 0, 0, true);
+        source = {};
+        staging = {};
+        ring.seal(0).wait();
+        ASSERT_TRUE(ring.poll(0));
+        std::array<float, 4> actual{};
+        const auto bytes = ring.slot_bytes(0);
+        std::memcpy(actual.data(), bytes.data(), sizeof(actual));
+        EXPECT_EQ(actual, (std::array<float, 4>{1, 2, 3, 4}));
+        ring.release(0);
+    }
+
+    TEST_P(TensorOperationContracts, ScalarSelectionPreservesExactAndOverlappingAliases) {
+        const auto condition = Tensor::from_vector(std::vector<int>{1, 0, 1, 0}, {4}, device()).to(DataType::Bool);
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            auto input = values({1, 2, 3, 4, 5}, {5}).to(dtype);
+            auto source = input.slice(0, 0, 4);
+            auto output = input.slice(0, 1, 5);
+            where_into(output, condition, 9.f, source);
+            ASSERT_NO_FATAL_FAILURE(expect_values(output.to(DataType::Float32), {4}, {9, 2, 9, 4}));
+            where_into(output, condition, 7.f, output);
+            ASSERT_NO_FATAL_FAILURE(expect_values(output.to(DataType::Float32), {4}, {7, 2, 7, 4}));
         }
     }
 

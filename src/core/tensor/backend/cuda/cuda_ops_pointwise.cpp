@@ -711,6 +711,12 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output,
         const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(convert_type);
+        if (input.dtype == DataType::Int32 && output.dtype == DataType::Bool) {
+            ScalarOperand zero{};
+            zero.kind = ScalarKind::Int32;
+            unary({PointwiseOp::NotEqualScalar, DataType::Int32, DataType::Bool, zero}, input, output, count, context);
+            return;
+        }
         switch (input.dtype) {
         case DataType::Float32:
             switch (output.dtype) {
