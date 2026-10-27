@@ -2576,7 +2576,7 @@ namespace lfs::io {
                     params.progress_callback(completed_count, completed_count, skipped_count);
 
                 check_sink(sink.prepareComplete({media::SinkOutcome::Completed, accepted_frames, {}}));
-                if (!custom_sink && params.generate_metadata && !saved_frames.empty()) {
+                if (!custom_sink && params.generate_metadata && (!saved_frames.empty() || params.preserve_source_metadata)) {
                     const std::filesystem::path meta_path = params.output_dir / "extraction_metadata.json";
                     try {
                         nlohmann::json root;
@@ -2858,6 +2858,7 @@ namespace lfs::io {
                             root["sharpness"]["effective_candidates_per_window"] = eff;
                         }
 
+                        root["frames"] = nlohmann::json::array();
                         auto& frames = root["frames"];
                         for (const auto& f : saved_frames) {
                             frames.push_back({{"file", f.filename},

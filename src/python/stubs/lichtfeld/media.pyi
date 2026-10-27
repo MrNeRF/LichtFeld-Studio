@@ -572,6 +572,9 @@ class Orientation:
     def rotate_tag(self) -> str | None: ...
 
     @property
+    def rotate_tag_limited(self) -> bool: ...
+
+    @property
     def display_matrix(self) -> list[int] | None: ...
 
     @property

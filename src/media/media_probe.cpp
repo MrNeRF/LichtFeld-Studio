@@ -161,9 +161,12 @@ namespace lfs::media {
             const auto* tag = av_dict_get(stream->metadata, "rotate", nullptr, 0);
             if (tag && tag->value) {
                 result.orientation.source = OrientationSource::RotateTag;
-                result.orientation.rotate_tag = tag->value;
-                result.orientation.clockwise_degrees.reset();
                 std::string_view value(tag->value);
+                result.orientation.rotate_tag.reset();
+                result.orientation.rotate_tag_limited = value.size() > Orientation::max_rotate_tag_bytes;
+                if (!result.orientation.rotate_tag_limited)
+                    result.orientation.rotate_tag = value;
+                result.orientation.clockwise_degrees.reset();
                 const auto first = value.find_first_not_of(" \t\r\n");
                 if (first == std::string_view::npos)
                     return result;

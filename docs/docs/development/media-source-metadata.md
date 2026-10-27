@@ -476,6 +476,13 @@ hex and explicit limited states. This is a bounded static observation, not an
 archive of all original container bytes or a scan of timed telemetry packets.
 The selected stream and other observed streams retain their identities.
 
+The stream description retains at most 4096 bytes of rotation-tag text.
+Larger text is omitted with `rotate_tag_limited: true`; numeric rotation is
+still interpreted from the demuxer value without copying it. The summary
+reports this omission as limited. Raw tags keep their separate collection
+budget, so an omitted description string can still have exact retained bytes
+in the catalog. Normal orientation JSON is unchanged.
+
 This opt-in includes any GPS, identifiers or other private data contained in
 tags or opaque payloads. Turning it off omits this snapshot from newly generated manifests; it does
 not redact files from earlier runs. There is no field-level privacy filter: a payload may contain information outside its
@@ -491,6 +498,11 @@ regenerated from a verified resumed run; completed images can survive an
 interruption before manifest publication. Images and the manifest are not a
 single filesystem transaction. Cancellation retains the existing extraction
 semantics and atomic publication checks.
+
+When every candidate is rejected, explicit source preservation still publishes
+the observation with an empty `frames` array. A resumed empty run regenerates
+that manifest. With source preservation disabled, the historical zero-frame
+behavior is unchanged.
 
 The CLI and Python bindings use this same file-extraction path. Rendered image
 sequences have no video input to observe; their metadata needs an explicitly

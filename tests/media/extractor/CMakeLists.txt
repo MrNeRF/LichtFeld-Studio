@@ -200,3 +200,8 @@ if(WIN32)
     set_tests_properties(MediaSourceMetadataUnitContracts PROPERTIES
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${MEDIA_RUNTIME_LIBRARY_DIR}")
 endif()
+
+# Use the same Python UTF-8 startup policy as the Windows workflow.
+set_property(TEST MediaExtractionContracts MediaExactFrameBoundarySoftware
+    MediaIngestCLIContracts MediaPythonBindingsContracts MediaFloatExrReferenceContracts
+    APPEND PROPERTY ENVIRONMENT "PYTHONUTF8=1")

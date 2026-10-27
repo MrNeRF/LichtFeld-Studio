@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Production CPU CLI contracts; synthetic offline input and legacy references."""
@@ -1908,7 +1909,8 @@ class IngestCLI(unittest.TestCase):
         result, _ = self.invoke("extract", self.source(), "--output", directory,
                                 "--interval", "1", "--end", "0.2", "--preserve-source-metadata")
         self.assertTrue(result["success"])
-        manifest = json.loads((directory / "extraction_metadata.json").read_text())
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["source_metadata"]["metadata"]["source_locator"], str(self.source()))
         self.assertEqual(manifest["source_metadata_policy"], "preserve_static_container_v1")
         self.assertEqual(manifest["source_metadata"]["metadata"]["scope"], "container_stream")
         self.assertEqual(manifest["source_metadata"]["metadata"]["source_metadata"]["provider"]["name"], "ffmpeg")
