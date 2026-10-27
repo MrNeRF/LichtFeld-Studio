@@ -2255,7 +2255,8 @@ body {
     min-width: 44dp;
 }
 
-.scale-distance-input {
+/* Outranks the global input[type="text"] size, like the depth field. */
+.scale-distance-toolbar > .number-input.scale-distance-input {
     width: 68dp;
     min-width: 68dp;
     height: 24dp;
