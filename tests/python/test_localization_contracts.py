@@ -494,7 +494,8 @@ def test_immediate_python_controls_request_one_followup_frame_without_polling():
 def test_collision_error_keys_cover_native_producers_and_all_locales():
     native = [
         "src/core/collision_volume.cpp", "src/core/collision_walk.cpp", "src/core/collision_voxelization.cpp",
-        "src/core/include/core/collision.hpp", "src/core/scene.cpp",
+        "src/core/include/core/collision.hpp", "src/core/include/core/collision_volume.hpp",
+        "src/core/scene.cpp",
         "src/io/collision_export.cpp", "src/io/project/collision_serialization.hpp",
         "src/io/project/project_document.cpp", "src/python/lfs/py_scene.cpp",
         "src/python/lfs/py_io.cpp", "src/visualizer/gui/async_task_manager.cpp",

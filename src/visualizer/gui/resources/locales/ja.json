@@ -1233,7 +1233,8 @@
     "scale": "拡大縮小",
     "mirror": "ミラー",
     "crop": "切り抜き",
-    "align": "整列"
+    "align": "整列",
+    "scale_distance": "距離で拡大縮小"
   },
   "toolbar": {
     "selection": "選択",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "境界をリサイズ",
     "reset_default": "デフォルトにリセット",
     "fullscreen": "全画面表示",
-    "toggle_ui": "UIを切り替え"
+    "toggle_ui": "UIを切り替え",
+    "scale_distance": "距離で拡大縮小",
+    "scale_distance_tool": "距離スケール",
+    "scale_distance_measured": "測定値:",
+    "scale_distance_set": "距離を設定:",
+    "scale_distance_apply": "スケールを確定",
+    "scale_distance_reset": "点をリセット"
   },
   "transform": {
+    "scale_apriltag": "AprilTagでシーンのスケールを調整",
     "node": "ノード: %s",
     "world": "ワールド",
     "local": "ローカル",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "スケールツール",
     "action.tool_mirror": "ミラーツール",
     "action.tool_align": "整列ツール",
+    "action.tool_scale_distance": "距離スケールツール",
     "action.pie_menu": "パイメニュー",
     "action.group_selected_scene_nodes": "選択したシーンノードをグループ化",
     "action.ungroup_selected_scene_node": "選択したシーンノードのグループを解除",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "パネルタブを下にスクロール"
   },
   "runtime": {
+    "apriltag_scan": "AprilTagスキャン",
+    "apriltag_worker_required": "AprilTagのスキャンはバックグラウンドのエディタスクリプトまたはMCPジョブで実行してください",
+    "apriltag_scanning": "AprilTagを検出中",
+    "apriltag_solving": "AprilTagのキャリブレーションを計算中",
+    "apriltag_scene_changed": "AprilTagの検出中にシーンが変更されました。再度スキャンしてください",
+    "apriltag_busy": "AprilTagのスキャンはすでに実行中です",
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "次のキーフレーム",
   "gamepad.binding.deselect_keyframe": "キーフレームの選択を解除",
   "gamepad.binding.update_selected_keyframe": "選択したキーフレームを更新",
-  "gamepad.binding.context_help": "カメラモードまたはシーケンサーの操作を設定します。パネルが表示され、再生が一時停止または停止している間は、シーケンサーの割り当てが優先されます。"
+  "gamepad.binding.context_help": "カメラモードまたはシーケンサーの操作を設定します。パネルが表示され、再生が一時停止または停止している間は、シーケンサーの割り当てが優先されます。",
+  "scale_distance": {
+    "click_1st": "1点目をクリック",
+    "click_2nd": "2点目をクリック",
+    "points_count": "点: {}/2",
+    "hint_picking": "クリック: 点を配置/選択。マーカーをドラッグ: 移動。{0}: 選択削除。{1}: キャンセル。",
+    "hint_review": "ツールバーで目標距離を入力し、確定をクリックしてスケール。点をドラッグして調整。{0}: キャンセル。",
+    "status_invalid_distance": "距離はゼロより大きい必要があります。",
+    "status_no_surface": "カーソル下にサーフェスがありません。",
+    "status_no_target": "スケールできる対象がありません。"
+  }
 }

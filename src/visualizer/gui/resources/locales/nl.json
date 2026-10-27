@@ -1233,7 +1233,8 @@
     "scale": "Schalen",
     "mirror": "Spiegelen",
     "crop": "Bijsnijden",
-    "align": "Uitlijnen"
+    "align": "Uitlijnen",
+    "scale_distance": "Afstand schalen"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "Grenzen Aanpassen",
     "reset_default": "Reset naar Standaard",
     "fullscreen": "Volledig Scherm",
-    "toggle_ui": "Schakel UI"
+    "toggle_ui": "Schakel UI",
+    "scale_distance": "Afstand schalen",
+    "scale_distance_tool": "Afstand schalen",
+    "scale_distance_measured": "Gemeten:",
+    "scale_distance_set": "Afstand instellen:",
+    "scale_distance_apply": "Schaling bevestigen",
+    "scale_distance_reset": "Punten resetten"
   },
   "transform": {
+    "scale_apriltag": "Scène schalen met AprilTags",
     "node": "Node: %s",
     "world": "Wereld",
     "local": "Lokaal",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "Schaalgereedschap",
     "action.tool_mirror": "Spiegelgereedschap",
     "action.tool_align": "Uitlijngereedschap",
+    "action.tool_scale_distance": "Afstand-schaalgereedschap",
     "action.pie_menu": "Cirkelmenu",
     "action.group_selected_scene_nodes": "Geselecteerde sceneknooppunten groeperen",
     "action.ungroup_selected_scene_node": "Geselecteerd sceneknooppunt degroeperen",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "Paneeltabbladen omlaag scrollen"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag-scan",
+    "apriltag_worker_required": "Voer de AprilTag-scan uit in een editorscript op de achtergrond of via de MCP-taak",
+    "apriltag_scanning": "AprilTags zoeken",
+    "apriltag_solving": "AprilTag-kalibratie berekenen",
+    "apriltag_scene_changed": "De scène is gewijzigd tijdens de AprilTag-detectie; scan opnieuw",
+    "apriltag_busy": "Er loopt al een AprilTag-scan",
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "Volgend keyframe",
   "gamepad.binding.deselect_keyframe": "Keyframe deselecteren",
   "gamepad.binding.update_selected_keyframe": "Geselecteerd keyframe bijwerken",
-  "gamepad.binding.context_help": "Stel bediening per cameramodus of voor de sequencer in. Sequencertoewijzingen hebben voorrang wanneer het paneel zichtbaar is en het afspelen is gepauzeerd of gestopt."
+  "gamepad.binding.context_help": "Stel bediening per cameramodus of voor de sequencer in. Sequencertoewijzingen hebben voorrang wanneer het paneel zichtbaar is en het afspelen is gepauzeerd of gestopt.",
+  "scale_distance": {
+    "click_1st": "Klik 1e punt",
+    "click_2nd": "Klik 2e punt",
+    "points_count": "Punten: {}/2",
+    "hint_picking": "Klik: punt plaatsen/selecteren. Marker slepen: verplaatsen. {0}: selectie. {1}: annuleren.",
+    "hint_review": "Voer doelafstand in op werkbalk en klik op Bevestigen. Sleep punten om aan te passen. {0}: annuleren.",
+    "status_invalid_distance": "Afstand moet groter zijn dan nul.",
+    "status_no_surface": "Geen oppervlak onder de cursor.",
+    "status_no_target": "Geen transformeerbaar doel om te schalen."
+  }
 }

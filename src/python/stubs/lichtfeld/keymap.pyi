@@ -151,6 +151,8 @@ class Action(enum.Enum):
 
     TOOL_ALIGN = 67
 
+    TOOL_SCALE_DISTANCE = 99
+
     PIE_MENU = 68
 
     DEPTH_ADJUST_NEAR = 69

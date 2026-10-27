@@ -35,6 +35,7 @@ namespace lfs::vis {
     // Forward declarations
     namespace tools {
         class AlignTool;
+        class ScaleDistanceTool;
         class SelectionTool;
     } // namespace tools
     class ToolContext;
@@ -65,6 +66,11 @@ namespace lfs::vis {
         // Set align tool
         void setAlignTool(std::shared_ptr<tools::AlignTool> tool) {
             align_tool_ = tool;
+        }
+
+        // Set scale distance tool
+        void setScaleDistanceTool(std::shared_ptr<tools::ScaleDistanceTool> tool) {
+            scale_distance_tool_ = tool;
         }
 
         // Set selection tool
@@ -318,6 +324,7 @@ namespace lfs::vis {
 
         // Tool support
         std::shared_ptr<tools::AlignTool> align_tool_;
+        std::shared_ptr<tools::ScaleDistanceTool> scale_distance_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         ToolContext* tool_context_ = nullptr;
         Visualizer* viewer_ = nullptr;

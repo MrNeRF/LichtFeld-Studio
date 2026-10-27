@@ -292,11 +292,11 @@ namespace {
         settings.orthographic = true;
         settings.ortho_scale = 100.0f;
         Viewport panel(800, 600);
-        EXPECT_FLOAT_EQ(lfs::vis::op::alignPanelOrthoScale(panel, settings), 100.0f);
+        EXPECT_FLOAT_EQ(lfs::vis::op::pointPickPanelOrthoScale(panel, settings), 100.0f);
 
         // A split-view panel zoomed on its own must draw and pick markers at its own scale.
         panel.ortho_scale_override = 400.0f;
-        EXPECT_FLOAT_EQ(lfs::vis::op::alignPanelOrthoScale(panel, settings), 400.0f);
+        EXPECT_FLOAT_EQ(lfs::vis::op::pointPickPanelOrthoScale(panel, settings), 400.0f);
     }
 
     TEST(AlignEdgeToWorldX, IdentityUpMapsPositiveZEdgeToPlusX) {
@@ -521,8 +521,8 @@ namespace lfs::vis::op {
             lfs::event::EventBridge::instance().clear_all();
         }
 
-        OperatorResult action(Services::AlignUiAction action) {
-            services().requestAlignUiAction(action);
+        OperatorResult action(PointPickState::UiAction action) {
+            services().alignPointPick().requestUiAction(action);
             OperatorProperties properties;
             return operation_.modal(*context_, properties);
         }
@@ -531,6 +531,12 @@ namespace lfs::vis::op {
             context_->setModalEvent(event);
             OperatorProperties properties;
             return operation_.modal(*context_, properties);
+        }
+
+        OperatorResult mouse(const int action, const glm::dvec2 position, const bool over_gui = false) {
+            return send({.type = ModalEvent::Type::MOUSE_BUTTON,
+                         .over_gui = over_gui,
+                         .data = MouseButtonEvent{.button = operation_.pick_button_, .action = action, .mods = 0, .position = position}});
         }
 
         OperatorResult key(const int key) {
@@ -553,6 +559,23 @@ namespace lfs::vis::op {
         AlignPickPointOperator operation_;
     };
 
+    TEST_F(AlignPreviewTest, MousePressPassesThroughAndClickReleaseIsConsumed) {
+        EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(mouse(input::ACTION_RELEASE, {10, 20}), OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 3u);
+        EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(mouse(input::ACTION_RELEASE, {30, 20}), OperatorResult::PASS_THROUGH);
+    }
+
+    TEST_F(AlignPreviewTest, PreviewAndGuiMousePressesPassThrough) {
+        EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}, true), OperatorResult::PASS_THROUGH);
+        action(PointPickState::UiAction::TogglePreview);
+        EXPECT_TRUE(services().getAlignPreviewEnabled());
+        EXPECT_EQ(mouse(input::ACTION_PRESS, {10, 20}), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(mouse(input::ACTION_RELEASE, {10, 20}), OperatorResult::PASS_THROUGH);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 3u);
+    }
+
     TEST_F(AlignPreviewTest, AlignmentChangesNotifyUiOncePerFrame) {
         auto& store = app_store();
         (void)store.store().drain_dirty_into_frame();
@@ -561,13 +584,13 @@ namespace lfs::vis::op {
         const auto generation = store.align_state_generation.get();
 
         // Repeated synchronization of the same triangle must not keep the UI awake.
-        services().setAlignPickedPoints(services().getAlignPickedPoints());
+        services().alignPointPick().setPickedPoints(services().alignPointPick().getPickedPoints());
         services().setAlignPreviewEnabled(services().getAlignPreviewEnabled());
         services().setAlignAxisSnapEnabled(services().getAlignAxisSnapEnabled());
         services().setAlignEdgeToAxisEnabled(services().getAlignEdgeToAxisEnabled());
         EXPECT_EQ(store.align_state_generation.get(), generation);
 
-        services().setAlignPickedPoints({{0, 0, 0}, {1, 0, 0}, {0, 0, 1}});
+        services().alignPointPick().setPickedPoints({{0, 0, 0}, {1, 0, 0}, {0, 0, 1}});
         services().setAlignPreviewEnabled(true);
         services().setAlignAxisSnapEnabled(true);
         services().setAlignEdgeToAxisEnabled(true);
@@ -575,28 +598,28 @@ namespace lfs::vis::op {
         EXPECT_TRUE(store.store().drain_dirty_into_frame());
         EXPECT_EQ(notifications, 1);
 
-        services().clearAlignPickedPoints();
+        services().alignPointPick().clearPickedPoints();
         EXPECT_TRUE(store.store().drain_dirty_into_frame());
         EXPECT_EQ(notifications, 2);
-        services().clearAlignPickedPoints();
+        services().alignPointPick().clearPickedPoints();
         EXPECT_FALSE(store.store().drain_dirty_into_frame());
         EXPECT_EQ(notifications, 2);
     }
 
     TEST_F(AlignPreviewTest, ClearingStatusWithoutPickedPointsNotifiesUi) {
-        services().clearAlignPickedPoints();
-        services().setAlignStatusMessage("No surface at the selected point", 5.0);
+        services().alignPointPick().clearPickedPoints();
+        services().alignPointPick().setStatusMessage("No surface at the selected point", 5.0);
         auto& store = app_store();
         (void)store.store().drain_dirty_into_frame();
         const auto generation = store.align_state_generation.get();
-        ASSERT_NE(services().getAlignStatusMessage(), nullptr);
+        ASSERT_NE(services().alignPointPick().getStatusMessage(), nullptr);
 
-        services().clearAlignPickedPoints();
-        EXPECT_EQ(services().getAlignStatusMessage(), nullptr);
+        services().alignPointPick().clearPickedPoints();
+        EXPECT_EQ(services().alignPointPick().getStatusMessage(), nullptr);
         EXPECT_EQ(store.align_state_generation.get(), generation + 1);
         EXPECT_TRUE(store.store().drain_dirty_into_frame());
 
-        services().clearAlignPickedPoints();
+        services().alignPointPick().clearPickedPoints();
         EXPECT_EQ(store.align_state_generation.get(), generation + 1);
         EXPECT_FALSE(store.store().drain_dirty_into_frame());
     }
@@ -613,7 +636,7 @@ namespace lfs::vis::op {
         ASSERT_EQ(scene.getTotalGaussianCount(), 0u);
         ASSERT_TRUE(operation_.poll(*context_));
         const auto original = scene.getNode("points")->transform();
-        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
         EXPECT_NE(scene.getNode("points")->transform(), original);
         ASSERT_TRUE(undoHistory().undo().success);
         EXPECT_EQ(scene.getNode("points")->transform(), original);
@@ -627,7 +650,7 @@ namespace lfs::vis::op {
 
     TEST_F(AlignPreviewTest, CancelRestoresOriginalTransformAfterTargetIsLocked) {
         const auto original = transform();
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         ASSERT_NE(transform(), original);
         manager_->getScene().setNodeLocked("target", true);
         operation_.cancel(*context_);
@@ -638,26 +661,26 @@ namespace lfs::vis::op {
 
     TEST_F(AlignPreviewTest, OptionTogglesUseOriginalTransformWithoutDrift) {
         const auto original = transform();
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         const auto without_axis = transform();
         services().setAlignEdgeToAxisEnabled(true);
-        action(Services::AlignUiAction::RefreshPreview);
+        action(PointPickState::UiAction::RefreshPreview);
         EXPECT_NE(transform(), without_axis);
         services().setAlignEdgeToAxisEnabled(false);
-        action(Services::AlignUiAction::RefreshPreview);
+        action(PointPickState::UiAction::RefreshPreview);
         EXPECT_EQ(transform(), without_axis);
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         EXPECT_EQ(transform(), original);
         EXPECT_EQ(undoHistory().undoCount(), 0u);
     }
 
     TEST_F(AlignPreviewTest, ApplyWithoutPreviewMatchesPreviewAndCreatesOneUndoStep) {
         const auto original = transform();
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         const auto preview = transform();
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         ASSERT_EQ(transform(), original);
-        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
         EXPECT_EQ(transform(), preview);
         EXPECT_FALSE(services().getAlignPreviewEnabled());
         EXPECT_EQ(undoHistory().undoCount(), 1u);
@@ -671,14 +694,14 @@ namespace lfs::vis::op {
                                     input::KEY_KP_ENTER, input::KEY_ESCAPE}) {
             EXPECT_EQ(key(fixed_key), OperatorResult::PASS_THROUGH) << fixed_key;
         }
-        EXPECT_EQ(services().getAlignPickedPoints().size(), 3u);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 3u);
         EXPECT_EQ(transform(), original);
 
         selectPoint(0);
         EXPECT_EQ(bound(input::Action::DELETE_SELECTED), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(services().getAlignPickedPoints().size(), 2u);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 2u);
         EXPECT_EQ(bound(input::Action::REMOVE_LAST_POINT), OperatorResult::RUNNING_MODAL);
-        EXPECT_EQ(services().getAlignPickedPoints().size(), 1u);
+        EXPECT_EQ(services().alignPointPick().getPickedPoints().size(), 1u);
         EXPECT_EQ(bound(input::Action::APPLY_ALIGNMENT), OperatorResult::RUNNING_MODAL);
         EXPECT_EQ(bound(input::Action::UNDO), OperatorResult::PASS_THROUGH);
         EXPECT_EQ(bound(input::Action::CANCEL_POLYGON), OperatorResult::CANCELLED);
@@ -694,9 +717,9 @@ namespace lfs::vis::op {
 
     TEST_F(AlignPreviewTest, ApplyCommitsOneUndoStepMatchingThePreview) {
         const auto original = transform();
-        action(Services::AlignUiAction::TogglePreview);
+        action(PointPickState::UiAction::TogglePreview);
         const auto preview = transform();
-        EXPECT_EQ(action(Services::AlignUiAction::Apply), OperatorResult::FINISHED);
+        EXPECT_EQ(action(PointPickState::UiAction::Apply), OperatorResult::FINISHED);
         EXPECT_EQ(transform(), preview);
         EXPECT_EQ(undoHistory().undoCount(), 1u);
         EXPECT_TRUE(undoHistory().undo().success);

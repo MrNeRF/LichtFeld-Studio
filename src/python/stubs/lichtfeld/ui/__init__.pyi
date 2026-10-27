@@ -2389,6 +2389,21 @@ def get_align_edge_to_axis() -> bool:
 def set_align_edge_to_axis(enabled: bool) -> None:
     """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
 
+def can_apply_scale_distance() -> bool:
+    """True when 2 valid points are picked for scale distance"""
+
+def get_scale_distance_measured() -> float:
+    """Get measured distance between 2 picked points"""
+
+def apply_scale_distance(target_distance: float) -> bool:
+    """Request scale distance modal to rescale scene"""
+
+def clear_scale_distance() -> None:
+    """Request scale distance modal to clear picked points"""
+
+def get_scale_distance_points() -> list[list[float]]:
+    """Get picked points for scale distance tool"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path

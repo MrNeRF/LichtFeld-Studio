@@ -38,6 +38,8 @@ namespace lfs::vis::op {
         CropPolygonDraw,
         CropPolygonSet,
 
+        ScaleDistancePickPoint,
+
         _Count
     };
 
@@ -48,6 +50,7 @@ namespace lfs::vis::op {
         Scale,
         Mirror,
         Align,
+        ScaleDistance,
 
         _Count
     };

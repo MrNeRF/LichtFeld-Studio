@@ -1233,7 +1233,8 @@
     "scale": "Skaluj",
     "mirror": "Odbij",
     "crop": "Przytnij",
-    "align": "Wyrównaj"
+    "align": "Wyrównaj",
+    "scale_distance": "Skaluj według odległości"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "Zmień Rozmiar Granic",
     "reset_default": "Resetuj do Domyślnych",
     "fullscreen": "Pełny Ekran",
-    "toggle_ui": "Przełącz UI"
+    "toggle_ui": "Przełącz UI",
+    "scale_distance": "Skaluj według odległości",
+    "scale_distance_tool": "Skala odległości",
+    "scale_distance_measured": "Zmierzono:",
+    "scale_distance_set": "Ustaw odległość:",
+    "scale_distance_apply": "Zatwierdź skalę",
+    "scale_distance_reset": "Zresetuj punkty"
   },
   "transform": {
+    "scale_apriltag": "Skaluj scenę za pomocą AprilTags",
     "node": "Węzeł: %s",
     "world": "Światowa",
     "local": "Lokalna",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "Narzędzie skalowania",
     "action.tool_mirror": "Narzędzie lustrzane",
     "action.tool_align": "Narzędzie wyrównywania",
+    "action.tool_scale_distance": "Narzędzie skali odległości",
     "action.pie_menu": "Menu kołowe",
     "action.group_selected_scene_nodes": "Grupuj wybrane węzły sceny",
     "action.ungroup_selected_scene_node": "Rozgrupuj wybrany węzeł sceny",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "Przewiń karty paneli w dół"
   },
   "runtime": {
+    "apriltag_scan": "Skanowanie AprilTag",
+    "apriltag_worker_required": "Skanowanie AprilTag musi działać w skrypcie edytora w tle lub jako zadanie MCP",
+    "apriltag_scanning": "Wyszukiwanie AprilTags",
+    "apriltag_solving": "Obliczanie kalibracji AprilTag",
+    "apriltag_scene_changed": "Scena zmieniła się podczas wykrywania AprilTags; zeskanuj ponownie",
+    "apriltag_busy": "Skanowanie AprilTags już trwa",
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "Następna klatka kluczowa",
   "gamepad.binding.deselect_keyframe": "Odznacz klatkę kluczową",
   "gamepad.binding.update_selected_keyframe": "Aktualizuj wybraną klatkę kluczową",
-  "gamepad.binding.context_help": "Skonfiguruj sterowanie dla trybu kamery lub sekwencera. Przypisania sekwencera mają pierwszeństwo, gdy panel jest widoczny, a odtwarzanie wstrzymane lub zatrzymane."
+  "gamepad.binding.context_help": "Skonfiguruj sterowanie dla trybu kamery lub sekwencera. Przypisania sekwencera mają pierwszeństwo, gdy panel jest widoczny, a odtwarzanie wstrzymane lub zatrzymane.",
+  "scale_distance": {
+    "click_1st": "Kliknij 1. punkt",
+    "click_2nd": "Kliknij 2. punkt",
+    "points_count": "Punkty: {}/2",
+    "hint_picking": "Klik: ustaw/wybierz punkt. Przeciągnij marker: przesuń. {0}: usuń wybrany. {1}: anuluj.",
+    "hint_review": "Wpisz docelową odległość na pasku i kliknij Zatwierdź. Przeciągnij punkty, aby poprawić. {0}: anuluj.",
+    "status_invalid_distance": "Odległość musi być większa od zera.",
+    "status_no_surface": "Brak powierzchni pod kursorem.",
+    "status_no_target": "Brak obiektu do przeskalowania."
+  }
 }

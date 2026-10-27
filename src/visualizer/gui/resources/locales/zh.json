@@ -1233,7 +1233,8 @@
     "scale": "缩放",
     "mirror": "镜像",
     "crop": "裁剪",
-    "align": "对齐"
+    "align": "对齐",
+    "scale_distance": "按距离缩放"
   },
   "toolbar": {
     "selection": "选择",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "调整边界大小",
     "reset_default": "重置为默认",
     "fullscreen": "全屏",
-    "toggle_ui": "切换UI"
+    "toggle_ui": "切换UI",
+    "scale_distance": "按距离缩放",
+    "scale_distance_tool": "距离缩放",
+    "scale_distance_measured": "测量值:",
+    "scale_distance_set": "设置距离:",
+    "scale_distance_apply": "确认缩放",
+    "scale_distance_reset": "重置点"
   },
   "transform": {
+    "scale_apriltag": "使用 AprilTag 缩放场景",
     "node": "节点：%s",
     "world": "世界",
     "local": "局部",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "缩放工具",
     "action.tool_mirror": "镜像工具",
     "action.tool_align": "对齐工具",
+    "action.tool_scale_distance": "距离缩放工具",
     "action.pie_menu": "饼形菜单",
     "action.group_selected_scene_nodes": "对所选场景节点分组",
     "action.ungroup_selected_scene_node": "取消所选场景节点分组",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "向下滚动面板标签"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag 扫描",
+    "apriltag_worker_required": "AprilTag 扫描必须在后台编辑器脚本中或通过 MCP 运行时任务执行",
+    "apriltag_scanning": "正在扫描 AprilTag",
+    "apriltag_solving": "正在计算 AprilTag 标定",
+    "apriltag_scene_changed": "AprilTag 检测期间场景已更改，请重新扫描",
+    "apriltag_busy": "AprilTag 扫描已在运行",
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "下一个关键帧",
   "gamepad.binding.deselect_keyframe": "取消选择关键帧",
   "gamepad.binding.update_selected_keyframe": "更新选中的关键帧",
-  "gamepad.binding.context_help": "为相机模式或序列器配置操作。面板可见且播放已暂停或停止时，序列器的按键分配优先。"
+  "gamepad.binding.context_help": "为相机模式或序列器配置操作。面板可见且播放已暂停或停止时，序列器的按键分配优先。",
+  "scale_distance": {
+    "click_1st": "点击第 1 个点",
+    "click_2nd": "点击第 2 个点",
+    "points_count": "点: {}/2",
+    "hint_picking": "点击：放置/选择点。拖动标记：移动。{0}：删除所选。{1}：取消。",
+    "hint_review": "在工具栏输入目标距离并点击确认进行缩放。拖动点进行调整。{0}：取消。",
+    "status_invalid_distance": "距离必须大于零。",
+    "status_no_surface": "光标下没有表面。",
+    "status_no_target": "没有可缩放的可变换目标。"
+  }
 }

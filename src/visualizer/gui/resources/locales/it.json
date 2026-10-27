@@ -1246,7 +1246,8 @@
     "scale": "Scala",
     "mirror": "Specchia",
     "crop": "Ritaglia",
-    "align": "Allinea"
+    "align": "Allinea",
+    "scale_distance": "Scala distanza"
   },
   "toolbar": {
     "selection": "Selezione",
@@ -1316,9 +1317,16 @@
     "resize_bounds": "Ridimensiona Limiti",
     "reset_default": "Ripristina Predefinito",
     "fullscreen": "Schermo Intero",
-    "toggle_ui": "Alterna UI"
+    "toggle_ui": "Alterna UI",
+    "scale_distance": "Scala distanza",
+    "scale_distance_tool": "Scala distanza",
+    "scale_distance_measured": "Misurato:",
+    "scale_distance_set": "Imposta distanza:",
+    "scale_distance_apply": "Conferma scala",
+    "scale_distance_reset": "Reimposta punti"
   },
   "transform": {
+    "scale_apriltag": "Ridimensiona la scena con AprilTags",
     "node": "Nodo: %s",
     "world": "Mondo",
     "local": "Locale",
@@ -1861,6 +1869,7 @@
     "action.tool_scale": "Strumento di scala",
     "action.tool_mirror": "Strumento specchio",
     "action.tool_align": "Strumento di allineamento",
+    "action.tool_scale_distance": "Strumento scala distanza",
     "action.pie_menu": "Menu a torta",
     "action.group_selected_scene_nodes": "Raggruppa nodi scena selezionati",
     "action.ungroup_selected_scene_node": "Separa nodo scena selezionato",
@@ -2828,6 +2837,12 @@
     "scroll_panel_tabs_down": "Scorri le schede dei pannelli verso il basso"
   },
   "runtime": {
+    "apriltag_scan": "Scansione AprilTag",
+    "apriltag_worker_required": "La scansione AprilTag deve essere eseguita in uno script dell’editor in background o tramite il processo MCP",
+    "apriltag_scanning": "Ricerca degli AprilTags",
+    "apriltag_solving": "Calcolo della calibrazione AprilTag",
+    "apriltag_scene_changed": "La scena è cambiata durante il rilevamento degli AprilTags; ripeti la scansione",
+    "apriltag_busy": "Una scansione degli AprilTags è già in corso",
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "Keyframe successivo",
   "gamepad.binding.deselect_keyframe": "Deseleziona keyframe",
   "gamepad.binding.update_selected_keyframe": "Aggiorna keyframe selezionato",
-  "gamepad.binding.context_help": "Configura i controlli per ciascuna modalità di navigazione o per il Sequencer. Le assegnazioni del Sequencer hanno precedenza quando il pannello è visibile e la riproduzione è in pausa o arrestata."
+  "gamepad.binding.context_help": "Configura i controlli per ciascuna modalità di navigazione o per il Sequencer. Le assegnazioni del Sequencer hanno precedenza quando il pannello è visibile e la riproduzione è in pausa o arrestata.",
+  "scale_distance": {
+    "click_1st": "Clicca il 1° punto",
+    "click_2nd": "Clicca il 2° punto",
+    "points_count": "Punti: {}/2",
+    "hint_picking": "Clic: posiziona/seleziona punto. Trascina marcatore: sposta. {0}: rimuovi selezionato. {1}: annulla.",
+    "hint_review": "Inserisci la distanza desiderata nella barra e clicca Conferma. Trascina i punti per regolare. {0}: annulla.",
+    "status_invalid_distance": "La distanza deve essere maggiore di zero.",
+    "status_no_surface": "Nessuna superficie sotto il cursore.",
+    "status_no_target": "Nessun obiettivo trasformabile da scalare."
+  }
 }

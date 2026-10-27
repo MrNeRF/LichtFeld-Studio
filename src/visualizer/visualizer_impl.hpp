@@ -62,6 +62,7 @@ namespace lfs::vis {
 
     namespace tools {
         class AlignTool;
+        class ScaleDistanceTool;
         class SelectionTool;
     } // namespace tools
 
@@ -270,6 +271,14 @@ namespace lfs::vis {
             return align_tool_.get();
         }
 
+        tools::ScaleDistanceTool* getScaleDistanceTool() {
+            return scale_distance_tool_.get();
+        }
+
+        const tools::ScaleDistanceTool* getScaleDistanceTool() const {
+            return scale_distance_tool_.get();
+        }
+
         tools::SelectionTool* getSelectionTool() {
             return selection_tool_.get();
         }
@@ -309,6 +318,7 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend void installSessionTestInputController(VisualizerImpl& viewer);
+        friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
@@ -715,6 +725,7 @@ namespace lfs::vis {
 
         // Tools
         std::shared_ptr<tools::AlignTool> align_tool_;
+        std::shared_ptr<tools::ScaleDistanceTool> scale_distance_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         std::unique_ptr<ToolContext> tool_context_;
 

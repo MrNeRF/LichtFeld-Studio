@@ -34,6 +34,13 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_batch_process_tests test_batch_process.cpp)
+target_compile_features(lichtfeld_batch_process_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_batch_process_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
+add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
+set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
+
 add_executable(lichtfeld_collision_tests test_collision.cpp
     ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
@@ -127,6 +134,17 @@ endif()
 add_test(NAME lichtfeld.file_dialog_paths COMMAND lichtfeld_file_dialog_tests)
 set_tests_properties(lichtfeld.file_dialog_paths PROPERTIES LABELS "fast;cpu;io" TIMEOUT 30)
 
+add_executable(lichtfeld_apriltag_scaling_tests test_apriltag_scaling.cpp)
+target_compile_features(lichtfeld_apriltag_scaling_tests PRIVATE cxx_std_23)
+target_link_libraries(lichtfeld_apriltag_scaling_tests PRIVATE
+    lfs_geometry
+    GTest::gtest_main
+    glm::glm
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME lichtfeld.apriltag_scaling COMMAND lichtfeld_apriltag_scaling_tests)
+set_tests_properties(lichtfeld.apriltag_scaling PROPERTIES LABELS "fast;cpu;geometry" TIMEOUT 30)
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================
@@ -178,6 +196,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_point_cloud_vulkan_projection.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
+        test_scale_distance.cpp
         test_orthographic_zoom.cpp
         test_ui_visibility_transition.cpp
         test_summary_labels.cpp
@@ -938,6 +957,7 @@ set(TEST_FILES
     test_mask_color_consistency.cpp
     test_camera_mask_threshold.cpp
     test_camera_thumbnail_policy.cpp
+    test_apriltag_scene_scale.cpp
     test_undistort.cpp
     gut_camera_model_cuda.cu
     test_viewport_region_utils.cpp
@@ -945,6 +965,7 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp
+    test_scale_distance.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
@@ -1037,6 +1058,7 @@ list(APPEND TEST_FILES test_png_parallel_writer.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 list(APPEND TEST_FILES test_rad_spark_paging.cpp)
+list(APPEND TEST_FILES test_batch_trainer.cpp)
 
 # Keep the source manifest strict: a stale entry should fail configuration
 # instead of silently dropping coverage from the executable.
@@ -1056,6 +1078,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_overwrite.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/batch_trainer.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 
@@ -1567,6 +1590,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scale_distance_contract.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py

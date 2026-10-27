@@ -1233,7 +1233,8 @@
     "scale": "Skalieren",
     "mirror": "Spiegeln",
     "crop": "Zuschneiden",
-    "align": "Ausrichten"
+    "align": "Ausrichten",
+    "scale_distance": "Abstand skalieren"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "Grenzen ändern",
     "reset_default": "Auf Standard zurücksetzen",
     "fullscreen": "Vollbild",
-    "toggle_ui": "UI umschalten"
+    "toggle_ui": "UI umschalten",
+    "scale_distance": "Abstand skalieren",
+    "scale_distance_tool": "Abstand skalieren",
+    "scale_distance_measured": "Gemessen:",
+    "scale_distance_set": "Abstand festlegen:",
+    "scale_distance_apply": "Skalierung bestätigen",
+    "scale_distance_reset": "Punkte zurücksetzen"
   },
   "transform": {
+    "scale_apriltag": "Szene mit AprilTags skalieren",
     "node": "Knoten: %s",
     "world": "Welt",
     "local": "Lokal",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "Skalierwerkzeug",
     "action.tool_mirror": "Spiegelwerkzeug",
     "action.tool_align": "Ausrichtungswerkzeug",
+    "action.tool_scale_distance": "Abstand-Skalieren-Werkzeug",
     "action.pie_menu": "Kreismenü",
     "action.group_selected_scene_nodes": "Ausgewählte Szenenknoten gruppieren",
     "action.ungroup_selected_scene_node": "Ausgewählten Szenenknoten aus Gruppe lösen",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "Panel-Tabs nach unten scrollen"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag-Suche",
+    "apriltag_worker_required": "Die AprilTag-Suche muss in einem Editor-Skript im Hintergrund oder als MCP-Laufzeitauftrag ausgeführt werden",
+    "apriltag_scanning": "AprilTags werden gesucht",
+    "apriltag_solving": "AprilTag-Kalibrierung wird berechnet",
+    "apriltag_scene_changed": "Die Szene wurde während der AprilTag-Erkennung geändert; erneut scannen",
+    "apriltag_busy": "Ein AprilTag-Scan läuft bereits",
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "Nächster Keyframe",
   "gamepad.binding.deselect_keyframe": "Keyframe abwählen",
   "gamepad.binding.update_selected_keyframe": "Ausgewählten Keyframe aktualisieren",
-  "gamepad.binding.context_help": "Steuerung je Kameramodus oder für den Sequencer festlegen. Sequencer-Belegungen haben Vorrang, solange sein Panel sichtbar und die Wiedergabe pausiert oder angehalten ist."
+  "gamepad.binding.context_help": "Steuerung je Kameramodus oder für den Sequencer festlegen. Sequencer-Belegungen haben Vorrang, solange sein Panel sichtbar und die Wiedergabe pausiert oder angehalten ist.",
+  "scale_distance": {
+    "click_1st": "1. Punkt klicken",
+    "click_2nd": "2. Punkt klicken",
+    "points_count": "Punkte: {}/2",
+    "hint_picking": "Klick: Punkt setzen/auswählen. Marker ziehen: bewegen. {0}: Auswahl. {1}: abbrechen.",
+    "hint_review": "Zielabstand in der Leiste eingeben und Bestätigen klicken. Punkte zum Anpassen ziehen. {0}: abbrechen.",
+    "status_invalid_distance": "Der Abstand muss größer als null sein.",
+    "status_no_surface": "Keine Oberfläche unter dem Cursor.",
+    "status_no_target": "Kein transformierbares Ziel zum Skalieren."
+  }
 }

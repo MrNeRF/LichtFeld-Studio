@@ -1233,7 +1233,8 @@
     "scale": "크기 조절",
     "mirror": "미러",
     "crop": "자르기",
-    "align": "정렬"
+    "align": "정렬",
+    "scale_distance": "거리 기준 크기 조절"
   },
   "toolbar": {
     "selection": "선택",
@@ -1303,9 +1304,16 @@
     "resize_bounds": "경계 크기 조절",
     "reset_default": "기본값으로 재설정",
     "fullscreen": "전체 화면",
-    "toggle_ui": "UI 토글"
+    "toggle_ui": "UI 토글",
+    "scale_distance": "거리 기준 크기 조절",
+    "scale_distance_tool": "거리 스케일",
+    "scale_distance_measured": "측정치:",
+    "scale_distance_set": "거리 설정:",
+    "scale_distance_apply": "크기 조절 확정",
+    "scale_distance_reset": "점 재설정"
   },
   "transform": {
+    "scale_apriltag": "AprilTag로 장면 크기 조정",
     "node": "노드: %s",
     "world": "월드",
     "local": "로컬",
@@ -1848,6 +1856,7 @@
     "action.tool_scale": "크기 조정 도구",
     "action.tool_mirror": "거울 도구",
     "action.tool_align": "정렬 도구",
+    "action.tool_scale_distance": "거리 스케일 도구",
     "action.pie_menu": "파이 메뉴",
     "action.group_selected_scene_nodes": "선택한 장면 노드 그룹화",
     "action.ungroup_selected_scene_node": "선택한 장면 노드 그룹 해제",
@@ -2815,6 +2824,12 @@
     "scroll_panel_tabs_down": "패널 탭 아래로 스크롤"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag 스캔",
+    "apriltag_worker_required": "AprilTag 스캔은 백그라운드 편집기 스크립트 또는 MCP 작업으로 실행해야 합니다",
+    "apriltag_scanning": "AprilTag 검색 중",
+    "apriltag_solving": "AprilTag 보정 계산 중",
+    "apriltag_scene_changed": "AprilTag 감지 중 장면이 변경되었습니다. 다시 스캔하세요",
+    "apriltag_busy": "AprilTag 스캔이 이미 실행 중입니다",
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",
     "autosave_deferred_no_memory": "자동 저장이 일시 중지되었습니다: 여유 메모리가 부족합니다({}). 학습은 계속되며, 메모리가 확보되면 자동 저장이 재개됩니다.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "다음 키프레임",
   "gamepad.binding.deselect_keyframe": "키프레임 선택 해제",
   "gamepad.binding.update_selected_keyframe": "선택한 키프레임 업데이트",
-  "gamepad.binding.context_help": "카메라 모드 또는 시퀀서의 조작을 설정합니다. 패널이 표시되고 재생이 일시 중지되거나 정지된 동안은 시퀀서 할당이 우선합니다."
+  "gamepad.binding.context_help": "카메라 모드 또는 시퀀서의 조작을 설정합니다. 패널이 표시되고 재생이 일시 중지되거나 정지된 동안은 시퀀서 할당이 우선합니다.",
+  "scale_distance": {
+    "click_1st": "첫 번째 점 클릭",
+    "click_2nd": "두 번째 점 클릭",
+    "points_count": "점: {}/2",
+    "hint_picking": "클릭: 점 배치/선택. 마커 드래그: 이동. {0}: 선택 삭제. {1}: 취소.",
+    "hint_review": "툴바에 목표 거리를 입력하고 확정을 클릭하여 크기 조절. 점을 드래그하여 조정. {0}: 취소.",
+    "status_invalid_distance": "거리는 0보다 커야 합니다.",
+    "status_no_surface": "커서 아래에 표면이 없습니다.",
+    "status_no_target": "크기를 조절할 변환 가능한 대상이 없습니다."
+  }
 }

@@ -129,6 +129,10 @@ def _poll_can_align(_context) -> bool:
     return _poll_builtin_tool_available("builtin.align")
 
 
+def _poll_can_scale_distance(_context) -> bool:
+    return _poll_builtin_tool_available("builtin.scale_distance")
+
+
 def _poll_can_cropbox(context) -> bool:
     if not _poll_has_scene(context):
         return False
@@ -258,6 +262,17 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         description="Align to world axes",
         shortcut="6",
         poll=_poll_can_align,
+    ),
+    ToolDef(
+        id="builtin.scale_distance",
+        label="Scale Distance",
+        label_key="tool_defs.scale_distance",
+        icon="bounds",
+        group="utility",
+        order=90,
+        description="Scale scene by measured distance",
+        shortcut="7",
+        poll=_poll_can_scale_distance,
     ),
 )
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core/collision.hpp"
+#include "core/collision_volume.hpp"
 #include "core/error.hpp"
 #include "core/uuid.hpp"
 #include "io/project_chapters.hpp"

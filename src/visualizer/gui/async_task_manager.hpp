@@ -21,9 +21,11 @@
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include "training/training_cropbox_mask.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <expected>
 #include <filesystem>
 #include <functional>
 #include <future>
@@ -72,6 +74,20 @@ namespace lfs::vis {
             [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }
             void pollImportCompletion();
             [[nodiscard]] bool hasPendingMainThreadCompletions() const;
+
+            struct AprilTagScanRequest {
+                JobHandle job;
+                std::shared_future<AprilTagSceneApplyResult> completion;
+            };
+            [[nodiscard]] std::expected<AprilTagScanRequest, std::string> startAprilTagScan(AprilTagSceneScaleOptions options,
+                                                                                            std::vector<geometry::apriltag::TagDistanceConstraint> constraints = {},
+                                                                                            std::vector<std::string> targets = {},
+                                                                                            bool solve_scale = false, bool apply_to_scene = false);
+            void cancelAprilTagScan();
+            void shutdownAprilTagScan();
+            void pollAprilTagScanCompletion();
+            [[nodiscard]] std::optional<JobSnapshot> aprilTagScanStatus() const { return jobs_.peek(apriltag_state_.job); }
+            [[nodiscard]] const AprilTagSceneApplyResult& aprilTagScanResult() const { return apriltag_state_.result; }
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -344,8 +360,21 @@ namespace lfs::vis {
             beginJob(JobHandle& handle, JobType type,
                      std::string stage);
             void settlePendingJobs();
+            void settleAprilTagScan() noexcept;
 
             VisualizerImpl* viewer_;
+            struct AprilTagScanState {
+                JobHandle job;
+                AprilTagSceneSnapshot snapshot;
+                AprilTagSceneScaleReport report;
+                AprilTagSceneApplyResult result;
+                std::optional<std::promise<AprilTagSceneApplyResult>> completion;
+                std::vector<std::string> targets;
+                bool apply_to_scene = false;
+                std::optional<std::jthread> thread;
+            };
+            AprilTagScanState apriltag_state_;
+
             JobRegistry& jobs_;
             JobHandle collision_job_;
             std::future<void> collision_worker_;

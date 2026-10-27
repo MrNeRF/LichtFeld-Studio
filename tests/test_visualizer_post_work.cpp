@@ -21679,6 +21679,130 @@ namespace lfs::vis {
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
 
+    TEST_F(VisualizerImplResetTest, AprilTagJobRequestOwnsCompletionAcrossRestart) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        scene.addCamera("camera", dataset, std::make_shared<core::Camera>());
+        const auto first = tasks.startAprilTagScan({});
+        ASSERT_TRUE(first);
+        EXPECT_EQ(tasks.aprilTagScanStatus()->handle, first->job);
+        EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
+        EXPECT_EQ(first->completion.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+        const auto second = tasks.startAprilTagScan({});
+        ASSERT_FALSE(second);
+        EXPECT_EQ(second.error(), LOC("runtime.apriltag_busy"));
+        EXPECT_EQ(tasks.aprilTagScanStatus()->handle, first->job);
+        EXPECT_FALSE(tasks.aprilTagScanStatus()->cancel_requested);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(first->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        scene.clear();
+        const auto restarted = tasks.startAprilTagScan({});
+        ASSERT_TRUE(restarted);
+        EXPECT_NE(restarted->job, first->job);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(restarted->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_TRUE(restarted->completion.get().scale_report.views.empty());
+        EXPECT_TRUE(first->completion.get().scale_report.success);
+        EXPECT_EQ(first->completion.get().scale_report.views.size(), 1u);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobShutdownSettlesPendingRequestWaiter) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        EXPECT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+        std::promise<bool> settled;
+        auto done = settled.get_future();
+        std::jthread waiter([completion = request->completion, &settled](std::stop_token stop) {
+            while (completion.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+                if (stop.stop_requested())
+                    return;
+            }
+            settled.set_value(!completion.get().scale_report.success && !completion.get().applied);
+        });
+        viewer.setShutdownRequestedCallback([&] {
+            EXPECT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        });
+        viewer.beginShutdown();
+        ASSERT_EQ(done.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        EXPECT_TRUE(done.get());
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobCompletesOnViewerAndCanRestart) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        scene.addCamera("camera", dataset, std::make_shared<core::Camera>());
+        for (int run = 0; run < 2; ++run) {
+            ASSERT_TRUE(tasks.startAprilTagScan({}));
+            EXPECT_FALSE(tasks.startAprilTagScan({}));
+            ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+            // The worker publishes a report, but cannot complete or apply it itself.
+            EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
+            EXPECT_TRUE(tasks.hasPendingMainThreadCompletions());
+            tasks.pollAprilTagScanCompletion();
+            EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Completed);
+            EXPECT_FLOAT_EQ(tasks.aprilTagScanStatus()->progress, 1.0f);
+            EXPECT_EQ(tasks.aprilTagScanResult().scale_report.views.size(), 1u);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobLateCancelPreventsCompletion) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.cancelAprilTagScan();
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobRejectsChangedSceneAndShutdownJoinsWorker) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        viewer.getSceneManager()->getScene().addDataset("replacement");
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+        ASSERT_TRUE(tasks.startAprilTagScan({}));
+        tasks.shutdown();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobFailedSolveRetainsDiagnostics) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({}, {}, {}, true, false);
+        ASSERT_TRUE(request);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().scale_report.error_message.empty());
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
     void installSessionTestInputController(VisualizerImpl& viewer) {
         viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
     }

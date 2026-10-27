@@ -131,6 +131,7 @@ def _install_recording_lf(monkeypatch):
         "TOOL_SCALE",
         "TOOL_MIRROR",
         "TOOL_ALIGN",
+        "TOOL_SCALE_DISTANCE",
         "PIE_MENU",
         "DEPTH_ADJUST_NEAR",
         "HISTOGRAM_ZOOM_MARKED",

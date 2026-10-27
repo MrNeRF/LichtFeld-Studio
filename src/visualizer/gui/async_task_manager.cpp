@@ -959,6 +959,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        shutdownAprilTagScan();
+
         cancelCollision();
         collision_replacement_ = {};
         if (collision_worker_.valid())
@@ -1012,6 +1014,145 @@ namespace lfs::vis::gui {
             splat_simplify_state_.thread->join();
         splat_simplify_state_.thread.reset();
         settlePendingJobs();
+    }
+
+    std::expected<AsyncTaskManager::AprilTagScanRequest, std::string> AsyncTaskManager::startAprilTagScan(
+        AprilTagSceneScaleOptions options,
+        std::vector<geometry::apriltag::TagDistanceConstraint> constraints,
+        std::vector<std::string> targets,
+        const bool solve_scale, const bool apply_to_scene) {
+        auto* sm = viewer_->getSceneManager();
+        if (!sm)
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED));
+        if (const auto state = aprilTagScanStatus(); state && state->running())
+            return std::unexpected(LOC("runtime.apriltag_busy"));
+        std::promise<AprilTagSceneApplyResult> completion;
+        auto future = completion.get_future().share();
+        auto snapshot = snapshotAprilTagScene(sm->getScene(), options.active_cameras_only);
+        if (!beginJob(apriltag_state_.job, JobType::AprilTagScan, LOC("runtime.apriltag_scanning"))) {
+            return std::unexpected(LOC("runtime.apriltag_busy"));
+        }
+        apriltag_state_.thread.reset();
+        apriltag_state_.snapshot = std::move(snapshot);
+        apriltag_state_.targets = std::move(targets);
+        apriltag_state_.apply_to_scene = apply_to_scene;
+        apriltag_state_.report = {};
+        apriltag_state_.result = {};
+        apriltag_state_.completion = std::move(completion);
+        const auto job = apriltag_state_.job;
+        try {
+            apriltag_state_.thread.emplace([this, job, options = std::move(options),
+                                            constraints = std::move(constraints), solve_scale](std::stop_token stop) {
+                jobs_.work(job);
+                std::string error;
+                try {
+                    const auto progress = [this, job, stop](const std::size_t done, const std::size_t total, const std::string&) {
+                        jobs_.report(job, total ? 0.9f * static_cast<float>(done) / total : 0.0f,
+                                     done == total ? LOC("runtime.apriltag_solving") : LOC("runtime.apriltag_scanning"));
+                        return !stop.stop_requested() && !jobs_.cancelRequested(job);
+                    };
+                    apriltag_state_.report = computeAprilTagSceneScale(
+                        apriltag_state_.snapshot, constraints, options, solve_scale, progress);
+                    error = apriltag_state_.report.error_message;
+                } catch (const std::exception& e) {
+                    error = e.what();
+                } catch (...) {
+                    error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                }
+                jobs_.finishWork(job, stop.stop_requested() || jobs_.cancelRequested(job), std::move(error));
+                wakeMainThreadForAsyncWork();
+            });
+        } catch (const std::exception& e) {
+            jobs_.failed(job, e.what(), LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            settleAprilTagScan();
+            return std::unexpected(e.what());
+        }
+        return AprilTagScanRequest{job, std::move(future)};
+    }
+
+    void AsyncTaskManager::shutdownAprilTagScan() {
+        cancelAprilTagScan();
+        apriltag_state_.thread.reset();
+        if (const auto state = aprilTagScanStatus(); state && state->running()) {
+            jobs_.canceled(apriltag_state_.job);
+        }
+        settleAprilTagScan();
+    }
+
+    void AsyncTaskManager::cancelAprilTagScan() {
+        if (const auto state = aprilTagScanStatus(); state && state->running()) {
+            jobs_.requestCancel(apriltag_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+            if (apriltag_state_.thread)
+                apriltag_state_.thread->request_stop();
+        }
+    }
+
+    void AsyncTaskManager::settleAprilTagScan() noexcept {
+        if (!apriltag_state_.completion)
+            return;
+        try {
+            auto result = apriltag_state_.result;
+            const auto state = aprilTagScanStatus();
+            if (!state || state->status != JobStatus::Completed) {
+                result.scale_report.success = false;
+                result.error_message = state && state->status == JobStatus::Canceled
+                                           ? LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED)
+                                       : state ? state->error
+                                               : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            }
+            apriltag_state_.completion->set_value(std::move(result));
+        } catch (...) {
+            apriltag_state_.completion->set_exception(std::current_exception());
+        }
+        apriltag_state_.completion.reset();
+    }
+
+    void AsyncTaskManager::pollAprilTagScanCompletion() {
+        const auto state = aprilTagScanStatus();
+        if (!state || state->status != JobStatus::CompletionPending)
+            return;
+        const ScopeExit settle([this] { settleAprilTagScan(); });
+        // Completion publication synchronizes the report; workers never access the live scene.
+        if (apriltag_state_.thread && apriltag_state_.thread->joinable())
+            apriltag_state_.thread->join();
+        apriltag_state_.thread.reset();
+        if (state->cancel_requested || state->worker_canceled) {
+            jobs_.report(state->handle, std::nullopt, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED));
+            jobs_.canceled(state->handle);
+            return;
+        }
+        if (!state->error.empty()) {
+            apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
+            apriltag_state_.result.error_message = state->error;
+            jobs_.failed(state->handle, state->error, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            return;
+        }
+        auto* sm = viewer_->getSceneManager();
+        if (!sm) {
+            apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
+            apriltag_state_.result.error_message = LOC("runtime.apriltag_scene_changed");
+            jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            return;
+        }
+        try {
+            apriltag_state_.result = applyAprilTagScaleReport(*sm, apriltag_state_.snapshot,
+                                                              std::move(apriltag_state_.report), apriltag_state_.targets, apriltag_state_.apply_to_scene);
+            if (!apriltag_state_.result.scale_report.success ||
+                (apriltag_state_.apply_to_scene && !apriltag_state_.result.applied)) {
+                jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+                return;
+            }
+            if (apriltag_state_.result.applied) {
+                if (auto* rm = viewer_->getRenderingManager())
+                    rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+            }
+            jobs_.report(state->handle, 1.0f, LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
+            jobs_.completed(state->handle);
+        } catch (const std::exception& e) {
+            jobs_.failed(state->handle, e.what(), LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+        } catch (...) {
+            jobs_.failed(state->handle, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+        }
     }
 
     bool AsyncTaskManager::startSplatLoad(std::vector<std::filesystem::path> paths,
@@ -1762,6 +1903,7 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::pollImportCompletion() {
         pollCollision();
+        pollAprilTagScanCompletion();
         if (import_cancel_pending_) {
             cancelImport(false);
             if (import_cancel_pending_)
@@ -1779,7 +1921,8 @@ namespace lfs::vis::gui {
             return true;
         if (import_cancel_pending_)
             return importWorkersFinished();
-        return splat_load_state_.pending_render_request.has_value() ||
+        return (aprilTagScanStatus() && aprilTagScanStatus()->status == JobStatus::CompletionPending) ||
+               splat_load_state_.pending_render_request.has_value() ||
                (viewer_->getDataLoader() && viewer_->getDataLoader()->hasPendingImports()) ||
                import_state_.load_complete.load(std::memory_order_acquire) ||
                splat_load_state_.worker_complete.load(std::memory_order_acquire) ||

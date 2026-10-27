@@ -1244,7 +1244,8 @@
     "scale": "Scale",
     "mirror": "Mirror",
     "crop": "Crop",
-    "align": "Align"
+    "align": "Align",
+    "scale_distance": "Scale Distance"
   },
   "toolbar": {
     "selection": "Selection",
@@ -1314,9 +1315,16 @@
     "resize_bounds": "Resize Bounds",
     "reset_default": "Reset to Default",
     "fullscreen": "Fullscreen",
-    "toggle_ui": "Toggle UI"
+    "toggle_ui": "Toggle UI",
+    "scale_distance": "Scale Distance",
+    "scale_distance_tool": "Scale Distance",
+    "scale_distance_measured": "Measured:",
+    "scale_distance_set": "Set Distance:",
+    "scale_distance_apply": "Confirm scale",
+    "scale_distance_reset": "Reset points"
   },
   "transform": {
+    "scale_apriltag": "Scale scene with AprilTags",
     "node": "Node: %s",
     "world": "World",
     "local": "Local",
@@ -1859,6 +1867,7 @@
     "action.tool_scale": "Scale Tool",
     "action.tool_mirror": "Mirror Tool",
     "action.tool_align": "Align Tool",
+    "action.tool_scale_distance": "Scale Distance Tool",
     "action.pie_menu": "Pie Menu",
     "action.group_selected_scene_nodes": "Group Selected Scene Nodes",
     "action.ungroup_selected_scene_node": "Ungroup Selected Scene Node",
@@ -2827,6 +2836,12 @@
     "scroll_panel_tabs_down": "Scroll panel tabs down"
   },
   "runtime": {
+    "apriltag_scan": "AprilTag Scan",
+    "apriltag_worker_required": "AprilTag scanning must run in a background editor script or through the MCP runtime job",
+    "apriltag_scanning": "Scanning AprilTags",
+    "apriltag_solving": "Solving AprilTag calibration",
+    "apriltag_scene_changed": "Scene changed during AprilTag detection; scan again",
+    "apriltag_busy": "An AprilTag scan is already running",
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",
@@ -3627,5 +3642,15 @@
   "gamepad.binding.next_keyframe": "Next keyframe",
   "gamepad.binding.deselect_keyframe": "Deselect keyframe",
   "gamepad.binding.update_selected_keyframe": "Update selected keyframe",
-  "gamepad.binding.context_help": "Configure controls for each camera mode or the Sequencer. Sequencer assignments take priority while its panel is visible and playback is paused or stopped."
+  "gamepad.binding.context_help": "Configure controls for each camera mode or the Sequencer. Sequencer assignments take priority while its panel is visible and playback is paused or stopped.",
+  "scale_distance": {
+    "click_1st": "Click 1st point",
+    "click_2nd": "Click 2nd point",
+    "points_count": "Points: {}/2",
+    "hint_picking": "Click: place/select point. Drag marker: move. {0}: remove selected. {1}: cancel.",
+    "hint_review": "Enter target distance in toolbar and click Confirm to scale. Drag points to adjust. {0}: cancel.",
+    "status_invalid_distance": "Distance must be greater than zero.",
+    "status_no_surface": "No surface under the cursor.",
+    "status_no_target": "No transformable target to scale."
+  }
 }

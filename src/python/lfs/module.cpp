@@ -20,6 +20,7 @@
 
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
+#include "py_apriltag.hpp"
 #include "py_cameras.hpp"
 #include "py_command.hpp"
 #include "py_diagnostics.hpp"
@@ -56,6 +57,7 @@
 #include "control/control_boundary.hpp"
 #include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
@@ -112,6 +114,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <span>
 #include <sstream>
 #include <string>
@@ -4034,6 +4037,8 @@ Example:
             return result->dataset;
         },
         nb::arg("path"), "Read training parameters from a checkpoint (None if failed)");
+
+    lfs::python::register_apriltag(m);
 
     lfs::python::set_invalidate_poll_cache_callback([](uint8_t dependency) {
         const auto dep = static_cast<lfs::vis::op::PollDependency>(dependency);

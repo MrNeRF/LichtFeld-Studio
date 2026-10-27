@@ -38,6 +38,7 @@ namespace lfs::vis::op {
             {"ellipsoid.reset", "Reset Ellipsoid"},
             {"crop.draw_polygon", "Draw Crop Polygon"},
             {"crop_polygon.set", "Set Crop Polygon"},
+            {"scale_distance.pick_point", "Scale by Distance"},
         }};
 
         struct ToolInfo {
@@ -52,6 +53,7 @@ namespace lfs::vis::op {
             {"builtin.scale", "Scale"},
             {"builtin.mirror", "Mirror"},
             {"builtin.align", "Align"},
+            {"builtin.scale_distance", "Scale Distance"},
         }};
 
     } // namespace

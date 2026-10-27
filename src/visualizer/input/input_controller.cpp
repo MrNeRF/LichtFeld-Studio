@@ -38,6 +38,7 @@
 #include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
+#include "tools/scale_distance_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 #include "tools/unified_tool_registry.hpp"
@@ -172,7 +173,9 @@ namespace lfs::vis {
                 ((modal_id == op::to_string(op::BuiltinOp::SelectionStroke) ||
                   modal_id == op::to_string(op::BuiltinOp::CropPolygonDraw)) &&
                  isSelectionModalAction(action)) ||
-                (modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) && isAlignModalAction(action));
+                ((modal_id == op::to_string(op::BuiltinOp::AlignPickPoint) ||
+                  modal_id == op::to_string(op::BuiltinOp::ScaleDistancePickPoint)) &&
+                 isAlignModalAction(action));
             if (!accepted) {
                 return false;
             }
@@ -328,6 +331,8 @@ namespace lfs::vis {
                 return ToolType::Mirror;
             case input::Action::TOOL_ALIGN:
                 return ToolType::Align;
+            case input::Action::TOOL_SCALE_DISTANCE:
+                return ToolType::ScaleDistance;
             default:
                 return std::nullopt;
             }
@@ -1370,14 +1375,18 @@ namespace lfs::vis {
                             }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
-                    } else if (align_tool_ && align_tool_->isEnabled() &&
+                    } else if (((align_tool_ && align_tool_->isEnabled()) ||
+                                (scale_distance_tool_ && scale_distance_tool_->isEnabled())) &&
                                !op::operators().hasModalOperator()) {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
                         props.set("button", button);
                         props.set("modifiers", mods);
-                        const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
+                        const auto id = align_tool_ && align_tool_->isEnabled()
+                                            ? op::BuiltinOp::AlignPickPoint
+                                            : op::BuiltinOp::ScaleDistancePickPoint;
+                        const auto result = op::operators().invoke(id, &props);
                         if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             return;
                         }
@@ -1395,14 +1404,19 @@ namespace lfs::vis {
 
             case input::Action::NONE:
             default:
-                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui &&
+                if (((align_tool_ && align_tool_->isEnabled()) ||
+                     (scale_distance_tool_ && scale_distance_tool_->isEnabled())) &&
+                    tool_context_ && !over_gui &&
                     !op::operators().hasModalOperator()) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
                     props.set("button", button);
                     props.set("modifiers", mods);
-                    const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
+                    const auto id = align_tool_ && align_tool_->isEnabled()
+                                        ? op::BuiltinOp::AlignPickPoint
+                                        : op::BuiltinOp::ScaleDistancePickPoint;
+                    const auto result = op::operators().invoke(id, &props);
                     if (result.status == op::OperatorResult::RUNNING_MODAL) {
                         return;
                     }
@@ -1660,6 +1674,10 @@ namespace lfs::vis {
         if (align_tool_ && align_tool_->isEnabled() && (delta_x != 0.0 || delta_y != 0.0)) {
             if (auto* rendering = services().renderingOrNull())
                 rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay, "align_cursor_moved");
+        }
+        if (scale_distance_tool_ && scale_distance_tool_->isEnabled() && (delta_x != 0.0 || delta_y != 0.0)) {
+            if (auto* rendering = services().renderingOrNull())
+                rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::Overlay, "scale_distance_cursor_moved");
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
@@ -4400,6 +4418,8 @@ namespace lfs::vis {
         if (selection_tool_ && selection_tool_->isEnabled())
             return input::ToolMode::SELECTION;
         if (align_tool_ && align_tool_->isEnabled())
+            return input::ToolMode::ALIGN;
+        if (scale_distance_tool_ && scale_distance_tool_->isEnabled())
             return input::ToolMode::ALIGN;
         // Check GUI tool mode for transform tools
         if (services().guiOrNull()) {

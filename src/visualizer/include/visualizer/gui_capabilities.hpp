@@ -138,6 +138,13 @@ namespace lfs::vis::cap {
         const std::vector<std::string>& targets,
         const glm::vec3& value,
         std::string_view undo_label = "transform.scale");
+
+    [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
+        SceneManager& scene_manager,
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
+        std::string_view undo_label);
+
     [[nodiscard]] LFS_VIS_API std::expected<size_t, std::string> bakeNodeTransforms(
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,

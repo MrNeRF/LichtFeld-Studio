@@ -339,6 +339,7 @@ def preferences_panel_module(monkeypatch):
             TOOL_SCALE=SimpleNamespace(name="TOOL_SCALE", value=59),
             TOOL_MIRROR=SimpleNamespace(name="TOOL_MIRROR", value=60),
             TOOL_ALIGN=SimpleNamespace(name="TOOL_ALIGN", value=61),
+            TOOL_SCALE_DISTANCE=SimpleNamespace(name="TOOL_SCALE_DISTANCE", value=94),
             PIE_MENU=SimpleNamespace(name="PIE_MENU", value=62),
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
