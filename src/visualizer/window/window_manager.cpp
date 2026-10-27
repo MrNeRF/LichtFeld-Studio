@@ -1027,7 +1027,8 @@ namespace lfs::vis {
         bool navigation_changed = false;
         if (navigation_enabled) {
             navigation_changed = input::GamepadNavigationSession::needsSampleUpdate(
-                gamepad_wake_sample_, gamepads_.navigationSample(), input_controller_->gamepadNavigationSettings().dead_zone);
+                gamepad_wake_sample_, gamepads_.navigationSample(), input_controller_->gamepadNavigationSettings().dead_zone,
+                input_controller_->gamepadNavigationNeedsNeutral());
         }
         gamepad_wake_sample_ = gamepads_.navigationSample();
         if (devices_changed || navigation_changed || (sample_changed && gamepads_.diagnosticSelected() != 0))

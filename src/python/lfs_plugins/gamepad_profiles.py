@@ -103,7 +103,8 @@ class GamepadProfilesSection:
         return self.tr("personal") if profile["id"] == "personal" and profile["name"] == "Personal" else profile["name"]
 
     def save(self, library, expected):
-        self.owner.deactivate()
+        # Profile edits cancel captures, but the visible page still owns discovery.
+        self.owner.deactivate(release_discovery=False)
         try:
             if not lf.ui.set_gamepad_profiles_json(json.dumps(library), expected):
                 raise RuntimeError("Unavailable viewer")
@@ -124,7 +125,7 @@ class GamepadProfilesSection:
             return
         self._selection_intent = False
         try:
-            self.owner.deactivate()
+            self.owner.deactivate(release_discovery=False)
             expected, library = self.snapshot()
             if identifier != library["active"] and any(p["id"] == identifier for p in library["profiles"]):
                 library["active"] = identifier
@@ -148,7 +149,7 @@ class GamepadProfilesSection:
         if not self.valid_device() or bool(enabled) == bool(self.remembered()):
             return
         try:
-            self.owner.deactivate()
+            self.owner.deactivate(release_discovery=False)
             expected, library = self.snapshot()
             key = self.owner.navigation["device_key"]
             if enabled:
@@ -164,7 +165,7 @@ class GamepadProfilesSection:
         self.handle.dirty("gamepad_profile_message")
 
     def action(self, operation):
-        self.owner.deactivate()
+        self.owner.deactivate(release_discovery=False)
         try:
             expected, library = self.snapshot()
             current = next(p for p in library["profiles"] if p["id"] == library["active"])

@@ -62,6 +62,39 @@ TEST_F(NavigationTest, ShortTriggerCommandsAreConsumedEvenAfterTheAxisReturnsToZ
     EXPECT_EQ(tick().navigation_step, 0);
 }
 
+TEST_F(NavigationTest, ProgressiveTriggerSqueezeGeneratesOnlyOneCommandUntilReleased) {
+    for (const auto control : {SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER}) {
+        for (const auto action : {GamepadAction::AddKeyframe, GamepadAction::NextRendering}) {
+            GamepadNavigationSession resolver;
+            GamepadNavigationSettings mapped{true};
+            mapped.bindings.common[actionIndex(GamepadAction::Vertical)] = {};
+            mapped.bindings.common[actionIndex(action)] = {control};
+            mapped.validate();
+            context.sequencer_open = true;
+            context.click_epoch = 1;
+            auto input = sample;
+            for (int i = 0; i < 3; ++i)
+                resolver.update(input, mapped, context, .05f);
+            const auto command = [action](const GamepadNavigationIntent& intent) {
+                return action == GamepadAction::AddKeyframe ? intent.add_keyframe : intent.rendering_step != 0;
+            };
+            input.axes[control] = .51f;
+            input.trigger_pressed[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
+            EXPECT_TRUE(command(resolver.update(input, mapped, context, .05f)));
+            input.trigger_pressed.fill(false); // acknowledged by the input-frame consumer
+            for (const float value : {.52f, .60f, 1.0f, .51f}) {
+                input.axes[control] = value;
+                EXPECT_FALSE(command(resolver.update(input, mapped, context, .05f)));
+            }
+            input.axes[control] = .49f;
+            EXPECT_FALSE(command(resolver.update(input, mapped, context, .05f)));
+            input.axes[control] = .51f;
+            input.trigger_pressed[control - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = true;
+            EXPECT_TRUE(command(resolver.update(input, mapped, context, .05f)));
+        }
+    }
+}
+
 TEST_F(NavigationTest, SequencerTriggerCrossingDoesNotReplayAfterBlockedTimelineEditing) {
     context.sequencer_open = true;
     settings.bindings.common[actionIndex(GamepadAction::Vertical)] = {};
@@ -101,13 +134,63 @@ TEST_F(NavigationTest, WakeFilteringIgnoresNoiseButRetainsNeutralAndButtonTransi
     next.axes[4] = .01f;
     EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
     next.axes[0] = .13f; // crosses the arming hysteresis threshold
-    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+    EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+    EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f, true));
     next = sample;
     next.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
     EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
     next = sample;
     ++next.generation;
     EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, next, .15f));
+}
+
+TEST_F(NavigationTest, ArmedIdleIgnoresTheWholeDeadZoneButStillWakesToStartAndStopMotion) {
+    arm();
+    EXPECT_FALSE(session.needsNeutral());
+    for (const auto control : {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_RIGHTY}) {
+        auto previous = sample;
+        previous.axes[control] = .13f;
+        auto current = previous;
+        current.axes[control] = .14f;
+        EXPECT_FALSE(session.update(previous, settings, context, .05f).active);
+        EXPECT_FALSE(session.update(current, settings, context, .05f).active);
+        EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(previous, current, settings.dead_zone, session.needsNeutral()));
+        current.axes[control] = .16f;
+        EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(previous, current, settings.dead_zone, session.needsNeutral()));
+        EXPECT_TRUE(session.update(current, settings, context, .05f).active);
+        EXPECT_TRUE(GamepadNavigationSession::needsSampleUpdate(current, previous, settings.dead_zone, session.needsNeutral()));
+    }
+    auto previous = sample;
+    previous.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = .045f;
+    auto current = previous;
+    current.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = .049f;
+    EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(previous, current, settings.dead_zone, session.needsNeutral()));
+}
+
+TEST_F(NavigationTest, ReturningToNeutralStillWakesAnInterruptedSessionWithoutAnotherClick) {
+    for (const auto control : {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFT_TRIGGER}) {
+        session = {};
+        sample.axes.fill(0);
+        context.allowed = true;
+        arm();
+        context.allowed = false;
+        tick();
+        EXPECT_TRUE(session.needsNeutral());
+        EXPECT_FALSE(session.awaitingNeutral()); // no forced frames while held outside neutral
+        context.allowed = true;
+        sample.axes[control] = control == SDL_GAMEPAD_AXIS_LEFTX ? .13f : .045f;
+        tick();
+        auto released = sample;
+        released.axes[control] = control == SDL_GAMEPAD_AXIS_LEFTX ? .11f : .039f;
+        ASSERT_TRUE(GamepadNavigationSession::needsSampleUpdate(sample, released, settings.dead_zone, session.needsNeutral()));
+        sample = released;
+        for (int i = 0; i < 3; ++i)
+            tick();
+        EXPECT_STREQ(session.status(), "ready");
+        EXPECT_FALSE(session.needsNeutral());
+        released.axes[control] = control == SDL_GAMEPAD_AXIS_LEFTX ? .14f : .049f;
+        EXPECT_FALSE(GamepadNavigationSession::needsSampleUpdate(sample, released, settings.dead_zone, session.needsNeutral()));
+    }
 }
 
 TEST_F(NavigationTest, TemporaryInterruptionRetainsAssignmentButTargetAndDeviceChangesRequireClick) {

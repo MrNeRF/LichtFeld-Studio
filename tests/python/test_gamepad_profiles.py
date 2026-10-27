@@ -50,7 +50,7 @@ def profiles(monkeypatch):
     handle = SimpleNamespace(dirty=dirty.append, update_record_list=lambda name, rows: records.update({name: rows}))
     model = SimpleNamespace(get_handle=lambda: handle, bind_record_list=lambda *_: None,
                             bind=lambda *_: None, bind_func=lambda *_: None, bind_event=lambda *_: None)
-    owner = SimpleNamespace(navigation=navigation, deactivate=lambda: None, sync=lambda: None)
+    owner = SimpleNamespace(navigation=navigation, deactivate=lambda **_kwargs: None, sync=lambda: None)
     subject = module.GamepadProfilesSection(owner, model)
     subject.sync()
     return SimpleNamespace(subject=subject, module=module, library=library, navigation=navigation, ui=ui,
@@ -60,6 +60,58 @@ def profiles(monkeypatch):
 def named(profiles, operation, name):
     profiles.subject.action(operation)
     profiles.prompts[-1][-1](name)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("operation", ["select", "rename", "new", "duplicate", "delete", "remember", "import_cancel", "export_cancel"])
+def test_profile_operations_preserve_two_device_selection_until_page_closes(profiles, enabled, operation):
+    p = profiles
+    p.library["profiles"].append({**copy.deepcopy(p.library["profiles"][0]), "id": "alt", "name": "Alternate"})
+    p.navigation.update(enabled=enabled, selected=22)
+    source = Path(__file__).resolve().parents[2] / "src/python/lfs_plugins/gamepad_preferences.py"
+    spec = importlib.util.spec_from_file_location("profile_discovery_preferences_test", source)
+    preferences = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preferences)
+    state = {"available": True, "selected": 0, "devices": [
+        {"id": 11, "name": "Pad", "mapped": True}, {"id": 22, "name": "Pad", "mapped": True}]}
+    usage = []
+    def set_active(active):
+        usage.append(active)
+        state["available"] = active or p.navigation["enabled"]
+        if not state["available"]:
+            p.navigation.update(selected=0, device_key="")
+    p.ui.set_gamepad_test_active = set_active
+    p.ui.set_gamepad_test_device = lambda _identifier: True
+    p.ui.get_gamepad_navigation_state = lambda: dict(p.navigation)
+    p.ui.get_gamepad_test_state = lambda: dict(state)
+    owner = preferences.GamepadTestSection()
+    owner.handle = p.subject.handle
+    owner.profiles = p.subject
+    p.subject.owner = owner
+    owner.activate()
+    owner.sync()
+
+    if operation == "select":
+        p.subject._intent(True)
+        p.subject.select("alt")
+    elif operation == "remember":
+        p.subject.remember(True)
+    elif operation == "delete":
+        p.subject.action("delete")
+        p.confirmations[-1][-1]("gamepad.profile.delete")
+    elif operation.endswith("_cancel"):
+        p.subject.action(operation.removesuffix("_cancel"))
+    else:
+        named(p, operation, "Updated")
+    owner.activate()  # next visible-page update must not reopen the subsystem
+    owner.sync()
+    assert p.navigation["selected"] == 22
+    assert owner.navigation["selected"] == 22
+    assert p.navigation["enabled"] is enabled
+    assert usage == [True]
+    owner.close()
+    assert usage == [True, False]
+    assert p.navigation["selected"] == (22 if enabled else 0)
 
 
 def test_create_duplicate_rename_and_selection_do_not_change_enablement(profiles):

@@ -15,6 +15,10 @@ union SDL_Event;
 
 namespace lfs::vis::input {
 
+    // Commands use the raw SDL trigger range. Keep event edges and held state
+    // on the same threshold; movement conditioning has a separate dead zone.
+    inline constexpr bool gamepadCommandTriggerDown(float value) { return value > 0.5f; }
+
     struct GamepadDevice {
         SDL_JoystickID id = 0;
         uint64_t generation = 0;

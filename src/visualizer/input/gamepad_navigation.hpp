@@ -98,7 +98,8 @@ namespace lfs::vis::input {
         }
 
         [[nodiscard]] const char* status() const { return status_; }
-        [[nodiscard]] bool awaitingNeutral() const { return pending_ && neutral_seconds_ > 0 && !armed_; }
+        [[nodiscard]] bool needsNeutral() const { return pending_ && !armed_; }
+        [[nodiscard]] bool awaitingNeutral() const { return needsNeutral() && neutral_seconds_ > 0; }
 
         [[nodiscard]] static glm::vec2 filterStick(glm::vec2 value, float dead_zone) {
             if (!std::isfinite(value.x) || !std::isfinite(value.y))
@@ -110,17 +111,17 @@ namespace lfs::vis::input {
             return value / length * ((std::min(length, 1.0f) - dead_zone) / (1.0f - dead_zone));
         }
 
-        // Compare effective samples, including the narrower neutral threshold.
-        // Sensor noise inside it must not keep the viewer awake.
-        [[nodiscard]] static bool needsSampleUpdate(GamepadSample previous, GamepadSample current, float dead_zone) {
-            const auto condition = [dead_zone](GamepadSample& sample) {
+        // An armed session only wakes for effective movement. The narrower
+        // threshold matters while rearming, including entry into neutral.
+        [[nodiscard]] static bool needsSampleUpdate(GamepadSample previous, GamepadSample current, float dead_zone, bool rearming = false) {
+            const auto condition = [dead_zone, rearming](GamepadSample& sample) {
                 for (int i : {0, 2}) {
-                    const auto stick = filterStick({sample.axes[i], sample.axes[i + 1]}, dead_zone * 0.8f);
+                    const auto stick = filterStick({sample.axes[i], sample.axes[i + 1]}, rearming ? dead_zone * 0.8f : dead_zone);
                     sample.axes[i] = stick.x;
                     sample.axes[i + 1] = stick.y;
                 }
                 for (int i : {4, 5})
-                    if (std::abs(sample.axes[i]) <= 0.04f)
+                    if (std::abs(sample.axes[i]) <= (rearming ? 0.04f : 0.05f))
                         sample.axes[i] = 0;
             };
             condition(previous);
@@ -251,7 +252,8 @@ namespace lfs::vis::input {
                 const auto& b = settings.bindings.resolve(scope, a);
                 const bool enabled = allowedGamepadAction(scope, a) &&
                                      (sequencer_action ? context.sequencer_open : navigation_supported && !reserved(b.positive));
-                const bool held = enabled && read_control(b.positive) > 0.5f;
+                const bool trigger_control = b.positive >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER && b.positive < SDL_GAMEPAD_AXIS_COUNT;
+                const bool held = enabled && (trigger_control ? gamepadCommandTriggerDown(axis(b.positive)) : read_control(b.positive) > 0.5f);
                 const bool short_press = enabled &&
                                          ((b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
                                            sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT]) ||

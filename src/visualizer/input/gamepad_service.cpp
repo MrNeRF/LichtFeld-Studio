@@ -177,7 +177,7 @@ namespace lfs::vis::input {
             if (found == impl_->connections.end())
                 break;
             const auto index = event.gaxis.axis - SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
-            const bool down = event.gaxis.value > 16383;
+            const bool down = gamepadCommandTriggerDown(static_cast<float>(event.gaxis.value) / 32767.0f);
             if (down && !found->trigger_down[index]) {
                 if (event.gaxis.which == impl_->state.navigation_selected)
                     impl_->state.navigation_sample.trigger_pressed[index] = true;
@@ -269,7 +269,7 @@ namespace lfs::vis::input {
             const auto raw = SDL_GetGamepadAxis(pad, axis);
             sample.axes[i] = sample.has_axis[i] ? float(raw) / (raw < 0 ? 32768.0f : 32767.0f) : 0.0f;
             if (i >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER)
-                found->trigger_down[i - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = sample.axes[i] > 0.5f;
+                found->trigger_down[i - SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = gamepadCommandTriggerDown(sample.axes[i]);
         }
         for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
             const auto button = static_cast<SDL_GamepadButton>(i);

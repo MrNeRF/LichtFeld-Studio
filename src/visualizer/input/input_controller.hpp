@@ -156,6 +156,7 @@ namespace lfs::vis {
         bool configureGamepadProfiles(const std::string& serialized, bool disable = false, const std::string& expected = {});
         [[nodiscard]] const input::GamepadNavigationSettings& gamepadNavigationSettings() const { return gamepad_settings_; }
         [[nodiscard]] const char* gamepadNavigationStatus() const { return gamepad_settings_.enabled ? gamepad_session_.status() : "disabled"; }
+        [[nodiscard]] bool gamepadNavigationNeedsNeutral() const { return gamepad_settings_.enabled && gamepad_session_.needsNeutral(); }
         [[nodiscard]] SDL_JoystickID gamepadNavigationDevice() const;
         [[nodiscard]] SplitViewPanelId gamepadNavigationPanel() const;
 
