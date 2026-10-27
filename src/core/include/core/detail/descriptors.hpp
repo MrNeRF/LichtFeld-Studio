@@ -146,6 +146,7 @@ namespace lfs::core {
         enum class AllocationClass : uint8_t {
             Pooled,
             Direct,
+            Exact,
         };
 
         struct ExecContext {

@@ -1,5 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../internal/expression_pairing.hpp"
+
+#include "../native_allocation.hpp"
 #include "../prepared_readback.hpp"
 
 #include "../../internal/expression_runtime.hpp"
@@ -240,4 +243,13 @@ std::unique_ptr<PreparedReadback> MetalBackendOps::prepare_readback(const Tensor
 
 namespace lfs::core::internal {
 void MetalBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
+}
+
+namespace lfs::core::internal {
+NativeTensorAllocation MetalBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
+}
+
+namespace lfs::core::internal {
+uint64_t MetalBackendOps::expression_device_address(StorageRef storage) const { return descriptor_expression_address(storage); }
+void MetalBackendOps::optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) { }
 }

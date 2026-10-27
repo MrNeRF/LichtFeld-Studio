@@ -33,6 +33,9 @@ namespace lfs::core::internal {
     // Opt-in native Tensor adapter. SDK types stay behind the private C ABI.
     class HipBackendOps final : public GpuBackendOps {
     public:
+        uint64_t expression_device_address(StorageRef) const override;
+        void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
+        NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
         LFS_CORE_API HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
         ~HipBackendOps() override;
         LFS_CORE_API void ensure_initialized();

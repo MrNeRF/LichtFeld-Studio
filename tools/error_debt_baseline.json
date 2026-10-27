@@ -963,7 +963,7 @@
   "fatal-invariant-site": {},
   "local-check-macro": {
     "core": [
-      "src/core/tensor/tensor_random_ops.cpp:18"
+      "src/core/tensor/backend/cuda/cuda_random_state.cpp:8"
     ],
     "rendering": [
       "src/rendering/rasterizer/vulkan/src/config.h:60",

@@ -4,6 +4,7 @@
 #include "../backend_driver.hpp"
 #include "../backend_work_queue.hpp"
 #include "../gpu_backend_ops.hpp"
+#include "../native_allocation.hpp"
 #include "../native_export.hpp"
 #include "../native_pressure.hpp"
 #include "../tensor_vulkan_interop.hpp"
@@ -12,6 +13,9 @@
 #include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/gpu_device_selection.hpp"
+#include "runtime/cuda_stream_context.hpp"
+#include "runtime/memory_pool.hpp"
+#include "runtime/stream_lifetime.hpp"
 #include <atomic>
 #include <charconv>
 #include <cstring>
@@ -20,11 +24,37 @@
 #include <format>
 
 namespace lfs::core::internal {
+    void shutdown_cuda_tensor_pool();
     namespace {
         class CudaDriver final : public BackendDriver {
             std::atomic<int> selection_{-1};
 
         public:
+            void* canonical_home_target(void* target) const noexcept override { return target; }
+            std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor& tensor, bool implicit) override {
+                const auto target = implicit ? tensor.stream() : prepare_inputs_for_stream({&tensor});
+                if (implicit && (!target || getCurrentCUDAStream() || is_stream_retired(target)))
+                    return std::nullopt;
+                const auto previous = reinterpret_cast<uintptr_t>(getCurrentCUDAStream());
+                setCurrentCUDAStream(target);
+                return std::array<uintptr_t, 2>{previous, 0};
+            }
+            void synchronize_tensor_target(const Tensor& tensor, void* target) override {
+                const auto consumer = static_cast<cudaStream_t>(target);
+                if (tensor.stream() != consumer) {
+                    bridgeStreams(tensor.stream(), consumer);
+                    tensor.record_stream(consumer);
+                }
+            }
+            void shutdown_compatibility_pool() override { shutdown_cuda_tensor_pool(); }
+            void set_pool_iteration(int value) override { CudaMemoryPool::instance().set_iteration(value); }
+            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
+
+            NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
+                const bool direct = kind == TensorAllocationKind::Direct;
+                return {.storage = {.backend = GpuBackend::CUDA, .flags = allocation_flags(StorageAccountingKind::CudaDirect, direct, false, false, direct ? AllocationLabel::CudaDirect : AllocationLabel::None)}, .target = getCurrentCUDAStream(), .external_kind = direct ? "cuda.direct" : ""};
+            }
+
             void complete_checked_index(void* target, SourceSite location) override {
                 device_fault_await_and_consume_or_throw(static_cast<cudaStream_t>(target), "tensor.masking.index_select.assert", location);
             }

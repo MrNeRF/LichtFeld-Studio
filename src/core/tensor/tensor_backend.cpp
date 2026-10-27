@@ -3,7 +3,6 @@
 
 #include "backend/tensor_completion.hpp"
 #include "backend/tensor_vulkan_interop.hpp"
-#include "core/cuda/driver_entry.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_completion.hpp"
 #include <charconv>

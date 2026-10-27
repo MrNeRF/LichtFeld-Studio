@@ -16,6 +16,9 @@ namespace lfs::core::internal {
     // Built on Metal 4; metal_backend_available() is false before macOS 26.
     class API_AVAILABLE(macos(26.0)) MetalBackendOps final : public GpuBackendOps {
     public:
+        uint64_t expression_device_address(StorageRef) const override;
+        void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
+        NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
         std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
         std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
         void name_queue(ExecContext, const char*) override;

@@ -16,12 +16,15 @@ namespace lfs::core {
     struct VulkanInteropDevice;
     class MemoryPressureCoordinator;
     enum class SplatPublication : uint8_t;
+    enum class StorageAccountingKind : uint8_t;
 } // namespace lfs::core
 
 namespace lfs::core::internal {
     class TensorVulkanInteropBackend;
     class GpuBackendOps;
     class BackendWorkQueue;
+    struct NativeTensorAllocation;
+    enum class TensorAllocationKind;
     struct BackendQueueCreateInfo;
     using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
@@ -60,7 +63,28 @@ namespace lfs::core::internal {
         virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) = 0;
         virtual SplatPublication publication() const = 0;
         virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
+        virtual void* canonical_home_target(void*) const noexcept = 0;
+        virtual std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool implicit) = 0;
+        virtual void synchronize_tensor_target(const Tensor&, void*) = 0;
+        virtual void shutdown_compatibility_pool() = 0;
+        virtual void set_pool_iteration(int) = 0;
+        virtual std::optional<StorageAccountingKind> supplementary_accounting() const noexcept = 0;
+        virtual NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind) = 0;
         virtual void complete_checked_index(void* target, SourceSite location) = 0;
+    };
+    class TensorTargetBinding {
+        BackendDriver& driver_;
+        std::optional<std::array<uintptr_t, 2>> token_;
+
+    public:
+        TensorTargetBinding(BackendDriver& driver, const Tensor& tensor, bool implicit)
+            : driver_(driver), token_(driver.bind_tensor_target(tensor, implicit)) {}
+        ~TensorTargetBinding() {
+            if (token_)
+                driver_.unbind_target(*token_);
+        }
+        TensorTargetBinding(const TensorTargetBinding&) = delete;
+        TensorTargetBinding& operator=(const TensorTargetBinding&) = delete;
     };
     MemoryInfo backend_pressure_memory_info(BackendDriver&);
     using BackendRegistry = std::array<BackendDriver*, kGpuBackendCount>;

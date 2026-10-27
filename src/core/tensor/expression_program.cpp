@@ -3,6 +3,7 @@
 
 #include "backend/gpu_backend_ops.hpp"
 #include "core/assert.hpp"
+#include "internal/expression_pairing.hpp"
 #include "internal/expression_runtime.hpp"
 #include "internal/tensor_impl.hpp"
 
@@ -175,11 +176,7 @@ namespace lfs::core::internal {
         }
 
         uint64_t device_address(const StorageRef& storage) {
-            if (storage.backend == GpuBackend::CUDA)
-                return reinterpret_cast<uintptr_t>(storage.data) + storage.byte_offset;
-            require(storage.meta != nullptr && storage.meta->gpu_descriptor.base_address != 0,
-                    "expression storage has no device address");
-            return storage.meta->gpu_descriptor.base_address + storage.byte_offset;
+            return backend_ops(storage.backend).expression_device_address(storage);
         }
 
         ExprStride stride_class(const int32_t stride) {
@@ -399,22 +396,7 @@ namespace lfs::core::internal {
                             "expression input aliases an output at other elements");
                 }
             }
-            if (backend == GpuBackend::CUDA) {
-                std::array<bool, ExpressionProgram::max_inputs> paired{};
-                for (uint32_t i = 0; i < inputs.size(); ++i)
-                    for (uint32_t j = 0; j < inputs.size() && !paired[i]; ++j) {
-                        const auto& low = signature.input[i];
-                        const auto& high = signature.input[j];
-                        if (i == j || paired[j] || !loaded[i] || !loaded[j] || low.host || high.host || low.linear ||
-                            low.dtype != high.dtype || dtype_size(low.dtype) != 4 ||
-                            inputs[i].storage.data != inputs[j].storage.data || strides[i] != strides[j] ||
-                            read_extents[i].begin % 8 != 0 || read_extents[j].begin != read_extents[i].begin + 4 ||
-                            std::any_of(strides[i].begin(), strides[i].end(), [](int32_t s) { return s % 2 != 0; }))
-                            continue;
-                        signature.input[i].pair = int8_t(j);
-                        paired[i] = paired[j] = true;
-                    }
-            }
+            backend_ops(backend).optimize_expression_pairing(signature, {program, inputs, std::span(strides.data(), inputs.size())});
 
             std::array<std::array<uint32_t, rank_limit>, ExpressionProgram::max_inputs> gather_bounds{};
             for (uint32_t i = 0; i < inputs.size(); ++i)

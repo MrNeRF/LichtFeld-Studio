@@ -277,7 +277,7 @@ namespace lfs::core::internal {
 } // namespace lfs::core::internal
 
 namespace lfs::core::internal {
-    StorageRef CudaBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return {GpuBackend::CUDA, pointer, 0, DataType::Float32, nullptr}; }
+    StorageRef CudaBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return {GpuBackend::CUDA, pointer, 0, DataType::Float32, nullptr, allocation_flags(StorageAccountingKind::CudaExternal, false, false, false)}; }
 } // namespace lfs::core::internal
 
 namespace lfs::core::internal {

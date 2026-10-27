@@ -5,9 +5,10 @@
 #include "../../internal/expression_runtime.hpp"
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
+#include "../native_allocation.hpp"
 #include "../readback_buffer.hpp"
 #include "../tensor_completion.hpp"
-#include "core/device_fault.hpp"
+#include "core/nn/activation_arena.hpp"
 #include "core/vulkan_queue_sync.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -267,7 +268,8 @@ namespace lfs::core {
                 .backend = GpuBackend::CUDA,
                 .data = allocate_cuda_storage(
                     bytes, context.cuda_stream,
-                    direct ? CudaStorageMode::Direct : CudaStorageMode::Pooled,
+                    direct ? CudaStorageMode::Direct : context.allocation_class == AllocationClass::Exact ? CudaStorageMode::ExactAsync
+                                                                                                          : CudaStorageMode::Pooled,
                     context.allocation_label, context.allocation_operation),
                 .byte_offset = 0,
                 .dtype = DataType::UInt8,
@@ -332,12 +334,13 @@ namespace lfs::core {
             return result;
         }
 
-        void CudaBackendOps::shutdown() {
+        void shutdown_cuda_tensor_pool() {
             if (CudaMemoryPool* const pool =
                     g_cuda_memory_pool_instance.exchange(nullptr, std::memory_order_acq_rel)) {
                 pool->shutdown();
             }
         }
+        void CudaBackendOps::shutdown() { shutdown_cuda_tensor_pool(); }
 
         void CudaBackendOps::set_allocation_iteration(const int iteration) {
             CudaMemoryPool::instance().set_iteration(iteration);
@@ -509,7 +512,6 @@ namespace lfs::core {
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include <algorithm>
 #include <limits>
 #ifndef _WIN32
@@ -1042,5 +1044,19 @@ namespace lfs::core::internal {
     void CudaBackendOps::validate_checked_index_execution(ExecContext context) {
         if (stream_is_capturing(context))
             throw_device_fault_graph_capture_error(context.cuda_stream, LFS_SOURCE_SITE_CURRENT());
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    NativeTensorAllocation CudaBackendOps::allocate_tensor(const TensorAllocationRequest& request) {
+        const auto target = getCurrentCUDAStream();
+        if (request.kind == TensorAllocationKind::Pooled && request.allow_arena) {
+            if (auto* arena = nn::ActivationArena::current()) {
+                if (void* data = arena->try_alloc(request.bytes)) {
+                    return {.storage = {.backend = GpuBackend::CUDA, .data = data}, .target = target, .owner = arena->owner(), .external_kind = "nn.arena"};
+                }
+            }
+        }
+        return allocate_native_tensor(*this, request, target);
     }
 } // namespace lfs::core::internal

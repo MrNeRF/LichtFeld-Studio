@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../native_allocation.hpp"
 #include "../prepared_readback.hpp"
 
 #include "../facade_trace.hpp"
@@ -618,4 +619,8 @@ namespace lfs::core::internal {
 
 namespace lfs::core::internal {
     void VulkanBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    NativeTensorAllocation VulkanBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
 } // namespace lfs::core::internal

@@ -35,8 +35,15 @@ namespace lfs::core {
         struct ExpressionLaunch;
         struct ExpressionCacheStats;
 
+        struct ExpressionSignature;
+        struct ExpressionPairingRequest;
+        struct TensorAllocationRequest;
+        struct NativeTensorAllocation;
         class LFS_CORE_API GpuBackendOps {
         public:
+            virtual uint64_t expression_device_address(StorageRef) const = 0;
+            virtual void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) = 0;
+            virtual NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) = 0;
             virtual ~GpuBackendOps();
 
             virtual void compiled_expression(const ExpressionLaunch& launch, ExecContext context) = 0;
@@ -444,6 +451,9 @@ namespace lfs::core {
 
         class CudaBackendOps final : public GpuBackendOps {
         public:
+            uint64_t expression_device_address(StorageRef) const override;
+            void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
+            NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
             std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
             std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
             StorageRef borrow_native_range(void*, size_t) override;

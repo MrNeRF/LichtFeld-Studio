@@ -433,6 +433,7 @@ namespace lfs::core {
         Device device = Device::GPU;
         DataType dtype = DataType::Float32;
         bool use_pinned = true;
+        bool exact_allocation = false;
         std::optional<uint64_t> random_seed;
         std::variant<
             std::monostate,
@@ -723,6 +724,8 @@ namespace lfs::core {
         void init_storage_meta() {
             storage_meta_ = std::make_shared<StorageMeta>();
         }
+
+        void adopt_native_tensor_allocation(internal::NativeTensorAllocation allocation, size_t bytes);
 
         template <typename Deleter>
         void adopt_storage(void* data, Deleter&& deleter) {

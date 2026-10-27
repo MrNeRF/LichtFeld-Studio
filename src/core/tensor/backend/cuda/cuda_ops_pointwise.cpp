@@ -711,10 +711,9 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output,
         const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(convert_type);
-        if (input.dtype == DataType::Int32 && output.dtype == DataType::Bool) {
-            ScalarOperand zero{};
-            zero.kind = ScalarKind::Int32;
-            unary({PointwiseOp::NotEqualScalar, DataType::Int32, DataType::Bool, zero}, input, output, count, context);
+        if (output.dtype == DataType::Bool && (input.dtype == DataType::Int32 || input.dtype == DataType::Float32)) {
+            const auto zero = input.dtype == DataType::Int32 ? scalar_operand(int32_t{0}) : scalar_operand(0.f);
+            unary({PointwiseOp::NotEqualScalar, input.dtype, DataType::Bool, zero}, input, output, count, context);
             return;
         }
         switch (input.dtype) {

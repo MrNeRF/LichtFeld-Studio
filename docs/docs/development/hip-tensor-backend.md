@@ -6,6 +6,10 @@ Public Tensor headers do not include HIP SDK headers, and the host compiler does
 not link a HIP import library. The private native module uses the selected ROCm
 compiler independently of the application's C++ and CUDA compilers.
 
+The shared responsibilities of all four implementations are documented in
+[Tensor backend contracts](tensor-backend-contracts.md). That contract also
+covers allocation ownership, targets, compatibility APIs and validation.
+
 ## Build
 
 `LFS_TENSOR_HIP` defaults to `OFF`. Standard CUDA, Vulkan and Metal build defaults

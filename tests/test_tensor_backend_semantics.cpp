@@ -116,6 +116,48 @@ namespace {
         expect_floats(host<float>(output), {6, 2});
     }
 
+    TEST_P(TensorBackendSemantics, NormalReseedingPreservesOddAndEvenSequences) {
+        auto& generator = lfs::core::RandomGenerator::instance();
+        const auto old_seed = generator.get_seed();
+        struct ResetSeed {
+            uint64_t value;
+            ~ResetSeed() { lfs::core::RandomGenerator::instance().manual_seed(value); }
+        } reset{old_seed};
+        for (const size_t count : {size_t{1}, size_t{2}, size_t{3}, size_t{16}}) {
+            generator.manual_seed(731);
+            const auto first = Tensor::normal({count}, 0.5f, 0.75f, device());
+            const auto expected = host<float>(first);
+            generator.manual_seed(731);
+            const auto repeated = Tensor::normal({count}, 0.5f, 0.75f, device());
+            EXPECT_EQ(expected, host<float>(repeated));
+            for (const auto value : expected)
+                EXPECT_TRUE(std::isfinite(value));
+            expect_placement(first);
+            expect_placement(repeated);
+        }
+    }
+
+    TEST_P(TensorBackendSemantics, ExactAllocationPreservesPlacementAndEmptyStorage) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU allocation API";
+        auto tensor = Tensor::empty_exact({3, 2}, DataType::Float32);
+        expect_placement(tensor);
+        EXPECT_EQ(tensor.shape(), (TensorShape{3, 2}));
+        tensor.fill_(7.f);
+        expect_floats(host<float>(tensor), {7, 7, 7, 7, 7, 7});
+        const auto empty = Tensor::empty_exact({0, 2}, DataType::Float32);
+        EXPECT_TRUE(empty.is_valid());
+        EXPECT_EQ(empty.numel(), 0);
+        expect_placement(empty);
+    }
+
+    TEST_P(TensorBackendSemantics, FloatBoolConversionUsesNonzeroIncludingNan) {
+        const auto source = make<float>(DataType::Float32, {6}, {0.f, -0.f, 0.25f, -0.25f, kNan, kInf});
+        const auto output = source.to(DataType::Bool);
+        expect_placement(output);
+        EXPECT_EQ(host<uint8_t>(output), (std::vector<uint8_t>{0, 0, 1, 1, 1, 1}));
+    }
+
     TEST_P(TensorBackendSemantics, SoftmaxNonfiniteRows) {
         const std::vector<float> rows{
             0.f, kInf, kInf, 0.f, kInf, kInf,

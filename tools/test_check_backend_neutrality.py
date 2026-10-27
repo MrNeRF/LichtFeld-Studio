@@ -83,5 +83,23 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
         self.assertIn("probe.mm:1: [backend-branch]", output.getvalue())
 
 
+class SharedTensorDispatchTest(unittest.TestCase):
+    def test_rejects_compile_time_and_runtime_backend_choices(self) -> None:
+        source = "#if LFS_HAS_CUDA\nif (b == core::GpuBackend::HIP) {}\n#endif\nif constexpr (gpu_backend_compiled(GpuBackend::Metal)) {}\n"
+        kinds = [kind for _, kind, _ in gate.scan_shared_tensor_dispatch(source)]
+        self.assertIn("shared-backend-guard", kinds)
+        self.assertGreaterEqual(kinds.count("shared-backend-branch"), 2)
+
+    def test_rejects_native_headers_and_calls(self) -> None:
+        source = '#include "backend/cuda/runtime/memory_pool.hpp"\n#include <curand.h>\nvoid f() { cudaDeviceSynchronize(); }\n'
+        kinds = [kind for _, kind, _ in gate.scan_shared_tensor_dispatch(source)]
+        self.assertEqual(kinds.count("shared-native-include"), 2)
+        self.assertIn("shared-native-api", kinds)
+
+    def test_preserves_cpu_gpu_branches_and_explicit_api_identities(self) -> None:
+        source = '#include "core/tensor_cuda_interop.hpp"\nif (device == Device::GPU) backend_driver(GpuBackend::CUDA).selected_device();\n// if (b == GpuBackend::HIP) {}\nconst char* text = "cudaDeviceSynchronize()";\n'
+        self.assertEqual(gate.scan_shared_tensor_dispatch(source), [])
+
+
 if __name__ == "__main__":
     unittest.main()

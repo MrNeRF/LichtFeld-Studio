@@ -139,8 +139,46 @@ def private_header(path: Path, header: str) -> bool:
             (tensor_root / "internal" / header).is_file())
 
 
+# This PR owns these shared dispatch seams; unrelated Core cleanup stays outside
+# this gate until those files have adopted the same native-service contract.
+SHARED_TENSOR_DISPATCH = {
+    "src/core/tensor/tensor.cpp", "src/core/tensor/tensor_backend.cpp",
+    "src/core/tensor/tensor_factory.cpp", "src/core/tensor/tensor_unified_ops.cpp",
+    "src/core/tensor/tensor_masking_ops.cpp", "src/core/tensor/tensor_random_ops.cpp",
+    "src/core/tensor/tensor_readback.cpp", "src/core/tensor/expression_program.cpp",
+    "src/core/tensor/backend/tensor_upload.cpp",
+}
+
+
+def scan_shared_tensor_dispatch(source: str) -> list[tuple[int, str, str]]:
+    comments_removed = mask_tokens(source, strings=False)
+    code = mask_tokens(source)
+    findings = []
+
+    def add(position: int, kind: str, text: str) -> None:
+        findings.append((source.count('\n', 0, position) + 1, kind, text))
+
+    for match in re.finditer(r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b[^\n]*(?:LFS_HAS_CUDA|LFS_TENSOR_(?:HIP|METAL|VULKAN)|LFS_GRAPHICS_(?:METAL|VULKAN))', code, re.M):
+        add(match.start(), "shared-backend-guard", match.group().strip())
+    for match in BACKEND_BRANCH.finditer(code):
+        add(match.start(), "shared-backend-branch", match.group())
+    for match in re.finditer(r'\bgpu_backend_compiled\s*\(\s*(?:\w+::)*GpuBackend::(?:CUDA|Vulkan|Metal|HIP)\s*\)', code):
+        add(match.start(), "shared-backend-branch", match.group())
+    for match in INCLUDE.finditer(comments_removed):
+        header = match[1].replace("\\", "/")
+        if (CUDA_HEADER.fullmatch(header) or
+                re.search(r'(?:^|/)(?:backend/)?(?:cuda|vulkan|metal|hip)/', header, re.I) or
+                re.fullmatch(r'(?:curand|cublas|cusolver|cufft)(?:_[a-z0-9]+)?\.h', header)):
+            add(match.start(), "shared-native-include", header)
+    for match in NATIVE_CALL.finditer(code):
+        add(match.start(), "shared-native-api", match[1])
+    return findings
+
+
 def scan(path: Path) -> list[tuple[int, str, str]]:
     relative = path.relative_to(PROJECT_ROOT).as_posix() if path.is_relative_to(PROJECT_ROOT) else str(path)
+    if relative in SHARED_TENSOR_DISPATCH:
+        return scan_shared_tensor_dispatch(path.read_text(encoding="utf-8"))
     if (relative.startswith(("src/core/tensor/", "src/core/include/core/detail/",
                              "src/visualizer/training/", *TRAINER_CUDA_ROOTS)) or
             TRAINER_CUDA_FILE.fullmatch(relative)):

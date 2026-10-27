@@ -1,5 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../internal/expression_pairing.hpp"
+
+#include "../native_allocation.hpp"
 #include "../prepared_readback.hpp"
 
 #include "architecture_runtime.hpp"
@@ -2968,4 +2971,13 @@ namespace lfs::core::internal {
 
 namespace lfs::core::internal {
     void HipBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    NativeTensorAllocation HipBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    uint64_t HipBackendOps::expression_device_address(StorageRef storage) const { return descriptor_expression_address(storage); }
+    void HipBackendOps::optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) {}
 } // namespace lfs::core::internal

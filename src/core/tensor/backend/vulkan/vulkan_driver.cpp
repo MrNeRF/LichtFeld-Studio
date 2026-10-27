@@ -3,6 +3,7 @@
 #include "../../internal/tensor_impl.hpp"
 #include "../backend_driver.hpp"
 #include "../backend_work_queue.hpp"
+#include "../native_allocation.hpp"
 #include "../native_export.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "core/assert.hpp"
@@ -21,6 +22,18 @@ namespace lfs::core::internal {
     namespace {
         class VulkanDriver final : public BackendDriver {
         public:
+            void* canonical_home_target(void*) const noexcept override { return nullptr; }
+            std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
+            void synchronize_tensor_target(const Tensor&, void*) override {}
+            void shutdown_compatibility_pool() override {}
+            void set_pool_iteration(int) override {}
+            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
+
+            NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
+                const bool direct = kind == TensorAllocationKind::Direct;
+                return {.storage = {.backend = GpuBackend::Vulkan, .flags = allocation_flags(StorageAccountingKind::VulkanOwned, direct, false, false, AllocationLabel::None)}, .target = nullptr, .external_kind = ""};
+            }
+
             void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
             MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
             void register_pressure_clients(MemoryPressureCoordinator&) override {}

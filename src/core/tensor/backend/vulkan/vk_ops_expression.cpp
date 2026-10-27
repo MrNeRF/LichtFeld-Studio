@@ -1,5 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../internal/expression_pairing.hpp"
+
 #include "../../internal/expression_emitter.hpp"
 #include "../facade_trace.hpp"
 #include "core/logger.hpp"
@@ -126,4 +128,9 @@ namespace lfs::core::internal {
                                    direct ? static_cast<const void*>(launch.arguments.data()) : &address);
                 vkCmdDispatch(command, vk::dispatch_groups(*context, work), 1, 1); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | (direct ? 0 : VK_PIPELINE_STAGE_2_TRANSFER_BIT), VK_WHOLE_SIZE, kernel);
     }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    uint64_t VulkanBackendOps::expression_device_address(StorageRef storage) const { return descriptor_expression_address(storage); }
+    void VulkanBackendOps::optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) {}
 } // namespace lfs::core::internal
