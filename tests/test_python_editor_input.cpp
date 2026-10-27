@@ -259,6 +259,15 @@ namespace {
         EXPECT_NE(terminal.getAllText().find("line 20"), std::string::npos);
     }
 
+    TEST(PythonConsoleInputTest, AllTextJoinsRowsWrappedAtTheTerminalWidth) {
+        // MCP editor output parses this text, so a long line must not gain newlines at the console width.
+        lfs::vis::terminal::TerminalWidget terminal(6, 2);
+        terminal.write("hello world\r\nnext\r\n");
+        EXPECT_EQ(terminal.getAllText(), "hello world\nnext");
+        terminal.write("[0.123456789, 1.5]");
+        EXPECT_EQ(terminal.getAllText(), "hello world\nnext\n[0.123456789, 1.5]");
+    }
+
     TEST(PythonConsoleInputTest, ClearDoesNothingOnPackagesTab) {
         auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
         state.setEditorText("print(1)");
