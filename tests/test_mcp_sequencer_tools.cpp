@@ -273,8 +273,6 @@ namespace {
         }
 
         void delete_keyframe(const size_t index) {
-            if (index == 0)
-                return;
             if (!controller.selectKeyframe(index))
                 return;
             controller.removeSelectedKeyframe();
@@ -595,25 +593,17 @@ TEST_F(McpSequencerToolsTest, SetEasingPreservesAllNumericAndNamedModes) {
     }
 }
 
-TEST_F(McpSequencerToolsTest, DeleteRejectsProtectedFirstKeyframeWithoutChangingState) {
-    const auto reject_deletion = [this](const lfs::sequencer::KeyframeId id) {
-        const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
-                "sequencer.delete_keyframe", json{{"keyframe_id", id}});
-            EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
-            EXPECT_NE(result.value("error_message", "").find("first keyframe cannot be deleted"), std::string::npos);
-            EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
-        }
-    };
+TEST_F(McpSequencerToolsTest, DeleteAcceptsTheFirstKeyframeAndTheOnlyKeyframe) {
+    auto& registry = lfs::mcp::ToolRegistry::instance();
     const auto first = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
-    reject_deletion(first);
     const auto second = backend_.add_manual_keyframe(1.0f, {1.0f, 0.0f, 0.0f});
-    reject_deletion(first);
-    backend_.controller.setKeyframeTimeById(second, -1.0f);
-    reject_deletion(second);
+    for (const auto id : {first, second}) {
+        const auto result = registry.call_tool("sequencer.delete_keyframe", json{{"keyframe_id", id}});
+        EXPECT_TRUE(result.value("success", false)) << result.dump();
+        EXPECT_EQ(backend_.controller.timeline().getKeyframeById(id), nullptr);
+    }
+    EXPECT_EQ(backend_.controller.timeline().realKeyframeCount(), 0u);
 }
-
 TEST_F(McpSequencerToolsTest, SetEasingCommandLatency) {
     const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     auto& registry = lfs::mcp::ToolRegistry::instance();

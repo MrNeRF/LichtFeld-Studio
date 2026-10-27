@@ -5141,12 +5141,10 @@ namespace lfs::python {
         m.def(
             "delete_keyframe",
             [](size_t index) {
-                if (index == 0)
-                    throw nb::value_error("The first keyframe cannot be deleted");
                 lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit();
             },
             nb::arg("index"),
-            "Delete keyframe by index; raises ValueError for the protected first keyframe");
+            "Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted");
 
         m.def(
             "set_keyframe_easing",

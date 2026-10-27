@@ -571,11 +571,31 @@ TEST_F(NavigationTest, SimultaneousSequencerEditingCommandsAreIgnored) {
     EXPECT_EQ(intent.keyframe_step, 0);
 }
 
+TEST_F(NavigationTest, DeselectIsOptionalRemappableAndReservedOnlyInsideSequencer) {
+    constexpr auto action = actionIndex(GamepadAction::DeselectKeyframe);
+    EXPECT_EQ(settings.bindings.resolve(gamepad_sequencer_scope, action).positive, -1);
+    settings.bindings.modes[gamepad_sequencer_scope][action] = GamepadBinding{SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_DPAD_DOWN};
+    context.sequencer_open = true;
+    arm();
+    sample.pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN] = true;
+    EXPECT_TRUE(tick().deselect_keyframe);
+    sample.pressed.fill(false);
+    context.sequencer_open = false;
+    for (int i = 0; i < 3; ++i) tick();
+    sample.pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN] = true;
+    EXPECT_FALSE(tick().deselect_keyframe);
+    const auto restored = GamepadNavigationSettings::fromJson(settings.json());
+    EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, action).positive,
+              SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+}
+
 TEST_F(NavigationTest, LegacyProfilesGainSequencerDefaultsAndKeepExplicitOverrides) {
     auto legacy = settings.json();
-    for (auto name : {"add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe"})
+    for (auto name : {"add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe", "deselect_keyframe", "update_selected_keyframe"})
         legacy["bindings"]["common"].erase(name);
     auto restored = GamepadNavigationSettings::fromJson(legacy);
+    EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, actionIndex(GamepadAction::DeselectKeyframe)).positive, -1);
+    EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, actionIndex(GamepadAction::UpdateSelectedKeyframe)).positive, -1);
     EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, 12).positive,
               SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_WEST);
     restored.bindings.modes[gamepad_sequencer_scope][12] = GamepadBinding{};

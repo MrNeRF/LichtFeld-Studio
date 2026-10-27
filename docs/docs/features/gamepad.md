@@ -31,10 +31,22 @@ ground support; this feature does not add jumping or a new physics system.
 
 Expand **Assignments** to edit common controls or override a camera mode.
 Clearing an assignment differs from inheriting its common value. The Sequencer
-has its own context: while open, X/West adds or replaces a keyframe from the
-assigned viewport, Y/North deletes the selected keyframe, and D-pad left/right
-select adjacent keyframes and move that same viewport. Delete requires an
-actual selection and protects the first keyframe. These edits use normal undo.
+has its own context: while open, X/West captures a new keyframe from the assigned
+viewport and advances the playhead by 0.5 seconds without moving the camera.
+Occupied times are skipped in 0.5-second steps; existing poses are never replaced
+by this acquisition command. The clip extends when necessary. Acquisition leaves
+Follow mode so camera navigation stays free. The normal explicit update command
+remains available for replacing a pose.
+
+Y/North deletes the selected keyframe, including the first or only real keyframe.
+D-pad left/right select adjacent keyframes and move that same viewport. Stepping
+beyond either end deselects without moving the camera; stepping back inward
+returns to that endpoint. Continuing outward stays deselected. A separate
+remappable Deselect action is available without occupying a default button.
+Update selected keyframe is a separate remappable action, also unassigned by
+default; it replaces only the selected pose without advancing the playhead.
+Delete requires an actual selection. These edits use normal undo, including clip
+extensions, and captured keyframes can subsequently be dragged in the timeline.
 Sequencer bindings take precedence over camera bindings for the same control.
 
 Named profiles store tuning and assignments independently of keyboard keymaps.

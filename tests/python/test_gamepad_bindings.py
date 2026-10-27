@@ -297,11 +297,12 @@ def test_sequencer_context_is_remappable_and_isolated_from_camera_bindings(edito
     e = editor
     e.subject.catalog['modes'].append('sequencer')
     for name, control in [('add_keyframe', 'button.west'), ('remove_selected_keyframe', 'button.north'),
-                          ('previous_keyframe', 'button.dpad_left'), ('next_keyframe', 'button.dpad_right')]:
+                          ('previous_keyframe', 'button.dpad_left'), ('next_keyframe', 'button.dpad_right'),
+                          ('deselect_keyframe', 'none'), ('update_selected_keyframe', 'none')]:
         e.subject.catalog['actions'].append({'id': name, 'continuous': False, 'modes': ['sequencer']})
         e.profile['bindings']['common'][name] = {'positive': control, 'negative': 'none', 'inverted': False}
     e.subject.set_scope('sequencer')
-    assert [r['id'] for r in e.records['gamepad_binding_rows']] == ['add_keyframe', 'remove_selected_keyframe', 'previous_keyframe', 'next_keyframe']
+    assert [r['id'] for r in e.records['gamepad_binding_rows']] == ['add_keyframe', 'remove_selected_keyframe', 'previous_keyframe', 'next_keyframe', 'deselect_keyframe', 'update_selected_keyframe']
     e.subject.edit('add_keyframe', 'clear')
     assert e.module.effective(e.profile, 'sequencer', 'add_keyframe')['positive'] == 'none'
     assert e.profile['bindings']['common']['add_keyframe']['positive'] == 'button.west'

@@ -69,6 +69,8 @@ namespace lfs::vis::input {
         int rendering_step = 0;
         bool add_keyframe = false;
         bool remove_selected_keyframe = false;
+        bool deselect_keyframe = false;
+        bool update_selected_keyframe = false;
         int keyframe_step = 0;
         bool active = false;
     };
@@ -256,9 +258,11 @@ namespace lfs::vis::input {
             if (commands == 1) {
                 result.add_keyframe = edge[actionIndex(GamepadAction::AddKeyframe)];
                 result.remove_selected_keyframe = edge[actionIndex(GamepadAction::RemoveSelectedKeyframe)];
+                result.deselect_keyframe = edge[actionIndex(GamepadAction::DeselectKeyframe)];
+                result.update_selected_keyframe = edge[actionIndex(GamepadAction::UpdateSelectedKeyframe)];
                 result.keyframe_step = static_cast<int>(edge[actionIndex(GamepadAction::NextKeyframe)]) - static_cast<int>(edge[actionIndex(GamepadAction::PreviousKeyframe)]);
             }
-            result.active = result.add_keyframe || result.remove_selected_keyframe || result.keyframe_step || result.move != glm::vec2(0) || result.look != glm::vec2(0) || result.vertical != 0 || result.exit_walk || result.navigation_step || result.rendering_step;
+            result.active = result.add_keyframe || result.remove_selected_keyframe || result.deselect_keyframe || result.update_selected_keyframe || result.keyframe_step || result.move != glm::vec2(0) || result.look != glm::vec2(0) || result.vertical != 0 || result.exit_walk || result.navigation_step || result.rendering_step;
             status_ = result.active ? "moving" : "ready";
             return result;
         }

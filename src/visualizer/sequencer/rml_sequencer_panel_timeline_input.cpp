@@ -583,13 +583,6 @@ namespace lfs::vis {
             else if (auto selected_id = controller_.selectedKeyframeId(); selected_id.has_value())
                 to_delete.push_back(*selected_id);
 
-            for (const auto& keyframe : keyframes) {
-                if (!keyframe.is_loop_point) {
-                    std::erase(to_delete, keyframe.id);
-                    break;
-                }
-            }
-
             op::TransactionGuard transaction("Delete Keyframes");
             bool removed_any = false;
             for (const auto id : to_delete)

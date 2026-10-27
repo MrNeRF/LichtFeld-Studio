@@ -15,7 +15,7 @@ namespace lfs::vis::input {
     enum class GamepadNavigationMode { Orbit, Trackball, FPV, Drone, Walk };
     enum class GamepadAction { MoveX, MoveY, LookX, LookY, Vertical, Precision, Fast,
                                ExitWalk, NextNavigation, PreviousNavigation, NextRendering, PreviousRendering,
-                               AddKeyframe, RemoveSelectedKeyframe, PreviousKeyframe, NextKeyframe, Count };
+                               AddKeyframe, RemoveSelectedKeyframe, PreviousKeyframe, NextKeyframe, DeselectKeyframe, UpdateSelectedKeyframe, Count };
     inline constexpr size_t actionIndex(GamepadAction action) { return static_cast<size_t>(action); }
     inline constexpr size_t gamepad_action_count = static_cast<size_t>(GamepadAction::Count);
     inline constexpr std::array<std::string_view, 5> gamepad_modes{"orbit", "trackball", "fpv", "drone", "walk"};
@@ -25,7 +25,7 @@ namespace lfs::vis::input {
     inline constexpr std::array<std::string_view, gamepad_action_count> gamepad_actions{
         "move_x", "move_y", "look_x", "look_y", "vertical", "precision", "fast", "exit_walk",
         "next_navigation", "previous_navigation", "next_rendering", "previous_rendering",
-        "add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe"};
+        "add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe", "deselect_keyframe", "update_selected_keyframe"};
     inline constexpr std::array<std::string_view, SDL_GAMEPAD_AXIS_COUNT> gamepad_axes{
         "left_x", "left_y", "right_x", "right_y", "left_trigger", "right_trigger"};
     inline constexpr std::array<std::string_view, SDL_GAMEPAD_BUTTON_COUNT> gamepad_buttons{

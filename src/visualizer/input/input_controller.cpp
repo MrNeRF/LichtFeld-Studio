@@ -2791,7 +2791,8 @@ namespace lfs::vis {
                           !op::operators().hasModalOperator() &&
                           !gui::preserveNativeDragInput() && window->manualResizeEdgeMask() == 0 &&
                           !gui::PanelRegistry::instance().is_panel_enabled("lfs.preferences") &&
-                          (!gui || (!gui->sequencer().isPlaying() && gui->sequencer().state() != PlaybackState::SCRUBBING)) &&
+                          (!gui || (!gui->sequencer().isPlaying() && gui->sequencer().state() != PlaybackState::SCRUBBING &&
+                                    !gui->sequencerUI().isTimelineGestureActive())) &&
                           window->gamepads().diagnosticSelected() == 0;
         context.target = reinterpret_cast<uintptr_t>(&target);
         context.click_epoch = gamepad_click_epoch_;
@@ -2815,11 +2816,13 @@ namespace lfs::vis {
             gamepad_frame_demand_ = gamepad_session_.awaitingNeutral();
             return false;
         }
-        if (context.sequencer_open && (intent.add_keyframe || intent.remove_selected_keyframe || intent.keyframe_step)) {
+        if (context.sequencer_open && (intent.add_keyframe || intent.remove_selected_keyframe || intent.deselect_keyframe || intent.update_selected_keyframe || intent.keyframe_step)) {
             stopGamepadMotion();
             auto& sequencer_ui = gui->sequencerUI();
-            if (intent.add_keyframe) sequencer_ui.addKeyframeFromView(target);
+            if (intent.add_keyframe) sequencer_ui.captureKeyframeFromView(target);
             else if (intent.remove_selected_keyframe) sequencer_ui.removeSelectedKeyframe();
+            else if (intent.deselect_keyframe) sequencer_ui.deselectKeyframe();
+            else if (intent.update_selected_keyframe) sequencer_ui.updateSelectedKeyframeFromView(target);
             else sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step, &target);
             gamepad_frame_demand_ = true;
             return true;

@@ -142,9 +142,6 @@ namespace lfs::vis::gui {
         });
 
         cmd::SequencerDeleteKeyframe::when([this](const auto& e) {
-            if (e.keyframe_index == 0)
-                return;
-
             const auto& timeline = controller_.timeline();
             if (e.keyframe_index >= timeline.size())
                 return;

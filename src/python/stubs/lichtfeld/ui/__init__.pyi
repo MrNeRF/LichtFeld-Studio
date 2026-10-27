@@ -2659,7 +2659,7 @@ def select_keyframe(index: int) -> None:
 
 def delete_keyframe(index: int) -> None:
     """
-    Delete keyframe by index; raises ValueError for the protected first keyframe
+    Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted
     """
 
 def set_keyframe_easing(index: int, easing: int) -> None:

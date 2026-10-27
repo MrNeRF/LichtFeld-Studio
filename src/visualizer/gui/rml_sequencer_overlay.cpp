@@ -354,14 +354,9 @@ namespace lfs::vis::gui {
 
             html += R"(<div class="context-menu-separator"></div>)";
 
-            if (is_first)
-                html += fmt::format(
-                    R"(<div class="context-menu-item disabled" id="ctx-delete-disabled">{}</div>)",
-                    LOC(Sequencer::DELETE_KEYFRAME));
-            else
-                html += fmt::format(
-                    R"(<div class="context-menu-item" id="ctx-delete">{}</div>)",
-                    LOC(Sequencer::DELETE_KEYFRAME));
+            html += fmt::format(
+                R"(<div class="context-menu-item" id="ctx-delete">{}</div>)",
+                LOC(Sequencer::DELETE_KEYFRAME));
         }
 
         return html;
