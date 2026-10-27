@@ -381,12 +381,16 @@ namespace lfs::core {
                 adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
                     if (!data)
                         return;
-                    StorageMeta metadata;
-                    metadata.backend = storage.backend;
-                    metadata.gpu_descriptor = descriptor;
-                    auto released = storage;
-                    released.meta = storage.meta ? &metadata : nullptr;
-                    internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
+                    if (storage.meta) {
+                        StorageMeta metadata;
+                        metadata.backend = storage.backend;
+                        metadata.gpu_descriptor = descriptor;
+                        auto released = storage;
+                        released.meta = &metadata;
+                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
+                    } else {
+                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
+                    }
                     if (accounted)
                         Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
                 });

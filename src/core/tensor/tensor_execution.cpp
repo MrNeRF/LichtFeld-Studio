@@ -10,9 +10,6 @@
 #include <stdexcept>
 
 namespace lfs::core {
-    TensorExecutionTarget::TensorExecutionTarget(const TensorWorkQueue& queue)
-        : backend_(queue.backend()), target_(queue.native_handle()) {}
-
     TensorExecutionTarget TensorExecutionTarget::default_queue(GpuBackend backend) {
         return {backend, nullptr};
     }

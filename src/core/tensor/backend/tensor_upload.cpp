@@ -231,6 +231,8 @@ namespace lfs::core {
     TensorWorkQueue::Scope::~Scope() { static_cast<internal::BackendWorkQueue*>(native_)->unbind(binding_); }
     void* TensorWorkQueue::native_handle() const { return impl_->target; }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
+    TensorExecutionTarget::TensorExecutionTarget(const TensorWorkQueue& queue)
+        : backend_(queue.backend()), target_(queue.native_handle()) {}
     bool TensorWorkQueue::ready() const { return impl_->native->ready(); }
     void TensorWorkQueue::wait() const { impl_->native->wait(); }
     void TensorWorkQueue::record(TensorFence& fence) const { fence.record(TensorExecutionTarget(*this)); }
