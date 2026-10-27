@@ -5059,7 +5059,10 @@ namespace lfs::python {
                         data.at("softness").get<float>(), static_cast<lfs::sequencer::RevealEffect>(data.at("effect").get<int>())};
                     gui->sequencer().setRevealClip(clip);
                     return true;
-                } catch (const std::exception&) { return false; }
+                } catch (const std::exception& e) {
+                    LOG_WARN("set_reveal_clip rejected the clip: {}", e.what());
+                    return false;
+                }
             }, false); }, nb::arg("value"), "Set the live sequencer reveal clip; returns false for invalid input");
 
         m.def("remove_reveal_clip", []() { return invoke_on_viewer([]() -> bool {
