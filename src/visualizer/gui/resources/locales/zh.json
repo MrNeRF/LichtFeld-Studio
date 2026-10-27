@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "控制器导航",
   "gamepad.navigation_enabled": "启用",
   "gamepad.navigation_device": "导航控制器",
-  "gamepad.navigation_help": "关闭偏好设置，单击视口，然后松开控制器的所有输入。鼠标、键盘、对话框和焦点变化会暂停导航。L/R表示所选面板。",
+  "gamepad.navigation_help": "点击视图并松开所有控制器输入，即可将其设为操作目标。侧边面板会保留目标。对话框、偏好设置或切换到其他应用会暂停导航；松开所有输入即可恢复。",
   "gamepad.dead_zone": "摇杆死区",
   "gamepad.look_speed": "视角速度 (rad/s)",
   "gamepad.move_speed": "移动倍率",

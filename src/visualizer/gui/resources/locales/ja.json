@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "コントローラーナビゲーション",
   "gamepad.navigation_enabled": "有効にする",
   "gamepad.navigation_device": "ナビゲーション用コントローラー",
-  "gamepad.navigation_help": "設定を閉じ、ビューポートをクリックしてから、コントローラーの操作をすべて解除してください。マウス、キーボード、ダイアログ、フォーカスの変更で中断します。L/Rは選択したパネルです。",
+  "gamepad.navigation_help": "ビューをクリックし、すべてのコントローラー入力を離すと操作対象になります。サイドパネルでも対象は維持されます。ダイアログ、環境設定、他のアプリへの切り替え中は一時停止します。すべての入力を離すと再開します。",
   "gamepad.dead_zone": "スティックのデッドゾーン",
   "gamepad.look_speed": "視点速度 (rad/s)",
   "gamepad.move_speed": "移動倍率",

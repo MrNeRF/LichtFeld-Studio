@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Navigation à la manette",
   "gamepad.navigation_enabled": "Activer",
   "gamepad.navigation_device": "Manette de navigation",
-  "gamepad.navigation_help": "Fermez les préférences, cliquez dans la vue et relâchez toutes les commandes. Souris, clavier, dialogues et changements de focus suspendent la navigation. L/R indique le panneau sélectionné.",
+  "gamepad.navigation_help": "Cliquez dans une vue et relâchez les commandes pour l’affecter à la manette. Les panneaux latéraux conservent cette affectation. Les dialogues, les préférences et le changement d’application suspendent la navigation ; relâchez les commandes pour reprendre.",
   "gamepad.dead_zone": "Zone morte du stick",
   "gamepad.look_speed": "Vitesse du regard (rad/s)",
   "gamepad.move_speed": "Multiplicateur de mouvement",

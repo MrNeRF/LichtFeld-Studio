@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Navegación con mando",
   "gamepad.navigation_enabled": "Activar",
   "gamepad.navigation_device": "Mando de navegación",
-  "gamepad.navigation_help": "Cierra Preferencias, haz clic en la vista y suelta todos los controles del mando. El ratón, el teclado, los diálogos y los cambios de foco suspenden la navegación. L/R indica el panel seleccionado.",
+  "gamepad.navigation_help": "Haz clic en una vista y suelta todos los controles para asignarla al mando. Los paneles laterales mantienen la asignación. Los diálogos, las preferencias y cambiar de aplicación pausan la navegación; suelta los controles para continuar.",
   "gamepad.dead_zone": "Zona muerta del stick",
   "gamepad.look_speed": "Velocidad de vista (rad/s)",
   "gamepad.move_speed": "Multiplicador de movimiento",

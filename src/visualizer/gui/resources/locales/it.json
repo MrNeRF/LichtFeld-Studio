@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Navigazione joypad",
   "gamepad.navigation_enabled": "Abilita",
   "gamepad.navigation_device": "Joypad per la navigazione",
-  "gamepad.navigation_help": "Chiudi Preferenze, fai clic nella viewport e rilascia tutti i controlli del joypad per iniziare. Mouse, tastiera, dialoghi e cambi di focus sospendono la navigazione. L/R indicano il pannello della viewport selezionato.",
+  "gamepad.navigation_help": "Fai clic in una vista e rilascia tutti i controlli per assegnarla al joypad. I pannelli laterali mantengono la vista assegnata. Dialoghi, Preferenze e cambio di applicazione mettono in pausa la navigazione: rilascia i controlli per riprendere.",
   "gamepad.dead_zone": "Zona morta stick",
   "gamepad.look_speed": "Velocità rotazione (rad/s)",
   "gamepad.move_speed": "Velocità movimento (×)",

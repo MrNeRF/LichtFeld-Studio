@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "컨트롤러 탐색",
   "gamepad.navigation_enabled": "활성화",
   "gamepad.navigation_device": "탐색 컨트롤러",
-  "gamepad.navigation_help": "환경설정을 닫고 뷰포트를 클릭한 다음 컨트롤러의 모든 입력을 놓으세요. 마우스, 키보드, 대화상자 및 포커스 변경 시 탐색이 일시 중지됩니다. L/R은 선택한 패널입니다.",
+  "gamepad.navigation_help": "뷰를 클릭하고 모든 컨트롤러 입력을 놓으면 조작 대상으로 지정됩니다. 측면 패널에서도 지정은 유지됩니다. 대화 상자, 환경 설정, 다른 앱으로 전환하면 탐색이 일시 중지됩니다. 모든 입력을 놓으면 다시 시작됩니다.",
   "gamepad.dead_zone": "스틱 데드존",
   "gamepad.look_speed": "시점 속도 (rad/s)",
   "gamepad.move_speed": "이동 배율",

@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Controller-Navigation",
   "gamepad.navigation_enabled": "Aktivieren",
   "gamepad.navigation_device": "Navigationscontroller",
-  "gamepad.navigation_help": "Schließen Sie die Einstellungen, klicken Sie in den Viewport und lassen Sie alle Controller-Eingaben los. Maus, Tastatur, Dialoge und Fokuswechsel unterbrechen die Navigation. L/R kennzeichnet den gewählten Viewport.",
+  "gamepad.navigation_help": "Klicke in eine Ansicht und lasse alle Controller-Eingaben los, um sie zuzuweisen. Seitenleisten behalten die Zuweisung bei. Dialoge, Einstellungen und der Wechsel zu einer anderen Anwendung pausieren die Navigation. Zum Fortfahren alle Eingaben loslassen.",
   "gamepad.dead_zone": "Stick-Totzone",
   "gamepad.look_speed": "Blickgeschwindigkeit (rad/s)",
   "gamepad.move_speed": "Bewegungsmultiplikator",

@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Nawigacja kontrolerem",
   "gamepad.navigation_enabled": "Włącz",
   "gamepad.navigation_device": "Kontroler nawigacji",
-  "gamepad.navigation_help": "Zamknij Preferencje, kliknij widok i zwolnij wszystkie elementy kontrolera. Mysz, klawiatura, okna dialogowe i zmiany fokusu wstrzymują nawigację. L/R oznacza wybrany panel.",
+  "gamepad.navigation_help": "Kliknij widok i zwolnij wszystkie elementy sterowania, aby przypisać go do kontrolera. Panele boczne zachowują przypisanie. Okna dialogowe, preferencje i zmiana aplikacji wstrzymują nawigację. Zwolnij wszystkie elementy sterowania, aby ją wznowić.",
   "gamepad.dead_zone": "Martwa strefa drążka",
   "gamepad.look_speed": "Prędkość rozglądania (rad/s)",
   "gamepad.move_speed": "Mnożnik ruchu",

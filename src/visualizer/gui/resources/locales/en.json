@@ -3469,7 +3469,7 @@
   "gamepad.navigation_title": "Joypad navigation",
   "gamepad.navigation_enabled": "Enable",
   "gamepad.navigation_device": "Navigation controller",
-  "gamepad.navigation_help": "Close Preferences, click the viewport, then release all controller inputs to start. Mouse, keyboard, dialogs and focus changes suspend navigation. L/R indicate the selected viewport panel.",
+  "gamepad.navigation_help": "Click a viewport and release all controls to assign it to the controller. Side panels keep the assignment. Dialogs, Preferences and switching applications pause navigation; release all controls to resume.",
   "gamepad.dead_zone": "Stick dead zone",
   "gamepad.look_speed": "Look speed (rad/s)",
   "gamepad.move_speed": "Movement multiplier",
