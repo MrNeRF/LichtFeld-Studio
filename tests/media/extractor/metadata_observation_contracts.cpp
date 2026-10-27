@@ -725,6 +725,112 @@ namespace {
         require(bool(result), "create XMP catalog");
         return std::move(*result);
     }
+    void djiPhotoContracts() {
+        const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description xmlns:d="http://www.dji.com/drone-dji/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" )";
+        const std::string end = "</r:Description></r:RDF>";
+        const auto xml = begin + R"(d:GpsLatitude="-90" d:GpsLongitude="+180" d:GpsLongtitude="180" d:AbsoluteAltitude="-1.25" d:RelativeAltitude="0" d:FlightRollDegree="0" d:FlightPitchDegree="-1" d:FlightYawDegree="360" d:GimbalRollDegree="1" d:GimbalPitchDegree="-90" d:GimbalYawDegree="180" d:GpsStatus="Normal" d:AltitudeType="GpsFusionAlt" d:SurveyingMode="1" d:CamReverse="0" d:Version="1.6"><e:GPSLatitude>45,0N</e:GPSLatitude>)" + end;
+        const auto catalog = xmpFixture(xml);
+        const auto summary = summarizeImageMetadata(catalog);
+        require(summary && summary->facts.size() == 17 && !summary->limited, "all selected DJI photo properties use the existing summary");
+        for (const auto& item : summary->facts) {
+            require(item.state == MetadataValueState::Present && !item.ambiguous && catalog.resolve(item.source),
+                    "DJI and standard observations retain their validity and source handles");
+            if (item.semantic.starts_with("vendor.dji."))
+                require(item.inputs.empty() && item.origin == MetadataValueOrigin::InterpretedSource,
+                        "DJI values remain source observations without pose derivations");
+        }
+        require(std::get<double>(fact(*summary, "vendor.dji.position.latitude").value) == -90 &&
+                    std::get<double>(fact(*summary, "gps.latitude").value) == 45 &&
+                    fact(*summary, "vendor.dji.position.latitude").unit == MetadataUnit::Degrees,
+                "decimal DJI coordinates have physical bounds and do not conflict with another GPS subject");
+        require(std::get<double>(fact(*summary, "vendor.dji.altitude.absolute").value) == -1.25 &&
+                    std::get<double>(fact(*summary, "vendor.dji.altitude.relative").value) == 0 &&
+                    fact(*summary, "vendor.dji.altitude.absolute").unit == MetadataUnit::Metres,
+                "signed absolute and relative heights remain distinct; zero is a valid source value");
+        require(std::get<double>(fact(*summary, "vendor.dji.flight.yaw").value) == 360 &&
+                    std::get<double>(fact(*summary, "vendor.dji.gimbal.pitch").value) == -90 &&
+                    std::get<int64_t>(fact(*summary, "vendor.dji.camera.reverse").value) == 0 &&
+                    std::get<std::string>(fact(*summary, "vendor.dji.gps.status").value) == "Normal",
+                "angles, flags and unfamiliar status spellings are preserved without normalization");
+        auto conflict = xml;
+        conflict.replace(conflict.find(R"(d:GpsLongtitude="180")"), std::string(R"(d:GpsLongtitude="180")").size(), R"(d:GpsLongtitude="179")");
+        const auto changed = summarizeImageMetadata(xmpFixture(conflict));
+        require(bool(changed), "summarize differing DJI aliases");
+        for (const auto& item : changed->facts)
+            require(item.ambiguous == (item.semantic == "vendor.dji.position.longitude"), "only genuine DJI alias conflicts flag their own semantic");
+        for (const auto& [name, value] : {std::pair{"GpsLatitude", "90.01"}, {"GpsLongitude", "-180.01"}, {"AbsoluteAltitude", "nan"}, {"RelativeAltitude", "1e999"}, {"FlightYawDegree", "1/2"}, {"CamReverse", "-1"}, {"GpsLatitude", "+-1"}, {"CamReverse", "+-0"}}) {
+            const auto rejected = summarizeImageMetadata(xmpFixture(begin + "d:" + name + "=\"" + value + "\">" + end));
+            require(rejected && rejected->facts.size() == 1 && rejected->facts[0].state == MetadataValueState::Invalid &&
+                        std::get<std::string>(rejected->facts[0].value) == value,
+                    "invalid DJI scalars preserve their original text instead of fabricating values");
+        }
+        const auto future = summarizeImageMetadata(xmpFixture(begin + R"(d:SurveyingMode="2"><d:CamReverse>1</d:CamReverse>)" + end));
+        require(future && future->facts[0].state == MetadataValueState::Unsupported &&
+                    std::get<std::string>(future->facts[0].value) == "2" && std::get<int64_t>(future->facts[1].value) == 1,
+                "unknown flag modes remain unsupported; element-form flags use the same parser");
+        auto spoof = begin;
+        spoof.replace(spoof.find("http://www.dji.com/drone-dji/1.0/"), std::string("http://www.dji.com/drone-dji/1.0/").size(), "https://example.invalid/drone-dji/1.0/");
+        const auto unrelated = summarizeImageMetadata(xmpFixture(spoof + R"(d:GpsLatitude="1" e:GPSLatitude="45,0N">)" + end));
+        require(unrelated && unrelated->facts.size() == 1 && unrelated->facts[0].semantic == "gps.latitude", "DJI names require the exact namespace URI");
+        // Attribute order cannot turn a named DJI subject into standard image facts.
+        for (const auto attributes : {R"(e:GPSLatitude="45,0N" r:about="DJI Meta Data" d:GpsLatitude="-1")",
+                                      R"(r:about="DJI Meta Data" d:GpsLatitude="-1" e:GPSLatitude="45,0N")"}) {
+            const auto named = summarizeImageMetadata(xmpFixture(begin + attributes + ">" + end));
+            require(named && named->facts.size() == 1 && named->facts[0].semantic == "vendor.dji.position.latitude" &&
+                        named->facts[0].xmp->property.subject == "DJI Meta Data" &&
+                        json_detail::metadataSummary(*named)["facts"][0]["xmp_property"]["rdf_about"] == "DJI Meta Data",
+                    "observed DJI subjects retain their identity and never promote standard properties");
+        }
+        const auto mixed = summarizeImageMetadata(xmpFixture(begin + R"(r:about="DJI Meta Data" d:RelativeAltitude="0"></r:Description><r:Description xmlns:t="http://ns.adobe.com/tiff/1.0/" t:Make="plain">)" + end));
+        require(mixed && mixed->facts.size() == 2 && mixed->facts[0].xmp->property.subject == "DJI Meta Data" &&
+                    mixed->facts[1].semantic == "camera.make" && mixed->facts[1].xmp->property.subject.empty(),
+                "DJI subject restrictions never leak into a later unqualified description");
+        for (const bool element_link : {false, true}) {
+            auto named_link = standardPacket(extendedGuid);
+            std::string named_xml(named_link.bytes.begin() + named_link.payload_offset, named_link.bytes.end());
+            const auto description = named_xml.find("<r:Description") + std::string("<r:Description").size();
+            named_xml.insert(description, R"( r:about="DJI Meta Data" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="0")");
+            const auto attribute = std::string(R"(n:HasExtendedXMP=")") + std::string(extendedGuid) + '"';
+            if (element_link) {
+                named_xml.erase(named_xml.find(attribute), attribute.size());
+                named_xml.resize(named_xml.find("/></r:RDF>"));
+                named_xml += "><n:HasExtendedXMP>" + std::string(extendedGuid) + "</n:HasExtendedXMP></r:Description></r:RDF>";
+            }
+            named_link.bytes.resize(named_link.payload_offset);
+            named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
+            const auto unassociated = summarizeImageMetadata(extendedCatalog({standardPacket(extendedGuid), named_link,
+                                                                              extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
+            require(unassociated && unassociated->facts.size() == 2 &&
+                        std::any_of(unassociated->facts.begin(), unassociated->facts.end(), [](const auto& value) { return value.semantic == "vendor.dji.altitude.relative"; }) &&
+                        std::any_of(unassociated->xmp_packets.begin(), unassociated->xmp_packets.end(), [](const auto& value) { return value.assembly && value.state == XmpPacketState::Unsupported; }),
+                    "accepted DJI projection must not hide a qualified Extended link from the association check");
+            if (!element_link) {
+                named_xml.erase(named_xml.find(attribute), attribute.size());
+                named_link.bytes.resize(named_link.payload_offset);
+                named_link.bytes.insert(named_link.bytes.end(), named_xml.begin(), named_xml.end());
+                const auto independent = summarizeImageMetadata(extendedCatalog({standardPacket(extendedGuid), named_link,
+                                                                                 extendedSegment(extendedGuid, static_cast<uint32_t>(extendedXml.size()), 0, extendedXml)}));
+                require(independent && independent->facts.size() == 3 &&
+                            std::any_of(independent->facts.begin(), independent->facts.end(), [](const auto& value) { return value.semantic == "camera.model"; }),
+                        "a completely parsed DJI subject without a link does not block an independent valid association");
+            }
+        }
+        const auto limited = summarizeImageMetadata(catalog, 1);
+        require(limited && limited->limited && limited->facts.empty(), "DJI fields consume the existing packet property budget atomically");
+        const auto named_catalog = xmpFixture(begin + R"(r:about="DJI Meta Data" d:RelativeAltitude="-1.25">)" + end);
+        const auto named_cost = std::string_view("vendor.dji.altitude.relative").size() +
+                                std::string_view("http://www.dji.com/drone-dji/1.0/").size() +
+                                std::string_view("RelativeAltitude").size() + std::string_view("DJI Meta Data").size();
+        for (const auto budget : {std::size_t{0}, named_cost - 1, named_cost}) {
+            const auto bounded = summarizeImageMetadata(named_catalog, 4096, budget);
+            require(bounded && bounded->limited == (budget < named_cost) &&
+                        bounded->facts.size() == (budget < named_cost ? 0 : 1),
+                    "named DJI provenance is charged at the exact summary text boundary");
+        }
+        const auto recovered = summarizeImageMetadata(catalog);
+        require(recovered && json_detail::metadataSummary(*recovered) == json_detail::metadataSummary(*summary),
+                "rejections and exhausted budgets do not contaminate a later valid summary");
+    }
     void xmpContracts() {
         const std::string begin = R"(<r:RDF xmlns:r="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><r:Description r:about="" xmlns:t="http://ns.adobe.com/tiff/1.0/" xmlns:e="http://ns.adobe.com/exif/1.0/" )";
         const std::string end = "</r:Description></r:RDF>";
@@ -937,6 +1043,7 @@ namespace {
 int runMetadataObservationContracts() {
     extendedXmpContracts();
     xmpContracts();
+    djiPhotoContracts();
     cameraContracts();
     require(!MediaIngest::sourceMetadata({}), "empty source path rejected before collection");
     require(!MediaIngest::sourceMetadata(std::filesystem::path(std::string("a\0b", 3))), "embedded NUL cannot redirect metadata collection");

@@ -351,15 +351,61 @@ The regression corpus checks exact decoded Brotli bytes and aggregate statuses, 
 
 `summarizeImageMetadata` projects selected standard XMP properties from packets already retained in the catalog. The existing `source-metadata` CLI calls this summary. Collection and `MediaIngest::sourceMetadata` preserve original packets independently; normal probing, pixel decoding and training do not request interpretation. The Python catalog result remains the original catalog transport.
 
-Expat recognizes expanded namespace URIs, not prefix spelling, in abbreviated attributes and simple RDF property elements. Supported fields are TIFF Make/Model/Orientation; EXIF ExposureTime, FNumber, FocalLength, GPSLatitude/Longitude, GPSAltitude/AltitudeRef, GPSMapDatum, DateTimeOriginal/Digitized; CIPA LensMake/LensModel; auxiliary Lens; XMP CreateDate/ModifyDate. Unknown properties remain in the packet. Structured or qualified forms of recognized properties yield Unsupported facts. This is a scalar projection rather than a complete RDF graph or vendor interpreter.
+Expat recognizes expanded namespace URIs, not prefix spelling, in abbreviated attributes and simple RDF property elements. Supported fields are TIFF Make/Model/Orientation; EXIF ExposureTime, FNumber, FocalLength, GPSLatitude/Longitude, GPSAltitude/AltitudeRef, GPSMapDatum, DateTimeOriginal/Digitized; CIPA LensMake/LensModel; auxiliary Lens; XMP CreateDate/ModifyDate. Unknown properties remain in the packet. Structured or qualified forms of recognized properties yield Unsupported facts. This is a scalar projection rather than a complete RDF graph implementation; selected DJI source properties use the separate interpretation contract below.
 
 Each fact carries its packet reference and `xmp_property` namespace, local name, description ordinal and property occurrence ordinal. Namespace and name refer to a shared static field descriptor rather than per-fact string copies. Ordinals count direct description attributes/properties, including unknown ones, excluding `rdf:about` and namespace declarations. Altitude requires one valid reference in the same description and packet, or in the uniquely associated Standard/Extended portions described below; `xmp_inputs` identifies that operand. Repeated observations remain separate with their original provenance. Concordant Present values with matching units do not create a conflict, including aliases within one RDF description; differing or non-comparable values are marked ambiguous. Numeric comparison uses exact reduced rationals or equality at the floating carrier precision, without an epsilon; large rational operands that cannot be converted exactly remain conservatively non-comparable. Pre-existing EXIF ambiguities remain unresolved. Collection or interpretation limits set `summary.limited` independently and do not mark unrelated valid facts ambiguous. No preferred source is selected. GPS coordinates require the standard degrees/minutes or degrees/minutes/seconds form and hemisphere. Datum is retained without conversion or a WGS84 assumption. Dates retain declared precision, fractions and timezone, including no timezone. Leap-second interpretation is Unsupported. Invalid values retain their text instead of becoming numeric zero.
 
-`summary.xmp_packets` reports parsed, malformed, unsupported or limited with packet provenance. No facts are published from a packet failing XML parsing, supported subject/root checks or parsing budgets. A later independent packet can still be interpreted. A supported root is `rdf:RDF`, optionally inside `x:xmpmeta`; descriptions have an empty or omitted `rdf:about` and no subject/description qualifiers. Extended JPEG XMP fragments use the bounded assembly contract below. Non-primary TIFF directory packets remain preserved without promotion to primary camera properties.
+`summary.xmp_packets` reports parsed, malformed, unsupported or limited with packet provenance. No facts are published from a packet failing XML parsing, supported subject/root checks or parsing budgets. A later independent packet can still be interpreted. A supported root is `rdf:RDF`, optionally inside `x:xmpmeta`; standard image descriptions have an empty or omitted `rdf:about` and no subject/description qualifiers. The observed DJI subject is handled only as described below. Extended JPEG XMP fragments use the bounded assembly contract below. Non-primary TIFF directory packets remain preserved without promotion to primary camera properties.
 
 DTDs are rejected before processing their internal/external subsets; external resolution and parameter entities are disabled. The parser never opens files or URLs. Predefined XML entities, numeric references, CDATA and supported XML encodings use Expat XML validation. Interpretation limits: 1 MiB per packet, 4 MiB aggregate input, 64 packet results, depth 32, 16384 elements, 128 ordinary attributes per element (namespace declarations are excluded from this count and remain subject to packet/name bounds), 1024-byte expanded element/attribute/namespace names, 1024 recognized properties and at most 64 KiB decoded property text per packet. Shared summary fact/text budgets also apply; EXIF projection precedes XMP. These controls are not a total-process allocation ceiling. Collector limits remain independent.
 
 Schema references: [Adobe TIFF](https://developer.adobe.com/xmp/docs/xmp-namespaces/tiff/), [Adobe EXIF](https://developer.adobe.com/xmp/docs/xmp-namespaces/exif/), [Expat API](https://libexpat.github.io/doc/api/latest/). Expat is an explicit media dependency using the existing 2.9.0 version override and standard vcpkg port. Its registry selection follows the existing security pins; no separate registry routing is added.
+
+## DJI photo source properties
+
+The image summary also interprets selected properties in the exact
+`http://www.dji.com/drone-dji/1.0/` namespace. They remain source declarations
+under `vendor.dji.*` semantics, independently of standard EXIF/XMP GPS facts.
+The parser does not select a decoder from the camera's manufacturer name.
+The observed DJI `rdf:about="DJI Meta Data"` label is accepted specifically for
+these vendor properties and retained as `xmp_property.rdf_about`. Standard
+properties in that named description are not promoted to unqualified image
+facts. Other nonempty RDF subjects and description qualifiers retain the
+existing Unsupported behavior. A named description cannot supply an Extended
+XMP association or participate in cross-portion altitude derivation. Its
+`HasExtendedXMP` declaration is still counted as invalid association evidence,
+including the element form, rather than hidden by the selective photo
+projection. A completely parsed DJI description without that declaration does
+not block an independently valid association.
+
+| Properties | Summary semantics and units |
+| --- | --- |
+| `GpsLatitude`, `GpsLongitude`, historical `GpsLongtitude` | `vendor.dji.position.latitude/longitude`, signed decimal degrees within physical bounds |
+| `AbsoluteAltitude`, `RelativeAltitude` | `vendor.dji.altitude.absolute/relative`, finite signed metres; zero is a valid value |
+| `FlightRollDegree`, `FlightPitchDegree`, `FlightYawDegree` | `vendor.dji.flight.roll/pitch/yaw`, finite source angles in degrees |
+| `GimbalRollDegree`, `GimbalPitchDegree`, `GimbalYawDegree` | `vendor.dji.gimbal.roll/pitch/yaw`, finite source angles in degrees |
+| `GpsStatus`, `AltitudeType`, `Version` | `vendor.dji.gps.status`, `vendor.dji.altitude.type`, `vendor.dji.version`, source text without status normalization |
+| `SurveyingMode`, `CamReverse` | `vendor.dji.surveying_mode`, `vendor.dji.camera.reverse`, unitless integer flags 0/1; other nonnegative modes remain Unsupported with their original text |
+
+Present means the declared scalar passed its syntax and range checks. It does
+not establish a valid GNSS fix, a vertical datum, a camera optical center, an
+exposure epoch or a usable photogrammetric pose. Those qualifications depend on
+the model, metadata version and accompanying source properties. The summary
+does not convert heights, normalize angles or apply camera/gimbal reversal.
+Flight and gimbal observations remain separate; unknown status strings are
+preserved rather than interpreted as RTK or a successful fix.
+
+Equal longitude aliases agree; differing or invalid observations flag that
+vendor semantic using the existing conflict policy. Different standard and
+vendor coordinates do not conflict automatically, since their measured subject
+and epoch may differ. Source handles and namespace/property/description/ordinal
+provenance retain each occurrence. Existing parser, output and text budgets
+apply to these properties too. Unselected DJI properties remain available in
+the original XMP bytes. Their presence does not qualify every DJI device,
+MakerNote, video telemetry format, RTK profile or calibration representation.
+
+Format reference: DJI Media File Metadata Whitepaper, Part 2, sections 3.3.1–3.3.17,
+linked from the [official DJI announcement](https://github.com/dji-sdk/Payload-SDK-Doc/blob/ca93b6470fe8e157550f70ed16ffd8c4d2b5af3a/source/introduction/announcement.md).
 
 ## JPEG Extended XMP interpretation
 

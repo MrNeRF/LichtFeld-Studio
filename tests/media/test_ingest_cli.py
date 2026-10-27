@@ -355,7 +355,7 @@ class IngestCLI(unittest.TestCase):
 
     def test_source_metadata_xmp_interpretation_carriers(self):
         packet = self._rdf_packet('<t:Model>Body &amp; lens</t:Model><e:FNumber>28/10</e:FNumber>',
-                                  't:Make="Caméra 日本語"').encode()
+                                  't:Make="Caméra 日本語" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="-0.75"').encode()
         for carrier in ("jpeg", "png", "jxl", "tiff", "avif", "heic"):
             with self.subTest(carrier=carrier):
                 path = self.root / ("interpreted." + carrier)
@@ -374,13 +374,30 @@ class IngestCLI(unittest.TestCase):
                 summary = result["summary"]
                 self.assertEqual([p["state"] for p in summary["xmp_packets"]], ["parsed"])
                 facts = {f["semantic"]: f for f in summary["facts"] if "xmp_property" in f}
-                self.assertEqual(len(facts), 3)
+                self.assertEqual(len(facts), 4)
                 self.assertEqual(facts["camera.make"]["value"], "Caméra 日本語")
                 self.assertEqual(facts["camera.model"]["value"], "Body & lens")
                 self.assertEqual(facts["lens.f_number"]["value"], {"numerator": 28, "denominator": 10})
+                self.assertEqual((facts["vendor.dji.altitude.relative"]["value"], facts["vendor.dji.altitude.relative"]["unit"],
+                                  facts["vendor.dji.altitude.relative"]["origin"]), (-0.75, "metres", "interpreted_source"))
                 self.assertTrue(all(f["source"] == {"kind": "xmp_block", "block": 0} for f in facts.values()))
                 self.assertEqual(facts["camera.make"]["xmp_property"], {"namespace": "http://ns.adobe.com/tiff/1.0/", "name": "Make", "description": 0, "ordinal": 1})
                 self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+
+    def test_source_metadata_dji_named_photo_subject(self):
+        path = self.root / "dji-photo.jpg"
+        packet = self._rdf_packet('<d:RelativeAltitude>-1.25</d:RelativeAltitude><e:GPSAltitude>5/1</e:GPSAltitude>',
+                                  'xmlns:d="http://www.dji.com/drone-dji/1.0/" t:Make="DJI"')
+        packet = packet.replace('r:about=""', 'r:about="DJI Meta Data"').encode()
+        self._xmp_jpeg(path, [b"http://ns.adobe.com/xap/1.0/\0" + packet])
+        result, _ = self.invoke("source-metadata", path)
+        fact, = [f for f in result["summary"]["facts"] if "xmp_property" in f]
+        self.assertEqual((fact["semantic"], fact["value"], fact["origin"]),
+                         ("vendor.dji.altitude.relative", -1.25, "interpreted_source"))
+        self.assertEqual(fact["xmp_property"]["rdf_about"], "DJI Meta Data")
+        self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "parsed")
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]),
+                         b"http://ns.adobe.com/xap/1.0/\0" + packet)
 
     def test_source_metadata_xmp_agreement_and_independent_limits(self):
         path = self.root / "xmp-agreement.jpg"

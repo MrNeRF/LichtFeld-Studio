@@ -25,6 +25,8 @@ namespace lfs::media {
         constexpr std::string_view aux = "http://ns.adobe.com/exif/1.0/aux/";
         constexpr std::string_view xmp = "http://ns.adobe.com/xap/1.0/";
         constexpr std::string_view note = "http://ns.adobe.com/xmp/note/";
+        constexpr std::string_view dji = "http://www.dji.com/drone-dji/1.0/";
+        constexpr std::string_view dji_subject = "DJI Meta Data";
         enum class Kind { Text,
                           Number,
                           Orientation,
@@ -32,6 +34,10 @@ namespace lfs::media {
                           Longitude,
                           Altitude,
                           AltitudeRef,
+                          SignedNumber,
+                          DecimalLatitude,
+                          DecimalLongitude,
+                          SourceFlag,
                           Date };
         struct Field {
             XmpPropertyName property;
@@ -58,11 +64,36 @@ namespace lfs::media {
             {{exif, "DateTimeDigitized"}, summary_detail::semantic::digitized, Kind::Date},
             {{xmp, "CreateDate"}, summary_detail::semantic::digitized, Kind::Date},
             {{xmp, "ModifyDate"}, summary_detail::semantic::modified, Kind::Date}};
+        // Vendor observations do not establish a camera optical center, a
+        // vertical datum or an exposure epoch comparable with standard GPS.
+        constexpr Field dji_fields[]{
+            {{dji, "GpsLatitude"}, "vendor.dji.position.latitude", Kind::DecimalLatitude, MetadataUnit::Degrees},
+            {{dji, "GpsLongitude"}, "vendor.dji.position.longitude", Kind::DecimalLongitude, MetadataUnit::Degrees},
+            {{dji, "GpsLongtitude"}, "vendor.dji.position.longitude", Kind::DecimalLongitude, MetadataUnit::Degrees},
+            {{dji, "AbsoluteAltitude"}, "vendor.dji.altitude.absolute", Kind::SignedNumber, MetadataUnit::Metres},
+            {{dji, "RelativeAltitude"}, "vendor.dji.altitude.relative", Kind::SignedNumber, MetadataUnit::Metres},
+            {{dji, "FlightRollDegree"}, "vendor.dji.flight.roll", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "FlightPitchDegree"}, "vendor.dji.flight.pitch", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "FlightYawDegree"}, "vendor.dji.flight.yaw", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "GimbalRollDegree"}, "vendor.dji.gimbal.roll", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "GimbalPitchDegree"}, "vendor.dji.gimbal.pitch", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "GimbalYawDegree"}, "vendor.dji.gimbal.yaw", Kind::SignedNumber, MetadataUnit::Degrees},
+            {{dji, "GpsStatus"}, "vendor.dji.gps.status"},
+            {{dji, "AltitudeType"}, "vendor.dji.altitude.type"},
+            {{dji, "SurveyingMode"}, "vendor.dji.surveying_mode", Kind::SourceFlag, MetadataUnit::Unitless},
+            {{dji, "CamReverse"}, "vendor.dji.camera.reverse", Kind::SourceFlag, MetadataUnit::Unitless},
+            {{dji, "Version"}, "vendor.dji.version"}};
         bool named(std::string_view expanded, std::string_view uri, std::string_view name) {
             return expanded.size() == uri.size() + name.size() + 1 && expanded.starts_with(uri) &&
                    expanded[uri.size()] == '\x1f' && expanded.substr(uri.size() + 1) == name;
         }
         const Field* field(std::string_view name) {
+            if (name.size() > dji.size() && name.starts_with(dji) && name[dji.size()] == '\x1f') {
+                for (const auto& candidate : dji_fields)
+                    if (named(name, candidate.property.namespace_uri, candidate.property.name))
+                        return &candidate;
+                return nullptr;
+            }
             for (const auto& candidate : fields)
                 if (named(name, candidate.property.namespace_uri, candidate.property.name))
                     return &candidate;
@@ -77,8 +108,9 @@ namespace lfs::media {
             std::string value;
             std::size_t description, ordinal;
             bool structured = false;
+            std::string_view subject;
             XmpPropertyLocation location() const {
-                return {&field->property, description, ordinal};
+                return {&field->property, description, ordinal, subject};
             }
         };
         enum class Role { Wrapper,
@@ -103,6 +135,8 @@ namespace lfs::media {
             bool collect_links = false, invalid_link = false;
             std::size_t link_count = 0;
             std::string extended_guid;
+            std::string_view subject;
+            bool named_subject = false;
             void linkText(std::string_view value) {
                 if (invalid_link || link_count != 1)
                     return;
@@ -139,14 +173,14 @@ namespace lfs::media {
                 }
             }
             std::optional<std::size_t> add(const Field* field, std::string_view value) {
-                if (!field)
+                if (!field || (!subject.empty() && field->property.namespace_uri != dji))
                     return std::nullopt;
                 if (properties.size() >= max_properties || value.size() > max_text - text_bytes) {
                     stop(XmpPacketState::Limited, "XMP property or text budget exhausted");
                     return std::nullopt;
                 }
                 text_bytes += value.size();
-                properties.push_back({field, std::string(value), descriptions - 1, ordinal});
+                properties.push_back({field, std::string(value), descriptions - 1, ordinal, false, subject});
                 return properties.size() - 1;
             }
             void start(std::string_view name, const XML_Char** attrs) {
@@ -175,9 +209,21 @@ namespace lfs::media {
                 } else if (parent == Role::Rdf && named(name, rdf, "Description")) {
                     role = Role::Description;
                     ++descriptions;
+                    subject = {};
+                    // Inspect the subject before collecting any attributes:
+                    // XML attribute order must not change which fields survive.
+                    for (std::size_t i = 0; i < attributes; ++i)
+                        if (named(attrs[i * 2], rdf, "about") && *attrs[i * 2 + 1]) {
+                            if (std::string_view(attrs[i * 2 + 1]) != dji_subject) {
+                                stop(XmpPacketState::Unsupported, "RDF subject or description qualifier is not interpreted");
+                                return;
+                            }
+                            subject = dji_subject;
+                            named_subject = true;
+                        }
                     for (std::size_t i = 0; i < attributes; ++i) {
                         const std::string_view key(attrs[i * 2]), value(attrs[i * 2 + 1]);
-                        if (named(key, rdf, "about") && value.empty())
+                        if (named(key, rdf, "about"))
                             continue;
                         if (key.starts_with(rdf) || key.starts_with("http://www.w3.org/XML/1998/namespace\x1f")) {
                             stop(XmpPacketState::Unsupported, "RDF subject or description qualifier is not interpreted");
@@ -185,7 +231,7 @@ namespace lfs::media {
                         }
                         ++ordinal;
                         if (collect_links && named(key, note, "HasExtendedXMP")) {
-                            beginLink(false);
+                            beginLink(!subject.empty());
                             linkText(value);
                         } else {
                             add(field(key), value);
@@ -197,7 +243,7 @@ namespace lfs::media {
                     ++ordinal;
                     if (collect_links && named(name, note, "HasExtendedXMP")) {
                         role = Role::ExtendedLink;
-                        beginLink(attributes != 0);
+                        beginLink(attributes != 0 || !subject.empty());
                     } else {
                         role = Role::Property;
                         selected = add(field(name), {});
@@ -301,16 +347,22 @@ namespace lfs::media {
             return packet;
         }
         bool integer(std::string_view value, int64_t& result) {
-            if (value.starts_with('+'))
+            if (value.starts_with('+')) {
                 value.remove_prefix(1);
+                if (value.starts_with('-'))
+                    return false;
+            }
             if (value.empty())
                 return false;
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
             return !value.empty() && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
         }
         bool real(std::string_view value, double& result) {
-            if (value.starts_with('+'))
+            if (value.starts_with('+')) {
                 value.remove_prefix(1);
+                if (value.starts_with('-'))
+                    return false;
+            }
             if (value.empty())
                 return false;
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result, std::chars_format::general);
@@ -456,7 +508,7 @@ namespace lfs::media {
             // Both portions must describe a single unqualified image subject
             // before an operand can cross the Standard/Extended boundary.
             if (related && related_source && related->state == XmpPacketState::Parsed &&
-                packet.descriptions == 1 && related->descriptions == 1)
+                packet.descriptions == 1 && related->descriptions == 1 && !packet.named_subject && !related->named_subject)
                 add_refs(*related, *related_source);
             for (const auto& property : packet.properties) {
                 const auto& field = *property.field;
@@ -479,6 +531,22 @@ namespace lfs::media {
                 } else if (value.empty()) {
                     fact.state = MetadataValueState::Absent;
                     fact.value = property.value;
+                } else if (field.kind == Kind::SignedNumber || field.kind == Kind::DecimalLatitude || field.kind == Kind::DecimalLongitude) {
+                    if (!real(value, numeric) ||
+                        (field.kind == Kind::DecimalLatitude && std::abs(numeric) > 90) ||
+                        (field.kind == Kind::DecimalLongitude && std::abs(numeric) > 180))
+                        fact.state = MetadataValueState::Invalid;
+                    else
+                        fact.value = numeric;
+                } else if (field.kind == Kind::SourceFlag) {
+                    if (!integer(value, whole) || whole < 0)
+                        fact.state = MetadataValueState::Invalid;
+                    else if (whole > 1) {
+                        fact.state = MetadataValueState::Unsupported;
+                        fact.value = property.value;
+                        fact.diagnostic = "Unknown DJI flag value";
+                    } else
+                        fact.value = whole;
                 } else if (field.kind == Kind::Orientation || field.kind == Kind::AltitudeRef) {
                     if (!integer(value, whole) || whole < (field.kind == Kind::Orientation ? 1 : 0) || whole > (field.kind == Kind::Orientation ? 8 : 1))
                         fact.state = MetadataValueState::Invalid;
@@ -531,9 +599,9 @@ namespace lfs::media {
                     fact.value = property.value;
                     fact.diagnostic = "Invalid XMP field value";
                 }
-                std::size_t provenance_bytes = field.property.namespace_uri.size() + field.property.name.size();
+                std::size_t provenance_bytes = field.property.namespace_uri.size() + field.property.name.size() + property.subject.size();
                 for (const auto& input : provenance.inputs)
-                    provenance_bytes += input.field->namespace_uri.size() + input.field->name.size();
+                    provenance_bytes += input.field->namespace_uri.size() + input.field->name.size() + input.subject.size();
                 if (provenance.assembly)
                     provenance_bytes += provenance.assembly->guid.size();
                 const auto cost = summary_detail::factCost(summary, max_facts, max_text_bytes, charged,
