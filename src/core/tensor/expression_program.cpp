@@ -5,9 +5,6 @@
 #include "core/assert.hpp"
 #include "internal/expression_runtime.hpp"
 #include "internal/tensor_impl.hpp"
-#ifdef LFS_TENSOR_HIP
-#include "backend/hip/hip_backend_ops.hpp"
-#endif
 #ifdef LFS_TENSOR_METAL
 #include "backend/metal/metal_context.hpp"
 #endif
@@ -504,10 +501,8 @@ namespace lfs::core::internal {
     }
 
     ExpressionCacheStats expression_cache_stats(const GpuBackend backend) {
-#ifdef LFS_TENSOR_HIP
-        if (backend == GpuBackend::HIP)
-            return hip_expression_cache_stats();
-#endif
+        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
+            return backend_ops(backend).expression_cache_stats();
 #ifdef LFS_TENSOR_METAL
         if (backend == GpuBackend::Metal)
             return metal_expression_cache_stats();

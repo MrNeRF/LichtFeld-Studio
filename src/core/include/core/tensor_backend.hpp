@@ -21,10 +21,8 @@ namespace lfs::core {
         std::string vulkan_device;           // Empty selects automatically; otherwise index or UUID.
         std::string rendering_vulkan_device; // Empty follows the tensor GPU for compatibility.
         std::string cuda_device;             // Empty keeps the existing default; otherwise CUDA index or UUID.
-#ifdef LFS_TENSOR_HIP
-        std::string hip_device; // Empty selects a compatible HIP GPU; otherwise a nonnegative ordinal.
-#endif
-        int vulkan_validation = 0; // 0: off, 1: API validation, 2: synchronization validation.
+        std::string hip_device;              // Empty selects a compatible HIP GPU; otherwise a nonnegative ordinal.
+        int vulkan_validation = 0;           // 0: off, 1: API validation, 2: synchronization validation.
         bool force_fp32_half = false;
         bool force_no_atomic_float = false;
     };
@@ -41,10 +39,8 @@ namespace lfs::core {
     LFS_CORE_API TensorBackendOptions tensor_backend_options_snapshot();
     // The configured process device is applied at CUDA worker/stream entry points.
     LFS_CORE_API int selected_cuda_device();
-#ifdef LFS_TENSOR_HIP
     // Inventory only: selecting a HIP device does not create its context.
     LFS_CORE_API int selected_hip_device();
-#endif
     LFS_CORE_API void activate_selected_cuda_device();
     // Installed by the renderer before creating training queues. Foreign GPUs
     // transfer through host memory; they must never import CUDA handles.

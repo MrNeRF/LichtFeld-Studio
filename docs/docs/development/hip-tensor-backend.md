@@ -39,14 +39,23 @@ supported capabilities rather than infer them from Tensor availability.
 
 ## Selection and execution
 
-`GpuBackend::HIP` is available only in HIP-enabled builds. Existing backend enum
-values remain stable. `GpuBackendScope` or `TensorExecutionTarget::default_queue`
+`GpuBackend::HIP = 3` and the dense `kGpuBackends` table are present in every
+build, including builds without HIP. `kCompiledGpuBackends` alone controls which
+backends are advertised; disabled HIP reports no devices and cannot construct
+backend operations. Existing enum values and default backend preference remain
+stable. `GpuBackendScope` or `TensorExecutionTarget::default_queue`
 selects HIP through the same Tensor facade used by other backends.
 `TensorBackendOptions::hip_device` accepts a nonnegative decimal device ordinal;
 an empty value selects the first compatible device. Inventory and availability
 checks do not create an execution context. Selection is frozen at startup with
 the existing backend options. An incompatible explicit selection does not switch
 to a different GPU or CPU backend.
+
+Shared Tensor code uses SDK-free ownership contracts through `GpuBackendOps`
+for optional native upload, fence, queue, timestamp and readback services.
+Concrete HIP types, native error classification and architecture compatibility
+checks stay in `backend/hip`. Hot optional paths use the constexpr compiled
+backend inventory so HIP-disabled builds eliminate them during compilation.
 
 The adapter owns one nonblocking HIP queue for the selected device and serializes
 host submissions. It rejects CUDA streams and foreign storage before dispatch.

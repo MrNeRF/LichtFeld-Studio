@@ -459,10 +459,8 @@ namespace lfs::core {
                             Tensor::record_storage_deallocation(
                                 StorageAccountingKind::VulkanOwned, bytes);
                         }
-#ifdef LFS_TENSOR_HIP
-                        if (storage.backend == GpuBackend::HIP)
+                        if (gpu_backend_compiled(GpuBackend::HIP) && storage.backend == GpuBackend::HIP)
                             Tensor::record_storage_deallocation(StorageAccountingKind::HipOwned, bytes);
-#endif
                     }
                 });
                 result.data_ = result.data_owner_.get();
@@ -476,10 +474,8 @@ namespace lfs::core {
                 if (*gpu_backend == GpuBackend::Vulkan) {
                     record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
                 }
-#ifdef LFS_TENSOR_HIP
-                if (*gpu_backend == GpuBackend::HIP)
+                if (gpu_backend_compiled(GpuBackend::HIP) && *gpu_backend == GpuBackend::HIP)
                     record_storage_allocation(StorageAccountingKind::HipOwned, bytes);
-#endif
 
                 // Record tensor allocation for profiling
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
@@ -710,10 +706,8 @@ namespace lfs::core {
                             Tensor::record_storage_deallocation(
                                 StorageAccountingKind::VulkanOwned, bytes);
                         }
-#ifdef LFS_TENSOR_HIP
-                        if (storage.backend == GpuBackend::HIP)
+                        if (gpu_backend_compiled(GpuBackend::HIP) && storage.backend == GpuBackend::HIP)
                             Tensor::record_storage_deallocation(StorageAccountingKind::HipOwned, bytes);
-#endif
                     }
                 });
                 result.data_ = result.data_owner_.get();
@@ -727,10 +721,8 @@ namespace lfs::core {
                 if (*gpu_backend == GpuBackend::Vulkan) {
                     record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
                 }
-#ifdef LFS_TENSOR_HIP
-                if (*gpu_backend == GpuBackend::HIP)
+                if (gpu_backend_compiled(GpuBackend::HIP) && *gpu_backend == GpuBackend::HIP)
                     record_storage_allocation(StorageAccountingKind::HipOwned, bytes);
-#endif
 
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                     backend_ops.record_tensor_allocation(

@@ -32,9 +32,7 @@ namespace lfs::core {
         case GpuBackend::CUDA: return MemoryDomain::CudaDevice;
         case GpuBackend::Vulkan: return MemoryDomain::VulkanDevice;
         case GpuBackend::Metal: return MemoryDomain::MetalDevice;
-#ifdef LFS_TENSOR_HIP
         case GpuBackend::HIP: return MemoryDomain::HipDevice;
-#endif
         }
         return MemoryDomain::CudaDevice;
     }

@@ -2,10 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_execution.hpp"
 
+#include "backend/gpu_backend_ops.hpp"
 #include "backend/metal/metal_queue.hpp"
-#ifdef LFS_TENSOR_HIP
-#include "backend/hip/hip_backend_ops.hpp"
-#endif
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_memory.hpp"
@@ -26,10 +24,8 @@ namespace lfs::core {
 
     TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target)
         : backend_scope_(target.backend()), previous_target_(getCurrentCUDAStream()) {
-#ifdef LFS_TENSOR_HIP
-        if (target.backend() == GpuBackend::HIP && target.native_handle() != nullptr)
+        if (gpu_backend_compiled(GpuBackend::HIP) && target.backend() == GpuBackend::HIP && target.native_handle() != nullptr)
             throw std::invalid_argument("HIP Tensor accepts only its native default queue");
-#endif
 #ifdef LFS_TENSOR_VULKAN
         if (target.backend() == GpuBackend::Vulkan && target.native_handle() != nullptr) {
             const auto id = reinterpret_cast<uint64_t>(target.native_handle());
@@ -84,14 +80,12 @@ namespace lfs::core {
                 throw std::invalid_argument("Tensor queue bridge needs live Metal queues");
             return;
         }
-#ifdef LFS_TENSOR_HIP
-        if (backend_ == GpuBackend::HIP) {
+        if (gpu_backend_compiled(GpuBackend::HIP) && backend_ == GpuBackend::HIP) {
             (void)internal::backend_ops(backend_).bridge(
                 internal::ExecContext{static_cast<cudaStream_t>(producer.target_)},
                 internal::ExecContext{static_cast<cudaStream_t>(target_)});
             return;
         }
-#endif
         if (backend_ != GpuBackend::CUDA)
             throw std::runtime_error("Explicit tensor queue bridges are unsupported on this backend");
         waitForCUDAStream(static_cast<cudaStream_t>(target_),
@@ -131,14 +125,13 @@ namespace lfs::core {
 
     Tensor Tensor::from_blob(void* data, TensorShape shape, Device device, DataType dtype,
                              TensorExecutionTarget target) {
-#ifdef LFS_TENSOR_HIP
-        if (device == Device::GPU && target.backend() == GpuBackend::HIP) {
+        if (gpu_backend_compiled(GpuBackend::HIP) && device == Device::GPU && target.backend() == GpuBackend::HIP) {
             if (!target.is_default_queue())
                 throw std::invalid_argument("HIP raw views require the native default queue");
             const size_t width = dtype_size(dtype);
             if (shape.elements() > SIZE_MAX / width)
                 throw std::invalid_argument("HIP raw view byte count overflow");
-            auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(GpuBackend::HIP));
+            auto& ops = internal::backend_ops(GpuBackend::HIP);
             const auto storage = ops.borrow_native_range(data, shape.elements() * width);
             if (storage.byte_offset % width)
                 throw std::invalid_argument("HIP raw view offset is not aligned");
@@ -149,7 +142,6 @@ namespace lfs::core {
             result.view_generation_snapshot_ = storage.meta->generation.load(std::memory_order_relaxed);
             return result;
         }
-#endif
 #ifdef LFS_TENSOR_VULKAN
         if (device == Device::GPU && target.backend() == GpuBackend::Vulkan) {
             const auto storage = internal::acquire_vulkan_context()->memory().borrow_address(

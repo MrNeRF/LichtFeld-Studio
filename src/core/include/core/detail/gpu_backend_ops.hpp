@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "backend_runtime.hpp"
 #include "core/export.hpp"
 #include "descriptors.hpp"
 
@@ -21,6 +22,7 @@ namespace lfs::core {
     struct PointRegion2D;
     struct LabelUpdate;
     struct DecimateMerge;
+    struct GpuDeviceInfo;
 
     namespace tensor_ops {
         struct FusedPointwiseOpChain;
@@ -30,6 +32,13 @@ namespace lfs::core {
 
         class ReadbackBuffer;
         struct ExpressionLaunch;
+        struct ExpressionCacheStats;
+
+        // Inventory must not construct a backend or freeze startup options.
+        LFS_CORE_API int optional_backend_device_count(GpuBackend backend);
+        LFS_CORE_API std::optional<GpuDeviceInfo> optional_backend_device_info(GpuBackend backend, int ordinal);
+        LFS_CORE_API bool optional_backend_live(GpuBackend backend) noexcept;
+        LFS_CORE_API int select_optional_backend_device(GpuBackend backend, int requested);
 
         class LFS_CORE_API GpuBackendOps {
         public:
@@ -411,6 +420,20 @@ namespace lfs::core {
             virtual void memset(const FillRequest& request) = 0;
 
             virtual std::unique_ptr<ReadbackBuffer> create_readback_buffer() = 0;
+
+            // Optional native services. Existing backends retain their current
+            // direct paths; only backends using these services dispatch here.
+            virtual std::unique_ptr<BackendUploadBuffer> create_upload_buffer();
+            virtual std::unique_ptr<BackendFence> create_fence();
+            virtual std::unique_ptr<BackendTimestamps> create_timestamps(size_t count);
+            virtual std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes);
+            virtual BackendQueueLease execution_lease(ExecContext);
+            virtual StorageRef borrow_native_range(void* pointer, size_t bytes);
+            virtual bool queue_ready(ExecContext);
+            virtual bool drain_queue_for_destruction() noexcept;
+            virtual void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext);
+            virtual void where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext);
+            virtual ExpressionCacheStats expression_cache_stats();
 
             virtual void push_range(const char* name);
             virtual void pop_range();

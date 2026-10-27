@@ -113,11 +113,9 @@ namespace lfs::core {
             state.backend = backend;
         }
         state.buffered_gpu_work = state.bytes != 0 && backend.has_value();
-#ifdef LFS_TENSOR_HIP
         // An empty HIP transfer is still an execution snapshot: it must retain
         // errors from preceding work, just like a native zero-byte readback.
-        state.buffered_gpu_work |= backend == GpuBackend::HIP;
-#endif
+        state.buffered_gpu_work |= gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP;
         if (state.bytes != 0 || state.buffered_gpu_work) {
             if (backend) {
                 if (!state.buffer) {

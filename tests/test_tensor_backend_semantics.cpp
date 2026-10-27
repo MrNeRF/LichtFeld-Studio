@@ -93,6 +93,25 @@ namespace {
         }
     }
 
+    TEST_P(TensorBackendSemantics, OptionalNativeStateDoesNotConstructUncompiledResources) {
+        using State = lfs::core::internal::CompiledBackendState<GpuBackend::HIP, std::unique_ptr<int>>;
+        static_assert(lfs::core::gpu_backend_compiled(GpuBackend::HIP) || sizeof(State) == 1);
+        static_assert(lfs::core::gpu_backend_compiled(GpuBackend::HIP) || std::is_trivially_destructible_v<State>);
+        State state;
+        if constexpr (lfs::core::gpu_backend_compiled(GpuBackend::HIP)) {
+            state.get() = std::make_unique<int>(42);
+            ASSERT_NE(state.get(), nullptr);
+            EXPECT_EQ(*state.get(), 42);
+            const State& view = state;
+            EXPECT_EQ(*view.get(), 42);
+        } else {
+            EXPECT_THROW((void)state.get(), std::logic_error);
+            const State& view = state;
+            EXPECT_THROW((void)view.get(), std::logic_error);
+            EXPECT_THROW((void)lfs::core::internal::backend_ops(GpuBackend::HIP), std::runtime_error);
+        }
+    }
+
     TEST_P(TensorBackendSemantics, SoftmaxNonfiniteRows) {
         const std::vector<float> rows{
             0.f, kInf, kInf, 0.f, kInf, kInf,

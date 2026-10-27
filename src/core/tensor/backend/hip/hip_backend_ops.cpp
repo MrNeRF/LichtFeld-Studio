@@ -1,12 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "hip_backend_ops.hpp"
+#include "architecture_runtime.hpp"
 #include "expression_api.h"
 #include "runtime_api.h"
 #include "runtime_context.hpp"
 #ifdef LFS_HIP_EXPRESSION_JIT
 #include "hip_expression_emitter.hpp"
 #endif
+#include "../../internal/expression_runtime.hpp"
 #include "../../internal/tensor_impl.hpp"
 #include "../export_pipeline.hpp"
 #include "../readback_buffer.hpp"
@@ -27,6 +29,7 @@
 #include <core/detail/tensor_half.hpp>
 #include <core/error.hpp>
 #include <core/failure_report.hpp>
+#include <core/logger.hpp>
 #include <core/memory_pressure.hpp>
 #include <core/splat_transform_math.hpp>
 #include <core/tensor.hpp>
@@ -50,6 +53,20 @@
 #include <dlfcn.h>
 #endif
 namespace lfs::core::internal {
+    int select_hip_device(const std::filesystem::path& module, int requested) {
+        const auto count = hip_device_count(module);
+        for (int ordinal = 0; ordinal < count; ++ordinal) {
+            if (requested >= 0 && requested != ordinal)
+                continue;
+            const auto info = hip_device_info(module, ordinal);
+            const auto identity = hip_device_identity(module, ordinal);
+            if ((info.warp_size == 32 || info.warp_size == 64) &&
+                lfs_hip_has_architecture(identity.compiled_architecture, info.architecture))
+                return ordinal;
+        }
+        throw std::runtime_error("No compatible HIP GPU is available for this Tensor runtime build");
+    }
+
     namespace {
         std::atomic<unsigned> live_contexts{0};
         std::atomic<uint64_t> next_context_identity{1};
@@ -1211,8 +1228,8 @@ namespace lfs::core::internal {
         };
         return std::make_unique<Staging>(impl_);
     }
-    std::unique_ptr<HipUploadBuffer> HipBackendOps::create_upload_buffer() {
-        class Upload final : public HipUploadBuffer {
+    std::unique_ptr<BackendUploadBuffer> HipBackendOps::create_upload_buffer() {
+        class Upload final : public BackendUploadBuffer {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* staging_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
@@ -1261,8 +1278,8 @@ namespace lfs::core::internal {
         };
         return std::make_unique<Upload>(impl_);
     }
-    std::unique_ptr<HipReadbackSlot> HipBackendOps::create_readback_slot(size_t bytes) {
-        class Slot final : public HipReadbackSlot {
+    std::unique_ptr<BackendReadbackSlot> HipBackendOps::create_readback_slot(size_t bytes) {
+        class Slot final : public BackendReadbackSlot {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* staging_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
@@ -1471,16 +1488,16 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.host_callback(impl_->context, callback, user, &error), error);
     }
-    HipQueueLease HipBackendOps::execution_lease(ExecContext execution) {
+    BackendQueueLease HipBackendOps::execution_lease(ExecContext execution) {
         queue(execution);
         std::lock_guard lock(impl_->mutex);
-        HipQueueLease lease{impl_};
+        BackendQueueLease lease{impl_};
         LfsHipError error{};
         check(impl_->api.context_queue(impl_->context, &lease.native_queue, &lease.device, &error), error);
         return lease;
     }
-    std::unique_ptr<HipTimestamps> HipBackendOps::create_timestamps(size_t count) {
-        class Timestamps final : public HipTimestamps {
+    std::unique_ptr<BackendTimestamps> HipBackendOps::create_timestamps(size_t count) {
+        class Timestamps final : public BackendTimestamps {
             std::shared_ptr<Impl> owner_;
             LfsHipTiming* pool_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
@@ -1544,8 +1561,8 @@ namespace lfs::core::internal {
         return std::make_unique<Timestamps>(impl_, count);
     }
 
-    std::unique_ptr<HipFence> HipBackendOps::create_fence() {
-        class Fence final : public HipFence {
+    std::unique_ptr<BackendFence> HipBackendOps::create_fence() {
+        class Fence final : public BackendFence {
             std::shared_ptr<Impl> owner_;
             LfsHipReadback* marker_ = nullptr;
             std::unique_ptr<HipRetiredResource> retirement_ = std::make_unique<HipRetiredResource>();
@@ -1617,6 +1634,30 @@ namespace lfs::core::internal {
         queue(execution);
         std::lock_guard lock(impl_->mutex);
         impl_->sync();
+    }
+    bool HipBackendOps::drain_queue_for_destruction() noexcept {
+        try {
+            synchronize_stream({});
+        } catch (const HipBackendError& error) {
+            if (error.checked_execution_error()) {
+                LOG_ERROR("HIP tensor queue completed with an execution error: {}", error.what());
+                return true;
+            }
+            LOG_ERROR("HIP tensor queue retained after failed synchronization: {}", error.what());
+            return false;
+        } catch (const std::exception& error) {
+            LOG_ERROR("HIP tensor queue retained after failed synchronization: {}", error.what());
+            return false;
+        }
+        return true;
+    }
+    ExpressionCacheStats HipBackendOps::expression_cache_stats() {
+#ifdef LFS_HIP_EXPRESSION_JIT
+        std::lock_guard lock(impl_->mutex);
+        return impl_->expressions.stats();
+#else
+        return {};
+#endif
     }
     void HipBackendOps::synchronize_device() { synchronize_stream({}); }
     void HipBackendOps::device_barrier() { synchronize_stream({}); }
@@ -2351,11 +2392,6 @@ namespace lfs::core::internal {
 
 #ifdef LFS_HIP_EXPRESSION_JIT
 namespace lfs::core::internal {
-    ExpressionCacheStats hip_expression_cache_stats() {
-        auto& backend = static_cast<HipBackendOps&>(backend_ops(GpuBackend::HIP));
-        std::lock_guard lock(backend.impl_->mutex);
-        return backend.impl_->expressions.stats();
-    }
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext execution) {
         queue(execution);
         require(launch.program && launch.words && launch.words <= ExpressionLayout::max_words &&

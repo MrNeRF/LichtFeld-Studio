@@ -77,9 +77,7 @@ namespace lfs::core {
             StorageAccountingCounter cuda_direct;
             StorageAccountingCounter vulkan_owned;
             StorageAccountingCounter vulkan_external;
-#ifdef LFS_TENSOR_HIP
             StorageAccountingCounter hip_owned;
-#endif
         };
 
         StorageAccountingState& storage_accounting_state() {
@@ -302,11 +300,9 @@ namespace lfs::core {
         case StorageAccountingKind::VulkanExternal:
             add_counter(state.vulkan_external, bytes);
             break;
-#ifdef LFS_TENSOR_HIP
         case StorageAccountingKind::HipOwned:
             add_counter(state.hip_owned, bytes);
             break;
-#endif
         case StorageAccountingKind::MetalOwned:
             break;
         }
@@ -327,11 +323,9 @@ namespace lfs::core {
         case StorageAccountingKind::VulkanExternal:
             subtract_counter(state.vulkan_external, bytes);
             break;
-#ifdef LFS_TENSOR_HIP
         case StorageAccountingKind::HipOwned:
             subtract_counter(state.hip_owned, bytes);
             break;
-#endif
         case StorageAccountingKind::MetalOwned:
             break;
         }
@@ -354,10 +348,10 @@ namespace lfs::core {
         append("cuda_direct", state.cuda_direct);
         oss << "; ";
         append("vulkan_external", state.vulkan_external);
-#ifdef LFS_TENSOR_HIP
-        oss << "; ";
-        append("hip_owned", state.hip_owned);
-#endif
+        if constexpr (gpu_backend_compiled(GpuBackend::HIP)) {
+            oss << "; ";
+            append("hip_owned", state.hip_owned);
+        }
         return oss.str();
     }
 
@@ -1819,8 +1813,7 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
-#ifdef LFS_TENSOR_HIP
-            if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP) {
+            if (gpu_backend_compiled(GpuBackend::HIP) && device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP) {
                 auto result = internal::allocate_like(*this, shape_, DataType::Bool);
                 if (numel() > 0)
                     internal::backend_ops_for(*this).convert_type(
@@ -1828,7 +1821,6 @@ namespace lfs::core {
                         numel(), internal::ExecContext{result.stream()});
                 return result;
             }
-#endif
             if (device_ == Device::GPU && numel() > 0) {
                 // != 0 on the device.
                 return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
@@ -3333,12 +3325,9 @@ namespace lfs::core {
         std::shared_ptr<void> new_owner;
         if (device_ == Device::GPU) {
             const StorageAccountingKind accounting_kind =
-#ifdef LFS_TENSOR_HIP
-                new_gpu_storage.backend == GpuBackend::HIP ? StorageAccountingKind::HipOwned :
-#endif
-                new_gpu_storage.backend == GpuBackend::Vulkan  ? StorageAccountingKind::VulkanOwned
-                : new_gpu_storage.backend == GpuBackend::Metal ? StorageAccountingKind::MetalOwned
-                                                               : StorageAccountingKind::CudaDirect;
+                (gpu_backend_compiled(GpuBackend::HIP) && new_gpu_storage.backend == GpuBackend::HIP) ? StorageAccountingKind::HipOwned : new_gpu_storage.backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
+                                                                                                                                      : new_gpu_storage.backend == GpuBackend::Metal    ? StorageAccountingKind::MetalOwned
+                                                                                                                                                                                        : StorageAccountingKind::CudaDirect;
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
             const GpuStorageDescriptor released_descriptor =
@@ -3536,11 +3525,8 @@ namespace lfs::core {
         Tensor t;
         t.data_ = data_ptr;
         const StorageAccountingKind accounting_kind =
-#ifdef LFS_TENSOR_HIP
-            backend == GpuBackend::HIP ? StorageAccountingKind::HipOwned :
-#endif
-            backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
-                                          : StorageAccountingKind::CudaDirect;
+            (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP) ? StorageAccountingKind::HipOwned : backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
+                                                                                                                                                    : StorageAccountingKind::CudaDirect;
         record_storage_allocation(accounting_kind, total_bytes);
         const GpuStorageDescriptor released_descriptor =
             storage.meta != nullptr ? storage.meta->gpu_descriptor
@@ -3591,10 +3577,8 @@ namespace lfs::core {
         t.storage_meta_->external_kind = backend == GpuBackend::Vulkan
                                              ? ""
                                              : "cuda.direct";
-#ifdef LFS_TENSOR_HIP
-        if (backend == GpuBackend::HIP)
+        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
             t.storage_meta_->external_kind = "hip.direct";
-#endif
 
         return t;
     }

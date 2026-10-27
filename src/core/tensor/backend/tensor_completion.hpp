@@ -7,9 +7,7 @@
 
 namespace lfs::core {
     struct TensorCompletionAccess {
-#ifdef LFS_TENSOR_HIP
         static TensorCompletion hip();
-#endif
         static TensorCompletion cuda(cudaStream_t stream, VulkanTimelinePoint point = {});
         static TensorCompletion vulkan(uint64_t value);
         // Completes with the Metal batch `serial`; `point` is signaled with it.

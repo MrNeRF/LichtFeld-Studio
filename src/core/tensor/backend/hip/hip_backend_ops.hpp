@@ -22,8 +22,8 @@ namespace lfs::core::internal {
         }
     };
     struct ExpressionCacheStats;
-    LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
     bool hip_backend_is_live() noexcept;
+    int select_hip_device(const std::filesystem::path& module, int requested);
     // Hardware inventory loads only the versioned module; no Tensor allocator
     // or execution context is constructed during preferences discovery.
     LFS_CORE_API int hip_device_count(const std::filesystem::path& module);
@@ -31,63 +31,28 @@ namespace lfs::core::internal {
     LFS_CORE_API LfsHipDeviceIdentity hip_device_identity(const std::filesystem::path& module, int ordinal);
     std::optional<GpuDeviceInfo> hip_gpu_device_info(const std::filesystem::path&, int ordinal);
     // Opt-in native Tensor adapter. SDK types stay behind the private C ABI.
-    struct HipQueueLease {
-        std::shared_ptr<void> keep_alive;
-        uint64_t native_queue = 0;
-        int32_t device = -1;
-    };
-    class HipFence {
-    public:
-        virtual ~HipFence() = default;
-        virtual void record(ExecContext) = 0;
-        virtual void wait_on(ExecContext) const = 0;
-        virtual void wait() const = 0;
-        virtual bool ready() const = 0;
-    };
-    class HipReadbackSlot {
-    public:
-        virtual ~HipReadbackSlot() = default;
-        virtual void* data() const = 0;
-        virtual void append(StorageRef, size_t bytes, size_t destination_offset) = 0;
-        virtual bool ready() = 0;
-        virtual void wait() = 0;
-        virtual void release() = 0;
-    };
-    class HipUploadBuffer {
-    public:
-        virtual ~HipUploadBuffer() = default;
-        virtual void enqueue(StorageRef destination, const void* source, size_t bytes, ExecContext) = 0;
-        virtual void wait() = 0;
-        virtual bool poll() = 0;
-    };
-    class HipTimestamps {
-    public:
-        virtual ~HipTimestamps() = default;
-        virtual bool mark(size_t, void* queue) = 0;
-        virtual bool wait_event(size_t) = 0;
-        virtual bool wait_queue(void* queue) = 0;
-        virtual std::optional<float> milliseconds(size_t, size_t) const = 0;
-    };
     class HipBackendOps final : public GpuBackendOps {
     public:
         LFS_CORE_API HipBackendOps(const std::filesystem::path& module, int device, size_t max_cached_bytes = 64 * 1024 * 1024);
         ~HipBackendOps() override;
         LFS_CORE_API void ensure_initialized();
-        std::unique_ptr<HipUploadBuffer> create_upload_buffer();
-        std::unique_ptr<HipFence> create_fence();
-        std::unique_ptr<HipTimestamps> create_timestamps(size_t count);
-        std::unique_ptr<HipReadbackSlot> create_readback_slot(size_t bytes);
-        LFS_CORE_API HipQueueLease execution_lease(ExecContext);
+        std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+        std::unique_ptr<BackendFence> create_fence() override;
+        std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
+        std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
+        LFS_CORE_API BackendQueueLease execution_lease(ExecContext) override;
+        bool drain_queue_for_destruction() noexcept override;
+        ExpressionCacheStats expression_cache_stats() override;
         LFS_CORE_API uint64_t storage_address(StorageRef, size_t required_bytes);
 
         // Non-owning view of a live Tensor allocation. The arena owner must
         // outlive the returned view, as for the existing raw-view APIs.
-        LFS_CORE_API StorageRef borrow_native_range(void* pointer, size_t bytes);
-        LFS_CORE_API bool queue_ready(ExecContext);
+        LFS_CORE_API StorageRef borrow_native_range(void* pointer, size_t bytes) override;
+        LFS_CORE_API bool queue_ready(ExecContext) override;
         void push_range(const char*) override;
         void pop_range() override;
         LFS_CORE_API void shared_image(const LfsHipSharedImage&, StorageRef source, StorageRef destination, StorageRef auxiliary, ExecContext);
-        void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext);
+        void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext) override;
         LFS_CORE_API Tensor shared_image_resize(const Tensor&, int height, int width, unsigned mode, int kernel_size, ExecContext);
         Tensor image_warp(const Tensor&, const UndistortParams&, int mode, bool inverse, Tensor* validity, ExecContext) override;
         void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;
@@ -216,7 +181,7 @@ namespace lfs::core::internal {
         PointerClass classify_pointer(const void* pointer) override;
         bool stream_is_capturing(ExecContext context) override;
 
-        void where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext);
+        void where_scalar(StorageRef mask, StorageRef source, StorageRef output, size_t count, float value, ExecContext) override;
         bool radius_connected_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) override;
         bool point_tree_counts(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const PointTreeProgram&, ExecContext) override;
         bool point_tree_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, const PointTreeProgram&, ExecContext) override;
@@ -228,7 +193,6 @@ namespace lfs::core::internal {
         friend class HipExportKernels;
         void launch_export(const char*, uint32_t, std::span<const std::byte>, std::span<const StorageRef>, std::span<const StorageRef>, size_t);
         void launch_point_tree(StorageRef, StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, std::optional<StorageRef>, StorageRef, const PointTreeProgram&, bool, ExecContext);
-        friend LFS_CORE_API ExpressionCacheStats hip_expression_cache_stats();
         void launch_shared_resize(const LfsHipSharedResize&, StorageRef source, StorageRef destination, StorageRef coefficients_x, StorageRef coefficients_y, ExecContext);
         void launch_inverse_lens(StorageRef, const UndistortParams&, ExecContext);
         void launch_shared_warp(StorageRef, StorageRef, const UndistortParams&, unsigned channels, unsigned mode, ExecContext);

@@ -1,11 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "internal/tensor_impl.hpp"
-#ifdef LFS_TENSOR_HIP
-#include "backend/hip/hip_backend_ops.hpp"
+#include "backend/gpu_backend_ops.hpp"
 #include "core/tensor_execution.hpp"
-#endif
+#include "internal/tensor_impl.hpp"
 
 namespace lfs::core {
 
@@ -51,11 +49,10 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape.rank() == 0 || effective_capacity >= shape[0],
                        "from_external_owner capacity is smaller than the logical row count");
         const size_t allocation_bytes = storage_allocation_bytes(shape, effective_capacity, dtype);
-#ifdef LFS_TENSOR_HIP
-        if (device == Device::GPU && internal::resolve_new_gpu_storage_backend() == GpuBackend::HIP) {
+        if (gpu_backend_compiled(GpuBackend::HIP) && device == Device::GPU && internal::resolve_new_gpu_storage_backend() == GpuBackend::HIP) {
             if (stream != nullptr)
                 throw std::invalid_argument("HIP external storage cannot use a CUDA stream");
-            auto& ops = static_cast<internal::HipBackendOps&>(internal::backend_ops(GpuBackend::HIP));
+            auto& ops = internal::backend_ops(GpuBackend::HIP);
             const auto storage = ops.borrow_native_range(data, allocation_bytes);
             if (storage.byte_offset != 0)
                 throw std::invalid_argument("HIP external ownership requires an allocation base");
@@ -79,7 +76,6 @@ namespace lfs::core {
             result.is_view_ = false;
             return result;
         }
-#endif
         auto external_owner = owner;
         auto owner_box = std::make_shared<std::shared_ptr<void>>(std::move(owner));
         record_storage_allocation(StorageAccountingKind::VulkanExternal, allocation_bytes);

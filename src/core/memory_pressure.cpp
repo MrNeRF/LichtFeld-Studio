@@ -47,10 +47,8 @@ namespace lfs::core {
                 return GpuBackend::Vulkan;
             if (domain == MemoryDomain::MetalDevice)
                 return GpuBackend::Metal;
-#ifdef LFS_TENSOR_HIP
             if (domain == MemoryDomain::HipDevice)
                 return GpuBackend::HIP;
-#endif
             return std::nullopt;
         }
 
@@ -205,9 +203,7 @@ namespace lfs::core {
         std::atomic<uint64_t> episode_counter{0};
         std::atomic<bool> pressure_active{false};
         std::atomic<size_t> last_target_free{0};
-#ifdef LFS_TENSOR_HIP
         std::atomic<MemoryDomain> last_failure_domain{MemoryDomain::CudaDevice};
-#endif
         std::chrono::steady_clock::time_point last_recover_check{};
 
         std::mutex probe_mutex;
@@ -458,9 +454,8 @@ namespace lfs::core {
         if (viewer_failure) {
             impl_->pressure_active.store(true);
             impl_->last_target_free.store(target);
-#ifdef LFS_TENSOR_HIP
-            impl_->last_failure_domain.store(failure.domain);
-#endif
+            if constexpr (gpu_backend_compiled(GpuBackend::HIP))
+                impl_->last_failure_domain.store(failure.domain);
         }
 
         PressureRequest request{
@@ -620,10 +615,8 @@ namespace lfs::core {
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
         auto recovery_domain = LFS_HAS_CUDA ? MemoryDomain::CudaDevice
                                             : device_memory_domain(default_gpu_backend());
-#ifdef LFS_TENSOR_HIP
-        if (impl_->last_failure_domain.load() == MemoryDomain::HipDevice)
+        if (gpu_backend_compiled(GpuBackend::HIP) && impl_->last_failure_domain.load() == MemoryDomain::HipDevice)
             recovery_domain = MemoryDomain::HipDevice;
-#endif
         if (impl_->query_free(recovery_domain) >= hysteresis) {
             impl_->pressure_active.store(false);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");
@@ -671,9 +664,7 @@ namespace lfs::core {
         impl_->episode_counter.store(0);
         impl_->pressure_active.store(false);
         impl_->last_target_free.store(0);
-#ifdef LFS_TENSOR_HIP
         impl_->last_failure_domain.store(MemoryDomain::CudaDevice);
-#endif
         impl_->last_recover_check = {};
     }
 

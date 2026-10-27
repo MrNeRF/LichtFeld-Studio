@@ -1,9 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#ifdef LFS_TENSOR_HIP
-#include "../hip/hip_backend_ops.hpp"
-#endif
 #include "../../internal/expression_runtime.hpp"
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
@@ -475,10 +472,8 @@ namespace lfs::core {
     } // namespace internal
 
     std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend, const int device_index) {
-#ifdef LFS_TENSOR_HIP
-        if (backend == GpuBackend::HIP)
-            return internal::hip_gpu_device_info(LFS_HIP_RUNTIME_DEFAULT_MODULE, device_index);
-#endif
+        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
+            return internal::optional_backend_device_info(GpuBackend::HIP, device_index);
         if (backend != GpuBackend::CUDA || device_index < 0)
             return std::nullopt;
         cudaDeviceProp properties{};

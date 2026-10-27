@@ -1,5 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/gpu_device_info.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_fused.hpp"
@@ -36,6 +38,32 @@ namespace {
             }
         }
     };
+
+    static_assert(static_cast<unsigned>(GpuBackend::CUDA) == 0);
+    static_assert(static_cast<unsigned>(GpuBackend::Vulkan) == 1);
+    static_assert(static_cast<unsigned>(GpuBackend::Metal) == 2);
+    static_assert(static_cast<unsigned>(GpuBackend::HIP) == 3);
+    static_assert(kGpuBackendCount == 4);
+    static_assert(kGpuBackends[3] == GpuBackend::HIP);
+
+    TEST_P(TensorOperationContracts, BackendIdentityIsStableWithoutAdvertisingUncompiledDevices) {
+        EXPECT_STREQ(gpu_backend_name(GpuBackend::HIP), "HIP");
+        for (const auto backend : kGpuBackends) {
+            const bool advertised = std::find(kCompiledGpuBackends.begin(), kCompiledGpuBackends.end(), backend) != kCompiledGpuBackends.end();
+            EXPECT_EQ(gpu_backend_compiled(backend), advertised);
+            if (!advertised) {
+                EXPECT_FALSE(gpu_backend_available(backend));
+                EXPECT_FALSE(gpu_backend_live(backend));
+                EXPECT_EQ(gpu_device_count(backend), 0);
+                EXPECT_FALSE(gpu_backend_device_info(backend).has_value());
+                EXPECT_FALSE(gpu_backend_device_info(backend, 0).has_value());
+            }
+        }
+        if constexpr (!gpu_backend_compiled(GpuBackend::HIP)) {
+            EXPECT_THROW((void)selected_hip_device(), std::runtime_error);
+            EXPECT_FALSE(gpu_backend_live(GpuBackend::HIP));
+        }
+    }
 
     TEST_P(TensorOperationContracts, RejectsMalformedShapeDtypeAndTruncatedResults) {
         const auto expect_rejected = [&](const Tensor& result, const TensorShape& shape,

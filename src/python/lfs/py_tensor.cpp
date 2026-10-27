@@ -240,10 +240,8 @@ namespace lfs::python {
             return "cpu";
         }
         const auto backend = lfs::core::gpu_backend_of(tensor_);
-#ifdef LFS_TENSOR_HIP
         if (backend == lfs::core::GpuBackend::HIP)
             return "hip";
-#endif
         if (backend == lfs::core::GpuBackend::Vulkan) {
             return "vulkan";
         }
@@ -1476,10 +1474,8 @@ namespace lfs::python {
 #endif
 
     nb::tuple PyTensor::dlpack_device() const {
-#ifdef LFS_TENSOR_HIP
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::HIP)
             throw std::runtime_error("HIP DLPack export is not supported; call .cpu() first");
-#endif
 #if !LFS_HAS_CUDA
         if (tensor_.device() == Device::GPU) {
             throw std::runtime_error(
@@ -1567,10 +1563,8 @@ namespace lfs::python {
     } // namespace
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
-#ifdef LFS_TENSOR_HIP
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::HIP)
             throw std::runtime_error("HIP DLPack export is not supported; call .cpu() first");
-#endif
         Tensor exported = tensor_;
 #if LFS_HAS_CUDA
         if (lfs::core::gpu_backend_of(tensor_) == lfs::core::GpuBackend::Vulkan) {
