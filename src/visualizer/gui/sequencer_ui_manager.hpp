@@ -33,6 +33,8 @@
 #include <unordered_set>
 #include <vector>
 
+class Viewport;
+
 namespace lfs::vis::gui {
     class RmlSequencerOverlay;
     class SequencerExportWorkflowTest;
@@ -58,6 +60,9 @@ namespace lfs::vis {
             ~SequencerUIManager();
 
             void setupEvents();
+            void addKeyframeFromView(const Viewport& source, std::optional<float> time = {});
+            bool removeSelectedKeyframe();
+            bool selectAdjacentKeyframe(int direction);
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);

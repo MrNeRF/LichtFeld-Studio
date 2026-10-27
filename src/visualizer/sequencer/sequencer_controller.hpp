@@ -148,6 +148,7 @@ namespace lfs::vis {
         bool selectKeyframeById(sequencer::KeyframeId id);
         void deselectKeyframe();
         [[nodiscard]] std::optional<size_t> selectedKeyframe() const;
+        [[nodiscard]] std::optional<size_t> adjacentKeyframeIndex(int direction) const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> selectedKeyframeId() const { return selected_keyframe_id_; }
         [[nodiscard]] bool hasSelection() const { return selected_keyframe_id_.has_value(); }
 

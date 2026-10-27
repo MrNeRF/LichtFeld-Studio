@@ -166,6 +166,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_analog_navigation.cpp
         test_gamepad_service.cpp
         test_gamepad_navigation.cpp
+        test_gamepad_sequencer.cpp
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
@@ -855,6 +856,7 @@ set(TEST_FILES
     test_analog_navigation.cpp
     test_gamepad_service.cpp
     test_gamepad_navigation.cpp
+    test_gamepad_sequencer.cpp
     test_camera_browse_repeat.cpp
     test_input_controller_focus.cpp
     test_input_key_repeat.cpp

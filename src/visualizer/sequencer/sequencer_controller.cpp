@@ -663,6 +663,26 @@ namespace lfs::vis {
         markSelectionChanged();
     }
 
+    std::optional<size_t> SequencerController::adjacentKeyframeIndex(const int direction) const {
+        if (direction != -1 && direction != 1) return std::nullopt;
+        const auto& keys = timeline_.keyframes();
+        if (const auto selected = selectedKeyframe()) {
+            for (auto i = static_cast<int64_t>(*selected) + direction;
+                 i >= 0 && i < static_cast<int64_t>(keys.size()); i += direction)
+                if (!keys[static_cast<size_t>(i)].is_loop_point) return static_cast<size_t>(i);
+            return std::nullopt; // no wraparound at either end
+        }
+        std::optional<size_t> first, last, candidate;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            if (keys[i].is_loop_point) continue;
+            if (!first) first = i;
+            last = i;
+            if (direction > 0 && keys[i].time > playhead_ + 0.001f && !candidate) candidate = i;
+            if (direction < 0 && keys[i].time < playhead_ - 0.001f) candidate = i;
+        }
+        return candidate ? candidate : (direction > 0 ? last : first);
+    }
+
     std::optional<size_t> SequencerController::selectedKeyframe() const {
         if (!selected_keyframe_id_.has_value())
             return std::nullopt;
