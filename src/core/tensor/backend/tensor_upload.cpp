@@ -1161,6 +1161,35 @@ namespace lfs::core {
 #endif
     }
     TensorWorkQueue::~TensorWorkQueue() {
+#ifdef LFS_TENSOR_HIP
+        if (impl_->backend == GpuBackend::HIP) {
+            try {
+                wait();
+            } catch (const internal::HipBackendError& e) {
+                if (e.checked_execution_error()) {
+                    LOG_ERROR("HIP tensor queue completed with an execution error: {}", e.what());
+                } else {
+                    LOG_ERROR("HIP tensor queue retained after failed synchronization: {}", e.what());
+                    (void)impl_.release();
+                }
+                return;
+            } catch (const std::exception& e) {
+                LOG_ERROR("HIP tensor queue retained after failed synchronization: {}", e.what());
+                (void)impl_.release();
+                return;
+            }
+            // The entire native queue has drained, including callbacks. A saved
+            // snapshot may still report an earlier, already consumed error.
+            // Its owned runtime resources handle any deferred event cleanup;
+            // retaining the outer queue cannot make that cleanup safer.
+            try {
+                impl_->last.wait();
+            } catch (const std::exception& e) {
+                LOG_ERROR("HIP tensor queue completion failed after synchronization: {}", e.what());
+            }
+            return;
+        }
+#endif
         try {
 #ifdef LFS_TENSOR_VULKAN
             if (impl_->vulkan_queue && !impl_->borrowed_queue && impl_->recorder_id != 0 &&
@@ -1180,22 +1209,7 @@ namespace lfs::core {
                 (impl_->ready_cuda || impl_->consumer_cuda || !impl_->retired_consumers.empty()))
                 wait();
 #endif
-#ifdef LFS_TENSOR_HIP
-            if (impl_->backend == GpuBackend::HIP)
-                wait();
-#endif
             impl_->last.wait();
-#ifdef LFS_TENSOR_HIP
-        } catch (const internal::HipBackendError& e) {
-            if (impl_->backend == GpuBackend::HIP && e.checked_execution_error()) {
-                // These errors are reported only after the native work drained.
-                // The lease and saved completion can therefore be destroyed.
-                LOG_ERROR("HIP tensor queue completed with an execution error: {}", e.what());
-            } else {
-                LOG_ERROR("Tensor queue retained after incomplete work: {}", e.what());
-                (void)impl_.release();
-            }
-#endif
         } catch (const std::exception& e) {
             LOG_ERROR("Tensor queue retained after incomplete work: {}", e.what());
             (void)impl_.release();
