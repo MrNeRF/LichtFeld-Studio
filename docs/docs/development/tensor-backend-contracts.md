@@ -34,6 +34,11 @@ their binding tokens inline. Lazy materialization and conversions use native
 target-binding policy. Stream retirement and native event ownership stay beside
 the native runtime, including compatibility entry points.
 
+Synchronizing a tensor to its existing home target is a no-op. Shared code may
+skip native dispatch for that case; different targets must still use the native
+ordering policy. Fused expressions preserve the execution-to-home ordering of
+every output before subsequent work consumes it on another target.
+
 Transfers retain every resource still in use. Prepared downloads retain their
 source and destination and check the producer's execution errors before exposing
 bytes. A zero-byte completion still represents an error snapshot. Queue cleanup

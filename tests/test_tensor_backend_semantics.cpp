@@ -12,6 +12,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/internal/expression_runtime.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_fused.hpp"
 #include "core/tensor_upload.hpp"
 #include "tensor_backend_contract.hpp"
 
@@ -156,6 +157,35 @@ namespace {
         const auto output = source.to(DataType::Bool);
         expect_placement(output);
         EXPECT_EQ(host<uint8_t>(output), (std::vector<uint8_t>{0, 0, 1, 1, 1, 1}));
+    }
+
+    TEST_P(TensorBackendSemantics, FusedOutputsRetainTheirQueueOrdering) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU expression API";
+        const auto backend = *GetParam().backend;
+        lfs::core::TensorWorkQueue producer(backend);
+        lfs::core::TensorWorkQueue consumer(backend);
+        Tensor input, first, second, observed;
+        producer.execute([&] {
+            input = Tensor::full({4}, 2.f, Device::GPU);
+            first = Tensor::full({4}, -1.f, Device::GPU);
+        });
+        consumer.execute([&] { second = Tensor::full({4}, -2.f, Device::GPU); });
+        producer.wait();
+        consumer.wait();
+
+        lfs::core::fused::Builder builder(1);
+        const auto value = builder.input(DataType::Float32, 1);
+        const auto gain = builder.input(DataType::Float32, 1);
+        builder.output(value.load() + gain.at({0}), DataType::Float32);
+        builder.output(value.load() * gain.at({0}), DataType::Float32);
+        const lfs::core::fused::Kernel compiled(builder);
+        const auto host_gain = Tensor::full({1}, 3.f, Device::CPU);
+        compiled({4}, {input, host_gain}, {first, second});
+        consumer.execute([&] { observed = second.add(1.f); });
+        consumer.wait();
+        expect_floats(host<float>(first), {5, 5, 5, 5});
+        expect_floats(host<float>(observed), {7, 7, 7, 7});
     }
 
     TEST_P(TensorBackendSemantics, SoftmaxNonfiniteRows) {

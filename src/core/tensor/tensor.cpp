@@ -908,7 +908,7 @@ namespace lfs::core {
     void Tensor::sync_to_stream(cudaStream_t execution_stream) const {
         LFS_ASSERT_MSG(is_valid(),
                        "sync_to_stream requires a valid tensor");
-        if (device_ == Device::GPU)
+        if (device_ == Device::GPU && execution_stream != stream())
             internal::backend_driver(internal::gpu_backend_tag(*this)).synchronize_tensor_target(*this, execution_stream);
     }
 
