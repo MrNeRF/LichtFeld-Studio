@@ -9,7 +9,7 @@ using namespace lfs::core::internal;
 static std::filesystem::path module_path;
 TEST(HipAdapterRecovery, PartialShutdownCannotReuseReleasedCacheEntries) {
     lfs::test::FaultControl faults(module_path);
-    for (const int fault : {2, 9}) {
+    for (const int fault : {2, 9, 7}) {
         auto* adapter = new HipBackendOps(module_path, 0);
         std::unique_ptr<GpuBackendOps> ops(adapter);
         adapter->ensure_initialized();
