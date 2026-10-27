@@ -139,6 +139,7 @@ namespace lfs::io {
             int avif_quality = 90;
             int avif_speed = 8;
             int avif_bit_depth = 8;
+            bool preserve_source_metadata = false;
         };
 
         struct ValidatedLayout {

@@ -121,7 +121,8 @@ namespace lfs::media {
                                                                                                   : files->files.format == FrameFileFormat::EXR    ? io::ImageFormat::EXR
                                                                                                                                                    : io::ImageFormat::JPG;
                     p.jpg_quality = files->files.jpeg_quality;
-                    p.generate_metadata = files->write_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
+                    p.preserve_source_metadata = files->preserve_source_metadata;
+                    p.generate_metadata = files->write_metadata || files->preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
                     // Resume regenerates the derived manifest only after the sink
                     // verifies the checkpoint identity and every recorded frame.
                     p.overwrite_metadata = files->resume || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite

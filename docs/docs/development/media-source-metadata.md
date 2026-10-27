@@ -456,3 +456,42 @@ for fact in result["summary"]["facts"]:
 Validity and ambiguity are properties of the interpreted declaration, not a
 GNSS or calibration quality guarantee. Dataset/training loading does not
 request this operation automatically.
+
+## Preserving static source observations during extraction
+
+File extraction accepts `FileExtraction.preserve_source_metadata` in C++/Python
+and `--preserve-source-metadata` in the CLI. It is false by default. Enabling it
+also requests `extraction_metadata.json`, using the existing atomic manifest
+writer. A single `source_metadata` object contains the version-1 catalog and
+static stream summary; `source_metadata_policy` identifies
+`preserve_static_container_v1`. All listed output frames belong to that input;
+their existing `source_pts`, input stream index/timebase and output transform
+fields identify the extraction. The observation is stored once, rather than
+copied into every frame record.
+
+Collection uses the same opened FFmpeg context as extraction, before frame
+delivery, and the existing container collection/index/summary limits. It
+preserves demuxer-exposed tags and coded side data, with exact retained bytes in
+hex and explicit limited states. This is a bounded static observation, not an
+archive of all original container bytes or a scan of timed telemetry packets.
+The selected stream and other observed streams retain their identities.
+
+This opt-in includes any GPS, identifiers or other private data contained in
+tags or opaque payloads. Turning it off omits this snapshot from newly generated manifests; it does
+not redact files from earlier runs. There is no field-level privacy filter: a payload may contain information outside its
+visible tag name. Existing manifest filenames are not an anonymization feature.
+Original source declarations remain separate from output dimensions, rotation,
+resampling and color processing. They are not injected as current EXIF/XMP
+properties of the transformed images or asserted as per-frame GPS fixes.
+
+Resume includes the preservation policy in its existing input-digest and
+pipeline/provider identity checks. Switching it in either direction rejects a
+checkpoint before adopting/replacing recorded images. The final manifest is
+regenerated from a verified resumed run; completed images can survive an
+interruption before manifest publication. Images and the manifest are not a
+single filesystem transaction. Cancellation retains the existing extraction
+semantics and atomic publication checks.
+
+The CLI and Python bindings use this same file-extraction path. Rendered image
+sequences have no video input to observe; their metadata needs an explicitly
+identified source/consumer rather than an invented camera declaration.

@@ -1903,6 +1903,16 @@ class IngestCLI(unittest.TestCase):
         return json.loads(result.stdout),result.stderr
     def source(self,name="cfr-asymmetric"):
         return self.corpus/(name+".nut")
+    def test_source_metadata_preserved_in_extraction_manifest(self):
+        directory = self.root / "source-metadata-manifest"
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--interval", "1", "--end", "0.2", "--preserve-source-metadata")
+        self.assertTrue(result["success"])
+        manifest = json.loads((directory / "extraction_metadata.json").read_text())
+        self.assertEqual(manifest["source_metadata_policy"], "preserve_static_container_v1")
+        self.assertEqual(manifest["source_metadata"]["metadata"]["scope"], "container_stream")
+        self.assertEqual(manifest["source_metadata"]["metadata"]["source_metadata"]["provider"]["name"], "ffmpeg")
+        self.assertEqual(manifest["source_metadata"]["summary"]["scope"], "static_stream_properties")
     def test_capabilities_and_help(self):
         result,_=self.invoke("capabilities")
         self.assertTrue(result["software_decode"])

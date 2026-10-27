@@ -63,6 +63,9 @@ namespace lfs::media {
         // Opt-in verified image-sequence replay. Existing output without a
         // compatible checkpoint is never adopted or overwritten.
         bool resume = false;
+        // Opt-in static demuxer observation in the shared extraction manifest.
+        // Includes retained tags/opaque side data, potentially GPS/identifiers.
+        bool preserve_source_metadata = false;
     };
     struct IngestReport {
         std::size_t frames_accepted = 0;

@@ -937,6 +937,116 @@ class MediaBindings(unittest.TestCase):
         del request, report, file_report
         self.assertEqual(before, frames[0].pixels)
 
+    def metadata_request(self, multitrack=False):
+        request = self.request()
+        path = self.root / (self._testMethodName + ".mkv")
+        command = [os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-y", "-i", str(request.input)]
+        if multitrack:
+            command += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono,aformat=sample_fmts=s16"]
+        command += ["-map", "0:v:0", "-c:v", "copy"]
+        if multitrack:
+            command += ["-map", "1:a:0", "-c:a", "pcm_s16le", "-metadata:s:a:0", "title=AUDIO_METADATA_SENTINEL", "-shortest"]
+        command += ["-metadata", "comment=STATIC_METADATA_SENTINEL", "-metadata", "location=+01.2500+002.5000/",
+                    "-write_crc32", "0", str(path)]
+        subprocess.run(command, check=True, capture_output=True, timeout=30)
+        request.input = path
+        return request
+
+    def test_source_metadata_is_opt_in_and_shared_by_output_frames(self):
+        request = self.metadata_request()
+        for preserve in (False, True):
+            files = media.FileExtraction()
+            files.files.output_directory = self.root / ("preserved" if preserve else "omitted")
+            files.write_metadata = True
+            files.preserve_source_metadata = preserve
+            media.MediaIngest.extract_files(request, files)
+            manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual("source_metadata" in manifest, preserve)
+            self.assertEqual("source_metadata_policy" in manifest, preserve)
+            if preserve:
+                self.assertEqual(manifest["source_metadata_policy"], "preserve_static_container_v1")
+                snapshot = manifest["source_metadata"]
+                description = snapshot["metadata"]["description"]
+                self.assertEqual(description["selected_video_stream"], manifest["input"]["video"]["stream_index"])
+                native = str(request.input).encode("utf-16-le") if os.name == "nt" else os.fsencode(request.input)
+                self.assertEqual(snapshot["metadata"]["source_locator_bytes"], native.hex())
+                self.assertEqual((snapshot["schema_version"], snapshot["success"]), (1, True))
+                observed = snapshot["metadata"]["source_metadata"]
+                tags = {bytes.fromhex(tag["key_bytes"]).lower(): bytes.fromhex(tag["value_bytes"]) for tag in observed["tags"]}
+                self.assertEqual(tags[b"comment"], b"STATIC_METADATA_SENTINEL")
+                self.assertEqual(tags[b"location"], b"+01.2500+002.5000/")
+                self.assertFalse(snapshot["summary"]["limited"])
+                self.assertGreater(len(manifest["frames"]), 1)
+                self.assertTrue(all("source_metadata" not in frame and "source_pts" in frame for frame in manifest["frames"]))
+        omitted, preserved = [self.root / name for name in ("omitted", "preserved")]
+        self.assertEqual({p.name: p.read_bytes() for p in omitted.glob("frame_*.png")},
+                         {p.name: p.read_bytes() for p in preserved.glob("frame_*.png")})
+
+    def test_source_metadata_keeps_other_streams_without_decoding_them(self):
+        request = self.metadata_request(multitrack=True)
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "metadata-multitrack"
+        files.preserve_source_metadata = True
+        media.MediaIngest.extract_files(request, files)
+        manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        catalog = manifest["source_metadata"]["metadata"]
+        audio, = [stream for stream in catalog["description"]["streams"] if stream["kind"] == "audio"]
+        observed, = [stream for stream in catalog["source_metadata"]["streams"] if stream["stream_index"] == audio["index"]]
+        self.assertTrue(any(bytes.fromhex(tag["value_bytes"]) == b"AUDIO_METADATA_SENTINEL" for tag in observed["tags"]))
+
+    def test_source_metadata_preservation_all_image_formats(self):
+        request = self.metadata_request()
+        request.geometry.clockwise_rotation = 90
+        request.geometry.mode = media.ResizeMode.Scale
+        request.geometry.scale = 0.5
+        for name in ("PNG", "JPEG", "EXR", "TIFF16", "JXL", "AVIF"):
+            with self.subTest(format=name):
+                files = media.FileExtraction()
+                files.files.output_directory = self.root / ("metadata-" + name)
+                files.files.format = getattr(media.FrameFileFormat, name)
+                files.preserve_source_metadata = True
+                request.output_format = media.FramePixelFormat.RGB8 if name in ("PNG", "JPEG") else media.FramePixelFormat.RGBFloat32
+                request.input_color.transfer = media.ColorTransfer.Unspecified if name in ("PNG", "JPEG") else media.ColorTransfer.Linear
+                request.input_color.primaries = media.ColorPrimaries.Unspecified if name in ("PNG", "JPEG") else media.ColorPrimaries.Bt709
+                report = media.MediaIngest.extract_files(request, files)
+                manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(manifest["frames"]), report.frames_accepted)
+                self.assertEqual(manifest["output"]["size"], [16, 32])
+                dimensions = {fact["semantic"]: fact["value"] for fact in manifest["source_metadata"]["summary"]["facts"]}
+                self.assertEqual((dimensions["image.width"], dimensions["image.height"]), (64, 32))
+
+    def test_source_metadata_policy_is_bound_to_resume_identity(self):
+        request = self.metadata_request()
+        for preserve in (False, True):
+            with self.subTest(preserve=preserve):
+                files = self.resume_files(self.root / ("metadata-resume-" + str(preserve)))
+                files.preserve_source_metadata = preserve
+                self.interrupt_resume(request, files)
+                before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files.files.output_directory.glob("frame_*.png")}
+                files.preserve_source_metadata = not preserve
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.extract_files(request, files)
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files.files.output_directory.glob("frame_*.png")})
+                files.preserve_source_metadata = preserve
+                media.MediaIngest.extract_files(request, files)
+                manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual("source_metadata" in manifest, preserve)
+
+    def test_non_utf8_source_tag_bytes_survive_manifest_transport(self):
+        request = self.metadata_request()
+        data = request.input.read_bytes()
+        self.assertIn(b"STATIC_METADATA_SENTINEL", data)
+        request.input.write_bytes(data.replace(b"STATIC_METADATA_SENTINEL", b"\xffTATIC_METADATA_SENTINEL"))
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "metadata-bytes"
+        files.preserve_source_metadata = True
+        media.MediaIngest.extract_files(request, files)
+        manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        tags = manifest["source_metadata"]["metadata"]["source_metadata"]["tags"]
+        comment, = [tag for tag in tags if bytes.fromhex(tag["key_bytes"]).lower() == b"comment"]
+        self.assertEqual(bytes.fromhex(comment["value_bytes"]), b"\xffTATIC_METADATA_SENTINEL")
+        self.assertIn("\ufffd", comment["value"])
+
     def test_budget_and_cancellation_failures(self):
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract(self.request(), payload_budget=1)
