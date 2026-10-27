@@ -60,6 +60,7 @@ if(TARGET lfs_visualizer AND TARGET lfs_vulkan_rasterizer_macos_reference)
     endforeach()
     add_library(lfs_viewer_vulkan_reference STATIC
         ../../src/visualizer/rendering/vksplat_viewport_renderer.cpp
+        ../../src/visualizer/rendering/stochastic_viewport.cpp
         ../../src/visualizer/rendering/point_cloud_vulkan_renderer.cpp
         ../../src/visualizer/rendering/vulkan_scene_renderer.cpp)
     target_compile_features(lfs_viewer_vulkan_reference PRIVATE cxx_std_23)
