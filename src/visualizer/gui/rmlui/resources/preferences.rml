@@ -402,6 +402,28 @@
             </select>
           </div>
           <span class="preferences-description" data-if="gamepad_navigation_show_status">{{ gamepad_navigation_status }}</span>
+          <div class="preferences-row" data-tooltip="gamepad.profile.help">
+            <span class="preferences-label">@tr:gamepad.profile.active</span>
+            <div class="preferences-field-actions">
+              <select id="gamepad-profile-select" class="preferences-select" data-value="gamepad_profile_id">
+                <option data-for="profile : gamepad_profiles" data-attr-value="profile.id">{{ profile.label }}</option>
+              </select>
+              <button class="btn btn--secondary" data-event-click="gamepad_profile_toggle" data-attr-title="gamepad_profile_manage_title">&#x2026;</button>
+            </div>
+          </div>
+          <div class="preferences-inline-actions" data-if="gamepad_profile_manage">
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_new">@tr:gamepad.profile.new</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_duplicate">@tr:gamepad.profile.duplicate</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_rename">@tr:gamepad.profile.rename</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_delete" data-attrif-disabled="!gamepad_profile_can_delete">@tr:gamepad.profile.delete</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_import">@tr:gamepad.profile.import</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_export">@tr:gamepad.profile.export</button>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="gamepad.profile.remember_help">
+            <span class="preferences-label">@tr:gamepad.profile.remember</span>
+            <input type="checkbox" data-checked="gamepad_profile_remember" data-attrif-disabled="!gamepad_profile_has_device" />
+          </div>
+          <span class="preferences-description" data-if="gamepad_profile_message != ''">{{ gamepad_profile_message }}</span>
           <div class="preferences-settings-group">
             <div class="setting-row setting-row--aligned">
               <span class="setting-row__label-col">@tr:gamepad.dead_zone</span>

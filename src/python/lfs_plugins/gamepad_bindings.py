@@ -83,6 +83,18 @@ class GamepadBindingsSection:
     def tr(key):
         return lf.ui.tr(f"gamepad.binding.{key}")
 
+    def profile_token(self):
+        getter = getattr(lf.ui, "get_gamepad_profiles_json", None)
+        return getter() if getter else None
+
+    def unchanged(self, token):
+        if token == self.profile_token():
+            return True
+        self.cancel()
+        self.message = lf.ui.tr("gamepad.profile.changed_error")
+        self.handle.dirty("gamepad_binding_message")
+        return False
+
     def profile(self):
         return json.loads(lf.ui.get_gamepad_profile_json())
 
@@ -113,6 +125,7 @@ class GamepadBindingsSection:
         self.sync()
 
     def change(self, action, binding):
+        token = self.profile_token()
         profile = self.profile()
         target = profile["bindings"]["common"] if self.scope == "common" else profile["bindings"].setdefault("modes", {}).setdefault(self.scope, {})
         if binding is None:
@@ -126,7 +139,7 @@ class GamepadBindingsSection:
         label = self.tr("replace")
         detail = "\n".join(self.tr(mode) + ": " + self.tr(a if b == action else b) for mode, a, b in clashes)
         def answer(button):
-            if button != label:
+            if button != label or not self.unchanged(token):
                 return
             for mode, a, b in clashes:
                 other = a if b == action else b
@@ -157,12 +170,15 @@ class GamepadBindingsSection:
                 profile = self.profile()
                 current = profile["bindings"]["common"][action] if self.scope == "common" else effective(profile, self.scope, action)
                 self.capture = {"action": action, "id": identifier, "generation": None, "neutral": None,
-                                "binding": dict(EMPTY), "phase": "positive", "axis_inverted": current["inverted"]}
+                                "binding": dict(EMPTY), "phase": "positive", "axis_inverted": current["inverted"],
+                                "profile_token": self.profile_token()}
                 self.message = self.tr("release")
             self.sync()
 
     def finish_capture(self):
         if not self.capture or self.capture["phase"] != "negative":
+            return
+        if not self.unchanged(self.capture.get("profile_token")):
             return
         action, binding = self.capture["action"], self.capture["binding"]
         self.cancel()
@@ -170,7 +186,7 @@ class GamepadBindingsSection:
 
     def sample(self):
         capture = self.capture
-        if not capture:
+        if not capture or not self.unchanged(capture.get("profile_token")):
             return
         state = lf.ui.get_gamepad_test_state()
         if state.get("selected") != capture["id"] or (capture["generation"] is not None and state.get("generation") != capture["generation"]):
@@ -220,10 +236,11 @@ class GamepadBindingsSection:
 
     def apply_shoulder_preset(self):
         self.cancel()
+        token = self.profile_token()
         scope = self.scope
         label = self.tr("apply_preset")
         def answer(button):
-            if button != label:
+            if button != label or not self.unchanged(token):
                 return
             self.cancel()
             self.expanded_action = None
@@ -234,10 +251,11 @@ class GamepadBindingsSection:
 
     def reset(self):
         self.cancel()
+        token = self.profile_token()
         scope = self.scope
         label = self.tr("reset")
         def answer(button):
-            if button != label:
+            if button != label or not self.unchanged(token):
                 return
             self.cancel()
             profile = self.profile()

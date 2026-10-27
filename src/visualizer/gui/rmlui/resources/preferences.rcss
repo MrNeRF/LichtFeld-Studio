@@ -560,3 +560,20 @@ body.floating-panel {
 .preferences-control-assignment .preferences-binding-desc { flex: 1 1 140dp; }
 .preferences-assignment-menu { flex-shrink: 0; min-width: 24dp; padding: 1dp 5dp; }
 .preferences-assignment-options { justify-content: flex-end; margin-bottom: 6dp; }
+
+/* Shared field + auxiliary action layout; wraps inside narrow preferences panels. */
+.preferences-field-actions {
+    display: flex;
+    flex: 0 1 240dp;
+    flex-wrap: wrap;
+    gap: 6dp;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+}
+.preferences-field-actions .preferences-select {
+    flex: 1 1 120dp;
+    width: auto;
+    margin-left: 0;
+}
+.preferences-field-actions .btn { flex: 0 0 auto; }

@@ -1728,6 +1728,8 @@ class PreferencesPanel(Panel):
         scope = "input_" + self._input_page if self._section == "input" else self._section
         section_name = lf.ui.tr(f"preferences.{scope}")
         message = lf.ui.tr("preferences.reset_page_confirmation").replace("{page}", section_name)
+        if scope == "input_gamepad":
+            message += "\n\n" + lf.ui.tr("gamepad.profile.reset_scope")
         if scope == "input_shortcuts":
             message += "\n\n" + lf.ui.tr("input_settings.reset_scope")
         if self._mcp_safe_mode:
@@ -1758,7 +1760,7 @@ class PreferencesPanel(Panel):
 
     def _on_reset_all_settings(self, _handle, _event, _args):
         reset_label = lf.ui.tr("preferences.reset_all_settings")
-        message = lf.ui.tr("preferences.reset_all_settings_confirmation") + "\n\n" + lf.ui.tr("preferences.reset_all_scope")
+        message = lf.ui.tr("preferences.reset_all_settings_confirmation") + "\n\n" + lf.ui.tr("preferences.reset_all_scope") + "\n\n" + lf.ui.tr("gamepad.profile.reset_all_scope")
         if self._mcp_safe_mode:
             message += "\n\n" + lf.ui.tr("preferences.reset_safe_mode_note")
 
@@ -1826,7 +1828,7 @@ class PreferencesPanel(Panel):
                 self._keymap.reset_to_default()
             if section in ("input", "input_gamepad"):
                 self._gamepad_test.deactivate()
-                error = self._gamepad_test.reset()
+                error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
                 if error:
                     return error
             if section != "input" and section != "input_navigation":

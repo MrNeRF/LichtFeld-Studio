@@ -223,3 +223,20 @@ def test_shoulder_preset_confirmation_is_atomic_and_cancels_capture(shoulders):
     e.subject.apply_shoulder_preset();e.choices[-1][-1]('gamepad.binding.apply_preset')
     assert e.profile['bindings']['common']['next_navigation']['positive']=='button.left_shoulder'
     assert len(e.saves)==1
+
+
+def test_switching_profile_cancels_capture_and_discards_queued_modal_edits(editor):
+    e = editor
+    token = ["profile-a"]
+    e.ui.get_gamepad_profiles_json = lambda: token[0]
+    e.subject.edit('move_x', 'assign')
+    assert e.subject.capture is not None
+    token[0] = "profile-b"
+    e.subject.sample()
+    assert e.subject.capture is None and not e.saves
+    assert e.subject.message == "gamepad.profile.changed_error"
+    e.profile['bindings']['common']['next_rendering']['positive'] = 'button.south'
+    e.subject.change('move_x', {'positive': 'button.south', 'negative': 'none', 'inverted': False})
+    token[0] = "profile-c"
+    e.choices[-1][-1]('gamepad.binding.replace')
+    assert not e.saves

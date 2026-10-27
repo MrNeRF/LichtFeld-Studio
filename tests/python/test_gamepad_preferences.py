@@ -240,3 +240,12 @@ def test_reset_disables_navigation_but_preserves_connected_device_choice(section
     monkeypatch.setattr(ui, 'set_gamepad_navigation', lambda *args: calls.append(args) or True, raising=False)
     assert subject.reset() is None
     assert calls == [(False, 22, .15, 1.5, 1.)]
+
+
+def test_general_reset_uses_library_reset_without_touching_device_selection(section, monkeypatch):
+    subject, _state, _selected, _records, _dirty = section
+    calls = []
+    monkeypatch.setattr(sys.modules["lichtfeld"].ui, "set_gamepad_navigation", lambda *args: calls.append(args), raising=False)
+    monkeypatch.setattr(sys.modules["lichtfeld"].ui, "reset_gamepad_profiles", lambda: calls.append("library") or True, raising=False)
+    assert subject.reset(all_profiles=True) is None
+    assert calls == ["library"]

@@ -19,6 +19,7 @@ class GamepadTestSection:
         self.navigation_error = ""
         self._selection_intent = set()
         self.bindings = None
+        self.profiles = None
 
     def bind(self, model):
         model.bind_record_list("gamepad_test_devices")
@@ -44,12 +45,17 @@ class GamepadTestSection:
         if hasattr(lf.ui, "get_gamepad_binding_catalog_json"):
             from .gamepad_bindings import GamepadBindingsSection
             self.bindings = GamepadBindingsSection(self, model)
+        if hasattr(lf.ui, "get_gamepad_profiles_json"):
+            from .gamepad_profiles import GamepadProfilesSection
+            self.profiles = GamepadProfilesSection(self, model)
         self.sync()
 
     def mount(self, document):
         self._selection_intent.clear()
         if not callable(getattr(document, "get_element_by_id", None)):
             return
+        if self.profiles:
+            self.profiles.mount(document)
         for channel in ("test", "navigation"):
             element = document.get_element_by_id("gamepad-" + channel + "-device")
             if element is not None:
@@ -85,6 +91,8 @@ class GamepadTestSection:
         self._pressed = []
 
     def deactivate(self):
+        if self.profiles:
+            self.profiles._intent(False)
         if self.bindings:
             self.bindings.cancel()
         self._selection_intent.clear()
@@ -125,9 +133,17 @@ class GamepadTestSection:
             self.handle.dirty("gamepad_navigation_status")
             self.handle.dirty("gamepad_navigation_show_status")
 
-    def reset(self):
+    def reset(self, all_profiles=False):
         if not callable(getattr(lf.ui, "set_gamepad_navigation", None)):
             return None
+        if all_profiles and hasattr(lf.ui, "reset_gamepad_profiles"):
+            try:
+                if not lf.ui.reset_gamepad_profiles():
+                    return lf.ui.tr("gamepad.profile.save_error")
+                self.sync()
+                return None
+            except (ValueError, RuntimeError):
+                return lf.ui.tr("gamepad.profile.save_error")
         setter = getattr(lf.ui, "set_gamepad_profile_json", None)
         if setter:
             try:
@@ -176,6 +192,8 @@ class GamepadTestSection:
         self.state = state
         if self.bindings:
             self.bindings.sync()
+        if self.profiles:
+            self.profiles.sync()
         records = [{"id": "0", "label": lf.ui.tr("gamepad.none")}]
         for device in state.get("devices", ()):
             label = lf.ui.tr("gamepad.device_label").format(name=device["name"], id=device["id"])
