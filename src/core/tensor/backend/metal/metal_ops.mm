@@ -6,6 +6,7 @@
 #include "../../internal/rad_ops.hpp"
 #include "../export_pipeline.hpp"
 #include "../facade_trace.hpp"
+#include "../native_index_scratch.hpp"
 #include "../readback_buffer.hpp"
 #include "../scalar_operand.hpp"
 #include "../tensor_vulkan_interop.hpp"
@@ -1986,10 +1987,15 @@ namespace lfs::core::internal {
                      {.mode = kIndexCastMode, .dtype = DataType::Int32, .total = count, .input = input, .values = output, .params = {.dim_size = checked_u32(extent, "Metal index extent exceeds uint32")}});
     }
 
-    void MetalBackendOps::gather(const StorageRef input, const StorageRef indices, const StorageRef output,
-                                 const StridedLayout& input_layout, const StridedLayout& index_layout,
-                                 const IndexProgram& program, ExecContext) {
+    void MetalBackendOps::gather(const StorageRef input, const StorageRef raw_indices, const StorageRef output,
+        const StridedLayout& input_layout, const StridedLayout& index_layout,
+        const IndexProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(gather);
+        const NativeIndexScratch scratch(raw_indices, program.total_elements, {}, [&](StorageRef input, StorageRef output) {
+            encode_index(*acquire_context(), { .mode = kIndexCastMode, .dtype = DataType::Int32, .total = program.total_elements, .input = input, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = { .dim_size = checked_u32(input_layout.dims[static_cast<size_t>(program.dim)], "Metal index extent exceeds uint32") } });
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(input_layout.rank > 0 && input_layout.rank <= MAX_TENSOR_RANK &&
                            index_layout.rank <= MAX_TENSOR_RANK,
                        "gather rank exceeds MAX_TENSOR_RANK");
@@ -1997,9 +2003,14 @@ namespace lfs::core::internal {
                      {.mode = kGatherMode, .dtype = input.dtype, .total = program.total_elements, .input = input, .indices = indices, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = {.rank = static_cast<uint32_t>(input_layout.rank), .index_rank = static_cast<uint32_t>(index_layout.rank), .dim = static_cast<uint32_t>(program.dim), .input_dims = shader_dims(input_layout), .index_dims = shader_dims(index_layout)}});
     }
 
-    void MetalBackendOps::gather_fused_unary(const StorageRef input, const StorageRef indices, const StorageRef output,
-                                             const PointwiseOp unary, const IndexProgram& program, ExecContext) {
+    void MetalBackendOps::gather_fused_unary(const StorageRef input, const StorageRef raw_indices, const StorageRef output,
+        const PointwiseOp unary, const IndexProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(gather_fused_unary);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            encode_index(*acquire_context(), { .mode = kIndexCastMode, .dtype = DataType::Int32, .total = program.index_size, .input = input, .values = output, .boundary = static_cast<uint32_t>(0), .params = { .dim_size = checked_u32(program.input_size, "Metal index extent exceeds uint32") } });
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
                        "Metal fused gather supports only Float32");
         const uint32_t unary_code = unary == PointwiseOp::Abs ? 1u : unary == PointwiseOp::Sqrt ? 2u
@@ -2010,9 +2021,14 @@ namespace lfs::core::internal {
                      {.mode = kTakeMode, .dtype = DataType::Float32, .total = program.index_size, .input = input, .indices = indices, .values = output, .unary = unary_code, .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
     }
 
-    void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,
-                                       const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
+    void MetalBackendOps::index_select(const StorageRef input, const StorageRef raw_indices, const StorageRef output,
+        const StridedLayout& input_layout, const IndexProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(index_select);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            encode_index(*acquire_context(), { .mode = kIndexCastMode, .dtype = DataType::Int32, .total = program.index_size, .input = input, .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode), .params = { .dim_size = checked_u32(input_layout.dims[static_cast<size_t>(program.dim)], "Metal index extent exceeds uint32") } });
+        });
+        const auto indices = scratch.storage();
         Geometry shape = geometry(input_layout, program.dim);
         // Rows whose bytes pair up into aligned 8-byte words move as Int64
         // elements: the same bytes in fewer loads and stores.
@@ -2042,16 +2058,26 @@ namespace lfs::core::internal {
             scatter_assign(*context, launch);
     }
 
-    void MetalBackendOps::index_copy(const StorageRef output, const StorageRef indices, const StorageRef source,
-                                     const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
+    void MetalBackendOps::index_copy(const StorageRef output, const StorageRef raw_indices, const StorageRef source,
+        const StridedLayout& output_layout, const IndexProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(index_copy);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            encode_index(*acquire_context(), { .mode = kIndexCastMode, .dtype = DataType::Int32, .total = program.index_size, .input = input, .values = output, .boundary = static_cast<uint32_t>(0), .params = { .dim_size = checked_u32(output_layout.dims[static_cast<size_t>(program.dim)], "Metal index extent exceeds uint32") } });
+        });
+        const auto indices = scratch.storage();
         scatter_assign(*acquire_context(), scatter_launch(kScatterAssignMode, output, indices, source, output_layout,
                                                           program.dim, program.index_size));
     }
 
-    void MetalBackendOps::index_add(const StorageRef output, const StorageRef indices, const StorageRef source,
-                                    const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
+    void MetalBackendOps::index_add(const StorageRef output, const StorageRef raw_indices, const StorageRef source,
+        const StridedLayout& output_layout, const IndexProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(index_add);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            encode_index(*acquire_context(), { .mode = kIndexCastMode, .dtype = DataType::Int32, .total = program.index_size, .input = input, .values = output, .boundary = static_cast<uint32_t>(0), .params = { .dim_size = checked_u32(output_layout.dims[static_cast<size_t>(program.dim)], "Metal index extent exceeds uint32") } });
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(output.dtype == DataType::Float32 || output.dtype == DataType::Int32,
                        "Metal index_add supports only Float32 and Int32");
         scatter_add(*acquire_context(), scatter_launch(kScatterAddMode, output, indices, source, output_layout,

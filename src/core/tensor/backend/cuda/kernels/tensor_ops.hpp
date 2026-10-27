@@ -342,7 +342,7 @@ namespace lfs::core::tensor_ops {
                                           size_t index_size, int boundary_mode, cudaStream_t stream);
 
     void launch_index_cast(const int64_t* input, int* output, size_t count, size_t extent,
-                           cudaStream_t stream);
+                           cudaStream_t stream, int boundary_mode = 0);
 
     LFS_CORE_API void launch_gather(const float* input, const int* indices, float* output,
                                     const size_t* input_shape, const size_t* index_shape,

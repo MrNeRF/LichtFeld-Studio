@@ -1,3 +1,4 @@
+#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/expression_runtime.hpp"
@@ -226,4 +227,12 @@ StorageRef MetalBackendOps::borrow_native_range([[maybe_unused]] void* pointer, 
 
 namespace lfs::core::internal {
 void MetalBackendOps::name_queue(ExecContext, const char*) { }
+}
+
+namespace lfs::core::internal {
+std::unique_ptr<PreparedReadback> MetalBackendOps::prepare_readback(const Tensor& source, const Tensor& destination)
+{
+    return std::make_unique<BufferedPreparedReadback>(source, destination,
+        source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) { });
+}
 }

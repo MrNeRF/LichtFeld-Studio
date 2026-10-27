@@ -222,8 +222,8 @@ namespace lfs::core {
                                                     .consumer = consumer,
                                                     .external_interop = direct})) {}
     TensorWorkQueue::Scope::Scope(const TensorWorkQueue& queue)
-        : backend_scope_(queue.backend()), native_(queue.impl_->native.get()), binding_(native_->bind(false)) {}
-    TensorWorkQueue::Scope::~Scope() { native_->unbind(binding_); }
+        : backend_scope_(queue.backend()), native_(queue.impl_->native.get()), binding_(static_cast<internal::BackendWorkQueue*>(native_)->bind(false)) {}
+    TensorWorkQueue::Scope::~Scope() { static_cast<internal::BackendWorkQueue*>(native_)->unbind(binding_); }
     void* TensorWorkQueue::native_handle() const { return impl_->native->native_handle(); }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
     bool TensorWorkQueue::ready() const { return impl_->native->ready(); }

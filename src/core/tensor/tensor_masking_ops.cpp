@@ -134,10 +134,10 @@ namespace lfs::core {
         void assert_async_index_tensor(const Tensor& indices, size_t upper_bound,
                                        std::string_view operation, bool check_bounds,
                                        const bool allow_negative = false) {
-            if (gpu_backend_compiled(GpuBackend::HIP) && indices.device() == Device::GPU && internal::gpu_backend_tag(indices) == GpuBackend::HIP &&
+            // These native adapters validate bounds in their kernels and report
+            // faults at synchronization. Int64 clamp/wrap never narrows first.
+            if (indices.device() == Device::GPU &&
                 (operation == "gather" || operation == "index_select_into" || operation == "index_copy_" || operation == "index_add_")) {
-                // HIP checks indices in the kernel, skipping invalid lanes and
-                // reporting faults at synchronization. Clamp/wrap preserve Int64.
                 assert_index_tensor_host_only(indices, upper_bound, operation);
                 return;
             }
@@ -150,10 +150,8 @@ namespace lfs::core {
             assert_index_tensor(indices, upper_bound, operation, check_bounds, allow_negative);
         }
 
-        bool needs_int32_index_cast(const Tensor& indices, [[maybe_unused]] const Tensor& consumer) {
-            if (gpu_backend_compiled(GpuBackend::HIP) && consumer.device() == Device::GPU && internal::gpu_backend_tag(consumer) == GpuBackend::HIP)
-                return false; // Native HIP indexing preserves Int64 and strides.
-            return indices.dtype() == DataType::Int64;
+        bool needs_int32_index_cast(const Tensor& indices, const Tensor& consumer) {
+            return consumer.device() != Device::GPU && indices.dtype() == DataType::Int64;
         }
 
         Tensor index_cast(const Tensor& indices, const Tensor& consumer, size_t extent, BoundaryMode mode = BoundaryMode::Assert) {
@@ -543,7 +541,7 @@ namespace lfs::core {
 
         auto indices_same_device = ensure_same_device(indices);
 
-        // HIP gather/select accept native Int64 indices directly.
+        // GPU adapters accept native Int32/Int64 indices.
         const bool is_int64 = needs_int32_index_cast(indices_same_device, *this);
         Tensor indices_int32;
         if (is_int64) {
@@ -710,7 +708,7 @@ namespace lfs::core {
             internal::backend_ops_for(*this).gather(
                 internal::storage_ref(*this), internal::storage_ref(kernel_index),
                 internal::storage_ref(result), internal::strided_layout(*this),
-                internal::strided_layout((gpu_backend_compiled(GpuBackend::HIP) && internal::gpu_backend_tag(*this) == GpuBackend::HIP) ? kernel_index : indices),
+                internal::strided_layout(kernel_index),
                 internal::IndexProgram{
                     .dim = dim,
                     .boundary_mode = static_cast<int>(mode),
@@ -1093,8 +1091,7 @@ namespace lfs::core {
                            dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
                        "index_copy_ encountered an unsupported dtype");
 
-        if (gpu_backend_compiled(GpuBackend::HIP) && device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP &&
-            (shares_storage_with(src) || shares_storage_with(idx))) {
+        if (shares_storage_with(src) || shares_storage_with(idx)) {
             Tensor stable_source = shares_storage_with(src) ? src.clone() : src;
             Tensor stable_indices = shares_storage_with(idx) ? idx.clone() : idx;
             return index_copy_(dim, stable_indices, stable_source);
@@ -1212,8 +1209,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "index_add_ currently supports only Float32 and Int32");
 
-        if (gpu_backend_compiled(GpuBackend::HIP) && device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::HIP &&
-            (shares_storage_with(src) || shares_storage_with(idx))) {
+        if (shares_storage_with(src) || shares_storage_with(idx)) {
             Tensor stable_source = shares_storage_with(src) ? src.clone() : src;
             Tensor stable_indices = shares_storage_with(idx) ? idx.clone() : idx;
             return index_add_(dim, stable_indices, stable_source);
@@ -1911,10 +1907,7 @@ namespace lfs::core {
             size_t actual_count = count; // Start with Thrust's count
 
             if (device_ == Device::GPU) {
-                // HIP consumes the already computed count; other backends retain
-                // their existing capacity-based selection contract.
-                const size_t selection_count =
-                    (gpu_backend_compiled(GpuBackend::HIP) && internal::gpu_backend_tag(*this) == GpuBackend::HIP) ? count : numel();
+                const size_t selection_count = count;
                 if (is_bool_like(dtype_)) {
                     actual_count = internal::backend_ops_for(*this).nonzero_bool(
                         internal::storage_ref(*this), internal::storage_ref(temp),

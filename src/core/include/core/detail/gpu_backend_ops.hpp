@@ -31,6 +31,7 @@ namespace lfs::core {
     namespace internal {
 
         class ReadbackBuffer;
+        class PreparedReadback;
         struct ExpressionLaunch;
         struct ExpressionCacheStats;
 
@@ -414,6 +415,7 @@ namespace lfs::core {
             virtual void memset(const FillRequest& request) = 0;
 
             virtual std::unique_ptr<ReadbackBuffer> create_readback_buffer() = 0;
+            virtual std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) = 0;
 
             // Optional native services. Existing backends retain their current
             // direct paths; only backends using these services dispatch here.
@@ -766,6 +768,7 @@ namespace lfs::core {
             void memset(const FillRequest& request) override;
 
             std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+            std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) override;
             void push_range(const char* name) override;
             void pop_range() override;
             void name_queue(ExecContext context, const char* name) override;

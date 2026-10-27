@@ -8,9 +8,6 @@
 #include "core/tensor_completion.hpp"
 #include <charconv>
 
-#if LFS_HAS_CUDA
-#include "backend/cuda/runtime/cuda_event_pool.hpp"
-#endif
 #include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/gpu_device_info.hpp"
@@ -19,43 +16,21 @@
 #include "core/logger.hpp"
 #include "core/pinned_allocator_stats.hpp"
 #include "internal/tensor_impl.hpp"
-#if LFS_HAS_CUDA
-#include "core/pinned_memory_allocator.hpp"
-#endif
 
+#include "backend/backend_driver.hpp"
+#include "backend/gpu_backend_ops.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#if LFS_HAS_CUDA
-#include <cuda.h>
-#include <cuda_runtime.h>
-#endif
-#include "backend/backend_driver.hpp"
-#include "backend/gpu_backend_ops.hpp"
 #include <exception>
 #include <format>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
-#ifdef LFS_TENSOR_METAL
-#include "backend/metal/metal_context.hpp"
-#endif
-#ifdef LFS_TENSOR_VULKAN
-#include "backend/vulkan/vk_context.hpp"
-#if LFS_HAS_CUDA
-#include "backend/vulkan/vk_cuda_bridge.hpp"
-#endif
-#include "backend/vulkan/vk_memory.hpp"
-#include "backend/vulkan/vk_recorder.hpp"
-#include "core/vulkan_helpers.hpp"
-#endif
-
-#include "backend/gpu_backend_ops.hpp"
-#include "backend/readback_buffer.hpp"
 
 namespace lfs::core::tensor_ops {
     namespace {
@@ -121,15 +96,6 @@ namespace lfs::core {
 
     size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
         return internal::backend_driver(backend).allocation_bytes(bytes);
-    }
-
-    PinnedAllocatorStats pinned_allocator_stats() {
-#if LFS_HAS_CUDA
-        const auto stats = PinnedMemoryAllocator::instance().get_stats();
-        return {stats.allocated_bytes, stats.cached_bytes};
-#else
-        return {};
-#endif
     }
 
     Tensor Tensor::empty_like(const Tensor& other, const TensorShape& shape, DataType dtype) {
@@ -214,27 +180,6 @@ namespace lfs::core {
         if (!backend || !tensor.is_valid())
             return std::nullopt;
         return impl_->backend(*backend).buffer(tensor);
-    }
-
-    void TensorVulkanInterop::upload_host(Tensor& tensor, std::span<const std::byte> bytes) {
-#ifdef LFS_TENSOR_VULKAN
-        if (!tensor.is_valid() || tensor.device() != Device::GPU ||
-            !tensor.is_contiguous() || bytes.size() > tensor.bytes())
-            throw TensorError("Vulkan-visible host upload requires a contiguous GPU tensor with sufficient capacity");
-        if (bytes.empty())
-            return;
-        internal::backend_ops_for(tensor).copy_host_to_device(internal::CopyRequest{
-            .src = internal::raw_storage_ref(const_cast<std::byte*>(bytes.data())),
-            .dst = internal::storage_ref(tensor),
-            .bytes = bytes.size(),
-            .synchronous = false,
-            .context = internal::ExecContext{tensor.stream()},
-        });
-#else
-        (void)tensor;
-        (void)bytes;
-        throw TensorError("Vulkan tensor interop is unavailable in this build");
-#endif
     }
 
     TensorCompletion TensorVulkanInterop::ready(std::span<const Tensor* const> tensors) {
@@ -475,7 +420,7 @@ namespace lfs::core {
 
     TensorExecutionTarget TensorExecutionTarget::current() {
         const auto backend = scoped_backend ? *scoped_backend : default_gpu_backend();
-        return {backend, backend == GpuBackend::CUDA ? getCurrentCUDAStream() : nullptr};
+        return {backend, internal::backend_driver(backend).current_target()};
     }
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)
@@ -663,263 +608,18 @@ namespace lfs::core {
         return adopt_vulkan_device(handles, false);
     }
 
-    lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles,
-                                    const bool subgroup_size_control_enabled) {
-#ifdef LFS_TENSOR_VULKAN
-        return internal::adopt_vulkan_context(internal::AdoptedDevice{
-            .instance = static_cast<VkInstance>(handles.instance),
-            .physical_device = static_cast<VkPhysicalDevice>(handles.physical_device),
-            .device = static_cast<VkDevice>(handles.device),
-            .queue = static_cast<VkQueue>(handles.queue),
-            .queue_family = handles.queue_family,
-            .sharing_queue_families = handles.sharing_queue_families,
-            .sharing_queue_family_count = handles.sharing_queue_family_count,
-            .shader_atomic_float = handles.shader_atomic_float,
-            .memory_budget = handles.memory_budget,
-            .shader_float64 = handles.shader_float64,
-            .shader_float16 = handles.shader_float16,
-            .vulkan_memory_model = handles.vulkan_memory_model,
-            .vulkan_memory_model_device_scope = handles.vulkan_memory_model_device_scope,
-            .cooperative_matrix = handles.cooperative_matrix,
-            .external_memory = handles.external_memory,
-            .external_semaphore = handles.external_semaphore,
-#ifdef __APPLE__
-            .metal_objects = handles.metal_objects,
-#endif
-            .subgroup_size_control = subgroup_size_control_enabled,
-            .consumer_queue = static_cast<VkQueue>(handles.consumer_queue),
-            .consumer_queue_mutex = handles.consumer_queue_mutex,
-        });
-#else
-        (void)handles;
-        (void)subgroup_size_control_enabled;
-        return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
-            .code = lfs::ErrorCode::Unsupported,
-            .domain = lfs::ErrorDomain::Vulkan,
-            .user_message = "this build has no Vulkan tensor backend",
-            .detection = LFS_SOURCE_SITE_CURRENT(),
-        }));
-#endif
-    }
-
     bool tensor_supports_metal_access(const Tensor& tensor) {
-#ifdef __APPLE__
         const auto backend = gpu_backend_of(tensor);
-        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
-#else
-        return false;
-#endif
+        return backend && internal::backend_driver(*backend).renderer_access().metal;
     }
-
     bool tensor_backend_supports_metal_access() {
-#ifdef __APPLE__
-        const auto backend = default_gpu_backend();
-        return backend == GpuBackend::Metal || backend == GpuBackend::Vulkan;
-#else
-        return false;
-#endif
+        return internal::backend_driver(default_gpu_backend()).renderer_access().metal;
     }
-
     bool tensor_backend_shares_vulkan_device() {
-        if (gpu_backend_compiled(GpuBackend::HIP) && default_gpu_backend() == GpuBackend::HIP)
-            return false;
-        return default_gpu_backend() != GpuBackend::Metal;
+        return internal::backend_driver(default_gpu_backend()).renderer_access().shares_vulkan;
     }
-
     bool tensor_backend_needs_vulkan_interop() {
-        if (gpu_backend_compiled(GpuBackend::HIP) && default_gpu_backend() == GpuBackend::HIP)
-            return true;
-        return default_gpu_backend() == GpuBackend::CUDA;
-    }
-
-    bool vulkan_backend_adopted() {
-#ifdef LFS_TENSOR_VULKAN
-        return internal::vulkan_context_adopted();
-#else
-        return false;
-#endif
-    }
-
-    std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor) {
-#ifdef LFS_TENSOR_VULKAN
-        auto result = internal::native_vulkan_buffer(tensor);
-        if (result)
-            internal::try_live_vulkan_context()->recorders().flush_storage(internal::storage_ref(tensor));
-        return result;
-#else
-        (void)tensor;
-        return std::nullopt;
-#endif
-    }
-
-    namespace {
-#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
-        lfs::Error cuda_view_error(const lfs::ErrorCode code,
-                                   const lfs::ErrorDomain domain,
-                                   std::string message) {
-            return lfs::make_error(lfs::ErrorInit{
-                .code = code,
-                .domain = domain,
-                .user_message = std::move(message),
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            });
-        }
-
-        std::string uuid_hex(const std::array<uint8_t, 16>& uuid) {
-            std::string text;
-            text.resize(32);
-            static constexpr char kHex[] = "0123456789abcdef";
-            for (size_t i = 0; i < uuid.size(); ++i) {
-                text[i * 2] = kHex[uuid[i] >> 4];
-                text[i * 2 + 1] = kHex[uuid[i] & 0x0f];
-            }
-            return text;
-        }
-
-        struct CudaVulkanViewOwner {
-            std::shared_ptr<void> vulkan_keep_alive;
-            std::shared_ptr<internal::VulkanCudaMemoryImport> import;
-            void* registered = nullptr;
-
-            ~CudaVulkanViewOwner() {
-                if (registered != nullptr) {
-                    unregister_cuda_address_range(registered);
-                }
-            }
-        };
-#endif
-    } // namespace
-
-    bool vulkan_backend_exports_memory() {
-#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
-        try {
-            const auto context = internal::try_live_vulkan_context();
-            if (!context || context->dead() || !context->cuda_imports()) {
-                return false;
-            }
-            if (!context->memory().exports_memory() || !context->timeline_exportable()) {
-                return false;
-            }
-            const auto cuda = gpu_backend_device_info(GpuBackend::CUDA, selected_cuda_device());
-            VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-            properties.pNext = &identity;
-            vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
-            if (!cuda || !std::equal(cuda->uuid.begin(), cuda->uuid.end(), identity.deviceUUID))
-                return false;
-            context->cuda_imports()->import_timeline(context->timeline());
-            return context->cuda_imports()->timeline_imported();
-        } catch (...) { // LFS-CENSUS-OK(empty-catch): export probe fails closed when CUDA import is absent
-            return false;
-        }
-#else
-        return false;
-#endif
-    }
-
-    lfs::Result<Tensor> cuda_view_of_vulkan_tensor(const Tensor& tensor,
-                                                   const cudaStream_t stream) {
-#if defined(LFS_TENSOR_VULKAN) && LFS_HAS_CUDA
-        if (!tensor.is_valid()) {
-            return cuda_view_error(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::Tensor,
-                                   "CUDA view of a Vulkan tensor requires a valid tensor");
-        }
-        const auto vulkan = tensor_vulkan_buffer(tensor);
-        if (!vulkan) {
-            return cuda_view_error(
-                lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::Tensor,
-                gpu_backend_of(tensor) != GpuBackend::Vulkan
-                    ? "CUDA view requires a Vulkan-backend tensor"
-                    : "CUDA view could not read the Vulkan tensor buffer");
-        }
-        if (!tensor.is_contiguous()) {
-            return cuda_view_error(
-                lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::Tensor,
-                "CUDA view of a Vulkan tensor requires contiguous storage");
-        }
-        if (!vulkan_backend_exports_memory()) {
-            return cuda_view_error(
-                lfs::ErrorCode::Unsupported, lfs::ErrorDomain::Vulkan,
-                "Vulkan tensor backend is not exporting device memory for CUDA");
-        }
-        const auto context = internal::try_live_vulkan_context();
-        if (!context || context->dead() || !context->cuda_imports()) {
-            return cuda_view_error(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::Vulkan,
-                                   "Vulkan tensor backend is not live");
-        }
-        const std::array<uint8_t, 16>& vulkan_uuid = context->caps().device_uuid;
-        int cuda_device = 0;
-        cudaError_t status = cudaGetDevice(&cuda_device);
-        if (status != cudaSuccess) {
-            (void)cudaGetLastError();
-            return cuda_view_error(lfs::ErrorCode::Internal, lfs::ErrorDomain::CUDA,
-                                   std::format("cudaGetDevice failed: {}",
-                                               cudaGetErrorString(status)));
-        }
-        cudaDeviceProp properties{};
-        status = cudaGetDeviceProperties(&properties, cuda_device);
-        if (status != cudaSuccess) {
-            (void)cudaGetLastError();
-            return cuda_view_error(lfs::ErrorCode::Internal, lfs::ErrorDomain::CUDA,
-                                   std::format("cudaGetDeviceProperties failed: {}",
-                                               cudaGetErrorString(status)));
-        }
-        std::array<uint8_t, 16> cuda_uuid{};
-        std::memcpy(cuda_uuid.data(), properties.uuid.bytes, cuda_uuid.size());
-        if (cuda_uuid != vulkan_uuid) {
-            return cuda_view_error(
-                lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::CUDA,
-                std::format(
-                    "CUDA device {} (UUID {}) does not match the Vulkan tensor device (UUID {})",
-                    cuda_device, uuid_hex(cuda_uuid), uuid_hex(vulkan_uuid)));
-        }
-
-        const internal::StorageRef storage = internal::storage_ref(tensor);
-        const auto block = context->memory().cuda_block_info(storage);
-        if (!block) {
-            return cuda_view_error(lfs::ErrorCode::Internal, lfs::ErrorDomain::Vulkan,
-                                   "CUDA view could not resolve the Vulkan memory block");
-        }
-        if (block->host_visible) {
-            return cuda_view_error(
-                lfs::ErrorCode::Unsupported, lfs::ErrorDomain::Vulkan,
-                "CUDA view of host-visible Vulkan readback storage is not supported");
-        }
-        if (!block->exportable) {
-            return cuda_view_error(
-                lfs::ErrorCode::Unsupported, lfs::ErrorDomain::Vulkan,
-                "CUDA view needs pool-backed Vulkan storage; direct (large) allocations are not exportable");
-        }
-        auto imported = context->cuda_imports()->import_memory(
-            block->memory, block->block_size, block->dedicated);
-        if (!imported) {
-            return imported.error();
-        }
-        const auto wait = context->cuda_imports()->wait_timeline(vulkan->pending_timeline_value,
-                                                                 stream);
-        if (!wait) {
-            return wait.error();
-        }
-
-        auto owner = std::make_shared<CudaVulkanViewOwner>();
-        owner->vulkan_keep_alive = vulkan->keep_alive;
-        owner->import = *imported;
-        void* const data = static_cast<std::byte*>((*imported)->mapped) +
-                           block->allocation_offset + storage.byte_offset;
-        register_cuda_address_range(data, tensor.bytes(), "vulkan.cuda_view");
-        owner->registered = data;
-        return Tensor::from_external_owner(data, tensor.shape(), Device::GPU, tensor.dtype(),
-                                           std::move(owner), 0, stream, "vulkan.cuda_view");
-#else
-        (void)tensor;
-        (void)stream;
-        return lfs::make_error(lfs::ErrorInit{
-            .code = lfs::ErrorCode::Unsupported,
-            .domain = lfs::ErrorDomain::Vulkan,
-            .user_message = "this build has no Vulkan tensor backend",
-            .detection = LFS_SOURCE_SITE_CURRENT(),
-        });
-#endif
+        return internal::backend_driver(default_gpu_backend()).renderer_access().needs_vulkan_interop;
     }
 
     namespace internal {

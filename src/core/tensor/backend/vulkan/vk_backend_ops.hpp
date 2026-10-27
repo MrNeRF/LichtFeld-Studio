@@ -207,6 +207,7 @@ namespace lfs::core::internal {
         void memset(const FillRequest&) override;
 
         std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+        std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) override;
         void synchronize_stream(ExecContext) override;
         void synchronize_device() override;
         void device_barrier() override;

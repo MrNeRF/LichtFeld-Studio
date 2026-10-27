@@ -271,7 +271,7 @@ namespace lfs::core {
                 .byte_offset = 0,
                 .dtype = DataType::UInt8,
                 .meta = nullptr,
-                .flags = direct ? STORAGE_REF_DIRECT_ALLOCATION : 0,
+                .flags = allocation_flags(StorageAccountingKind::CudaDirect, direct, direct, false, direct ? AllocationLabel::CudaDirect : AllocationLabel::None),
             };
         }
 
@@ -743,6 +743,7 @@ namespace lfs::core::internal {
             }
 
             Tensor empty(TensorShape shape, DataType dtype, size_t capacity) override {
+                const GpuBackendScope backend(GpuBackend::CUDA);
                 if (!target_.external_memory)
                     throw TensorError("Consumer device does not support CUDA external memory");
                 const size_t rows = shape.rank() == 0 ? 1 : shape[0];

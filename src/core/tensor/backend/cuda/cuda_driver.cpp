@@ -23,6 +23,9 @@ namespace lfs::core::internal {
             std::atomic<int> selection_{-1};
 
         public:
+            void* current_target() const noexcept override { return getCurrentCUDAStream(); }
+            BackendRendererAccess renderer_access() const noexcept override { return {true, true, false}; }
+
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_cuda_driver_vulkan_interop(device); }
             SplatPublication publication() const override { return cuda_vulkan_direct_interop() ? SplatPublication::RendererStorage : SplatPublication::Copied; }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_cuda_work_queue(info); }

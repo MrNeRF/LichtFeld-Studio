@@ -175,6 +175,7 @@ namespace lfs::core::internal {
         void copy_device_to_device(const CopyRequest& request) override;
         void memset(const FillRequest& request) override;
         std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+        std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) override;
         void synchronize_stream(ExecContext context) override;
         void synchronize_device() override;
         void device_barrier() override;

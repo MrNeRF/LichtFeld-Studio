@@ -18,8 +18,8 @@ namespace lfs::core {
     }
 
     TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target)
-        : backend_scope_(target.backend()), driver_(&internal::backend_driver(target.backend())), binding_(driver_->bind_target(target.native_handle())) {}
-    TensorExecutionTarget::Scope::~Scope() { driver_->unbind_target(binding_); }
+        : backend_scope_(target.backend()), driver_(&internal::backend_driver(target.backend())), binding_(static_cast<internal::BackendDriver*>(driver_)->bind_target(target.native_handle())) {}
+    TensorExecutionTarget::Scope::~Scope() { static_cast<internal::BackendDriver*>(driver_)->unbind_target(binding_); }
 
     void TensorExecutionTarget::wait() const {
         internal::backend_ops(backend_).synchronize_stream(

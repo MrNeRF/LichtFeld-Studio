@@ -21,6 +21,15 @@ namespace lfs::core::internal {
     namespace {
         class VulkanDriver final : public BackendDriver {
         public:
+            void* current_target() const noexcept override { return nullptr; }
+            BackendRendererAccess renderer_access() const noexcept override {
+#ifdef __APPLE__
+                return {true, false, true};
+#else
+                return {true, false, false};
+#endif
+            }
+
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_vulkan_vulkan_interop(device); }
             SplatPublication publication() const override { return SplatPublication::Shared; }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_vulkan_work_queue(info); }

@@ -3317,10 +3317,7 @@ namespace lfs::core {
 
         std::shared_ptr<void> new_owner;
         if (device_ == Device::GPU) {
-            const StorageAccountingKind accounting_kind =
-                (gpu_backend_compiled(GpuBackend::HIP) && new_gpu_storage.backend == GpuBackend::HIP) ? StorageAccountingKind::HipOwned : new_gpu_storage.backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
-                                                                                                                                      : new_gpu_storage.backend == GpuBackend::Metal    ? StorageAccountingKind::MetalOwned
-                                                                                                                                                                                        : StorageAccountingKind::CudaDirect;
+            const auto accounting_kind = internal::allocation_accounting(new_gpu_storage);
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
             const GpuStorageDescriptor released_descriptor =
@@ -3331,7 +3328,7 @@ namespace lfs::core {
                                                          released_descriptor,
                                                          accounting_kind,
                                                          allocation_stream](void* ptr) {
-                if (ptr && (new_gpu_storage.backend == GpuBackend::Vulkan ||
+                if (ptr && (internal::allocation_release_after_teardown(new_gpu_storage) ||
                             !gpu_process_teardown_started())) {
                     StorageMeta owner;
                     owner.backend = new_gpu_storage.backend;
@@ -3350,20 +3347,15 @@ namespace lfs::core {
         }
         auto new_storage_meta = std::make_shared<StorageMeta>();
         if (device_ == Device::GPU) {
-            new_storage_meta->backend = storage_meta_ ? storage_meta_->backend
-                                                      : GpuBackend::CUDA;
+            new_storage_meta->backend = new_gpu_storage.backend;
             if (new_gpu_storage.meta != nullptr) {
                 new_storage_meta->gpu_descriptor =
                     new_gpu_storage.meta->gpu_descriptor;
             } else {
                 new_storage_meta->gpu_descriptor.byte_size = new_bytes;
-                new_storage_meta->gpu_descriptor.accounting_kind =
-                    StorageAccountingKind::CudaDirect;
+                new_storage_meta->gpu_descriptor.accounting_kind = internal::allocation_accounting(new_gpu_storage);
             }
-            new_storage_meta->external_kind =
-                new_gpu_storage.backend == GpuBackend::Vulkan
-                    ? ""
-                    : "cuda.direct";
+            new_storage_meta->external_kind = internal::allocation_label(new_gpu_storage);
         }
 
         // Copy existing data
@@ -3517,9 +3509,7 @@ namespace lfs::core {
         // Create tensor with custom deleter
         Tensor t;
         t.data_ = data_ptr;
-        const StorageAccountingKind accounting_kind =
-            (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP) ? StorageAccountingKind::HipOwned : backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
-                                                                                                                                                    : StorageAccountingKind::CudaDirect;
+        const auto accounting_kind = internal::allocation_accounting(storage);
         record_storage_allocation(accounting_kind, total_bytes);
         const GpuStorageDescriptor released_descriptor =
             storage.meta != nullptr ? storage.meta->gpu_descriptor
@@ -3537,7 +3527,7 @@ namespace lfs::core {
             // release long-lived holders while CUDA is still healthy. The deleter
             // rebuilds a by-value descriptor so it never dereferences a freed
             // allocator record after shutdown and reinitialization.
-            if (storage.backend == GpuBackend::Vulkan ||
+            if (internal::allocation_release_after_teardown(storage) ||
                 !gpu_process_teardown_started()) {
                 StorageMeta owner;
                 owner.backend = storage.backend;
@@ -3564,14 +3554,9 @@ namespace lfs::core {
             t.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
         } else {
             t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
-            t.storage_meta_->gpu_descriptor.accounting_kind =
-                StorageAccountingKind::CudaDirect;
+            t.storage_meta_->gpu_descriptor.accounting_kind = internal::allocation_accounting(storage);
         }
-        t.storage_meta_->external_kind = backend == GpuBackend::Vulkan
-                                             ? ""
-                                             : "cuda.direct";
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend == GpuBackend::HIP)
-            t.storage_meta_->external_kind = "hip.direct";
+        t.storage_meta_->external_kind = internal::allocation_label(storage);
 
         return t;
     }

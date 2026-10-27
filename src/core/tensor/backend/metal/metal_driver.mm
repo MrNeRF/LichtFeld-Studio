@@ -20,6 +20,9 @@ namespace lfs::core::internal {
 namespace {
     class MetalDriver final : public BackendDriver {
     public:
+        void* current_target() const noexcept override { return nullptr; }
+        BackendRendererAccess renderer_access() const noexcept override { return { false, false, true }; }
+
         std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_metal_vulkan_interop(device); }
         SplatPublication publication() const override { return SplatPublication::Copied; }
         std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_metal_backend_work_queue(info); }

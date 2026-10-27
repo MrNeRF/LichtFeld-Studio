@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../facade_trace.hpp"
+#include "../native_index_scratch.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -348,10 +349,23 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::gather(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const StridedLayout& input_layout, const StridedLayout& index_layout,
         const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(gather);
+        const NativeIndexScratch scratch(raw_indices, program.total_elements, {}, [&](StorageRef input, StorageRef output) {
+            const auto context = acquire_vulkan_context();
+            Launch cast{.mode = kIndexCastMode, .dtype = DataType::Int32};
+            cast.boundary = static_cast<uint32_t>(program.boundary_mode);
+            cast.total = program.total_elements;
+            cast.push.input_address = address(input);
+            cast.push.value_address = address(output);
+            cast.push.dim_size = checked_u32(input_layout.dims[static_cast<size_t>(program.dim)], "Vulkan index extent exceeds uint32");
+            const std::array reads{input};
+            const std::array writes{output};
+            record_index(*context, cast, reads, writes);
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(input_layout.rank > 0 && input_layout.rank <= MAX_TENSOR_RANK &&
                            index_layout.rank <= MAX_TENSOR_RANK,
                        "gather rank exceeds MAX_TENSOR_RANK");
@@ -375,9 +389,22 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::gather_fused_unary(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const PointwiseOp unary, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(gather_fused_unary);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            const auto context = acquire_vulkan_context();
+            Launch cast{.mode = kIndexCastMode, .dtype = DataType::Int32};
+            cast.boundary = static_cast<uint32_t>(0);
+            cast.total = program.index_size;
+            cast.push.input_address = address(input);
+            cast.push.value_address = address(output);
+            cast.push.dim_size = checked_u32(program.input_size, "Vulkan index extent exceeds uint32");
+            const std::array reads{input};
+            const std::array writes{output};
+            record_index(*context, cast, reads, writes);
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
                        "Vulkan fused gather supports only Float32");
         uint32_t unary_code = kUnaryNone;
@@ -400,9 +427,22 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::index_select(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_select);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            const auto context = acquire_vulkan_context();
+            Launch cast{.mode = kIndexCastMode, .dtype = DataType::Int32};
+            cast.boundary = static_cast<uint32_t>(program.boundary_mode);
+            cast.total = program.index_size;
+            cast.push.input_address = address(input);
+            cast.push.value_address = address(output);
+            cast.push.dim_size = checked_u32(input_layout.dims[static_cast<size_t>(program.dim)], "Vulkan index extent exceeds uint32");
+            const std::array reads{input};
+            const std::array writes{output};
+            record_index(*context, cast, reads, writes);
+        });
+        const auto indices = scratch.storage();
         if (program.index_size == 0) {
             return;
         }
@@ -457,9 +497,22 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::index_copy(
-        const StorageRef output, const StorageRef indices, const StorageRef source,
+        const StorageRef output, const StorageRef raw_indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_copy);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            const auto context = acquire_vulkan_context();
+            Launch cast{.mode = kIndexCastMode, .dtype = DataType::Int32};
+            cast.boundary = static_cast<uint32_t>(0);
+            cast.total = program.index_size;
+            cast.push.input_address = address(input);
+            cast.push.value_address = address(output);
+            cast.push.dim_size = checked_u32(output_layout.dims[static_cast<size_t>(program.dim)], "Vulkan index extent exceeds uint32");
+            const std::array reads{input};
+            const std::array writes{output};
+            record_index(*context, cast, reads, writes);
+        });
+        const auto indices = scratch.storage();
         const auto context = acquire_vulkan_context();
         const Launch launch = scatter_launch(kScatterAssignMode, output, indices, source,
                                              output_layout, program.dim, program.index_size);
@@ -467,9 +520,22 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::index_add(
-        const StorageRef output, const StorageRef indices, const StorageRef source,
+        const StorageRef output, const StorageRef raw_indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_add);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, {}, [&](StorageRef input, StorageRef output) {
+            const auto context = acquire_vulkan_context();
+            Launch cast{.mode = kIndexCastMode, .dtype = DataType::Int32};
+            cast.boundary = static_cast<uint32_t>(0);
+            cast.total = program.index_size;
+            cast.push.input_address = address(input);
+            cast.push.value_address = address(output);
+            cast.push.dim_size = checked_u32(output_layout.dims[static_cast<size_t>(program.dim)], "Vulkan index extent exceeds uint32");
+            const std::array reads{input};
+            const std::array writes{output};
+            record_index(*context, cast, reads, writes);
+        });
+        const auto indices = scratch.storage();
         LFS_ASSERT_MSG(output.dtype == DataType::Float32 || output.dtype == DataType::Int32,
                        "Vulkan index_add supports only Float32 and Int32");
         const auto context = acquire_vulkan_context();

@@ -24,6 +24,9 @@ namespace lfs::core::internal {
     using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
     // backend_ops caches the resulting pointer in the calling thread.
+    struct BackendRendererAccess {
+        bool shares_vulkan = false, needs_vulkan_interop = false, metal = false;
+    };
     class BackendDriver {
     public:
         virtual ~BackendDriver() = default;
@@ -38,6 +41,8 @@ namespace lfs::core::internal {
         virtual void set_selection(int selection) noexcept = 0;
         virtual int selected_device() = 0;
         virtual void bind_thread() = 0;
+        virtual void* current_target() const noexcept = 0;
+        virtual BackendRendererAccess renderer_access() const noexcept = 0;
         virtual std::array<uintptr_t, 2> bind_target(void*) = 0;
         virtual void unbind_target(std::array<uintptr_t, 2>) noexcept = 0;
         virtual void bridge_targets(void* consumer, void* producer) = 0;

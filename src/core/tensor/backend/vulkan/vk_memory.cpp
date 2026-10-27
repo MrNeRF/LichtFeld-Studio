@@ -613,7 +613,7 @@ namespace lfs::core::internal {
             .byte_offset = 0,
             .dtype = DataType::UInt8,
             .meta = descriptor,
-            .flags = direct_class ? STORAGE_REF_DIRECT_ALLOCATION : 0,
+            .flags = allocation_flags(StorageAccountingKind::VulkanOwned, direct_class, true, true),
         };
     }
 

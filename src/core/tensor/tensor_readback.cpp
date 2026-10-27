@@ -2,11 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor_readback.hpp"
+#include "backend/prepared_readback.hpp"
 #include "backend/readback_buffer.hpp"
-#ifdef LFS_TENSOR_VULKAN
-#include "backend/vulkan/vk_context.hpp"
-#include "backend/vulkan/vk_recorder.hpp"
-#endif
 #include "core/device_fault.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_upload.hpp"
@@ -17,19 +14,12 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
-#if LFS_HAS_CUDA
-#include "core/cuda_error_typed.hpp"
-#include <cuda_runtime.h>
-#endif
 
 namespace lfs::core {
     struct TensorReadback::Impl {
         // Destroy staging before releasing the tensor that its queued copy reads.
         Tensor source;
-        Tensor destination;
-        void* destination_pointer = nullptr;
-        std::unique_ptr<TensorFence> producer;
-        std::unique_ptr<TensorFence> completion;
+        std::unique_ptr<internal::PreparedReadback> prepared;
         bool direct = false;
         std::unique_ptr<internal::ReadbackBuffer> buffer;
         std::optional<GpuBackend> backend;
@@ -151,27 +141,8 @@ namespace lfs::core {
             !destination.is_contiguous() || destination.bytes() != source.bytes())
             throw std::invalid_argument("Direct readback requires matching contiguous GPU and CPU tensors");
         auto next = std::make_unique<Impl>();
-        next->source = source;
-        next->destination = destination;
-        next->destination_pointer = next->destination.data_ptr();
-        next->bytes = source.bytes();
         next->backend = backend;
-        if (*backend == GpuBackend::CUDA) {
-#if LFS_HAS_CUDA
-            if (next->bytes) {
-                cudaPointerAttributes attributes{};
-                LFS_CUDA_CHECK(cudaPointerGetAttributes(&attributes, next->destination_pointer));
-                if (attributes.type != cudaMemoryTypeHost)
-                    throw std::invalid_argument("Direct readback destination must be pinned CPU storage");
-            }
-#else
-            throw std::runtime_error("CUDA tensor readback is unavailable in this build");
-#endif
-        } else if (next->bytes) {
-            next->buffer = internal::backend_ops_for(source).create_readback_buffer();
-        }
-        next->producer = std::make_unique<TensorFence>(*backend);
-        next->completion = std::make_unique<TensorFence>(*backend);
+        next->prepared = internal::backend_ops_for(source).prepare_readback(source, destination);
         next->direct = true;
         impl_ = std::move(next);
     }
@@ -184,62 +155,11 @@ namespace lfs::core {
             throw std::logic_error("Readback already has a pending download");
         if (!s.backend || queue.backend() != *s.backend)
             throw std::invalid_argument("Direct readback queue backend mismatch");
-        if (*s.backend != GpuBackend::CUDA) {
-            const auto storage = internal::storage_ref(s.source);
-            // Metal runs batches in submission order, so its copy already
-            // follows the source's producer.
-            if (*s.backend == GpuBackend::Vulkan) {
-#ifdef LFS_TENSOR_VULKAN
-                const uint64_t recorder = storage.meta == nullptr
-                                              ? 0
-                                              : storage.meta->pending_recorder.load(std::memory_order_acquire);
-                const uint64_t pending = storage.meta == nullptr
-                                             ? 0
-                                             : storage.meta->pending_value.load(std::memory_order_acquire);
-                // Flush the recorder that owns the source write, including an implicit
-                // recorder. Fence::record rejects anything that is not an owned queue.
-                uint64_t value = pending;
-                if (recorder != 0) {
-                    value = std::max(value, internal::acquire_vulkan_context()->recorders().flush_queue(recorder));
-                }
-                *s.producer = TensorFence::adopt(GpuBackend::Vulkan,
-                                                 reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
-                queue.wait_for(*s.producer);
-#else
-                throw std::runtime_error("Vulkan tensor readback is unavailable in this build");
-#endif
-            }
-            const TensorWorkQueue::Scope scope(queue);
-            try {
-                if (s.bytes && s.buffer) {
-                    auto source = storage;
-                    s.buffer->enqueue(source, s.bytes, {});
-                }
-                queue.record(*s.completion);
-                s.pending = true;
-            } catch (...) {
-                try {
-                    queue.wait();
-                } catch (...) {
-                    LOG_ERROR("Direct readback storage retained after failed queue drain");
-                    (void)impl_.release();
-                }
-                throw;
-            }
-            return;
-        }
-#if LFS_HAS_CUDA
-        s.producer->record(s.source.stream());
-        queue.wait_for(*s.producer);
         try {
-            if (s.bytes)
-                LFS_CUDA_CHECK(cudaMemcpyAsync(s.destination_pointer, std::as_const(s.source).data_ptr(),
-                                               s.bytes, cudaMemcpyDeviceToHost,
-                                               static_cast<cudaStream_t>(queue.native_handle())));
-            queue.record(*s.completion);
+            s.prepared->enqueue(queue);
             s.pending = true;
         } catch (...) {
-            // Retain both tensors until any partially submitted copy has settled.
+            // Retain both tensors if a partially submitted transfer cannot drain.
             try {
                 queue.wait();
             } catch (...) {
@@ -248,32 +168,13 @@ namespace lfs::core {
             }
             throw;
         }
-#else
-        throw std::runtime_error("CUDA tensor readback is unavailable in this build");
-#endif
     }
 
     bool TensorReadback::poll() {
         if (!impl_ || !impl_->direct || !impl_->pending)
             throw std::logic_error("No pending direct readback");
-        if (!impl_->completion->ready())
+        if (!impl_->prepared->poll())
             return false;
-        if (impl_->backend != GpuBackend::CUDA) {
-            if (impl_->bytes != 0 && impl_->buffer &&
-                !impl_->buffer->poll(impl_->destination_pointer))
-                return false;
-            impl_->pending = false;
-            return true;
-        }
-#if LFS_HAS_CUDA
-        // Only this retained producer can have supplied the downloaded bytes.
-        // Scanning the global registry allocates a vector on each publication.
-        const auto status = cudaStreamQuery(impl_->source.stream());
-        if (status == cudaSuccess)
-            device_fault_slot_consume_or_throw(impl_->source.stream(), "tensor.readback", LFS_SOURCE_SITE_CURRENT());
-        else if (status != cudaErrorNotReady)
-            LFS_CUDA_CHECK(status);
-#endif
         impl_->pending = false;
         return true;
     }
@@ -281,7 +182,7 @@ namespace lfs::core {
     void TensorReadback::wait() {
         if (!impl_ || !impl_->direct || !impl_->pending)
             throw std::logic_error("No pending direct readback");
-        impl_->completion->wait();
+        impl_->prepared->wait();
         (void)poll();
     }
 

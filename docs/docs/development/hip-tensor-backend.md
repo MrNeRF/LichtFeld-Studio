@@ -88,6 +88,20 @@ project-owned mathematical kernels and Slang programs. Each backend retains its
 native emitters and runtime ownership. Fused expression source is lowered separately
 and compiled with HIPRTC; unsupported inputs fail explicitly.
 
+GPU work queues and execution scopes own one native implementation. Queue
+creation, scope binding, host callbacks, consumer timeline imports and completion
+snapshots use the same contract on CUDA, Vulkan, Metal and HIP. Public scope
+objects retain opaque state inline and allocate no scope object on the heap.
+Unavailable native features fail explicitly rather than exposing another
+backend's handles.
+
+GPU indexing accepts Int32 and Int64 with a common aliasing and selected-count
+contract. Adapters whose kernels require Int32 own their conversion scratch;
+clamp and wrap normalize wide values before narrowing. Indexed writes snapshot
+overlapping inputs before mutation. Prepared readback retains its source and
+CPU destination, preserves native ordering, and checks execution errors before
+publishing bytes, including zero-byte completion snapshots.
+
 ## Ownership and memory
 
 HIP device allocations use the appended `MemoryDomain::HipDevice`. The allocator
@@ -96,6 +110,10 @@ allocations before retrying an allocation failure once. Live tensors are retaine
 Memory information separates live allocations, cached allocations and native
 algorithm workspaces. Device heap statistics from APIs using the same physical
 GPU must not be summed.
+
+Native allocations return their accounting, teardown and diagnostic-label policy
+with the allocation descriptor. Shared allocation and deletion consume that
+policy instead of deriving ownership from backend names.
 
 Storage views validate backend, owner, byte ranges, dtype and layout before native
 use. Borrowed raw views require a live allocation and retain the existing raw-view

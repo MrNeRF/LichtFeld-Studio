@@ -50,6 +50,8 @@ namespace lfs::core::internal {
                 throw std::runtime_error(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
             void bind_thread() override {}
+            void* current_target() const noexcept override { return default_device_ >= 0 ? getCurrentCUDAStream() : nullptr; }
+            BackendRendererAccess renderer_access() const noexcept override { return {publication_ != SplatPublication::Copied, publication_ == SplatPublication::RendererStorage, false}; }
             GpuBackendOps& activate() override {
                 LFS_ASSERT_MSG(false, std::format("GPU backend '{}' is not compiled into this build", name_));
                 std::unreachable();

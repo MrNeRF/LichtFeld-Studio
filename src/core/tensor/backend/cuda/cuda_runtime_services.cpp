@@ -1,3 +1,4 @@
+#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/expression_runtime.hpp"
@@ -280,3 +281,46 @@ namespace lfs::core::internal {
 
 namespace lfs::core::internal {
 }
+
+namespace lfs::core::internal {
+    namespace {
+        class CudaPreparedReadback final : public PreparedReadback {
+            Tensor source_, destination_;
+            void* destination_pointer_;
+            size_t bytes_;
+            TensorFence producer_{GpuBackend::CUDA}, completion_{GpuBackend::CUDA};
+
+        public:
+            CudaPreparedReadback(const Tensor& source, const Tensor& destination)
+                : source_(source), destination_(destination), destination_pointer_(destination_.data_ptr()), bytes_(source.bytes()) {
+                if (bytes_) {
+                    cudaPointerAttributes attributes{};
+                    LFS_CUDA_CHECK(cudaPointerGetAttributes(&attributes, destination_pointer_));
+                    if (attributes.type != cudaMemoryTypeHost)
+                        throw std::invalid_argument("Direct readback destination must be pinned CPU storage");
+                }
+            }
+            void enqueue(TensorWorkQueue& queue) override {
+                producer_.record(source_.stream());
+                queue.wait_for(producer_);
+                if (bytes_)
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(destination_pointer_, std::as_const(source_).data_ptr(), bytes_, cudaMemcpyDeviceToHost, static_cast<cudaStream_t>(queue.native_handle())));
+                queue.record(completion_);
+            }
+            bool poll() override {
+                if (!completion_.ready())
+                    return false;
+                const auto status = cudaStreamQuery(source_.stream());
+                if (status == cudaSuccess)
+                    device_fault_slot_consume_or_throw(source_.stream(), "tensor.readback", LFS_SOURCE_SITE_CURRENT());
+                else if (status != cudaErrorNotReady)
+                    LFS_CUDA_CHECK(status);
+                return true;
+            }
+            void wait() override { completion_.wait(); }
+        };
+    } // namespace
+    std::unique_ptr<PreparedReadback> CudaBackendOps::prepare_readback(const Tensor& source, const Tensor& destination) {
+        return std::make_unique<CudaPreparedReadback>(source, destination);
+    }
+} // namespace lfs::core::internal

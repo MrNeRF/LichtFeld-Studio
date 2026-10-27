@@ -413,11 +413,18 @@ namespace lfs::core::tensor_ops {
         *out_trap = device_fault_trap_after_record_for_launch();
     }
 
-    __global__ void index_cast_kernel(const int64_t* input, int* output, size_t count, size_t extent,
+    __global__ void index_cast_kernel(const int64_t* input, int* output, size_t count, size_t extent, int boundary_mode,
                                       DeviceFaultRecord* fault, uint32_t op_id, bool trap) {
         for (size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
              i < count; i += size_t(gridDim.x) * blockDim.x) {
-            const int64_t index = input[i];
+            int64_t index = input[i];
+            if (boundary_mode == 1)
+                index = index < 0 ? 0 : (uint64_t(index) >= extent ? int64_t(extent - 1) : index);
+            else if (boundary_mode == 2) {
+                index %= int64_t(extent);
+                if (index < 0)
+                    index += int64_t(extent);
+            }
             if (index < 0 || uint64_t(index) >= extent) {
                 device_fault_try_record_first(fault, op_id, index, extent, i, trap);
                 output[i] = -1;
@@ -428,15 +435,16 @@ namespace lfs::core::tensor_ops {
     }
 
     void launch_index_cast(const int64_t* input, int* output, size_t count, size_t extent,
-                           cudaStream_t stream) {
+                           cudaStream_t stream, int boundary_mode) {
         if (count == 0)
             return;
-        DeviceFaultRecord* fault;
-        uint32_t op_id;
-        bool trap;
-        prepare_index_device_fault(0, stream, "tensor.masking.index_cast", &fault, &op_id, &trap);
+        DeviceFaultRecord* fault = nullptr;
+        uint32_t op_id = 0;
+        bool trap = false;
+        if (boundary_mode == 0)
+            prepare_index_device_fault(0, stream, "tensor.masking.index_cast", &fault, &op_id, &trap);
         const size_t blocks = std::min((count + 255) / 256, size_t{65535});
-        index_cast_kernel<<<blocks, 256, 0, stream>>>(input, output, count, extent, fault, op_id, trap);
+        index_cast_kernel<<<blocks, 256, 0, stream>>>(input, output, count, extent, boundary_mode, fault, op_id, trap);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_cast");
     }
 

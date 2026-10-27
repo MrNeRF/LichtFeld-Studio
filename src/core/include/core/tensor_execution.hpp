@@ -7,9 +7,6 @@
 #include <array>
 #include <compare>
 
-namespace lfs::core::internal {
-    class BackendDriver;
-}
 namespace lfs::core {
     class TensorWorkQueue;
 
@@ -37,7 +34,7 @@ namespace lfs::core {
 
         private:
             GpuBackendScope backend_scope_;
-            internal::BackendDriver* driver_;
+            void* driver_;
             std::array<uintptr_t, 2> binding_;
         };
 

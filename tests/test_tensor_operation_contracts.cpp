@@ -185,6 +185,28 @@ namespace {
         ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices), {3, 2}, {5, 6, 1, 2, 5, 6}));
     }
 
+    TEST_P(TensorOperationContracts, WideIndicesNormalizeBeforeNativeNarrowing) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native GPU boundary normalization contract";
+        const auto input = values({10, 20, 30}, {3});
+        std::vector<int64_t> wide{std::numeric_limits<int64_t>::lowest(), -1, 0, 3, std::numeric_limits<int64_t>::max()};
+        const auto indices = Tensor::from_blob(wide.data(), {wide.size()}, Device::CPU, DataType::Int64).to(device());
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices, BoundaryMode::Clamp), {5}, {10, 10, 10, 30, 30}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices, BoundaryMode::Wrap), {5}, {20, 30, 10, 10, 20}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.gather(0, indices, BoundaryMode::Clamp), {5}, {10, 10, 10, 30, 30}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.gather(0, indices, BoundaryMode::Wrap), {5}, {20, 30, 10, 10, 20}));
+    }
+
+    TEST_P(TensorOperationContracts, IndexedWritesSnapshotOverlappingSources) {
+        const auto indices = Tensor::from_vector(std::vector<int>{1, 0}, {2}, device()).to(DataType::Int64);
+        auto copied = values({1, 2, 3, 4}, {2, 2});
+        copied.index_copy_(0, indices, copied);
+        ASSERT_NO_FATAL_FAILURE(expect_values(copied, {2, 2}, {3, 4, 1, 2}));
+        auto added = values({1, 2, 3, 4}, {2, 2});
+        added.index_add_(0, indices, added);
+        ASSERT_NO_FATAL_FAILURE(expect_values(added, {2, 2}, {4, 6, 4, 6}));
+    }
+
     TEST_P(TensorOperationContracts, NonzeroUsesSelectedCountRatherThanCapacity) {
         const auto check_indices = [&](const Tensor& input, const std::vector<int64_t>& expected) {
             const auto indices = input.nonzero();

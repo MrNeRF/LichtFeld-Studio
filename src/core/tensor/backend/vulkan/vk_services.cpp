@@ -1,3 +1,4 @@
+#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -596,5 +597,21 @@ namespace lfs::core::internal {
 
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice target) {
         return std::make_shared<VulkanTensorVulkanInterop>(target);
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    std::unique_ptr<PreparedReadback> VulkanBackendOps::prepare_readback(const Tensor& source, const Tensor& destination) {
+        return std::make_unique<BufferedPreparedReadback>(source, destination,
+                                                          source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor& tensor, TensorWorkQueue& queue) {
+                                                              const auto storage = storage_ref(tensor);
+                                                              const auto context = acquire_vulkan_context();
+                                                              const uint64_t recorder = storage.meta ? storage.meta->pending_recorder.load(std::memory_order_acquire) : 0;
+                                                              uint64_t value = storage.meta ? storage.meta->pending_value.load(std::memory_order_acquire) : 0;
+                                                              if (recorder)
+                                                                  value = std::max(value, context->recorders().flush_queue(recorder));
+                                                              auto producer = TensorFence::adopt(GpuBackend::Vulkan, reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
+                                                              queue.wait_for(producer);
+                                                          });
     }
 } // namespace lfs::core::internal

@@ -455,12 +455,8 @@ namespace lfs::core {
                         internal::StorageRef released = storage;
                         released.meta = storage.meta != nullptr ? &owner : nullptr;
                         internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
-                        if (storage.backend == GpuBackend::Vulkan) {
-                            Tensor::record_storage_deallocation(
-                                StorageAccountingKind::VulkanOwned, bytes);
-                        }
-                        if (gpu_backend_compiled(GpuBackend::HIP) && storage.backend == GpuBackend::HIP)
-                            Tensor::record_storage_deallocation(StorageAccountingKind::HipOwned, bytes);
+                        if (internal::allocation_accounted(storage))
+                            Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
                     }
                 });
                 result.data_ = result.data_owner_.get();
@@ -471,11 +467,8 @@ namespace lfs::core {
                 } else {
                     result.storage_meta_->gpu_descriptor.byte_size = bytes;
                 }
-                if (*gpu_backend == GpuBackend::Vulkan) {
-                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
-                }
-                if (gpu_backend_compiled(GpuBackend::HIP) && *gpu_backend == GpuBackend::HIP)
-                    record_storage_allocation(StorageAccountingKind::HipOwned, bytes);
+                if (internal::allocation_accounted(storage))
+                    record_storage_allocation(internal::allocation_accounting(storage), bytes);
 
                 // Record tensor allocation for profiling
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
@@ -702,12 +695,8 @@ namespace lfs::core {
                         internal::StorageRef released = storage;
                         released.meta = storage.meta != nullptr ? &owner : nullptr;
                         internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
-                        if (storage.backend == GpuBackend::Vulkan) {
-                            Tensor::record_storage_deallocation(
-                                StorageAccountingKind::VulkanOwned, bytes);
-                        }
-                        if (gpu_backend_compiled(GpuBackend::HIP) && storage.backend == GpuBackend::HIP)
-                            Tensor::record_storage_deallocation(StorageAccountingKind::HipOwned, bytes);
+                        if (internal::allocation_accounted(storage))
+                            Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
                     }
                 });
                 result.data_ = result.data_owner_.get();
@@ -718,11 +707,8 @@ namespace lfs::core {
                 } else {
                     result.storage_meta_->gpu_descriptor.byte_size = bytes;
                 }
-                if (*gpu_backend == GpuBackend::Vulkan) {
-                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
-                }
-                if (gpu_backend_compiled(GpuBackend::HIP) && *gpu_backend == GpuBackend::HIP)
-                    record_storage_allocation(StorageAccountingKind::HipOwned, bytes);
+                if (internal::allocation_accounted(storage))
+                    record_storage_allocation(internal::allocation_accounting(storage), bytes);
 
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                     backend_ops.record_tensor_allocation(

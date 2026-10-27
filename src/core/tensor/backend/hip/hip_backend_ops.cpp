@@ -1,8 +1,9 @@
+#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "hip_backend_ops.hpp"
 #include "architecture_runtime.hpp"
 #include "expression_api.h"
+#include "hip_backend_ops.hpp"
 #include "runtime_api.h"
 #include "runtime_context.hpp"
 #ifdef LFS_HIP_EXPRESSION_JIT
@@ -604,7 +605,7 @@ namespace lfs::core::internal {
         impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
         auto* pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
         return {GpuBackend::HIP, pointer, 0, DataType::Float32, impl_->allocations.at(pointer).metadata.get(),
-                cacheable ? 0u : STORAGE_REF_DIRECT_ALLOCATION};
+                allocation_flags(StorageAccountingKind::HipOwned, !cacheable, true, false, !cacheable ? AllocationLabel::HipDirect : AllocationLabel::None)};
     }
     void HipBackendOps::deallocate(StorageRef storage, ExecContext execution) noexcept {
         try {
@@ -2955,4 +2956,11 @@ namespace lfs::core::internal {
 
 namespace lfs::core::internal {
     void HipBackendOps::name_queue(ExecContext, const char*) {}
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    std::unique_ptr<PreparedReadback> HipBackendOps::prepare_readback(const Tensor& source, const Tensor& destination) {
+        return std::make_unique<BufferedPreparedReadback>(source, destination,
+                                                          source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) {});
+    }
 } // namespace lfs::core::internal

@@ -11,9 +11,6 @@
 #include <functional>
 #include <memory>
 #include <span>
-namespace lfs::core::internal {
-    class BackendWorkQueue;
-}
 namespace lfs::core {
     class Tensor;
     // Reusable asynchronous H2D slot. Owns both tensors until the queued copy
@@ -101,7 +98,7 @@ namespace lfs::core {
 
         private:
             GpuBackendScope backend_scope_;
-            internal::BackendWorkQueue* native_ = nullptr;
+            void* native_ = nullptr;
             std::array<uintptr_t, 2> binding_{};
         };
         [[nodiscard]] void* native_handle() const;
