@@ -84,7 +84,8 @@ TEST_F(NavigationTest, TemporaryInterruptionRetainsAssignmentButTargetAndDeviceC
     context.allowed = false;
     EXPECT_FALSE(tick().active);
     context.allowed = true;
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     EXPECT_STREQ(session.status(), "ready");
     context.target = 456;
     tick();
@@ -103,7 +104,8 @@ TEST_F(NavigationTest, ModeChangesRequireNeutralButExplicitSuspensionRevokesAssi
     context.mode = GamepadNavigationMode::Drone;
     EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "neutral");
-    for (int i = 0; i < 2; ++i) tick();
+    for (int i = 0; i < 2; ++i)
+        tick();
     EXPECT_STREQ(session.status(), "ready");
     session.suspend(context.click_epoch);
     sample.axes[SDL_GAMEPAD_AXIS_LEFTX] = 1;
@@ -276,7 +278,7 @@ TEST_F(NavigationTest, ModeOverrideCanExplicitlyClearOrInherit) {
 
 TEST_F(NavigationTest, ButtonsCanDriveSignedMovementAndInversion) {
     settings.bindings.common[0] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH,
-                                  SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_WEST, true};
+                                   SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_WEST, true};
     settings.validate();
     arm();
     sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
@@ -356,10 +358,12 @@ TEST_F(NavigationTest, DeliberateControllerModeChangeRearmsOnlyAfterNeutralWitho
     EXPECT_EQ(tick().navigation_step, 1);
     session.pause();
     context.mode = GamepadNavigationMode::Trackball;
-    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "neutral");
     sample.buttons.fill(false);
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     EXPECT_STREQ(session.status(), "ready");
     sample.buttons[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = true;
     EXPECT_EQ(tick().navigation_step, 1);
@@ -385,7 +389,8 @@ TEST(GamepadModeCycle, OrthographicCyclesOnlySupportedModesAndFailureIsBounded) 
     using namespace lfs::vis::input;
     std::vector<GamepadNavigationMode> tried;
     EXPECT_TRUE(cycleGamepadNavigation(GamepadNavigationMode::Trackball, 1, true, [&](auto mode) {
-        tried.push_back(mode); return true;
+        tried.push_back(mode);
+        return true;
     }));
     EXPECT_EQ(tried, (std::vector{GamepadNavigationMode::Orbit}));
     int attempts = 0;
@@ -398,16 +403,19 @@ TEST_F(NavigationTest, ModalPauseCannotQueueMovementOrShoulderCommands) {
     context.allowed = false;
     sample.axes[SDL_GAMEPAD_AXIS_LEFTX] = 1;
     sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
-    for (int i = 0; i < 5; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 5; ++i)
+        EXPECT_FALSE(tick().active);
     context.allowed = true;
-    for (int i = 0; i < 5; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 5; ++i)
+        EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "neutral");
     sample.axes.fill(0);
     sample.buttons.fill(false);
     sample.pressed[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
     EXPECT_FALSE(tick().active);
     sample.pressed.fill(false);
-    for (int i = 0; i < 3; ++i) EXPECT_EQ(tick().rendering_step, 0);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_EQ(tick().rendering_step, 0);
     EXPECT_STREQ(session.status(), "ready");
     sample.buttons[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = true;
     EXPECT_EQ(tick().rendering_step, 1);
@@ -416,7 +424,8 @@ TEST_F(NavigationTest, ModalPauseCannotQueueMovementOrShoulderCommands) {
 TEST_F(NavigationTest, PauseDoesNotGrantAnUnassignedViewport) {
     tick();
     session.pause();
-    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "viewport");
 }
 
@@ -427,7 +436,8 @@ TEST_F(NavigationTest, ReconnectDuringPauseRevokesPreviousGrant) {
     ++sample.generation;
     tick();
     context.allowed = true;
-    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "viewport");
     arm();
 }
@@ -436,9 +446,11 @@ TEST_F(NavigationTest, BlockingDialogBetweenFramesRequiresNeutralAgain) {
     arm();
     session.pause(); // native picker opened and closed while the UI loop was blocked
     sample.axes[SDL_GAMEPAD_AXIS_RIGHTX] = 0.9f;
-    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(tick().active);
     sample.axes.fill(0);
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     EXPECT_STREQ(session.status(), "ready");
 }
 
@@ -503,18 +515,22 @@ TEST_F(NavigationTest, SequencerDefaultsAreContextualAndFireOnlyOncePerPress) {
     EXPECT_FALSE(tick().add_keyframe);
     sample.buttons.fill(false);
     context.sequencer_open = true;
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
     EXPECT_TRUE(tick().add_keyframe);
     EXPECT_FALSE(tick().add_keyframe);
-    sample.buttons.fill(false); tick();
+    sample.buttons.fill(false);
+    tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
     EXPECT_TRUE(tick().remove_selected_keyframe);
-    sample.buttons.fill(false); tick();
+    sample.buttons.fill(false);
+    tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_DPAD_LEFT] = true;
     EXPECT_EQ(tick().keyframe_step, -1);
     EXPECT_EQ(tick().keyframe_step, 0);
-    sample.buttons.fill(false); tick();
+    sample.buttons.fill(false);
+    tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_DPAD_RIGHT] = true;
     EXPECT_EQ(tick().keyframe_step, 1);
 }
@@ -523,9 +539,11 @@ TEST_F(NavigationTest, OpeningAndClosingSequencerRequireNeutralAndNeverQueueHeld
     arm();
     sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
     context.sequencer_open = true;
-    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    for (int i = 0; i < 10; ++i)
+        EXPECT_FALSE(tick().active);
     sample.buttons.fill(false);
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     EXPECT_STREQ(session.status(), "ready");
     context.allowed = false;
     sample.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
@@ -533,7 +551,8 @@ TEST_F(NavigationTest, OpeningAndClosingSequencerRequireNeutralAndNeverQueueHeld
     context.allowed = true;
     EXPECT_FALSE(tick().active);
     sample.pressed.fill(false);
-    for (int i = 0; i < 3; ++i) EXPECT_FALSE(tick().add_keyframe);
+    for (int i = 0; i < 3; ++i)
+        EXPECT_FALSE(tick().add_keyframe);
     context.sequencer_open = false;
     EXPECT_FALSE(tick().active);
     EXPECT_STREQ(session.status(), "neutral");
@@ -547,12 +566,14 @@ TEST_F(NavigationTest, SequencerRemappingOverridesSharedCameraControlsOnlyWhileV
     EXPECT_EQ(tick().move.x, 1);
     sample.buttons.fill(false);
     context.sequencer_open = true;
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
     auto intent = tick();
     EXPECT_TRUE(intent.remove_selected_keyframe);
     EXPECT_EQ(intent.move.x, 0);
-    sample.buttons.fill(false); tick();
+    sample.buttons.fill(false);
+    tick();
     settings.bindings.modes[gamepad_sequencer_scope][13] = GamepadBinding{};
     intent = tick();
     sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
@@ -581,12 +602,33 @@ TEST_F(NavigationTest, DeselectIsOptionalRemappableAndReservedOnlyInsideSequence
     EXPECT_TRUE(tick().deselect_keyframe);
     sample.pressed.fill(false);
     context.sequencer_open = false;
-    for (int i = 0; i < 3; ++i) tick();
+    for (int i = 0; i < 3; ++i)
+        tick();
     sample.pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN] = true;
     EXPECT_FALSE(tick().deselect_keyframe);
     const auto restored = GamepadNavigationSettings::fromJson(settings.json());
     EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, action).positive,
               SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+}
+
+TEST_F(NavigationTest, TimelineGestureBlocksEditingButKeepsCameraMotionAndDoesNotReplayHeldButtons) {
+    context.sequencer_open = true;
+    arm();
+    context.sequencer_commands_allowed = false;
+    sample.axes[SDL_GAMEPAD_AXIS_LEFTX] = .8f;
+    sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+    sample.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
+    auto intent = tick();
+    EXPECT_FALSE(intent.add_keyframe);
+    EXPECT_GT(intent.move.x, 0.f);
+    EXPECT_TRUE(intent.active);
+    sample.pressed.fill(false);
+    context.sequencer_commands_allowed = true;
+    EXPECT_FALSE(tick().add_keyframe); // held through the drag, no delayed capture
+    sample.buttons.fill(false);
+    tick();
+    sample.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_TRUE(tick().add_keyframe);
 }
 
 TEST_F(NavigationTest, LegacyProfilesGainSequencerDefaultsAndKeepExplicitOverrides) {

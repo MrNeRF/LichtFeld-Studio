@@ -1580,14 +1580,15 @@ namespace lfs::vis::gui {
         set_class(element, "is-ready", ready);
         set_class(element, "needs-action", !ready && status != "suspended");
         const auto mode_key = controller->cameraNavigationMode() == InputController::CameraNavigationMode::Walk
-            ? std::string("collision.walk")
-            : std::string("preferences.navigation_") + InputController::cameraNavigationModeName(controller->cameraNavigationMode());
+                                  ? std::string("collision.walk")
+                                  : std::string("preferences.navigation_") + InputController::cameraNavigationModeName(controller->cameraNavigationMode());
         set_text("gamepad-indicator-mode", LOC(mode_key));
         const bool split = split_divider_overlay_.visible;
         set_class(document_->GetElementById("gamepad-indicator-panel"), "hidden", !split);
         if (split)
             set_text("gamepad-indicator-panel", controller->gamepadNavigationPanel() == SplitViewPanelId::Right
-                ? LOC("gamepad.indicator.right") : LOC("gamepad.indicator.left"));
+                                                    ? LOC("gamepad.indicator.right")
+                                                    : LOC("gamepad.indicator.left"));
         set_class(document_->GetElementById("gamepad-indicator-status"), "hidden", ready);
         if (!ready) {
             const auto key = "gamepad.indicator." + std::string(status);

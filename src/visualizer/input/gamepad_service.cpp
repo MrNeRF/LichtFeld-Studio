@@ -22,12 +22,15 @@ namespace lfs::vis::input {
         bool initialized = false;
 
         void selectOnlyNavigation() {
-            if (state.navigation_selected) return;
+            if (state.navigation_selected)
+                return;
             SDL_JoystickID only = 0;
-            for (const auto& connection : connections) if (connection.handle) {
-                if (only) return;
-                only = connection.device.id;
-            }
+            for (const auto& connection : connections)
+                if (connection.handle) {
+                    if (only)
+                        return;
+                    only = connection.device.id;
+                }
             state.navigation_selected = only;
         }
 
@@ -56,9 +59,10 @@ namespace lfs::vis::input {
                 }
             }
             const bool first_usable = connection.handle && std::none_of(connections.begin(), connections.end(),
-                                                                         [](const auto& c) { return bool(c.handle); });
+                                                                        [](const auto& c) { return bool(c.handle); });
             connections.push_back(std::move(connection));
-            if (auto_select && first_usable) selectOnlyNavigation();
+            if (auto_select && first_usable)
+                selectOnlyNavigation();
         }
 
         void remove(SDL_JoystickID id) {
@@ -240,7 +244,8 @@ namespace lfs::vis::input {
 
     std::string GamepadService::navigationProfileKey() const {
         for (const auto& connection : impl_->connections)
-            if (connection.device.id == impl_->state.navigation_selected) return connection.device.profile_key;
+            if (connection.device.id == impl_->state.navigation_selected)
+                return connection.device.profile_key;
         return {};
     }
 

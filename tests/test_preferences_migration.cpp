@@ -876,7 +876,10 @@ TEST(PreferencesMigration, NamedGamepadProfilesMigrateAndSwitchAtomicallyWithout
     EXPECT_EQ(updated["profiles"][0], library["profiles"][0]);
     EXPECT_EQ(updated["device_profiles"], library["device_profiles"]);
     const auto other_home = makeHome("lfs_named_gamepad_profiles_other");
-    { const ScopedLfsHome other(other_home); (void)preferences.gamepadProfiles(); }
+    {
+        const ScopedLfsHome other(other_home);
+        (void)preferences.gamepadProfiles();
+    }
     EXPECT_EQ(json::parse(preferences.gamepadProfiles()), updated);
 }
 
@@ -922,7 +925,8 @@ TEST(PreferencesMigration, SafeModeCannotModifyOrResetSavedGamepadProfiles) {
     struct SafeMode {
         std::optional<std::string> previous;
         SafeMode() {
-            if (const auto* value = std::getenv("LFS_SAFE_MODE")) previous = value;
+            if (const auto* value = std::getenv("LFS_SAFE_MODE"))
+                previous = value;
 #ifdef _WIN32
             (void)_putenv_s("LFS_SAFE_MODE", "1");
 #else
@@ -933,8 +937,10 @@ TEST(PreferencesMigration, SafeModeCannotModifyOrResetSavedGamepadProfiles) {
 #ifdef _WIN32
             (void)_putenv_s("LFS_SAFE_MODE", previous ? previous->c_str() : "");
 #else
-            if (previous) (void)setenv("LFS_SAFE_MODE", previous->c_str(), 1);
-            else (void)unsetenv("LFS_SAFE_MODE");
+            if (previous)
+                (void)setenv("LFS_SAFE_MODE", previous->c_str(), 1);
+            else
+                (void)unsetenv("LFS_SAFE_MODE");
 #endif
         }
     };

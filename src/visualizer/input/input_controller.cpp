@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_controller.hpp"
-#include "input/gamepad_profiles.hpp"
 #include "core/collision.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -13,14 +12,15 @@
 #include "core/source_site.hpp"
 #include "core/splat_data_transform.hpp"
 #include "gui/bounds_gizmo.hpp"
-#include "gui/utils/native_file_dialog.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/translation_gizmo.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "gui/utils/native_file_drag.hpp"
+#include "input/gamepad_profiles.hpp"
 #include "input/input_router.hpp"
 #include "input/input_types.hpp"
 #include "input/key_codes.hpp"
@@ -721,7 +721,8 @@ namespace lfs::vis {
             try {
                 core::settleWalk(candidate, walk_settings, camera.navigationUp(), walkQuery());
             } catch (const std::exception& error) {
-                if (!report_failure) return false;
+                if (!report_failure)
+                    return false;
                 const auto message = core::localizedCollisionError(error);
                 if (walk_error != message) {
                     lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
@@ -2791,12 +2792,12 @@ namespace lfs::vis {
                           !op::operators().hasModalOperator() &&
                           !gui::preserveNativeDragInput() && window->manualResizeEdgeMask() == 0 &&
                           !gui::PanelRegistry::instance().is_panel_enabled("lfs.preferences") &&
-                          (!gui || (!gui->sequencer().isPlaying() && gui->sequencer().state() != PlaybackState::SCRUBBING &&
-                                    !gui->sequencerUI().isTimelineGestureActive())) &&
+                          (!gui || (!gui->sequencer().isPlaying() && gui->sequencer().state() != PlaybackState::SCRUBBING)) &&
                           window->gamepads().diagnosticSelected() == 0;
         context.target = reinterpret_cast<uintptr_t>(&target);
         context.click_epoch = gamepad_click_epoch_;
         context.sequencer_open = gui && gui->isSequencerVisible() && !gui_state.text_input_active;
+        context.sequencer_commands_allowed = !gui || !gui->sequencerUI().isTimelineGestureActive();
         switch (camera_navigation_mode_) {
         case CameraNavigationMode::Orbit: context.mode = input::GamepadNavigationMode::Orbit; break;
         case CameraNavigationMode::Trackball: context.mode = input::GamepadNavigationMode::Trackball; break;
@@ -2819,11 +2820,16 @@ namespace lfs::vis {
         if (context.sequencer_open && (intent.add_keyframe || intent.remove_selected_keyframe || intent.deselect_keyframe || intent.update_selected_keyframe || intent.keyframe_step)) {
             stopGamepadMotion();
             auto& sequencer_ui = gui->sequencerUI();
-            if (intent.add_keyframe) sequencer_ui.captureKeyframeFromView(target);
-            else if (intent.remove_selected_keyframe) sequencer_ui.removeSelectedKeyframe();
-            else if (intent.deselect_keyframe) sequencer_ui.deselectKeyframe();
-            else if (intent.update_selected_keyframe) sequencer_ui.updateSelectedKeyframeFromView(target);
-            else sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step, &target);
+            if (intent.add_keyframe)
+                sequencer_ui.captureKeyframeFromView(target);
+            else if (intent.remove_selected_keyframe)
+                sequencer_ui.removeSelectedKeyframe();
+            else if (intent.deselect_keyframe)
+                sequencer_ui.deselectKeyframe();
+            else if (intent.update_selected_keyframe)
+                sequencer_ui.updateSelectedKeyframeFromView(target);
+            else
+                sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step, &target);
             gamepad_frame_demand_ = true;
             return true;
         }
@@ -2839,10 +2845,10 @@ namespace lfs::vis {
         }
         if (intent.navigation_step) {
             const bool changed = input::cycleGamepadNavigation(context.mode, intent.navigation_step, projection.orthographic,
-                [&](input::GamepadNavigationMode candidate) {
-                    const auto mode = cameraNavigationModeFromName(std::string(input::gamepad_modes[static_cast<size_t>(candidate)]));
-                    return mode && setCameraNavigationModeImpl(*mode, false, &target);
-                });
+                                                               [&](input::GamepadNavigationMode candidate) {
+                                                                   const auto mode = cameraNavigationModeFromName(std::string(input::gamepad_modes[static_cast<size_t>(candidate)]));
+                                                                   return mode && setCameraNavigationModeImpl(*mode, false, &target);
+                                                               });
             if (changed) {
                 // This deliberate command came from an armed viewport. Keep its
                 // ownership, but require released controls before resuming motion.
@@ -2852,7 +2858,9 @@ namespace lfs::vis {
         }
         if (intent.rendering_step && rendering) {
             const auto& settings = rendering->getSettings();
-            const int current = settings.point_cloud_mode ? 1 : settings.show_rings ? 2 : settings.show_center_markers ? 3 : 0;
+            const int current = settings.point_cloud_mode ? 1 : settings.show_rings        ? 2
+                                                            : settings.show_center_markers ? 3
+                                                                                           : 0;
             constexpr std::array<std::string_view, 4> modes{"splats", "points", "rings", "centers"};
             rendering->setViewportRenderMode(modes[(current + intent.rendering_step + 4) % 4]);
             return true;

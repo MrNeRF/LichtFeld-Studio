@@ -37,8 +37,14 @@ namespace lfs::vis::gui {
         std::atomic_uint native_dialog_active_count{0};
         std::atomic_uint64_t native_dialog_epoch{0};
         struct NativeDialogActivity {
-            NativeDialogActivity() { ++native_dialog_active_count; ++native_dialog_epoch; }
-            ~NativeDialogActivity() { --native_dialog_active_count; ++native_dialog_epoch; }
+            NativeDialogActivity() {
+                ++native_dialog_active_count;
+                ++native_dialog_epoch;
+            }
+            ~NativeDialogActivity() {
+                --native_dialog_active_count;
+                ++native_dialog_epoch;
+            }
         };
         thread_local bool native_dialog_block_attempted = false;
 

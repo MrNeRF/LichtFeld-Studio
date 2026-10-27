@@ -6,7 +6,7 @@ button names and physical labels may differ between manufacturers. Raw joysticks
 without an SDL gamepad mapping are listed in the input test but cannot navigate.
 This feature does not install vendor drivers or create SDL hardware mappings.
 
-Open **Preferences > Input > Joypad** to enable navigation, choose a connected
+Open **Preferences > Input > Gamepad** to enable navigation, choose a connected
 controller and adjust the dead zone, rotation speed and movement multiplier.
 Only one controller drives the camera. The sole usable controller is selected
 automatically; multiple devices can be selected explicitly. Connection IDs are
@@ -20,6 +20,11 @@ Modals, native file dialogs, Preferences, controller tests, text editing in the
 Sequencer, keyboard camera movement and viewport mouse gestures suspend the
 relevant controller operations. Resume with neutral controls after an
 interruption. Scene and split-layout changes require a new viewport click.
+
+Dragging timeline keys, the playhead or Reveal handles temporarily blocks
+gamepad keyframe commands to avoid competing edits. Camera navigation remains
+available while dragging keys or Reveal handles. Playback and playhead scrubbing
+retain control of the camera; Reveal itself does not suspend navigation.
 
 The controls follow the current camera navigation mode. The default left shoulder
 button cycles navigation modes, skipping unavailable modes, including Walk when
@@ -59,7 +64,7 @@ whole library or device associations.
 
 Slider edits are coalesced after a short idle period and flushed when leaving
 the page. A concurrent device or profile change discards an unfinished gesture.
-Resetting the Joypad page resets its active layout; the general reset also
+Resetting the Gamepad page resets its active layout; the general reset also
 removes named profiles and model associations and disables navigation. Safe mode
 continues to prevent writes to saved preferences.
 

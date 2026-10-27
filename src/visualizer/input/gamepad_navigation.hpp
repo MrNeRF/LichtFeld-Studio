@@ -28,8 +28,7 @@ namespace lfs::vis::input {
         }
 
         nlohmann::json json() const {
-            return {{"schema_version", 1}, {"enabled", enabled}, {"dead_zone", dead_zone}, {"look_speed", look_speed},
-                    {"move_speed", move_speed}, {"bindings", bindings.json()}};
+            return {{"schema_version", 1}, {"enabled", enabled}, {"dead_zone", dead_zone}, {"look_speed", look_speed}, {"move_speed", move_speed}, {"bindings", bindings.json()}};
         }
         static GamepadNavigationSettings fromJson(const nlohmann::json& value) {
             if (!value.is_object() || (value.contains("schema_version") && (!value["schema_version"].is_number_integer() || value["schema_version"] != 1)))
@@ -39,12 +38,14 @@ namespace lfs::vis::input {
                     throw std::invalid_argument("Unknown gamepad configuration field");
             GamepadNavigationSettings result;
             for (const char* key : {"dead_zone", "look_speed", "move_speed"})
-                if (value.contains(key) && !value[key].is_number()) throw std::invalid_argument("Invalid gamepad tuning value");
+                if (value.contains(key) && !value[key].is_number())
+                    throw std::invalid_argument("Invalid gamepad tuning value");
             result.enabled = value.value("enabled", false);
             result.dead_zone = value.value("dead_zone", 0.15f);
             result.look_speed = value.value("look_speed", 1.5f);
             result.move_speed = value.value("move_speed", 1.0f);
-            if (value.contains("bindings")) result.bindings = GamepadBindings::fromJson(value["bindings"]);
+            if (value.contains("bindings"))
+                result.bindings = GamepadBindings::fromJson(value["bindings"]);
             result.validate();
             return result;
         }
@@ -57,6 +58,7 @@ namespace lfs::vis::input {
         uint64_t click_epoch = 0;
         GamepadNavigationMode mode = GamepadNavigationMode::Orbit;
         bool sequencer_open = false;
+        bool sequencer_commands_allowed = true;
     };
 
     struct GamepadNavigationIntent {
@@ -118,7 +120,8 @@ namespace lfs::vis::input {
                     sample.axes[i + 1] = stick.y;
                 }
                 for (int i : {4, 5})
-                    if (std::abs(sample.axes[i]) <= 0.04f) sample.axes[i] = 0;
+                    if (std::abs(sample.axes[i]) <= 0.04f)
+                        sample.axes[i] = 0;
             };
             condition(previous);
             condition(current);
@@ -142,10 +145,12 @@ namespace lfs::vis::input {
             const auto mode_index = static_cast<size_t>(context.mode);
             bool mapped_navigation = true;
             for (size_t a = 0; a <= static_cast<size_t>(GamepadAction::Vertical); ++a) {
-                if (!allowedGamepadAction(mode_index, a)) continue;
+                if (!allowedGamepadAction(mode_index, a))
+                    continue;
                 const auto& binding = settings.bindings.resolve(mode_index, a);
                 for (int c : {binding.positive, binding.negative})
-                    if (c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER && !sample.has_axis[c]) mapped_navigation = false;
+                    if (c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER && !sample.has_axis[c])
+                        mapped_navigation = false;
             }
             if (!mapped_navigation && !context.sequencer_open)
                 return blocked("mapping");
@@ -210,22 +215,29 @@ namespace lfs::vis::input {
                 pending_ = false;
             }
             const auto read_control = [&](int c) -> float {
-                if (c < 0) return 0;
-                if (c < 2) return c == 0 ? left.x : left.y;
-                if (c < 4) return c == 2 ? right.x : right.y;
-                if (c < SDL_GAMEPAD_AXIS_COUNT) return c == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? down : up;
+                if (c < 0)
+                    return 0;
+                if (c < 2)
+                    return c == 0 ? left.x : left.y;
+                if (c < 4)
+                    return c == 2 ? right.x : right.y;
+                if (c < SDL_GAMEPAD_AXIS_COUNT)
+                    return c == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? down : up;
                 const auto b = c - SDL_GAMEPAD_AXIS_COUNT;
                 return sample.has_button[b] && sample.buttons[b] ? 1.0f : 0.0f;
             };
             const auto reserved = [&](int control) {
-                if (!context.sequencer_open || control < 0) return false;
+                if (!context.sequencer_open || control < 0)
+                    return false;
                 for (size_t a = gamepad_first_sequencer_action; a < gamepad_action_count; ++a)
-                    if (settings.bindings.resolve(gamepad_sequencer_scope, a).positive == control) return true;
+                    if (settings.bindings.resolve(gamepad_sequencer_scope, a).positive == control)
+                        return true;
                 return false;
             };
             const auto navigation_control = [&](int control) { return reserved(control) ? 0.0f : read_control(control); };
             const auto analog = [&](size_t a) {
-                if (!navigation_supported || !allowedGamepadAction(mode_index, a)) return 0.0f;
+                if (!navigation_supported || !allowedGamepadAction(mode_index, a))
+                    return 0.0f;
                 const auto& b = settings.bindings.resolve(mode_index, a);
                 return std::clamp(navigation_control(b.positive) - navigation_control(b.negative), -1.0f, 1.0f) * (b.inverted ? -1.0f : 1.0f);
             };
@@ -239,7 +251,10 @@ namespace lfs::vis::input {
                 const bool held = enabled && read_control(b.positive) > 0.5f;
                 const bool short_press = enabled && b.positive >= SDL_GAMEPAD_AXIS_COUNT &&
                                          sample.has_button[b.positive - SDL_GAMEPAD_AXIS_COUNT] && sample.pressed[b.positive - SDL_GAMEPAD_AXIS_COUNT];
-                edge[a] = short_press || (held && !action_down_[a]);
+                // Keep held state while timeline gestures block editing, so a
+                // button held through the gesture cannot fire on release.
+                edge[a] = (!sequencer_action || context.sequencer_commands_allowed) &&
+                          (short_press || (held && !action_down_[a]));
                 action_down_[a] = held;
             }
             const bool precision = action_down_[actionIndex(GamepadAction::Precision)];

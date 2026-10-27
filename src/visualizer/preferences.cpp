@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "preferences.hpp"
+#include "core/native_fs.hpp"
 #include "input/gamepad_navigation.hpp"
 #include "input/gamepad_profiles.hpp"
-#include "core/native_fs.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
@@ -729,7 +729,7 @@ namespace lfs::vis {
             return input::GamepadProfiles::migrate(input::GamepadNavigationSettings::fromJson(
                 values.value("gamepad_navigation", json::object())));
         }
-    }
+    } // namespace
 
     std::string UserPreferences::gamepadNavigation() {
         std::lock_guard lock(impl_->mutex);
@@ -762,7 +762,7 @@ namespace lfs::vis {
             candidate["gamepad_profiles"] = profiles.value;
             candidate["gamepad_navigation"] = profiles.activeSettings(enabled).json();
             auto merged = core::persisted_settings::mergeForWrite(impl_->paths->preferencesFile(), candidate,
-                                                                 "schema_version", 1, nullptr, {}, impl_->paths->backupDir());
+                                                                  "schema_version", 1, nullptr, {}, impl_->paths->backupDir());
             merged["gamepad_profiles"] = candidate["gamepad_profiles"];
             merged["gamepad_navigation"] = candidate["gamepad_navigation"];
             if (auto result = impl_->paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
@@ -771,7 +771,12 @@ namespace lfs::vis {
             impl_->persisted_values = std::move(merged);
             return {};
         } catch (const std::exception& error) {
-            return invalidRenderingPreference(error.what());
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
     }
 
@@ -790,7 +795,7 @@ namespace lfs::vis {
             candidate["gamepad_navigation"] = settings.json();
             candidate["gamepad_profiles"] = profiles.value;
             auto merged = core::persisted_settings::mergeForWrite(impl_->paths->preferencesFile(), candidate,
-                                                                 "schema_version", 1, nullptr, {}, impl_->paths->backupDir());
+                                                                  "schema_version", 1, nullptr, {}, impl_->paths->backupDir());
             merged["gamepad_navigation"] = candidate["gamepad_navigation"];
             merged["gamepad_profiles"] = candidate["gamepad_profiles"];
             if (auto result = impl_->paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
@@ -799,7 +804,12 @@ namespace lfs::vis {
             impl_->persisted_values = std::move(merged);
             return {};
         } catch (const std::exception& error) {
-            return invalidRenderingPreference(error.what());
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
     }
 

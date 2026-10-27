@@ -12,7 +12,6 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
-#include "visualizer/visualizer.hpp"
 #include "rendering/environment_image.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
@@ -24,6 +23,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/visualizer.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
@@ -586,7 +586,8 @@ namespace lfs::vis {
     }
 
     bool RenderingManager::setViewportRenderMode(std::string_view mode) {
-        if (mode != "splats" && mode != "points" && mode != "rings" && mode != "centers") return false;
+        if (mode != "splats" && mode != "points" && mode != "rings" && mode != "centers")
+            return false;
         auto settings = getSettings();
         const bool points = mode == "points";
         const bool changed = settings.point_cloud_mode != points;
@@ -594,7 +595,8 @@ namespace lfs::vis {
         settings.show_rings = mode == "rings";
         settings.show_center_markers = mode == "centers";
         updateSettings(settings, changed && points ? DirtyFlag::ALL : DirtyFlag::SELECTION);
-        if (auto* viewer = python::get_visualizer()) viewer->projectMarkSessionChapterCommitted("VIEW");
+        if (auto* viewer = python::get_visualizer())
+            viewer->projectMarkSessionChapterCommitted("VIEW");
         return true;
     }
 

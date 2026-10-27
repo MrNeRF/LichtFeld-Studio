@@ -353,4 +353,27 @@ namespace {
         EXPECT_FALSE(state.follow_playback);
     }
 
+    TEST_F(GamepadSequencerTest, CameraCaptureDeleteAndUndoPreserveTheRevealTrack) {
+        lfs::vis::VisualizerImpl viewer(options());
+        auto& ui = viewer.getGuiManager()->sequencerUI();
+        auto& controller = ui.controller();
+        auto& history = lfs::vis::op::undoHistory();
+        const lfs::sequencer::RevealClip reveal{.start = 1.f, .end = 6.f, .softness = .25f};
+        controller.setRevealClip(reveal);
+        history.clear();
+        ASSERT_TRUE(ui.captureKeyframeFromView(viewer.getViewport()));
+        ASSERT_TRUE(ui.selectAdjacentKeyframe(-1));
+        ASSERT_TRUE(ui.removeSelectedKeyframe());
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        ASSERT_TRUE(controller.timeline().revealClip());
+        EXPECT_EQ(controller.timeline().revealClip()->end, reveal.end);
+        ASSERT_TRUE(history.undo().success);
+        ASSERT_TRUE(history.undo().success);
+        EXPECT_EQ(controller.timeline().realKeyframeCount(), 0u);
+        ASSERT_TRUE(controller.timeline().revealClip());
+        EXPECT_EQ(controller.timeline().revealClip()->start, reveal.start);
+        EXPECT_EQ(controller.timeline().revealClip()->end, reveal.end);
+        EXPECT_EQ(controller.timeline().revealClip()->softness, reveal.softness);
+    }
+
 } // namespace

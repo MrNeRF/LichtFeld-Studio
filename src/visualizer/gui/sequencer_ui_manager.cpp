@@ -655,8 +655,10 @@ namespace lfs::vis::gui {
         // Sorted keys allow a bounded linear scan, including dense/dragged keys.
         // Never replace an existing pose through the acquisition command.
         for (const auto& key : controller_.timeline().keyframes()) {
-            if (key.is_loop_point) continue;
-            if (key.time > time + occupied_epsilon) break;
+            if (key.is_loop_point)
+                continue;
+            if (key.time > time + occupied_epsilon)
+                break;
             if (std::abs(key.time - time) <= occupied_epsilon)
                 time += step;
         }
@@ -709,28 +711,33 @@ namespace lfs::vis::gui {
         panel_->clearKeyframeSelection();
         keyframe_navigation_boundary_.reset();
         if (had_selection)
-            if (auto* scene = viewer_->getSceneManager()) scene->clearSelection();
+            if (auto* scene = viewer_->getSceneManager())
+                scene->clearSelection();
         return had_selection;
     }
 
     bool SequencerUIManager::removeSelectedKeyframe() {
         // Selection by a stable keyframe ID is mandatory; no nearest-time fallback.
         const auto selected = controller_.selectedKeyframeId();
-        if (!selected) return false;
+        if (!selected)
+            return false;
         deselectKeyframe();
-        if (!controller_.removeKeyframeById(*selected)) return false;
+        if (!controller_.removeKeyframeById(*selected))
+            return false;
         lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         return true;
     }
 
     bool SequencerUIManager::selectAdjacentKeyframe(const int direction, Viewport* target) {
-        if (direction != 1 && direction != -1) return false;
+        if (direction != 1 && direction != -1)
+            return false;
         if (keyframe_navigation_boundary_ && !controller_.hasSelection()) {
             const auto boundary = *keyframe_navigation_boundary_;
             if (boundary.timeline_revision == controller_.timelineRevision() &&
                 boundary.selection_revision == controller_.selectionRevision() &&
                 boundary.playhead == controller_.playhead()) {
-                if (direction == boundary.direction) return false;
+                if (direction == boundary.direction)
+                    return false;
                 keyframe_navigation_boundary_.reset();
                 if (const auto index = controller_.timeline().findKeyframeIndex(boundary.id))
                     return scene_sync_->goToKeyframe(*index, target);
@@ -740,7 +747,8 @@ namespace lfs::vis::gui {
         const auto index = controller_.adjacentKeyframeIndex(direction);
         if (!index) {
             const auto selected = controller_.selectedKeyframeId();
-            if (!selected) return false;
+            if (!selected)
+                return false;
             deselectKeyframe();
             keyframe_navigation_boundary_ = KeyframeNavigationBoundary{
                 *selected, direction, controller_.playhead(), controller_.timelineRevision(), controller_.selectionRevision()};

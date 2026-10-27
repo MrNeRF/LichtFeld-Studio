@@ -24,15 +24,13 @@ namespace lfs::vis::input {
         }
 
         static GamepadProfiles migrate(const GamepadNavigationSettings& settings) {
-            return fromJson({{"schema_version", 1}, {"active", "personal"},
-                             {"profiles", {{{"id", "personal"}, {"name", "Personal"},
-                                            {"settings", profileSettings(settings)}}}},
-                             {"device_profiles", nlohmann::json::object()}});
+            return fromJson({{"schema_version", 1}, {"active", "personal"}, {"profiles", {{{"id", "personal"}, {"name", "Personal"}, {"settings", profileSettings(settings)}}}}, {"device_profiles", nlohmann::json::object()}});
         }
 
         static GamepadProfiles fromJson(const nlohmann::json& input) {
             const auto require = [](bool condition) {
-                if (!condition) throw std::invalid_argument("Invalid gamepad profile library");
+                if (!condition)
+                    throw std::invalid_argument("Invalid gamepad profile library");
             };
             require(input.is_object() && input.size() == 4 && input.contains("schema_version") &&
                     input["schema_version"].is_number_integer() && input["schema_version"] == 1 &&
@@ -75,7 +73,8 @@ namespace lfs::vis::input {
 
         void updateActive(const GamepadNavigationSettings& settings) {
             for (auto& profile : value["profiles"])
-                if (profile["id"] == value["active"]) profile["settings"] = profileSettings(settings);
+                if (profile["id"] == value["active"])
+                    profile["settings"] = profileSettings(settings);
         }
     };
 } // namespace lfs::vis::input

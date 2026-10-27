@@ -2289,7 +2289,7 @@ namespace lfs::vis {
         bool published = false;
         bool source_open_at_publish = false;
 #ifdef __linux__
-        struct stat source_identity {};
+        struct stat source_identity{};
         ASSERT_EQ(::stat(profile_path.c_str(), &source_identity), 0);
 #endif
         loaded.setOnBindingsChanged([&] {
@@ -2304,7 +2304,7 @@ namespace lfs::vis {
                 const auto fd = std::strtol(fd_text.c_str(), &parsed_end, 10);
                 if (parsed_end == fd_text.c_str() || fd < 0)
                     continue;
-                struct stat open_identity {};
+                struct stat open_identity{};
                 if (::fstat(static_cast<int>(fd), &open_identity) != 0)
                     continue;
                 if (open_identity.st_dev == source_identity.st_dev &&
