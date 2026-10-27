@@ -12,7 +12,6 @@
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
 
-#include "core/apriltag_scene_scale.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -41,6 +40,7 @@
 #include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui/string_keys.hpp"
@@ -4895,10 +4895,10 @@ namespace lfs::app {
                             }
                         }
                         try {
-                            if (!gui->asyncTasks().startAprilTagScan(core::aprilTagSceneScaleOptions(args),
-                                                                     std::move(constraints), std::move(targets), solve_scale,
-                                                                     solve_scale && args.value("apply_to_scene", true)))
-                                return {{"error", "AprilTag scan could not start or is already running"}};
+                            const auto request = gui->asyncTasks().startAprilTagScan(vis::aprilTagSceneScaleOptions(args),
+                                                                                     std::move(constraints), std::move(targets), solve_scale, solve_scale && args.value("apply_to_scene", true));
+                            if (!request)
+                                return {{"error", request.error()}};
                         } catch (const std::invalid_argument& e) {
                             return {{"error", e.what()}};
                         }

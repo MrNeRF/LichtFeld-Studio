@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/apriltag_scene_scale.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,10 +34,10 @@ namespace {
 
     TEST(AprilTagSceneScale, SourceCalibrationSurvivesFocalChangeFrom1000To800) {
         auto camera = sourceCamera();
-        const auto before = core::buildCameraObservationView(*camera);
+        const auto before = vis::buildCameraObservationView(*camera);
         camera->prepare_undistortion();
         ASSERT_FLOAT_EQ(camera->focal_x(), 800);
-        const auto after = core::buildCameraObservationView(*camera);
+        const auto after = vis::buildCameraObservationView(*camera);
         EXPECT_DOUBLE_EQ(after.intrinsics.fx, 1000);
         EXPECT_EQ(after.intrinsics.distortion, before.intrinsics.distortion);
         const glm::dvec3 point(1.3, 0, 5);
@@ -55,7 +55,7 @@ namespace {
         const auto dataset = scene.addDataset("dataset");
         auto camera = sourceCamera();
         scene.addCamera("camera", dataset, camera);
-        const auto snapshot = core::snapshotAprilTagScene(scene);
+        const auto snapshot = vis::snapshotAprilTagScene(scene);
         ASSERT_EQ(snapshot.cameras.size(), 1u);
         EXPECT_TRUE(snapshot.matches(scene));
         camera->prepare_undistortion();
@@ -70,30 +70,30 @@ namespace {
     }
 
     TEST(AprilTagSceneScale, CancellationStopsBeforeImageRead) {
-        core::AprilTagCameraInput input;
+        vis::AprilTagCameraInput input;
         input.image_path = "unused-image.png";
         int calls = 0;
-        const auto result = core::detectAprilTagsInSnapshot(std::span(&input, 1), {}, 0,
-                                                            [&](std::size_t done, std::size_t total, const std::string&) {
-                                                                EXPECT_EQ(done, 0u);
-                                                                EXPECT_EQ(total, 1u);
-                                                                ++calls;
-                                                                return false;
-                                                            });
+        const auto result = vis::detectAprilTagsInSnapshot(std::span(&input, 1), {}, 0,
+                                                           [&](std::size_t done, std::size_t total, const std::string&) {
+                                                               EXPECT_EQ(done, 0u);
+                                                               EXPECT_EQ(total, 1u);
+                                                               ++calls;
+                                                               return false;
+                                                           });
         EXPECT_EQ(calls, 1);
         EXPECT_TRUE(result.empty());
     }
 
     TEST(AprilTagSceneScale, ParallelDetectionProgressIsMonotonic) {
-        const std::vector<core::AprilTagCameraInput> inputs(64);
+        const std::vector<vis::AprilTagCameraInput> inputs(64);
         std::size_t last = 0;
-        const auto views = core::detectAprilTagsInSnapshot(inputs, {}, 0,
-                                                           [&](const std::size_t done, const std::size_t total, const std::string&) {
-                                                               EXPECT_GE(done, last);
-                                                               EXPECT_EQ(total, inputs.size());
-                                                               last = done;
-                                                               return true;
-                                                           });
+        const auto views = vis::detectAprilTagsInSnapshot(inputs, {}, 0,
+                                                          [&](const std::size_t done, const std::size_t total, const std::string&) {
+                                                              EXPECT_GE(done, last);
+                                                              EXPECT_EQ(total, inputs.size());
+                                                              last = done;
+                                                              return true;
+                                                          });
         EXPECT_EQ(last, inputs.size());
         EXPECT_EQ(views.size(), inputs.size());
     }
@@ -123,9 +123,17 @@ namespace {
         core::NodeId dataset = core::NULL_NODE;
     };
 
+    vis::AprilTagSceneApplyResult applyScale(vis::SceneManager& manager, const std::vector<std::string>& targets = {}) {
+        vis::AprilTagSceneScaleReport report;
+        report.success = report.scale_result.success = true;
+        report.scale_result.scale_factor = 2;
+        report.scale_result.pivot = glm::dvec3(0);
+        return vis::applyAprilTagScaleReport(manager, vis::snapshotAprilTagScene(manager.getScene()), std::move(report), targets);
+    }
+
     TEST_F(AprilTagSceneApply, DefaultScalesCompleteDatasetAndUndoRedoRestoresIt) {
         auto& scene = manager->getScene();
-        const auto result = vis::cap::applyUniformScaleAboutDataPivot(*manager, {}, {0, 0, 0}, 2);
+        const auto result = applyScale(*manager);
         ASSERT_TRUE(result.applied) << result.error_message;
         EXPECT_EQ(result.transformed_nodes, std::vector<std::string>{"dataset"});
         EXPECT_FLOAT_EQ(scene.getWorldTransform(dataset)[0][0], 2);
@@ -149,7 +157,7 @@ namespace {
         scene.setNodeTransform(root, initial);
         scene.setNodeTransform(child, initial);
 
-        const auto result = vis::cap::applyUniformScaleAboutDataPivot(*manager, {}, {0, 0, 0}, 2);
+        const auto result = applyScale(*manager);
         ASSERT_TRUE(result.applied) << result.error_message;
         for (const auto id : {root, child}) {
             EXPECT_FLOAT_EQ(scene.getWorldTransform(id)[0][0], 2);
@@ -167,7 +175,7 @@ namespace {
     }
 
     TEST_F(AprilTagSceneApply, ExplicitTargetsAllowPartialScaling) {
-        const auto result = vis::cap::applyUniformScaleAboutDataPivot(*manager, {"splats"}, {0, 0, 0}, 2);
+        const auto result = applyScale(*manager, {"splats"});
         ASSERT_TRUE(result.applied) << result.error_message;
         EXPECT_EQ(result.transformed_nodes, std::vector<std::string>{"splats"});
         EXPECT_EQ(manager->getScene().getNodeTransform(dataset), glm::mat4(1));
@@ -178,20 +186,20 @@ namespace {
         auto& scene = manager->getScene();
         scene.addGroup("locked-root");
         scene.setNodeLocked("locked-root", true);
-        const auto result = vis::cap::applyUniformScaleAboutDataPivot(*manager, {}, {0, 0, 0}, 2);
+        const auto result = applyScale(*manager);
         EXPECT_FALSE(result.applied);
         EXPECT_EQ(scene.getNodeTransform(dataset), glm::mat4(1));
     }
 
     TEST_F(AprilTagSceneApply, StaleReportCannotScaleReplacementScene) {
         auto& scene = manager->getScene();
-        const auto snapshot = core::snapshotAprilTagScene(scene);
-        core::AprilTagSceneScaleReport report;
+        const auto snapshot = vis::snapshotAprilTagScene(scene);
+        vis::AprilTagSceneScaleReport report;
         report.success = true;
         report.scale_result.scale_factor = 2;
         scene.clear();
         const auto replacement = scene.addDataset("dataset");
-        const auto result = vis::cap::applyAprilTagScaleReport(*manager, snapshot, std::move(report));
+        const auto result = vis::applyAprilTagScaleReport(*manager, snapshot, std::move(report));
         EXPECT_FALSE(result.applied);
         EXPECT_FALSE(result.error_message.empty());
         EXPECT_EQ(scene.getNodeTransform(replacement), glm::mat4(1));

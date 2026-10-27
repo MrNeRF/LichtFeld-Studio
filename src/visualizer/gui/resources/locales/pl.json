@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "Wyszukiwanie AprilTags",
     "apriltag_solving": "Obliczanie kalibracji AprilTag",
     "apriltag_scene_changed": "Scena zmieniła się podczas wykrywania AprilTags; zeskanuj ponownie",
+    "apriltag_busy": "Skanowanie AprilTags już trwa",
     "environment_map_failed": "Nie można odczytać mapy środowiska „{}”. Zachowano poprzednie środowisko.",
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",
     "autosave_deferred_no_memory": "Autozapis został wstrzymany: za mało wolnej pamięci ({}). Trening jest kontynuowany; autozapis wznowi się, gdy pamięć zostanie zwolniona.",

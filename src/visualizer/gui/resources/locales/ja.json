@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "AprilTagを検出中",
     "apriltag_solving": "AprilTagのキャリブレーションを計算中",
     "apriltag_scene_changed": "AprilTagの検出中にシーンが変更されました。再度スキャンしてください",
+    "apriltag_busy": "AprilTagのスキャンはすでに実行中です",
     "environment_map_failed": "環境マップ「{}」を読み込めませんでした。前の環境を保持しました。",
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",
     "autosave_deferred_no_memory": "自動保存は一時停止中です: 空きメモリが不足しています（{}）。トレーニングは継続します。メモリが解放されると自動保存を再開します。",

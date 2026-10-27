@@ -3026,7 +3026,9 @@ def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
 def detect_scene_apriltags(family: str = 'tag36h11', min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0) -> dict:
-    """Detect and triangulate AprilTags from a background editor script; viewer-thread calls are rejected"""
+    """
+    Detect and triangulate AprilTags from a background editor script; viewer-thread calls are rejected
+    """
 
 def scale_scene_by_apriltags(constraints: Sequence[tuple[int, int, float]], family: str = 'tag36h11', inlier_relative_threshold: float = 0.02, inlier_absolute_threshold: float = 0.0, min_inliers: int = 1, min_inlier_ratio: float = 0.5, min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0, manifest_path: str = '', apply_to_scene: bool = True, targets: Sequence[str] = []) -> dict:
     """

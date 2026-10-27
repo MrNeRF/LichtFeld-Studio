@@ -2815,6 +2815,7 @@
     "apriltag_scanning": "Scanning AprilTags",
     "apriltag_solving": "Solving AprilTag calibration",
     "apriltag_scene_changed": "Scene changed during AprilTag detection; scan again",
+    "apriltag_busy": "An AprilTag scan is already running",
     "environment_map_failed": "Could not read environment map \"{}\". The previous environment was kept.",
     "training_save_no_memory": "Project save failed: {}",
     "autosave_deferred_no_memory": "Autosave is paused: not enough free memory ({}). Training continues; autosave resumes when memory frees up.",

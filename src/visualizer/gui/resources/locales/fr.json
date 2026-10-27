@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "Recherche des AprilTags",
     "apriltag_solving": "Calcul de la calibration AprilTag",
     "apriltag_scene_changed": "La scène a changé pendant la détection des AprilTags ; relancez la recherche",
+    "apriltag_busy": "Une recherche des AprilTags est déjà en cours",
     "environment_map_failed": "Impossible de lire la carte d’environnement « {} ». L’environnement précédent a été conservé.",
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",
     "autosave_deferred_no_memory": "L'enregistrement automatique est en pause : mémoire libre insuffisante ({}). L'entraînement continue ; l'enregistrement automatique reprendra dès que de la mémoire sera libérée.",

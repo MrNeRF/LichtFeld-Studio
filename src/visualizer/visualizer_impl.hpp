@@ -309,6 +309,7 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend void installSessionTestInputController(VisualizerImpl& viewer);
+        friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadWithoutActiveTrainingStillReplacesScene_Test;
         friend class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;

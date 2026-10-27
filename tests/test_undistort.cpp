@@ -2,12 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/camera_distortion_layout.hpp"
 #include "core/cuda/undistort/distortion_model.cuh"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -984,6 +986,34 @@ TEST(UndistortCrop, ThinPrismWithoutFrameBorderRaysReachesClamp) {
 }
 
 // ====================== Coefficient packing tests ======================
+
+TEST(UndistortPacking, CalibrationAndUndistortShareCoefficientLayouts) {
+    const auto check = [](CameraModelType model, std::vector<float> radial, std::vector<float> tangential,
+                          std::array<float, 12> expected, int count) {
+        const auto r = Tensor::from_vector(radial, TensorShape({radial.size()}), Device::CPU);
+        const auto t = tangential.empty() ? Tensor() : Tensor::from_vector(tangential, TensorShape({tangential.size()}), Device::CPU);
+        Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                      TEST_FX, TEST_FY, TEST_CX, TEST_CY, r, t, model, "camera", {}, {}, TEST_W, TEST_H, 1);
+        const auto view = lfs::vis::buildCameraObservationView(camera);
+        const auto params = compute_undistort_params(TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H, r, t, model);
+        std::array<float, 12> packed{};
+        EXPECT_EQ(packCameraDistortion(model, radial, tangential, std::span(packed)), count);
+        EXPECT_EQ(params.num_distortion, count);
+        EXPECT_EQ(view.intrinsics.num_distortion, count);
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            EXPECT_FLOAT_EQ(packed[i], expected[i]) << i;
+            EXPECT_FLOAT_EQ(params.distortion[i], expected[i]) << i;
+            EXPECT_DOUBLE_EQ(view.intrinsics.distortion[i], static_cast<double>(expected[i])) << i;
+        }
+    };
+    check(CameraModelType::PINHOLE, {.01f, .02f}, {.03f, .04f}, {.01f, .02f, 0, .03f, .04f}, 5);
+    check(CameraModelType::PINHOLE, {.01f, .02f, .03f, .04f, .05f, .06f}, {.07f, .08f},
+          {.01f, .02f, .03f, .04f, .05f, .06f, .07f, .08f}, 8);
+    check(CameraModelType::PINHOLE, {.01f, .02f, .03f, 0, 0, 0}, {.04f, .05f}, {.01f, .02f, .03f, .04f, .05f}, 5);
+    check(CameraModelType::FISHEYE, {.01f, .02f, .03f, .04f}, {}, {.01f, .02f, .03f, .04f}, 4);
+    check(CameraModelType::THIN_PRISM_FISHEYE, {.01f, .02f, .03f, .04f}, {.05f, .06f, .07f, .08f, .09f, .10f},
+          {.01f, .02f, .03f, .04f, .05f, .06f, .07f, .09f, .08f, .10f}, 10);
+}
 
 TEST(UndistortPacking, PinholeRadialOnly) {
     // COLMAP SIMPLE_RADIAL / RADIAL: 1-2 radial, no tangential

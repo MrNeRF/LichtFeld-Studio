@@ -9,10 +9,11 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
-#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -693,7 +694,7 @@ namespace lfs::app {
                     payload["error"] = state->error;
             }
             if (completed || failed) {
-                auto output = vis::cap::aprilTagResultJson(tasks.aprilTagScanResult());
+                auto output = vis::aprilTagResultJson(tasks.aprilTagScanResult());
                 output["success"] = completed && tasks.aprilTagScanResult().scale_report.success;
                 output.erase("manifest_json");
                 payload["result"] = std::move(output);

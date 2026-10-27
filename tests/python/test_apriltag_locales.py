@@ -10,5 +10,5 @@ def test_apriltag_labels_are_translated(language):
     root = Path(__file__).resolve().parents[2]
     strings = json.loads((root / "src/visualizer/gui/resources/locales" / f"{language}.json").read_text())
     assert strings["transform"]["scale_apriltag"]
-    for key in ("apriltag_scan", "apriltag_scanning", "apriltag_solving", "apriltag_scene_changed", "apriltag_worker_required"):
+    for key in ("apriltag_scan", "apriltag_scanning", "apriltag_solving", "apriltag_scene_changed", "apriltag_busy", "apriltag_worker_required"):
         assert strings["runtime"][key]

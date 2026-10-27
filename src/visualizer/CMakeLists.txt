@@ -131,6 +131,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/video_widget_factory.cpp
 
         # Scene management
+        scene/apriltag_calibration.cpp
         scene/scene_manager.cpp
         scene/selection_state.cpp
         scene/viewer_splat_quantize.cpp

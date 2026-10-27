@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "AprilTags zoeken",
     "apriltag_solving": "AprilTag-kalibratie berekenen",
     "apriltag_scene_changed": "De scène is gewijzigd tijdens de AprilTag-detectie; scan opnieuw",
+    "apriltag_busy": "Er loopt al een AprilTag-scan",
     "environment_map_failed": "Omgevingskaart ‘{}’ kon niet worden gelezen. De vorige omgeving is behouden.",
     "training_save_no_memory": "Project opslaan mislukt: {}",
     "autosave_deferred_no_memory": "Automatisch opslaan is gepauzeerd: onvoldoende vrij geheugen ({}). De training gaat door; automatisch opslaan wordt hervat zodra er geheugen vrijkomt.",

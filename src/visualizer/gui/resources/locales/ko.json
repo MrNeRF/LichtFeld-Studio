@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "AprilTag 검색 중",
     "apriltag_solving": "AprilTag 보정 계산 중",
     "apriltag_scene_changed": "AprilTag 감지 중 장면이 변경되었습니다. 다시 스캔하세요",
+    "apriltag_busy": "AprilTag 스캔이 이미 실행 중입니다",
     "environment_map_failed": "환경 맵 \"{}\"을(를) 읽을 수 없습니다. 이전 환경이 유지되었습니다.",
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",
     "autosave_deferred_no_memory": "자동 저장이 일시 중지되었습니다: 여유 메모리가 부족합니다({}). 학습은 계속되며, 메모리가 확보되면 자동 저장이 재개됩니다.",

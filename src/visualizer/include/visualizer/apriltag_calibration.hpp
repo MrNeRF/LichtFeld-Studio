@@ -15,14 +15,17 @@
 #include <nlohmann/json_fwd.hpp>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
-namespace lfs::core {
+namespace lfs::vis {
+
+    class SceneManager;
 
     using AprilTagProgressCallback = std::function<bool(std::size_t completed, std::size_t total, const std::string& image_name)>;
 
-    [[nodiscard]] LFS_CORE_API geometry::apriltag::CameraObservationView buildCameraObservationView(
-        const Camera& camera,
+    [[nodiscard]] LFS_VIS_API geometry::apriltag::CameraObservationView buildCameraObservationView(
+        const core::Camera& camera,
         const glm::mat4& scene_world_transform = glm::mat4(1.0f));
 
     struct AprilTagCameraInput {
@@ -32,18 +35,18 @@ namespace lfs::core {
 
     struct AprilTagSceneSnapshot {
         std::vector<AprilTagCameraInput> cameras;
-        std::vector<Uuid> node_uuids;
+        std::vector<core::Uuid> node_uuids;
         uint64_t render_generation = 0;
         uint64_t camera_list_generation = 0;
 
-        [[nodiscard]] LFS_CORE_API bool matches(const Scene& scene) const;
+        [[nodiscard]] LFS_VIS_API bool matches(const core::Scene& scene) const;
     };
 
     // Capture and validate on the scene owner thread; workers only use copied inputs.
-    [[nodiscard]] LFS_CORE_API AprilTagSceneSnapshot snapshotAprilTagScene(
-        const Scene& scene, bool active_cameras_only = false);
+    [[nodiscard]] LFS_VIS_API AprilTagSceneSnapshot snapshotAprilTagScene(
+        const core::Scene& scene, bool active_cameras_only = false);
 
-    [[nodiscard]] LFS_CORE_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInSnapshot(
+    [[nodiscard]] LFS_VIS_API std::vector<geometry::apriltag::CameraObservationView> detectAprilTagsInSnapshot(
         std::span<const AprilTagCameraInput> cameras,
         const geometry::apriltag::AprilTagDetectorConfig& detector_config = {},
         int max_image_width = 0,
@@ -68,13 +71,30 @@ namespace lfs::core {
         std::filesystem::path manifest_saved_path;
     };
 
-    [[nodiscard]] LFS_CORE_API AprilTagSceneScaleOptions aprilTagSceneScaleOptions(const nlohmann::json& args);
+    [[nodiscard]] LFS_VIS_API AprilTagSceneScaleOptions aprilTagSceneScaleOptions(const nlohmann::json& args);
 
-    [[nodiscard]] LFS_CORE_API AprilTagSceneScaleReport computeAprilTagSceneScale(
+    [[nodiscard]] LFS_VIS_API AprilTagSceneScaleReport computeAprilTagSceneScale(
         const AprilTagSceneSnapshot& snapshot,
         std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
         const AprilTagSceneScaleOptions& options = {},
         bool solve_scale = true,
         const AprilTagProgressCallback& progress_callback = {});
 
-} // namespace lfs::core
+    struct LFS_VIS_API AprilTagSceneApplyResult {
+        bool applied = false;
+        std::string error_message;
+        std::vector<std::string> transformed_nodes;
+        AprilTagSceneScaleReport scale_report;
+    };
+
+    [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult applyAprilTagScaleReport(
+        SceneManager& scene_manager,
+        const AprilTagSceneSnapshot& snapshot,
+        AprilTagSceneScaleReport report,
+        const std::vector<std::string>& requested_targets = {},
+        bool apply_to_scene = true,
+        std::string_view undo_label = "transform.scale_apriltag");
+
+    [[nodiscard]] LFS_VIS_API nlohmann::json aprilTagResultJson(const AprilTagSceneApplyResult& result);
+
+} // namespace lfs::vis

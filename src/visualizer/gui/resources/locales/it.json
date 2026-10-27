@@ -2816,6 +2816,7 @@
     "apriltag_scanning": "Ricerca degli AprilTags",
     "apriltag_solving": "Calcolo della calibrazione AprilTag",
     "apriltag_scene_changed": "La scena è cambiata durante il rilevamento degli AprilTags; ripeti la scansione",
+    "apriltag_busy": "Una scansione degli AprilTags è già in corso",
     "environment_map_failed": "Impossibile leggere la mappa ambiente «{}». È stato mantenuto l’ambiente precedente.",
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
     "autosave_deferred_no_memory": "Il salvataggio automatico è in pausa: memoria libera insufficiente ({}). L'addestramento continua; il salvataggio automatico riprenderà quando si libererà memoria.",

@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "AprilTags werden gesucht",
     "apriltag_solving": "AprilTag-Kalibrierung wird berechnet",
     "apriltag_scene_changed": "Die Szene wurde während der AprilTag-Erkennung geändert; erneut scannen",
+    "apriltag_busy": "Ein AprilTag-Scan läuft bereits",
     "environment_map_failed": "Die Umgebungskarte „{}“ konnte nicht gelesen werden. Die bisherige Umgebung wurde beibehalten.",
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
     "autosave_deferred_no_memory": "Automatisches Speichern ist pausiert: nicht genug freier Speicher ({}). Das Training läuft weiter; das automatische Speichern wird fortgesetzt, sobald wieder Speicher frei ist.",

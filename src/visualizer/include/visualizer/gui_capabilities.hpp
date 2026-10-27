@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "core/apriltag_scene_scale.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/scene.hpp"
@@ -140,29 +139,11 @@ namespace lfs::vis::cap {
         const glm::vec3& value,
         std::string_view undo_label = "transform.scale");
 
-    struct LFS_VIS_API AprilTagSceneApplyResult {
-        bool applied = false;
-        std::string error_message;
-        std::vector<std::string> transformed_nodes;
-        core::AprilTagSceneScaleReport scale_report;
-    };
-
-    [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult applyUniformScaleAboutDataPivot(
+    [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
         SceneManager& scene_manager,
-        const std::vector<std::string>& requested_targets,
-        const glm::vec3& data_world_pivot,
-        float scale_factor,
-        std::string_view undo_label = "transform.scale_apriltag");
-
-    [[nodiscard]] LFS_VIS_API AprilTagSceneApplyResult applyAprilTagScaleReport(
-        SceneManager& scene_manager,
-        const core::AprilTagSceneSnapshot& snapshot,
-        core::AprilTagSceneScaleReport report,
-        const std::vector<std::string>& requested_targets = {},
-        bool apply_to_scene = true,
-        std::string_view undo_label = "transform.scale_apriltag");
-
-    [[nodiscard]] LFS_VIS_API nlohmann::json aprilTagResultJson(const AprilTagSceneApplyResult& result);
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
+        std::string_view undo_label);
 
     [[nodiscard]] LFS_VIS_API std::expected<size_t, std::string> bakeNodeTransforms(
         SceneManager& scene_manager,

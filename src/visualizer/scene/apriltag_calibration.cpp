@@ -2,12 +2,17 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/apriltag_scene_scale.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 
+#include "core/camera_distortion_layout.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "scene/scene_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -22,64 +27,9 @@
 #include <tbb/parallel_for.h>
 #include <unordered_map>
 
-namespace lfs::core {
+namespace lfs::vis {
 
-    namespace {
-
-        void populateCameraDistortion(
-            const Camera& camera,
-            geometry::apriltag::CameraIntrinsics& intrinsics) {
-            intrinsics.distortion.fill(0.0);
-            intrinsics.num_distortion = 0;
-
-            const auto coefficients = [](const Tensor& tensor) {
-                return tensor.is_valid() ? tensor.to_vector() : std::vector<float>{};
-            };
-            const auto rad_vec = coefficients(camera.radial_distortion());
-            const auto tan_vec = coefficients(camera.tangential_distortion());
-            const auto place = [&](const int idx, const double val) {
-                intrinsics.distortion[idx] = val;
-                intrinsics.num_distortion = std::max(intrinsics.num_distortion, idx + 1);
-            };
-
-            switch (camera.camera_model_type()) {
-            case CameraModelType::PINHOLE: {
-                const bool rational =
-                    rad_vec.size() >= 6 &&
-                    (std::abs(rad_vec[3]) > 0.0 || std::abs(rad_vec[4]) > 0.0 || std::abs(rad_vec[5]) > 0.0);
-                const std::size_t radial_count =
-                    rational ? std::min<std::size_t>(rad_vec.size(), 6) : std::min<std::size_t>(rad_vec.size(), 3);
-                for (std::size_t i = 0; i < radial_count; ++i) {
-                    place(static_cast<int>(i), rad_vec[i]);
-                }
-                const int tangential_offset = rational ? 6 : 3;
-                const std::size_t tan_count = std::min<std::size_t>(tan_vec.size(), 2);
-                for (std::size_t i = 0; i < tan_count; ++i) {
-                    place(tangential_offset + static_cast<int>(i), tan_vec[i]);
-                }
-                break;
-            }
-            case CameraModelType::FISHEYE:
-            case CameraModelType::THIN_PRISM_FISHEYE: {
-                const std::size_t radial_count = std::min<std::size_t>(rad_vec.size(), 4);
-                for (std::size_t i = 0; i < radial_count; ++i) {
-                    place(static_cast<int>(i), rad_vec[i]);
-                }
-                if (camera.camera_model_type() == CameraModelType::FISHEYE)
-                    break;
-                constexpr std::array<int, 6> kThinPrismSlots = {4, 5, 6, 8, 7, 9};
-                const std::size_t tan_count = std::min<std::size_t>(tan_vec.size(), kThinPrismSlots.size());
-                for (std::size_t i = 0; i < tan_count; ++i) {
-                    place(kThinPrismSlots[i], tan_vec[i]);
-                }
-                break;
-            }
-            default:
-                break;
-            }
-        }
-
-    } // namespace
+    using namespace core;
 
     geometry::apriltag::CameraObservationView buildCameraObservationView(
         const Camera& camera,
@@ -92,17 +42,15 @@ namespace lfs::core {
         if (const auto& R_tensor = camera.R(); R_tensor.is_valid() && R_tensor.numel() >= 9) {
             const auto R_cpu = R_tensor.cpu().contiguous();
             const float* const ptr = R_cpu.ptr<float>();
-            if (ptr) {
+            if (ptr)
                 view.world_to_camera_rotation = glm::dmat3(glm::transpose(glm::make_mat3(ptr)));
-            }
         }
 
         if (const auto& T_tensor = camera.T(); T_tensor.is_valid() && T_tensor.numel() >= 3) {
             const auto T_cpu = T_tensor.cpu().contiguous();
             const float* const ptr = T_cpu.ptr<float>();
-            if (ptr) {
+            if (ptr)
                 view.world_to_camera_translation = glm::dvec3(glm::make_vec3(ptr));
-            }
         }
 
         view.intrinsics.fx = static_cast<double>(camera.focal_x());
@@ -112,7 +60,19 @@ namespace lfs::core {
         view.intrinsics.width = camera.camera_width();
         view.intrinsics.height = camera.camera_height();
         view.intrinsics.lens_model = camera.camera_model_type();
-        populateCameraDistortion(camera, view.intrinsics);
+        const auto coefficients = [](const Tensor& tensor) {
+            return tensor.is_valid() ? tensor.to_vector() : std::vector<float>{};
+        };
+        const auto rad_vec = coefficients(camera.radial_distortion());
+        const auto tan_vec = coefficients(camera.tangential_distortion());
+        const auto model = camera.camera_model_type();
+        const bool rational = rad_vec.size() >= 6 &&
+                              (std::abs(rad_vec[3]) > 0.0 || std::abs(rad_vec[4]) > 0.0 || std::abs(rad_vec[5]) > 0.0);
+        const std::size_t radial_limit = model == CameraModelType::PINHOLE ? (rational ? 6 : 3) : 4;
+        const std::size_t tangential_limit = model == CameraModelType::THIN_PRISM_FISHEYE ? 6 : 2;
+        view.intrinsics.num_distortion = packCameraDistortion(model,
+                                                              std::span(rad_vec).first(std::min(rad_vec.size(), radial_limit)),
+                                                              std::span(tan_vec).first(std::min(tan_vec.size(), tangential_limit)), std::span(view.intrinsics.distortion));
 
         // Detection reads the original file, even after training prepares an undistorted grid.
         if (camera.is_undistort_precomputed()) {
@@ -134,17 +94,14 @@ namespace lfs::core {
 
     bool AprilTagSceneSnapshot::matches(const Scene& scene) const {
         if (render_generation != scene.renderGeneration() ||
-            camera_list_generation != scene.cameraListGeneration()) {
+            camera_list_generation != scene.cameraListGeneration())
             return false;
-        }
         const auto nodes = scene.getNodes();
-        if (nodes.size() != node_uuids.size()) {
+        if (nodes.size() != node_uuids.size())
             return false;
-        }
         for (std::size_t i = 0; i < nodes.size(); ++i) {
-            if (nodes[i]->uuid != node_uuids[i]) {
+            if (nodes[i]->uuid != node_uuids[i])
                 return false;
-            }
         }
         return true;
     }
@@ -156,17 +113,13 @@ namespace lfs::core {
         std::unordered_map<int, glm::mat4> transforms;
         for (const auto* node : scene.getNodes()) {
             snapshot.node_uuids.push_back(node->uuid);
-            if (node->camera) {
+            if (node->camera)
                 transforms.try_emplace(node->camera->uid(), scene.getWorldTransform(node->id));
-            }
         }
         const auto cameras = active_cameras_only ? scene.getActiveCameras() : scene.getAllCameras();
         for (const auto& camera : cameras) {
-            if (camera) {
-                snapshot.cameras.push_back({buildCameraObservationView(*camera,
-                                                                       transforms.at(camera->uid())),
-                                            camera->image_path()});
-            }
+            if (camera)
+                snapshot.cameras.push_back({buildCameraObservationView(*camera, transforms.at(camera->uid())), camera->image_path()});
         }
         return snapshot;
     }
@@ -187,9 +140,8 @@ namespace lfs::core {
         std::mutex progress_mutex;
 
         tbb::parallel_for(std::size_t{0}, cameras.size(), [&](const std::size_t idx) {
-            if (cancelled.load(std::memory_order_relaxed)) {
+            if (cancelled.load(std::memory_order_relaxed))
                 return;
-            }
 
             auto view = cameras[idx].view;
             const auto& img_path = cameras[idx].image_path;
@@ -218,15 +170,13 @@ namespace lfs::core {
             if (progress_callback) {
                 std::lock_guard<std::mutex> lock(progress_mutex);
                 if (!cancelled.load(std::memory_order_relaxed) &&
-                    !progress_callback(completed_count.load(std::memory_order_relaxed), cameras.size(), cameras[idx].view.image_name)) {
+                    !progress_callback(completed_count.load(std::memory_order_relaxed), cameras.size(), cameras[idx].view.image_name))
                     cancelled.store(true, std::memory_order_relaxed);
-                }
             }
         });
 
-        if (cancelled.load(std::memory_order_relaxed)) {
+        if (cancelled.load(std::memory_order_relaxed))
             return {};
-        }
         return views;
     }
 
@@ -254,88 +204,134 @@ namespace lfs::core {
         return options;
     }
 
-    namespace {
-
-        AprilTagSceneScaleReport solveAprilTagScaleFromViews(
-            std::vector<geometry::apriltag::CameraObservationView> views,
-            const std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
-            const AprilTagSceneScaleOptions& options) {
-            AprilTagSceneScaleReport report;
-
-            if (views.empty()) {
-                report.error_message = "No camera views available for AprilTag triangulation";
-                return report;
-            }
-
-            report.triangulation = geometry::apriltag::triangulateAprilTags(
-                views,
-                options.triangulation_config);
-
-            if (report.triangulation.tags.empty()) {
-                report.error_message = "No AprilTags could be triangulated in 3D from camera views";
-            } else {
-                report.scale_result = geometry::apriltag::solveGlobalScale(
-                    report.triangulation.tags,
-                    constraints,
-                    options.solver_config);
-                report.success = report.scale_result.success;
-                if (!report.success) {
-                    report.error_message = report.scale_result.error_message;
-                }
-            }
-
-            geometry::apriltag::ScaleCalibrationManifest manifest;
-            manifest.family = options.detector_config.family;
-            manifest.triangulation_config = options.triangulation_config;
-            manifest.solver_config = options.solver_config;
-            manifest.triangulation = report.triangulation;
-            manifest.scale_result = report.scale_result;
-            report.manifest_json = geometry::apriltag::serializeManifestToJson(manifest, 2);
-
-            if (!options.manifest_output_path.empty()) {
-                const auto& path = options.manifest_output_path;
-                std::error_code ec;
-                if (const auto parent = path.parent_path(); !parent.empty())
-                    native_fs::create_directories(parent, ec);
-                std::ofstream out;
-                if (!ec && open_file_for_write(path, std::ios::binary | std::ios::trunc, out) &&
-                    (out << report.manifest_json).flush().good()) {
-                    report.manifest_saved_path = path;
-                } else {
-                    const auto error = "Failed to save AprilTag calibration manifest: " + path_to_utf8(path);
-                    LOG_WARN("{}", error);
-                    if (report.error_message.empty())
-                        report.error_message = error;
-                }
-            }
-
-            report.views = std::move(views);
-            return report;
-        }
-
-    } // namespace
-
     AprilTagSceneScaleReport computeAprilTagSceneScale(
         const AprilTagSceneSnapshot& snapshot,
         const std::span<const geometry::apriltag::TagDistanceConstraint> constraints,
         const AprilTagSceneScaleOptions& options,
         const bool solve_scale,
         const AprilTagProgressCallback& progress_callback) {
-        auto views = detectAprilTagsInSnapshot(snapshot.cameras, options.detector_config,
-                                               options.max_image_width, progress_callback);
+        AprilTagSceneScaleReport report;
+        auto& views = report.views;
+        views = detectAprilTagsInSnapshot(snapshot.cameras, options.detector_config, options.max_image_width, progress_callback);
         if ((!snapshot.cameras.empty() && views.empty()) ||
             (progress_callback && !progress_callback(views.size(), snapshot.cameras.size(), {}))) {
-            AprilTagSceneScaleReport report;
+            views.clear();
             report.error_message = "AprilTag detection was cancelled";
             return report;
         }
-        if (solve_scale)
-            return solveAprilTagScaleFromViews(std::move(views), constraints, options);
-        AprilTagSceneScaleReport report;
+        if (solve_scale && views.empty()) {
+            report.error_message = "No camera views available for AprilTag triangulation";
+            return report;
+        }
         report.triangulation = geometry::apriltag::triangulateAprilTags(views, options.triangulation_config);
-        report.views = std::move(views);
-        report.success = true;
+        if (!solve_scale) {
+            report.success = true;
+            return report;
+        }
+        if (report.triangulation.tags.empty())
+            report.error_message = "No AprilTags could be triangulated in 3D from camera views";
+        else {
+            report.scale_result = geometry::apriltag::solveGlobalScale(report.triangulation.tags, constraints, options.solver_config);
+            report.success = report.scale_result.success;
+            if (!report.success)
+                report.error_message = report.scale_result.error_message;
+        }
+
+        geometry::apriltag::ScaleCalibrationManifest manifest;
+        manifest.family = options.detector_config.family;
+        manifest.triangulation_config = options.triangulation_config;
+        manifest.solver_config = options.solver_config;
+        manifest.triangulation = report.triangulation;
+        manifest.scale_result = report.scale_result;
+        report.manifest_json = geometry::apriltag::serializeManifestToJson(manifest, 2);
+
+        if (!options.manifest_output_path.empty()) {
+            const auto& path = options.manifest_output_path;
+            std::error_code ec;
+            if (const auto parent = path.parent_path(); !parent.empty())
+                native_fs::create_directories(parent, ec);
+            std::ofstream out;
+            if (!ec && open_file_for_write(path, std::ios::binary | std::ios::trunc, out) &&
+                (out << report.manifest_json).flush().good()) {
+                report.manifest_saved_path = path;
+            } else {
+                report.success = false;
+                const auto error = "Failed to save AprilTag calibration manifest: " + path_to_utf8(path);
+                LOG_WARN("{}", error);
+                if (report.error_message.empty())
+                    report.error_message = error;
+            }
+        }
+
         return report;
     }
 
-} // namespace lfs::core
+    AprilTagSceneApplyResult applyAprilTagScaleReport(
+        SceneManager& scene_manager,
+        const AprilTagSceneSnapshot& snapshot,
+        AprilTagSceneScaleReport report,
+        const std::vector<std::string>& requested_targets,
+        const bool apply_to_scene,
+        const std::string_view undo_label) {
+        AprilTagSceneApplyResult result;
+        if (!snapshot.matches(scene_manager.getScene())) {
+            report.success = false;
+            report.error_message = LOC("runtime.apriltag_scene_changed");
+        }
+        result.scale_report = std::move(report);
+        result.error_message = result.scale_report.error_message;
+        if (!result.scale_report.success || !apply_to_scene)
+            return result;
+        const auto scale_factor = static_cast<float>(result.scale_report.scale_result.scale_factor);
+        if (!std::isfinite(scale_factor) || scale_factor <= 1e-6f) {
+            result.error_message = "Scale factor must be finite and positive";
+            return result;
+        }
+
+        const auto& scene = scene_manager.getScene();
+        auto candidate_names = requested_targets;
+        if (candidate_names.empty()) {
+            for (const auto* const node : scene.getNodes()) {
+                if (node && (cap::isAlignTransformTargetType(node->type) ||
+                             node->type == core::NodeType::COLLISION ||
+                             node->type == core::NodeType::CAMERA_GROUP || node->type == core::NodeType::CAMERA)) {
+                    candidate_names.push_back(node->name);
+                }
+            }
+        }
+
+        const auto vis_pivot = rendering::visualizerWorldPointFromDataWorld(glm::vec3(result.scale_report.scale_result.pivot));
+        const auto delta = geometry::apriltag::buildUniformScaleTransform(vis_pivot, scale_factor);
+        auto transformed = cap::applyVisualizerWorldDelta(scene_manager, candidate_names, delta, undo_label);
+        result.applied = transformed.has_value();
+        if (transformed)
+            result.transformed_nodes = std::move(*transformed);
+        else
+            result.error_message = transformed.error();
+        return result;
+    }
+
+    nlohmann::json aprilTagResultJson(const AprilTagSceneApplyResult& result) {
+        const auto& report = result.scale_report;
+        auto output = nlohmann::json::parse(report.manifest_json, nullptr, false);
+        if (output.is_discarded())
+            output = nlohmann::json::object();
+        output.update(geometry::apriltag::scaleResultToJson(report.scale_result));
+        output.update(geometry::apriltag::triangulationToJson(report.triangulation));
+        for (auto& tag : output["triangulated_tags"]) {
+            const auto& p = tag["position"];
+            const auto vis = rendering::visualizerWorldPointFromDataWorld(
+                glm::vec3(p[0].get<float>(), p[1].get<float>(), p[2].get<float>()));
+            tag["visualizer_position"] = {vis.x, vis.y, vis.z};
+        }
+        output["success"] = report.success;
+        output["error_message"] = result.error_message;
+        output["applied"] = result.applied;
+        output["camera_count"] = report.views.size();
+        output["transformed_nodes"] = result.transformed_nodes;
+        output["manifest_json"] = report.manifest_json;
+        output["manifest_saved_path"] = core::path_to_utf8(report.manifest_saved_path);
+        return output;
+    }
+
+} // namespace lfs::vis

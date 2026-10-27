@@ -2803,6 +2803,7 @@
     "apriltag_scanning": "正在扫描 AprilTag",
     "apriltag_solving": "正在计算 AprilTag 标定",
     "apriltag_scene_changed": "AprilTag 检测期间场景已更改，请重新扫描",
+    "apriltag_busy": "AprilTag 扫描已在运行",
     "environment_map_failed": "无法读取环境贴图“{}”。已保留之前的环境。",
     "training_save_no_memory": "项目保存失败：{}",
     "autosave_deferred_no_memory": "自动保存已暂停：可用内存不足（{}）。训练将继续；内存释放后自动保存会恢复。",

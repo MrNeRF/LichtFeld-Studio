@@ -1158,64 +1158,32 @@ namespace lfs::vis::cap {
         return {};
     }
 
-    AprilTagSceneApplyResult applyUniformScaleAboutDataPivot(
+    std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
         SceneManager& scene_manager,
-        const std::vector<std::string>& requested_targets,
-        const glm::vec3& data_world_pivot,
-        const float scale_factor,
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
         const std::string_view undo_label) {
-        AprilTagSceneApplyResult result;
-        if (!std::isfinite(scale_factor) || scale_factor <= 1e-6f) {
-            result.error_message = "Scale factor must be finite and positive";
-            return result;
-        }
-
         const auto& scene = scene_manager.getScene();
-        std::vector<std::string> candidate_names;
-        if (!requested_targets.empty()) {
-            candidate_names = requested_targets;
-        } else {
-            for (const auto* const node : scene.getNodes()) {
-                if (node && (isAlignTransformTargetType(node->type) ||
-                             node->type == core::NodeType::COLLISION ||
-                             node->type == core::NodeType::CAMERA_GROUP || node->type == core::NodeType::CAMERA)) {
-                    candidate_names.push_back(node->name);
-                }
-            }
-        }
-
-        const auto transform_targets = top_level_transform_targets(scene, candidate_names);
-        if (transform_targets.empty()) {
-            result.error_message = "No unlocked transformable scene nodes found";
-            return result;
-        }
+        const auto transform_targets = top_level_transform_targets(scene, targets);
+        if (transform_targets.empty())
+            return std::unexpected("No unlocked transformable scene nodes found");
 
         for (const auto& name : transform_targets) {
             const auto* const node = scene.getNode(name);
-            if (!node) {
-                result.error_message = "Node not found: " + name;
-                return result;
-            }
-            if (scene.isNodeEffectivelyLocked(node->id)) {
-                result.error_message = "Cannot transform '" + name + "': node is locked";
-                return result;
-            }
+            if (!node)
+                return std::unexpected("Node not found: " + name);
+            if (scene.isNodeEffectivelyLocked(node->id))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
         }
-
-        const glm::vec3 vis_pivot = rendering::visualizerWorldPointFromDataWorld(data_world_pivot);
-        const glm::mat4 scale_xform = geometry::apriltag::buildUniformScaleTransform(vis_pivot, scale_factor);
 
         std::vector<glm::mat4> local_transforms;
         local_transforms.reserve(transform_targets.size());
         for (const auto& name : transform_targets) {
             const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene, name);
             const auto local = scene_coords::nodeLocalTransformFromVisualizerWorld(
-                scene, name, scale_xform * *world_transform);
-            if (!local) {
-                result.error_message =
-                    "Cannot transform '" + name + "': parent transform cannot preserve a finite world transform";
-                return result;
-            }
+                scene, name, delta * *world_transform);
+            if (!local)
+                return std::unexpected("Cannot transform '" + name + "': parent transform cannot preserve a finite world transform");
             local_transforms.push_back(*local);
         }
 
@@ -1228,57 +1196,7 @@ namespace lfs::vis::cap {
         entry->captureAfter();
         vis::op::pushSceneSnapshotIfChanged(std::move(entry));
 
-        result.applied = true;
-        result.transformed_nodes = transform_targets;
-        return result;
-    }
-
-    AprilTagSceneApplyResult applyAprilTagScaleReport(
-        SceneManager& scene_manager,
-        const core::AprilTagSceneSnapshot& snapshot,
-        core::AprilTagSceneScaleReport report,
-        const std::vector<std::string>& requested_targets,
-        const bool apply_to_scene,
-        const std::string_view undo_label) {
-        AprilTagSceneApplyResult result;
-        if (!snapshot.matches(scene_manager.getScene())) {
-            report.success = false;
-            report.error_message = LOC("runtime.apriltag_scene_changed");
-        }
-        if (!report.success) {
-            result.error_message = report.error_message;
-        } else if (apply_to_scene) {
-            result = applyUniformScaleAboutDataPivot(scene_manager, requested_targets,
-                                                     glm::vec3(report.scale_result.pivot),
-                                                     static_cast<float>(report.scale_result.scale_factor), undo_label);
-        } else {
-            result.error_message = report.error_message;
-        }
-        result.scale_report = std::move(report);
-        return result;
-    }
-
-    nlohmann::json aprilTagResultJson(const AprilTagSceneApplyResult& result) {
-        const auto& report = result.scale_report;
-        auto output = nlohmann::json::parse(report.manifest_json, nullptr, false);
-        if (output.is_discarded())
-            output = nlohmann::json::object();
-        output.update(geometry::apriltag::scaleResultToJson(report.scale_result));
-        output.update(geometry::apriltag::triangulationToJson(report.triangulation));
-        for (auto& tag : output["triangulated_tags"]) {
-            const auto& p = tag["position"];
-            const auto vis = rendering::visualizerWorldPointFromDataWorld(
-                glm::vec3(p[0].get<float>(), p[1].get<float>(), p[2].get<float>()));
-            tag["visualizer_position"] = {vis.x, vis.y, vis.z};
-        }
-        output["success"] = report.success;
-        output["error_message"] = result.error_message;
-        output["applied"] = result.applied;
-        output["camera_count"] = report.views.size();
-        output["transformed_nodes"] = result.transformed_nodes;
-        output["manifest_json"] = report.manifest_json;
-        output["manifest_saved_path"] = core::path_to_utf8(report.manifest_saved_path);
-        return output;
+        return transform_targets;
     }
 
     std::expected<size_t, std::string> bakeNodeTransforms(SceneManager& scene_manager,
