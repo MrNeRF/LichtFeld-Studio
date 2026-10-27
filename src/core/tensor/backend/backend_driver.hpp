@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/gpu_device_info.hpp"
+#include "core/source_site.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_backend_vulkan.hpp"
 #include "core/tensor_protocol_export.hpp"
@@ -13,6 +14,7 @@
 
 namespace lfs::core {
     struct VulkanInteropDevice;
+    class MemoryPressureCoordinator;
     enum class SplatPublication : uint8_t;
 } // namespace lfs::core
 
@@ -48,6 +50,8 @@ namespace lfs::core::internal {
         virtual void bridge_targets(void* consumer, void* producer) = 0;
         virtual GpuBackendOps& activate() = 0;
         virtual MemoryInfo memory_info(bool include_pool_stats) = 0;
+        virtual MemoryInfo pressure_memory_info(bool free_query) = 0;
+        virtual void register_pressure_clients(MemoryPressureCoordinator&) = 0;
         virtual size_t allocation_bytes(size_t bytes) = 0;
         virtual lfs::Status shutdown() = 0;
         virtual BackendExportCapabilities export_capabilities() const noexcept = 0;
@@ -56,7 +60,9 @@ namespace lfs::core::internal {
         virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) = 0;
         virtual SplatPublication publication() const = 0;
         virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
+        virtual void complete_checked_index(void* target, SourceSite location) = 0;
     };
+    MemoryInfo backend_pressure_memory_info(BackendDriver&);
     using BackendRegistry = std::array<BackendDriver*, kGpuBackendCount>;
     void register_compiled_backends(BackendRegistry&);
     LFS_CORE_API BackendDriver& backend_driver(GpuBackend);

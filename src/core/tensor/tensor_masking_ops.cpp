@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "backend/backend_driver.hpp"
 #include "core/cuda_error.hpp"
 #include "core/detail/tensor_half.hpp"
 #include "core/device_fault.hpp"
@@ -188,11 +189,7 @@ namespace lfs::core {
 
         // §1.9 host entry: reject graph capture before checked index_select launch.
         void reject_index_select_graph_capture(const Tensor& tensor, const cudaStream_t stream) {
-            if (internal::backend_ops_for(tensor).stream_is_capturing(internal::ExecContext{stream})) {
-#if LFS_HAS_CUDA
-                throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
-#endif
-            }
+            internal::backend_ops_for(tensor).validate_checked_index_execution(internal::ExecContext{stream});
         }
     } // namespace
 
@@ -578,14 +575,7 @@ namespace lfs::core {
                 internal::ExecContext{execution_stream});
 #ifndef NDEBUG
             if (device_fault_assert_path) {
-                if (internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
-                    internal::backend_ops_for(*this).synchronize_stream(
-                        internal::ExecContext{execution_stream});
-                } else {
-                    lfs::core::device_fault_await_and_consume_or_throw(
-                        execution_stream, "tensor.masking.index_select.assert",
-                        LFS_SOURCE_SITE_CURRENT());
-                }
+                internal::backend_driver(*gpu_backend_of(*this)).complete_checked_index(execution_stream, LFS_SOURCE_SITE_CURRENT());
             }
 #endif
         } else {

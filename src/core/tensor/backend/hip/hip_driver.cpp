@@ -21,6 +21,10 @@ namespace lfs::core::internal {
             int requested_ = -1, selected_ = -1;
 
         public:
+            void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
+            MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
+            void register_pressure_clients(MemoryPressureCoordinator&) override {}
+
             void* current_target() const noexcept override { return nullptr; }
             BackendRendererAccess renderer_access() const noexcept override { return {false, true, false}; }
 

@@ -5,10 +5,12 @@
 #include "../backend_work_queue.hpp"
 #include "../gpu_backend_ops.hpp"
 #include "../native_export.hpp"
+#include "../native_pressure.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/driver_entry.hpp"
 #include "core/cuda_error.hpp"
+#include "core/device_fault.hpp"
 #include "core/gpu_device_selection.hpp"
 #include <atomic>
 #include <charconv>
@@ -23,6 +25,12 @@ namespace lfs::core::internal {
             std::atomic<int> selection_{-1};
 
         public:
+            void complete_checked_index(void* target, SourceSite location) override {
+                device_fault_await_and_consume_or_throw(static_cast<cudaStream_t>(target), "tensor.masking.index_select.assert", location);
+            }
+            MemoryInfo pressure_memory_info(bool free_query) override { return cuda_pressure_memory_info(free_query); }
+            void register_pressure_clients(MemoryPressureCoordinator& coordinator) override { register_cuda_pressure_clients(coordinator); }
+
             void* current_target() const noexcept override { return getCurrentCUDAStream(); }
             BackendRendererAccess renderer_access() const noexcept override { return {true, true, false}; }
 

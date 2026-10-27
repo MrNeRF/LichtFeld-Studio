@@ -8,13 +8,16 @@
 #include "core/error.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/backend_driver.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor/internal/expression_runtime.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
 #include "tensor_backend_contract.hpp"
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -91,6 +94,26 @@ namespace {
             else
                 EXPECT_FLOAT_EQ(got[i], want[i]) << i;
         }
+    }
+
+    TEST_P(TensorBackendSemantics, ExpressionCacheRejectsAnInvalidFreshKernel) {
+        if (GetParam().backend)
+            GTEST_SKIP() << "Device-independent expression cache contract";
+        lfs::core::internal::ExpressionCache cache;
+        const auto key = "invalid-fresh-contract-" + std::to_string(
+                                                         std::chrono::steady_clock::now().time_since_epoch().count());
+        EXPECT_THROW(cache.get(key, [] { return std::vector<char>{'x'}; }, [](std::span<const char>) { return std::shared_ptr<lfs::core::internal::CompiledExpression>{}; }), std::runtime_error);
+        EXPECT_EQ(cache.stats().entries, 0);
+    }
+
+    TEST_P(TensorBackendSemantics, CheckedIndexCompletionUsesTheSelectedNativeBackend) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native GPU completion contract";
+        const auto input = make<float>(DataType::Float32, {3}, {2, 4, 6});
+        const auto indices = Tensor::from_vector(std::vector<int32_t>{2, 0}, TensorShape{2}, device());
+        const auto output = input.index_select(0, indices);
+        lfs::core::internal::backend_driver(*GetParam().backend).complete_checked_index(output.stream(), LFS_SOURCE_SITE_CURRENT());
+        expect_floats(host<float>(output), {6, 2});
     }
 
     TEST_P(TensorBackendSemantics, SoftmaxNonfiniteRows) {

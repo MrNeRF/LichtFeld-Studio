@@ -1,6 +1,7 @@
-#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../prepared_readback.hpp"
+
 #include "../../internal/expression_runtime.hpp"
 #include "../tensor_vulkan_interop.hpp"
 

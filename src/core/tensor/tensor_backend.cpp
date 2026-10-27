@@ -19,6 +19,7 @@
 
 #include "backend/backend_driver.hpp"
 #include "backend/gpu_backend_ops.hpp"
+#include "backend/native_pressure.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -59,6 +60,15 @@ namespace lfs::core {
     std::vector<VulkanHardwareDevice> enumerate_cuda_hardware() {
         return internal::backend_driver(GpuBackend::CUDA).enumerate_hardware();
     }
+
+    MemoryInfo gpu_pressure_memory_info(GpuBackend backend, bool free_query) {
+        return internal::backend_driver(backend).pressure_memory_info(free_query);
+    }
+    void register_gpu_pressure_clients(MemoryPressureCoordinator& coordinator) {
+        for (const auto backend : kCompiledGpuBackends)
+            internal::backend_driver(backend).register_pressure_clients(coordinator);
+    }
+    void record_gpu_pressure_breadcrumb() { internal::record_pressure_breadcrumb(); }
 
     void gpu_trim_cached_memory(const GpuBackend backend) {
         if (gpu_backend_live(backend))

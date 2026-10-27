@@ -20,9 +20,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
-#if LFS_HAS_CUDA
-#include <cuda_runtime.h>
-#endif
 #include <dlpack/dlpack.h>
 #include <nanobind/stl/optional.h>
 #include <sstream>
@@ -57,12 +54,9 @@ namespace lfs::python {
 
         Device from_dl_device(const DLDeviceType t) {
             if (t == kDLCUDA || t == kDLCUDAManaged) {
-#if LFS_HAS_CUDA
+                if (!lfs::core::gpu_backend_export_capabilities(lfs::core::GpuBackend::CUDA).dlpack)
+                    throw std::runtime_error("CUDA DLPack import is unavailable in this build");
                 return Device::GPU;
-#else
-                throw std::runtime_error(
-                    "CUDA DLPack import is unavailable in this build");
-#endif
             }
             if (t == kDLCPU || t == kDLCUDAHost)
                 return Device::CPU;
@@ -1461,12 +1455,10 @@ namespace lfs::python {
     namespace {
         constexpr int64_t kDLPackLegacyDefault = 1;
 
-#if LFS_HAS_CUDA
         int64_t cuda_stream_to_dlpack(cudaStream_t s) {
             const uintptr_t v = reinterpret_cast<uintptr_t>(s);
             return v == 0 ? kDLPackLegacyDefault : static_cast<int64_t>(v);
         }
-#endif
 
         // Query __dlpack_device__ so CPU producers (e.g. NumPy) are not
         // given a CUDA stream. Matches from_dl_device for CUDA types.
@@ -1540,11 +1532,7 @@ namespace lfs::python {
         if (nb::hasattr(obj, "__dlpack__")) {
             nb::object dlpack_fn = obj.attr("__dlpack__");
             if (dlpack_producer_is_cuda_ordered(obj)) {
-#if LFS_HAS_CUDA
                 const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
-#else
-                const int64_t consumer = kDLPackLegacyDefault;
-#endif
                 try {
                     capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
                     stream_handshake = true;
@@ -1605,12 +1593,10 @@ namespace lfs::python {
 
         Tensor tensor(data, TensorShape(shape_vec), device, dtype);
         if (stream_handshake && device == Device::GPU) {
-#if LFS_HAS_CUDA
             // The producer ordered the data onto our current stream via the
             // __dlpack__(stream=) handshake; home the tensor there so a later
             // cross-stream op bridges from the consumer stream, not legacy.
             tensor.set_stream(lfs::core::getCurrentCUDAStream());
-#endif
         }
 
         // Store the DLManagedTensor with a custom deleter that calls the DLPack deleter

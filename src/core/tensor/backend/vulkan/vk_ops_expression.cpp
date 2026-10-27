@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/expression_emitter.hpp"
 #include "../facade_trace.hpp"
+#include "core/logger.hpp"
 #include "spirv_module.hpp"
 #include "vk_backend_ops.hpp"
 #include "vk_ops_common.hpp"
@@ -27,12 +28,19 @@ namespace lfs::core::internal {
         };
 
         std::shared_ptr<CompiledExpression> load_kernel(VulkanContext& context,
-                                                        const std::span<const char> artifact) {
+                                                        const std::span<const char> artifact,
+                                                        const uint32_t expected_push_bytes) {
             if (artifact.size() < 20 || artifact.size() % 4 != 0)
                 throw std::runtime_error("Invalid cached expression SPIR-V");
             std::vector<uint32_t> words(artifact.size() / 4);
             std::memcpy(words.data(), artifact.data(), artifact.size());
             const auto facts = spirv::analyze(spirv::parse(words));
+            // An optional cached artifact must match this launch's argument
+            // transport. Reject stale direct/indirect layouts and recompile.
+            if (facts.push_constant_size != expected_push_bytes) {
+                LOG_WARN("Cached Vulkan expression argument layout is incompatible ({} bytes, expected {}); recompiling", facts.push_constant_size, expected_push_bytes);
+                return {};
+            }
             if (facts.entry_name != "main" || facts.local_size != std::array<uint32_t, 3>{256, 1, 1} ||
                 facts.push_constant_size == 0 || facts.push_constant_size > 128 || facts.push_constant_size % 4 != 0 ||
                 facts.preserve_widths != facts.float_widths)
@@ -69,22 +77,25 @@ namespace lfs::core::internal {
         }
         std::shared_ptr<VulkanKernel> compiled_kernel(const std::shared_ptr<VulkanContext>& context,
                                                       const ExpressionProgram& program,
-                                                      const ExpressionSignature& signature) {
+                                                      const ExpressionSignature& signature,
+                                                      const uint32_t push_bytes) {
             std::string key = "vulkan-spirv:";
             const auto& caps = context->caps();
             key.append(reinterpret_cast<const char*>(caps.device_uuid.data()), caps.device_uuid.size());
             key.append(reinterpret_cast<const char*>(caps.driver_uuid.data()), caps.driver_uuid.size());
             key += expression_key(program, signature);
+            key.append(reinterpret_cast<const char*>(&push_bytes), sizeof(push_bytes));
             return std::static_pointer_cast<VulkanKernel>(context->pipelines().expressions().get(key, [&] { const auto words = expression_spirv(program, signature);
                 const auto* first = reinterpret_cast<const char*>(words.data());
-                return std::vector<char>(first, first + words.size() * 4); }, [&](const std::span<const char> artifact) { return load_kernel(*context, artifact); }));
+                return std::vector<char>(first, first + words.size() * 4); }, [&](const std::span<const char> artifact) { return load_kernel(*context, artifact, push_bytes); }));
         }
     } // namespace
 
     void VulkanBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext) {
         LFS_FACADE_TRACE(compiled_expression);
         const auto context = acquire_vulkan_context();
-        const auto kernel = compiled_kernel(context, *launch.program, launch.signature);
+        const uint32_t push_bytes = launch.words <= 128 / sizeof(uint32_t) ? launch.words * sizeof(uint32_t) : sizeof(uint64_t);
+        const auto kernel = compiled_kernel(context, *launch.program, launch.signature, push_bytes);
         if (launch.prepare_only)
             return;
         const uint32_t bytes = launch.words * 4;

@@ -21,7 +21,7 @@ namespace lfs::core {
         std::unique_ptr<internal::BackendUploadBuffer> upload;
         bool pending = false;
 
-        void prepare(Tensor target) {
+        void prepare(Tensor&& target) {
             auto& backend = internal::backend_ops_for(target);
             if (ops != &backend) {
                 auto replacement = backend.create_upload_buffer();
@@ -39,7 +39,8 @@ namespace lfs::core {
                 source = {};
             if (status.complete) {
                 pending = false;
-                source = {};
+                if (!status.source_consumed)
+                    source = {};
                 destination = {};
             }
         }
@@ -51,7 +52,7 @@ namespace lfs::core {
             upload.reset();
             ops = nullptr;
         }
-        void enqueue(Tensor target, const Tensor& input, internal::BackendQueueTarget queue) {
+        void enqueue(Tensor&& target, const Tensor& input, internal::BackendQueueTarget queue) {
             prepare(std::move(target));
             source = input;
             pin_operands({&source, &destination});
@@ -63,7 +64,7 @@ namespace lfs::core {
                 throw;
             }
         }
-        void enqueue_bytes(Tensor target, std::span<const std::byte> input, internal::BackendQueueTarget queue, bool in_batch) {
+        void enqueue_bytes(Tensor&& target, std::span<const std::byte> input, internal::BackendQueueTarget queue, bool in_batch) {
             prepare(std::move(target));
             pin_operands({&destination});
             pending = true;
@@ -203,10 +204,14 @@ namespace lfs::core {
     struct TensorWorkQueue::Impl {
         GpuBackend backend;
         std::unique_ptr<internal::BackendWorkQueue> native;
+        void* target = nullptr;
         Impl(GpuBackend selected, const internal::BackendQueueCreateInfo& info)
             : backend(selected), native(internal::backend_driver(selected).make_work_queue(info)) {
             if (!native)
                 throw std::runtime_error("Tensor backend does not support work queues");
+            // Queue identity is immutable; cache it once rather than adding a
+            // second virtual call to every fence, target or readback operation.
+            target = native->native_handle();
         }
     };
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, Mode mode)
@@ -224,7 +229,7 @@ namespace lfs::core {
     TensorWorkQueue::Scope::Scope(const TensorWorkQueue& queue)
         : backend_scope_(queue.backend()), native_(queue.impl_->native.get()), binding_(static_cast<internal::BackendWorkQueue*>(native_)->bind(false)) {}
     TensorWorkQueue::Scope::~Scope() { static_cast<internal::BackendWorkQueue*>(native_)->unbind(binding_); }
-    void* TensorWorkQueue::native_handle() const { return impl_->native->native_handle(); }
+    void* TensorWorkQueue::native_handle() const { return impl_->target; }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
     bool TensorWorkQueue::ready() const { return impl_->native->ready(); }
     void TensorWorkQueue::wait() const { impl_->native->wait(); }

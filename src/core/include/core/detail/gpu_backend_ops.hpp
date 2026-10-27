@@ -417,8 +417,8 @@ namespace lfs::core {
             virtual std::unique_ptr<ReadbackBuffer> create_readback_buffer() = 0;
             virtual std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) = 0;
 
-            // Optional native services. Existing backends retain their current
-            // direct paths; only backends using these services dispatch here.
+            // Required native services. Each backend owns its implementation
+            // and explicitly reports features its runtime cannot provide.
             virtual std::unique_ptr<BackendUploadBuffer> create_upload_buffer() = 0;
             virtual std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) = 0;
             virtual std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) = 0;
@@ -439,6 +439,7 @@ namespace lfs::core {
             virtual SyncToken bridge(ExecContext producer, ExecContext consumer) = 0;
             virtual PointerClass classify_pointer(const void* pointer) = 0;
             virtual bool stream_is_capturing(ExecContext context) = 0;
+            virtual void validate_checked_index_execution(ExecContext context) = 0;
         };
 
         class CudaBackendOps final : public GpuBackendOps {
@@ -779,6 +780,7 @@ namespace lfs::core {
             SyncToken bridge(ExecContext producer, ExecContext consumer) override;
             PointerClass classify_pointer(const void* pointer) override;
             bool stream_is_capturing(ExecContext context) override;
+            void validate_checked_index_execution(ExecContext context) override;
         };
 
         LFS_CORE_API GpuBackendOps& backend_ops(GpuBackend backend);

@@ -27,6 +27,7 @@ namespace lfs::core::internal {
                            : publication_;
             }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) override { throw_unavailable(); }
+            void complete_checked_index(void*, SourceSite) override { throw_unavailable(); }
             std::array<uintptr_t, 2> bind_target(void*) override { throw_unavailable(); }
             void unbind_target(std::array<uintptr_t, 2>) noexcept override {}
             void bridge_targets(void*, void*) override { throw_unavailable(); }
@@ -57,6 +58,8 @@ namespace lfs::core::internal {
                 std::unreachable();
             }
             MemoryInfo memory_info(bool) override { return {}; }
+            MemoryInfo pressure_memory_info(bool) override { return {}; }
+            void register_pressure_clients(MemoryPressureCoordinator&) override {}
             size_t allocation_bytes(size_t) override {
                 throw std::runtime_error(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
@@ -102,4 +105,17 @@ namespace lfs::core::internal {
 namespace lfs::core::internal {
     GpuBackendOps::~GpuBackendOps() = default;
 
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    MemoryInfo backend_pressure_memory_info(BackendDriver& driver) {
+        if (const auto device = driver.device_info(-1); device && device->supports_process_memory_budget) {
+            MemoryInfo result;
+            result.total_bytes = device->process_memory_budget_bytes;
+            result.allocated_bytes = device->process_memory_used_bytes;
+            result.free_bytes = result.total_bytes > result.allocated_bytes ? result.total_bytes - result.allocated_bytes : 0;
+            return result;
+        }
+        return driver.memory_info(false);
+    }
 } // namespace lfs::core::internal

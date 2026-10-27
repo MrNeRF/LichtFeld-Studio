@@ -183,6 +183,7 @@ namespace lfs::core::internal {
         SyncToken bridge(ExecContext producer, ExecContext consumer) override;
         PointerClass classify_pointer(const void* pointer) override;
         bool stream_is_capturing(ExecContext context) override;
+        void validate_checked_index_execution(ExecContext context) override;
 
         void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;
         bool radius_connected_components(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) override;

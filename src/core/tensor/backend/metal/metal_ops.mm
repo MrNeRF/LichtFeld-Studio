@@ -2191,7 +2191,8 @@ namespace lfs::core::internal {
     }
 
     // Every element draws its own Philox block, so odd counts need no scratch.
-    void MetalBackendOps::normal(const StorageRef output, const RandomProgram& program, ExecContext) {
+    void MetalBackendOps::normal(const StorageRef output, const RandomProgram& program, ExecContext)
+    {
         LFS_FACADE_TRACE(normal);
         draw_elements(kNormal, output, program);
     }

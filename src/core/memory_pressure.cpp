@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/memory_pressure.hpp"
+#include "core/gpu_device_runtime.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
@@ -10,15 +11,7 @@
 #include "core/events.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/logger.hpp"
-#if LFS_HAS_CUDA
-#include "core/pinned_memory_allocator.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#endif
 #include "core/tensor_backend.hpp"
-
-#if LFS_HAS_CUDA
-#include <cuda_runtime_api.h>
-#endif
 
 #include <algorithm>
 #include <array>
@@ -52,129 +45,17 @@ namespace lfs::core {
             return std::nullopt;
         }
 
-        MemoryInfo query_backend_memory(const GpuBackend backend) {
+        MemoryInfo query_backend_memory(const MemoryDomain domain, bool free_query) {
+            const auto backend = domain_backend(domain).value_or(GpuBackend::CUDA);
             try {
-                if (const auto device = gpu_backend_device_info(backend);
-                    device && device->supports_process_memory_budget) {
-                    MemoryInfo result;
-                    result.total_bytes = device->process_memory_budget_bytes;
-                    result.allocated_bytes = device->process_memory_used_bytes;
-                    result.free_bytes = result.total_bytes > result.allocated_bytes
-                                            ? result.total_bytes - result.allocated_bytes
-                                            : 0;
-                    return result;
-                }
-                return gpu_backend_memory_info(backend);
+                return gpu_pressure_memory_info(backend, free_query);
             } catch (const std::exception& error) {
                 LOG_WARN("Cannot query {} memory headroom: {}", gpu_backend_name(backend), error.what());
                 return {};
             }
         }
-
-        size_t query_device_free_bytes(const MemoryDomain domain) {
-            if (const auto backend = domain_backend(domain))
-                return query_backend_memory(*backend).free_bytes;
-#if LFS_HAS_CUDA
-            // Consume only a sticky OOM so an unrelated asynchronous CUDA error
-            // is preserved for its real handler.
-            const cudaError_t sticky = cudaPeekAtLastError();
-            if (sticky == cudaErrorMemoryAllocation) {
-                cudaGetLastError();
-            }
-            size_t free_bytes = 0;
-            size_t total_bytes = 0;
-            const cudaError_t status = cudaMemGetInfo(&free_bytes, &total_bytes);
-            if (status != cudaSuccess) {
-                if (status == cudaErrorMemoryAllocation) {
-                    cudaGetLastError();
-                }
-                return 0;
-            }
-            return free_bytes;
-#else
-            return 0;
-#endif
-        }
-
-        size_t query_device_total_bytes(const MemoryDomain domain) {
-            if (const auto backend = domain_backend(domain))
-                return query_backend_memory(*backend).total_bytes;
-#if LFS_HAS_CUDA
-            size_t free_bytes = 0;
-            size_t total_bytes = 0;
-            if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-                return 0;
-            }
-            return total_bytes;
-#else
-            return 0;
-#endif
-        }
-
-#if LFS_HAS_CUDA
-        [[noreturn]] void throw_cuda_unavailable_allocation(
-            const size_t bytes,
-            const cudaStream_t stream,
-            const char* const label,
-            const char* const operation) {
-            throw MemoryAllocationError(AllocationFailure{
-                .domain = MemoryDomain::CudaDevice,
-                .requested_bytes = bytes,
-                .alignment = 0,
-                .device = -1,
-                .stream = reinterpret_cast<uintptr_t>(stream),
-                .label = label,
-                .operation = operation,
-                .native_error = cudaErrorInitializationError,
-            });
-        }
-
-        void* try_allocate_direct_cuda_storage(const size_t bytes,
-                                               cudaError_t* const failure_status) {
-            void* ptr = nullptr;
-            const auto pre_call_state = sample_cuda_pre_call_state();
-            const cudaError_t status = cudaMalloc(&ptr, bytes);
-            if (status == cudaSuccess) {
-                alloc_counter::record_site(alloc_counter::Site::ZerosDirect);
-                return ptr;
-            }
-            if (failure_status) {
-                *failure_status = status;
-            }
-            ensure_cuda_success(
-                status, pre_call_state, "cudaMalloc(direct tensor storage)",
-                std::format("requested_bytes={}", bytes),
-                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-            if (ptr != nullptr) {
-                const cudaError_t cleanup_status = cudaFree(ptr);
-                if (cleanup_status != cudaSuccess) {
-                    ensure_cuda_success(
-                        cleanup_status, "cudaFree(failed direct tensor storage allocation)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
-                }
-            }
-            return nullptr;
-        }
-
-        [[noreturn]] void throw_non_oom_cuda_allocation(
-            const cudaError_t status,
-            const size_t bytes,
-            const char* const label,
-            const char* const operation) {
-            if (status == cudaSuccess) {
-                throw std::runtime_error(std::format(
-                    "CUDA allocator returned no storage without a CUDA error: "
-                    "requested_bytes={}, label='{}', operation='{}'",
-                    bytes, label ? label : "", operation ? operation : ""));
-            }
-            throw std::runtime_error(std::format(
-                "CUDA allocation failed with {} ({}): requested_bytes={}, label='{}', "
-                "operation='{}'",
-                cudaGetErrorName(status), cudaGetErrorString(status), bytes,
-                label ? label : "", operation ? operation : ""));
-        }
-#endif
-
+        size_t query_device_free_bytes(MemoryDomain domain) { return query_backend_memory(domain, true).free_bytes; }
+        size_t query_device_total_bytes(MemoryDomain domain) { return query_backend_memory(domain, false).total_bytes; }
     } // namespace
 
     MemoryAllocationError::MemoryAllocationError(const AllocationFailure& failure)
@@ -277,33 +158,7 @@ namespace lfs::core {
 
     MemoryPressureCoordinator::MemoryPressureCoordinator()
         : impl_(new Impl()) {
-#if LFS_HAS_CUDA
-        register_client(PressureClient{
-            .name = "tensor-cuda-pool",
-            .priority = 10,
-            .domain = MemoryDomain::CudaDevice,
-            .affinity = PressureAffinity::ImmediateThreadSafe,
-            .estimate = nullptr,
-            .shrink = [](const PressureRequest&) {
-                CudaMemoryPool::instance().trim_cached_memory();
-                return ReclaimResult{};
-            },
-        });
-        register_client(PressureClient{
-            .name = "pinned-host-cache",
-            .priority = 10,
-            .domain = MemoryDomain::PinnedHost,
-            .affinity = PressureAffinity::ImmediateThreadSafe,
-            .estimate = [](const PressureRequest&) -> size_t {
-                return PinnedMemoryAllocator::instance().get_stats().cached_bytes;
-            },
-            .shrink = [](const PressureRequest&) {
-                auto& allocator = PinnedMemoryAllocator::instance();
-                const size_t before = allocator.get_stats().cached_bytes;
-                allocator.empty_cache();
-                return ReclaimResult{.logical_bytes_released = before}; },
-        });
-#endif
+        register_gpu_pressure_clients(*this);
     }
 
     MemoryPressureCoordinator::~MemoryPressureCoordinator() {
@@ -313,81 +168,6 @@ namespace lfs::core {
     MemoryPressureCoordinator& MemoryPressureCoordinator::instance() {
         static MemoryPressureCoordinator coordinator;
         return coordinator;
-    }
-
-    void* allocate_cuda_storage(const size_t bytes,
-                                const cudaStream_t stream,
-                                const CudaStorageMode mode,
-                                const char* const label,
-                                const char* const operation) {
-#if LFS_HAS_CUDA
-        if (bytes == 0) {
-            return nullptr;
-        }
-        if (cuda_is_unavailable()) [[unlikely]] {
-            throw_cuda_unavailable_allocation(bytes, stream, label, operation);
-        }
-
-        auto& coordinator = MemoryPressureCoordinator::instance();
-        const auto try_allocate = [&](cudaError_t* const failure_status) -> void* {
-            *failure_status = cudaSuccess;
-            if (coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
-                *failure_status = cudaErrorMemoryAllocation;
-                return nullptr;
-            }
-            if (mode == CudaStorageMode::Direct) {
-                return try_allocate_direct_cuda_storage(bytes, failure_status);
-            }
-            if (mode == CudaStorageMode::ExactAsync) {
-                return CudaMemoryPool::instance().try_allocate_exact_async(
-                    bytes, stream, failure_status);
-            }
-            return CudaMemoryPool::instance().try_allocate(bytes, stream, failure_status);
-        };
-
-        cudaError_t failure_status = cudaSuccess;
-        void* ptr = try_allocate(&failure_status);
-        if (ptr != nullptr) {
-            return ptr;
-        }
-        if (cuda_is_unavailable()) {
-            throw_cuda_unavailable_allocation(bytes, stream, label, operation);
-        }
-        if (failure_status != cudaErrorMemoryAllocation) {
-            throw_non_oom_cuda_allocation(failure_status, bytes, label, operation);
-        }
-
-        int device = 0;
-        cudaGetDevice(&device);
-        const AllocationFailure failure{
-            .domain = MemoryDomain::CudaDevice,
-            .requested_bytes = bytes,
-            .alignment = 0,
-            .device = device,
-            .stream = reinterpret_cast<uintptr_t>(stream),
-            .label = label,
-            .operation = operation,
-            .native_error = cudaErrorMemoryAllocation,
-        };
-        if (coordinator.relieve_and_should_retry(failure)) {
-            ptr = try_allocate(&failure_status);
-        }
-        // A handled OOM and pressure-client reclaim can leave CUDA's last-error
-        // state sticky. Consume it before returning control to later CUDA work.
-        (void)cudaGetLastError();
-        if (ptr == nullptr) {
-            if (cuda_is_unavailable()) {
-                throw_cuda_unavailable_allocation(bytes, stream, label, operation);
-            }
-            if (failure_status != cudaErrorMemoryAllocation) {
-                throw_non_oom_cuda_allocation(failure_status, bytes, label, operation);
-            }
-            throw MemoryAllocationError(failure);
-        }
-        return ptr;
-#else
-        throw std::runtime_error("CUDA support is not compiled into this build");
-#endif
     }
 
     size_t MemoryPressureCoordinator::reserve_bytes(const MemoryDomain domain) const noexcept {
@@ -499,9 +279,7 @@ namespace lfs::core {
         }
         const size_t observed_released = free_after > free_before ? free_after - free_before : 0;
 
-#if LFS_HAS_CUDA
-        record_cuda_breadcrumb("memory-pressure.episode", __FILE__, __LINE__);
-#endif
+        record_gpu_pressure_breadcrumb();
 
         std::string summary = std::format(
             "VRAM pressure episode #{} ({}): requested {}, reserve {}, free {} -> {}, released {} across {} client(s){}",
@@ -591,11 +369,6 @@ namespace lfs::core {
     }
 
     void MemoryPressureCoordinator::maybe_recover() {
-#if LFS_HAS_CUDA
-        if (cuda_is_unavailable()) {
-            return;
-        }
-#endif
         if (!impl_->pressure_active.load()) {
             return;
         }

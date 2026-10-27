@@ -24,7 +24,7 @@ namespace lfs::core::internal {
         bool complete = false;
         bool source_consumed = false;
     };
-    // Optional native ownership primitives. Implementations and SDK types stay
+    // Backend-owned execution primitives. Implementations and SDK types stay
     // in backend directories; shared Tensor code sees only these contracts.
     struct BackendQueueLease {
         std::shared_ptr<void> keep_alive;

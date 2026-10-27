@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/device_fault.hpp"
 
 #include "../../internal/expression_runtime.hpp"
 #include "../facade_trace.hpp"
@@ -1036,3 +1037,10 @@ namespace lfs::core::internal {
     void hold_vulkan_interop_blocks(bool) {}
 } // namespace lfs::core::internal
 #endif
+
+namespace lfs::core::internal {
+    void CudaBackendOps::validate_checked_index_execution(ExecContext context) {
+        if (stream_is_capturing(context))
+            throw_device_fault_graph_capture_error(context.cuda_stream, LFS_SOURCE_SITE_CURRENT());
+    }
+} // namespace lfs::core::internal

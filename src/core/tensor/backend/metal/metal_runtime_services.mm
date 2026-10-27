@@ -1,6 +1,7 @@
-#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../prepared_readback.hpp"
+
 #include "../../internal/expression_runtime.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "metal_context.hpp"
@@ -235,4 +236,8 @@ std::unique_ptr<PreparedReadback> MetalBackendOps::prepare_readback(const Tensor
     return std::make_unique<BufferedPreparedReadback>(source, destination,
         source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) { });
 }
+}
+
+namespace lfs::core::internal {
+void MetalBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
 }

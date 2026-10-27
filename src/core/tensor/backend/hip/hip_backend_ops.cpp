@@ -1,6 +1,7 @@
-#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../prepared_readback.hpp"
+
 #include "architecture_runtime.hpp"
 #include "expression_api.h"
 #include "hip_backend_ops.hpp"
@@ -2963,4 +2964,8 @@ namespace lfs::core::internal {
         return std::make_unique<BufferedPreparedReadback>(source, destination,
                                                           source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) {});
     }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    void HipBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
 } // namespace lfs::core::internal

@@ -1,6 +1,6 @@
-#include "../prepared_readback.hpp"
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../prepared_readback.hpp"
 
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
@@ -614,4 +614,8 @@ namespace lfs::core::internal {
                                                               queue.wait_for(producer);
                                                           });
     }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    void VulkanBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
 } // namespace lfs::core::internal

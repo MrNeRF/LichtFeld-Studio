@@ -1,8 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/cuda_error.hpp"
 #include "core/gpu_device_info.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/gpu_elapsed.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_fused.hpp"
@@ -205,6 +207,36 @@ namespace {
         auto added = values({1, 2, 3, 4}, {2, 2});
         added.index_add_(0, indices, added);
         ASSERT_NO_FATAL_FAILURE(expect_values(added, {2, 2}, {4, 6, 4, 6}));
+    }
+
+    TEST_P(TensorOperationContracts, PressureRecoveryUsesTheFailingDomainWithoutCuda) {
+        if (GetParam().backend)
+            GTEST_SKIP() << "Device-independent coordinator policy";
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        struct Cleanup {
+            ~Cleanup() {
+                MemoryPressureCoordinator::instance().reset_for_testing();
+                if constexpr (gpu_backend_compiled(GpuBackend::CUDA))
+                    reset_cuda_diagnostics_for_testing();
+            }
+        } cleanup;
+        // SDK-free injection of cudaErrorInitializationError: recovery of other
+        // domains must not depend on a working NVIDIA runtime or device.
+        if constexpr (gpu_backend_compiled(GpuBackend::CUDA))
+            (void)latch_cuda_unavailable(static_cast<cudaError_t>(3));
+        for (const auto domain : {MemoryDomain::VulkanDevice, MemoryDomain::MetalDevice, MemoryDomain::HipDevice}) {
+            coordinator.reset_for_testing();
+            size_t free = 0;
+            bool wrong_domain = false;
+            coordinator.set_free_memory_probe([&](MemoryDomain queried) { wrong_domain |= queried != domain; return free; });
+            const auto target = coordinator.reserve_bytes(domain);
+            coordinator.run_episode(AllocationFailure{.domain = domain, .label = "contract", .operation = "pressure.recovery"}, PressureContext::RenderThread);
+            EXPECT_TRUE(coordinator.pressure_active());
+            free = target * 2;
+            coordinator.maybe_recover();
+            EXPECT_FALSE(coordinator.pressure_active());
+            EXPECT_FALSE(wrong_domain);
+        }
     }
 
     TEST_P(TensorOperationContracts, NonzeroUsesSelectedCountRatherThanCapacity) {

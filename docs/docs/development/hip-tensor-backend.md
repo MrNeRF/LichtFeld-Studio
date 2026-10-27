@@ -102,6 +102,15 @@ overlapping inputs before mutation. Prepared readback retains its source and
 CPU destination, preserves native ordering, and checks execution errors before
 publishing bytes, including zero-byte completion snapshots.
 
+Checked-index capture validation and Debug completion checks belong to the native
+implementation. CUDA consumes its device-fault record after synchronization;
+the other implementations preserve their native queue error checks.
+
+Vulkan expression cache identity includes the launch's push-constant size.
+The loader checks that size before reusing an artifact; an incompatible cached
+layout is recompiled with a log warning. A freshly compiled artifact rejected by
+its loader raises an error rather than publishing a null kernel.
+
 ## Ownership and memory
 
 HIP device allocations use the appended `MemoryDomain::HipDevice`. The allocator
@@ -114,6 +123,12 @@ GPU must not be summed.
 Native allocations return their accounting, teardown and diagnostic-label policy
 with the allocation descriptor. Shared allocation and deletion consume that
 policy instead of deriving ownership from backend names.
+
+Memory-pressure queries and reclaim clients use the native driver for the
+allocation's memory domain. Recovery checks that domain rather than the current
+Tensor backend; an unavailable CUDA device does not prevent another backend's
+pressure episode from recovering. CUDA retains its native OOM error-state
+handling and allocator retry behavior.
 
 Storage views validate backend, owner, byte ranges, dtype and layout before native
 use. Borrowed raw views require a live allocation and retain the existing raw-view

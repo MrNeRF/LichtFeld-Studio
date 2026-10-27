@@ -215,6 +215,7 @@ namespace lfs::core::internal {
         SyncToken bridge(ExecContext, ExecContext) override;
         PointerClass classify_pointer(const void*) override;
         bool stream_is_capturing(ExecContext) override;
+        void validate_checked_index_execution(ExecContext context) override;
     };
 
 } // namespace lfs::core::internal
