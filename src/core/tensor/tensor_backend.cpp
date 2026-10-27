@@ -349,6 +349,7 @@ namespace lfs::core {
 
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {
             internal::backend_driver(backend).throw_unavailable();
+            std::unreachable();
         }
 
     } // namespace

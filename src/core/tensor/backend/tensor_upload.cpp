@@ -586,30 +586,10 @@ namespace lfs::core {
 #endif
     }
     void TensorWorkQueue::record(TensorFence& fence) const {
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend() == GpuBackend::HIP) {
-            fence.record(TensorExecutionTarget(*this));
-            return;
-        }
-        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
-            fence.record(TensorExecutionTarget(*this));
-            return;
-        }
-        if (backend() != GpuBackend::CUDA)
-            throw std::runtime_error("Reusable fences are unsupported on Vulkan");
-        fence.record(native_handle());
+        fence.record(TensorExecutionTarget(*this));
     }
     void TensorWorkQueue::wait_for(const TensorFence& fence) const {
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend() == GpuBackend::HIP) {
-            fence.wait_on(TensorExecutionTarget(*this));
-            return;
-        }
-        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
-            fence.wait_on(TensorExecutionTarget(*this));
-            return;
-        }
-        if (backend() != GpuBackend::CUDA)
-            throw std::runtime_error("Reusable fences are unsupported on Vulkan");
-        fence.wait_on(native_handle());
+        fence.wait_on(TensorExecutionTarget(*this));
     }
     void TensorWorkQueue::enqueue_host_callback(void (*callback)(void*), void* user) {
         if (gpu_backend_compiled(GpuBackend::HIP) && backend() == GpuBackend::HIP) {
