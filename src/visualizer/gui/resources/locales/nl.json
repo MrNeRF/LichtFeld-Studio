@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Verwijderen",
   "gamepad.profile.import": "Importeren...",
   "gamepad.profile.export": "Exporteren...",
-  "gamepad.profile.replace": "Vervangen"
+  "gamepad.profile.replace": "Vervangen",
+  "gamepad.binding.sequencer": "Sequencer",
+  "gamepad.binding.add_keyframe": "Keyframe toevoegen",
+  "gamepad.binding.remove_selected_keyframe": "Geselecteerd keyframe verwijderen",
+  "gamepad.binding.previous_keyframe": "Vorig keyframe",
+  "gamepad.binding.next_keyframe": "Volgend keyframe",
+  "gamepad.binding.context_help": "Stel bediening per cameramodus of voor de sequencer in. Sequencertoewijzingen hebben voorrang wanneer het paneel zichtbaar is en het afspelen is gestopt."
 }

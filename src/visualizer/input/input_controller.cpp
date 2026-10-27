@@ -2767,17 +2767,20 @@ namespace lfs::vis {
         const bool viewport_mouse = mouse_down && input_router_ &&
                                     input_router_->pointerTarget(pointer_x, pointer_y) == input::InputTarget::Viewport;
         input::GamepadNavigationContext context;
-        context.allowed = window_ && (flags & SDL_WINDOW_INPUT_FOCUS) && !(flags & SDL_WINDOW_MINIMIZED) &&
+        // Native floating panels are SDL windows in this process too. Moving
+        // focus to the Sequencer must not look like leaving the application.
+        context.allowed = window_ && SDL_GetKeyboardFocus() && !(flags & SDL_WINDOW_MINIMIZED) &&
                           !gui_state.modal_open && !gui::nativeFileDialogActive() &&
                           !keys_held && !viewport_mouse && drag_mode_ == DragMode::None &&
                           !bindings_.isCapturing() && !lfs::python::has_keyboard_capture_request() &&
                           !op::operators().hasModalOperator() &&
                           !gui::preserveNativeDragInput() && window->manualResizeEdgeMask() == 0 &&
                           !gui::PanelRegistry::instance().is_panel_enabled("lfs.preferences") &&
-                          (!gui || !gui->sequencer().isPlaying()) &&
+                          (!gui || (!gui->sequencer().isPlaying() && gui->sequencer().state() != PlaybackState::SCRUBBING)) &&
                           window->gamepads().diagnosticSelected() == 0;
         context.target = reinterpret_cast<uintptr_t>(&target);
         context.click_epoch = gamepad_click_epoch_;
+        context.sequencer_open = gui && gui->isSequencerVisible() && !gui_state.text_input_active;
         switch (camera_navigation_mode_) {
         case CameraNavigationMode::Orbit: context.mode = input::GamepadNavigationMode::Orbit; break;
         case CameraNavigationMode::Trackball: context.mode = input::GamepadNavigationMode::Trackball; break;
@@ -2796,6 +2799,15 @@ namespace lfs::vis {
             stopGamepadMotion();
             gamepad_frame_demand_ = gamepad_session_.awaitingNeutral();
             return false;
+        }
+        if (context.sequencer_open && (intent.add_keyframe || intent.remove_selected_keyframe || intent.keyframe_step)) {
+            stopGamepadMotion();
+            auto& sequencer_ui = gui->sequencerUI();
+            if (intent.add_keyframe) sequencer_ui.addKeyframeFromView(target);
+            else if (intent.remove_selected_keyframe) sequencer_ui.removeSelectedKeyframe();
+            else sequencer_ui.selectAdjacentKeyframe(intent.keyframe_step);
+            gamepad_frame_demand_ = true;
+            return true;
         }
         if (intent.exit_walk) {
             setCameraNavigationMode(CameraNavigationMode::Orbit);

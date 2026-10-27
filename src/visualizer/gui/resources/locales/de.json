@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Löschen",
   "gamepad.profile.import": "Importieren...",
   "gamepad.profile.export": "Exportieren...",
-  "gamepad.profile.replace": "Ersetzen"
+  "gamepad.profile.replace": "Ersetzen",
+  "gamepad.binding.sequencer": "Sequencer",
+  "gamepad.binding.add_keyframe": "Keyframe hinzufügen",
+  "gamepad.binding.remove_selected_keyframe": "Ausgewählten Keyframe löschen",
+  "gamepad.binding.previous_keyframe": "Vorheriger Keyframe",
+  "gamepad.binding.next_keyframe": "Nächster Keyframe",
+  "gamepad.binding.context_help": "Steuerung je Kameramodus oder für den Sequencer festlegen. Sequencer-Belegungen haben Vorrang, solange das Panel sichtbar und die Wiedergabe angehalten ist."
 }

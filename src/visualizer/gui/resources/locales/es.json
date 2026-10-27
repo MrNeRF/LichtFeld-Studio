@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Eliminar",
   "gamepad.profile.import": "Importar...",
   "gamepad.profile.export": "Exportar...",
-  "gamepad.profile.replace": "Reemplazar"
+  "gamepad.profile.replace": "Reemplazar",
+  "gamepad.binding.sequencer": "Secuenciador",
+  "gamepad.binding.add_keyframe": "Añadir fotograma clave",
+  "gamepad.binding.remove_selected_keyframe": "Eliminar fotograma clave seleccionado",
+  "gamepad.binding.previous_keyframe": "Fotograma clave anterior",
+  "gamepad.binding.next_keyframe": "Fotograma clave siguiente",
+  "gamepad.binding.context_help": "Configura los controles por modo de cámara o para el secuenciador. Sus asignaciones tienen prioridad cuando el panel está visible y la reproducción está detenida."
 }

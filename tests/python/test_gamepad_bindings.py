@@ -240,3 +240,51 @@ def test_switching_profile_cancels_capture_and_discards_queued_modal_edits(edito
     token[0] = "profile-c"
     e.choices[-1][-1]('gamepad.binding.replace')
     assert not e.saves
+
+
+def test_sequencer_context_is_remappable_and_isolated_from_camera_bindings(editor):
+    e = editor
+    e.subject.catalog['modes'].append('sequencer')
+    for name, control in [('add_keyframe', 'button.west'), ('remove_selected_keyframe', 'button.north'),
+                          ('previous_keyframe', 'button.dpad_left'), ('next_keyframe', 'button.dpad_right')]:
+        e.subject.catalog['actions'].append({'id': name, 'continuous': False, 'modes': ['sequencer']})
+        e.profile['bindings']['common'][name] = {'positive': control, 'negative': 'none', 'inverted': False}
+    e.subject.set_scope('sequencer')
+    assert [r['id'] for r in e.records['gamepad_binding_rows']] == ['add_keyframe', 'remove_selected_keyframe', 'previous_keyframe', 'next_keyframe']
+    e.subject.edit('add_keyframe', 'clear')
+    assert e.module.effective(e.profile, 'sequencer', 'add_keyframe')['positive'] == 'none'
+    assert e.profile['bindings']['common']['add_keyframe']['positive'] == 'button.west'
+    e.subject.edit('add_keyframe', 'inherit')
+    assert e.module.effective(e.profile, 'sequencer', 'add_keyframe')['positive'] == 'button.west'
+    e.subject.edit('add_keyframe', 'options')
+    row = next(r for r in e.records['gamepad_binding_rows'] if r['id'] == 'add_keyframe')
+    assert row['inherit_label'] == 'gamepad.binding.reset'
+    before = len(e.choices)
+    e.subject.apply_shoulder_preset()
+    assert len(e.choices) == before
+
+
+def test_sequencer_does_not_conflict_with_camera_context_but_rejects_internal_duplicates(editor):
+    e = editor
+    e.subject.catalog['modes'].append('sequencer')
+    e.subject.catalog['actions'].append({'id': 'add_keyframe', 'continuous': False, 'modes': ['sequencer']})
+    e.subject.catalog['actions'].append({'id': 'remove_selected_keyframe', 'continuous': False, 'modes': ['sequencer']})
+    e.profile['bindings']['common']['next_rendering']['positive'] = 'button.north'
+    e.profile['bindings']['common']['add_keyframe'] = {'positive': 'button.north', 'negative': 'none', 'inverted': False}
+    e.profile['bindings']['common']['remove_selected_keyframe'] = {'positive': 'button.south', 'negative': 'none', 'inverted': False}
+    assert e.module.conflicts(e.profile, e.subject.catalog) == []
+    e.subject.set_scope('sequencer')
+    e.subject.change('remove_selected_keyframe', {'positive': 'button.north', 'negative': 'none', 'inverted': False})
+    assert e.choices and not e.saves
+    e.choices[-1][-1]('common.cancel')
+    assert e.module.effective(e.profile, 'sequencer', 'remove_selected_keyframe')['positive'] == 'button.south'
+
+
+def test_common_shoulder_preset_preserves_sequencer_overrides(editor):
+    e = editor
+    e.subject.catalog['modes'].append('sequencer')
+    e.subject.catalog['actions'].append({'id': 'add_keyframe', 'continuous': False, 'modes': ['sequencer']})
+    binding = {'positive': 'button.left_shoulder', 'negative': 'none', 'inverted': False}
+    e.profile['bindings']['common']['add_keyframe'] = dict(binding)
+    preset = e.module.shoulder_navigation_preset(e.profile, e.subject.catalog, 'common')
+    assert preset['bindings']['common']['add_keyframe'] == binding

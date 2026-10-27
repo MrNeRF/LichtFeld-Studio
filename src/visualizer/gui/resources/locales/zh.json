@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "删除",
   "gamepad.profile.import": "导入...",
   "gamepad.profile.export": "导出...",
-  "gamepad.profile.replace": "替换"
+  "gamepad.profile.replace": "替换",
+  "gamepad.binding.sequencer": "序列器",
+  "gamepad.binding.add_keyframe": "添加关键帧",
+  "gamepad.binding.remove_selected_keyframe": "删除选中的关键帧",
+  "gamepad.binding.previous_keyframe": "上一个关键帧",
+  "gamepad.binding.next_keyframe": "下一个关键帧",
+  "gamepad.binding.context_help": "为相机模式或序列器配置操作。面板可见且播放停止时，序列器的按键分配优先。"
 }

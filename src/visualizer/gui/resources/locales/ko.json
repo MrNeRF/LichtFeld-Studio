@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "삭제",
   "gamepad.profile.import": "가져오기...",
   "gamepad.profile.export": "내보내기...",
-  "gamepad.profile.replace": "교체"
+  "gamepad.profile.replace": "교체",
+  "gamepad.binding.sequencer": "시퀀서",
+  "gamepad.binding.add_keyframe": "키프레임 추가",
+  "gamepad.binding.remove_selected_keyframe": "선택한 키프레임 삭제",
+  "gamepad.binding.previous_keyframe": "이전 키프레임",
+  "gamepad.binding.next_keyframe": "다음 키프레임",
+  "gamepad.binding.context_help": "카메라 모드 또는 시퀀서의 조작을 설정합니다. 패널이 표시되고 재생이 멈춰 있을 때는 시퀀서 할당이 우선합니다."
 }

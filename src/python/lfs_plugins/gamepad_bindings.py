@@ -38,9 +38,10 @@ def shoulder_navigation_preset(profile, catalog, scope):
     preset = {"next_navigation": {**EMPTY, "positive": "button.left_shoulder"},
               "next_rendering": {**EMPTY, "positive": "button.right_shoulder"}}
     controls = {binding["positive"] for binding in preset.values()}
+    navigation_actions = {a["id"] for a in catalog["actions"] if any(m != "sequencer" for m in a["modes"])}
     if scope == "common":
         for action, binding in bindings["common"].items():
-            if action not in preset and controls.intersection((binding["positive"], binding["negative"])):
+            if action in navigation_actions and action not in preset and controls.intersection((binding["positive"], binding["negative"])):
                 bindings["common"][action] = dict(EMPTY)
         bindings["common"].update(preset)
         # A common preset consistently assigns these two commands in all modes.
@@ -235,6 +236,8 @@ class GamepadBindingsSection:
         lf.ui.request_redraw(delay=.12)
 
     def apply_shoulder_preset(self):
+        if self.scope == "sequencer":
+            return
         self.cancel()
         token = self.profile_token()
         scope = self.scope
@@ -288,7 +291,8 @@ class GamepadBindingsSection:
             inherited = self.scope != "common" and name not in profile["bindings"].get("modes", {}).get(self.scope, {})
             controls = [self.tr(binding[key]) for key in ("positive", "negative") if binding[key] != "none"]
             rows.append({"id": name, "label": self.tr(name), "value": " − ".join(controls) or self.tr("none"),
-                         "inherited": inherited, "mode": self.scope != "common", "continuous": action["continuous"] and bool(controls),
+                         "inherited": inherited and self.scope != "sequencer", "mode": self.scope != "common",
+                         "inherit_label": self.tr("reset" if self.scope == "sequencer" else "inherit"), "continuous": action["continuous"] and bool(controls),
                          "inverted": binding["inverted"], "expanded": self.expanded_action == name,
                          "overridden": self.scope != "common" and not inherited,
                          "assigned": bool(controls)})

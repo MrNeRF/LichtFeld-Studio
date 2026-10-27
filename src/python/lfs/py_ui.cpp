@@ -5574,10 +5574,10 @@ namespace lfs::python {
         }, nb::arg("serialized"));
         m.def("get_gamepad_binding_catalog_json", [] {
             using namespace vis::input;
-            nlohmann::json catalog{{"actions", nlohmann::json::array()}, {"controls", nlohmann::json::array()}, {"modes", gamepad_modes}};
+            nlohmann::json catalog{{"actions", nlohmann::json::array()}, {"controls", nlohmann::json::array()}, {"modes", gamepad_binding_contexts}};
             for (size_t a = 0; a < gamepad_action_count; ++a) {
                 nlohmann::json modes = nlohmann::json::array();
-                for (size_t m = 0; m < gamepad_modes.size(); ++m) if (allowedGamepadAction(m, a)) modes.push_back(gamepad_modes[m]);
+                for (size_t m = 0; m < gamepad_binding_contexts.size(); ++m) if (allowedGamepadAction(m, a)) modes.push_back(gamepad_binding_contexts[m]);
                 catalog["actions"].push_back({{"id", gamepad_actions[a]}, {"continuous", continuousAction(a)}, {"modes", modes}});
             }
             for (int c = -1; c < SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT; ++c)

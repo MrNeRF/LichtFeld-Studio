@@ -14,12 +14,17 @@
 namespace lfs::vis::input {
     enum class GamepadNavigationMode { Orbit, Trackball, FPV, Drone, Walk };
     enum class GamepadAction { MoveX, MoveY, LookX, LookY, Vertical, Precision, Fast,
-                               ExitWalk, NextNavigation, PreviousNavigation, NextRendering, PreviousRendering, Count };
+                               ExitWalk, NextNavigation, PreviousNavigation, NextRendering, PreviousRendering,
+                               AddKeyframe, RemoveSelectedKeyframe, PreviousKeyframe, NextKeyframe, Count };
     inline constexpr size_t gamepad_action_count = static_cast<size_t>(GamepadAction::Count);
     inline constexpr std::array<std::string_view, 5> gamepad_modes{"orbit", "trackball", "fpv", "drone", "walk"};
+    inline constexpr size_t gamepad_sequencer_scope = 5;
+    inline constexpr size_t gamepad_first_sequencer_action = static_cast<size_t>(GamepadAction::AddKeyframe);
+    inline constexpr std::array<std::string_view, 6> gamepad_binding_contexts{"orbit", "trackball", "fpv", "drone", "walk", "sequencer"};
     inline constexpr std::array<std::string_view, gamepad_action_count> gamepad_actions{
         "move_x", "move_y", "look_x", "look_y", "vertical", "precision", "fast", "exit_walk",
-        "next_navigation", "previous_navigation", "next_rendering", "previous_rendering"};
+        "next_navigation", "previous_navigation", "next_rendering", "previous_rendering",
+        "add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe"};
     inline constexpr std::array<std::string_view, SDL_GAMEPAD_AXIS_COUNT> gamepad_axes{
         "left_x", "left_y", "right_x", "right_y", "left_trigger", "right_trigger"};
     inline constexpr std::array<std::string_view, SDL_GAMEPAD_BUTTON_COUNT> gamepad_buttons{
@@ -46,6 +51,8 @@ namespace lfs::vis::input {
     }
     inline bool continuousAction(size_t action) { return action <= static_cast<size_t>(GamepadAction::Vertical); }
     inline bool allowedGamepadAction(size_t mode, size_t action) {
+        if (mode == gamepad_sequencer_scope) return action >= gamepad_first_sequencer_action;
+        if (action >= gamepad_first_sequencer_action) return false;
         if (action == static_cast<size_t>(GamepadAction::ExitWalk)) return mode == 4;
         return mode != 4 || (action != static_cast<size_t>(GamepadAction::Vertical) && action != static_cast<size_t>(GamepadAction::Fast));
     }
@@ -94,7 +101,7 @@ namespace lfs::vis::input {
     };
     struct GamepadBindings {
         std::array<GamepadBinding, gamepad_action_count> common{};
-        std::array<std::array<std::optional<GamepadBinding>, gamepad_action_count>, 5> modes{};
+        std::array<std::array<std::optional<GamepadBinding>, gamepad_action_count>, gamepad_binding_contexts.size()> modes{};
         GamepadBindings() {
             common[0] = {SDL_GAMEPAD_AXIS_LEFTX};
             common[1] = {SDL_GAMEPAD_AXIS_LEFTY, -1, true};
@@ -103,6 +110,10 @@ namespace lfs::vis::input {
             common[4] = {SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_GAMEPAD_AXIS_LEFT_TRIGGER};
             common[8] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_LEFT_SHOULDER};
             common[10] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER};
+            common[12] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_WEST};
+            common[13] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_NORTH};
+            common[14] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_LEFT};
+            common[15] = {int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_DPAD_RIGHT};
             modes[4][7] = GamepadBinding{int(SDL_GAMEPAD_AXIS_COUNT) + SDL_GAMEPAD_BUTTON_EAST};
         }
         const GamepadBinding& resolve(size_t mode, size_t action) const {
@@ -123,7 +134,7 @@ namespace lfs::vis::input {
                     const auto& binding = resolve(m, a);
                     for (int c : {binding.positive, binding.negative}) if (c >= 0) {
                         if (owner[c] != -1)
-                            throw std::invalid_argument("Conflicting gamepad inputs in " + std::string(gamepad_modes[m]));
+                            throw std::invalid_argument("Conflicting gamepad inputs in " + std::string(gamepad_binding_contexts[m]));
                         owner[c] = static_cast<int>(a);
                     }
                 }
@@ -134,7 +145,7 @@ namespace lfs::vis::input {
             for (size_t a = 0; a < gamepad_action_count; ++a) result["common"][gamepad_actions[a]] = common[a].json();
             for (size_t m = 0; m < modes.size(); ++m)
                 for (size_t a = 0; a < gamepad_action_count; ++a)
-                    if (modes[m][a]) result["modes"][gamepad_modes[m]][gamepad_actions[a]] = modes[m][a]->json();
+                    if (modes[m][a]) result["modes"][gamepad_binding_contexts[m]][gamepad_actions[a]] = modes[m][a]->json();
             return result;
         }
         static GamepadBindings fromJson(const nlohmann::json& value) {
@@ -155,9 +166,9 @@ namespace lfs::vis::input {
                 result.modes = {};
                 if (!value["modes"].is_object()) throw std::invalid_argument("Invalid navigation contexts");
                 for (auto it = value["modes"].begin(); it != value["modes"].end(); ++it) {
-                    const auto found = std::find(gamepad_modes.begin(), gamepad_modes.end(), it.key());
-                    if (found == gamepad_modes.end()) throw std::invalid_argument("Unknown navigation context");
-                    read(it.value(), result.modes[std::distance(gamepad_modes.begin(), found)]);
+                    const auto found = std::find(gamepad_binding_contexts.begin(), gamepad_binding_contexts.end(), it.key());
+                    if (found == gamepad_binding_contexts.end()) throw std::invalid_argument("Unknown navigation context");
+                    read(it.value(), result.modes[std::distance(gamepad_binding_contexts.begin(), found)]);
                 }
             }
             result.validate();

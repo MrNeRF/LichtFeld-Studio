@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Usuń",
   "gamepad.profile.import": "Importuj...",
   "gamepad.profile.export": "Eksportuj...",
-  "gamepad.profile.replace": "Zastąp"
+  "gamepad.profile.replace": "Zastąp",
+  "gamepad.binding.sequencer": "Sekwencer",
+  "gamepad.binding.add_keyframe": "Dodaj klatkę kluczową",
+  "gamepad.binding.remove_selected_keyframe": "Usuń wybraną klatkę kluczową",
+  "gamepad.binding.previous_keyframe": "Poprzednia klatka kluczowa",
+  "gamepad.binding.next_keyframe": "Następna klatka kluczowa",
+  "gamepad.binding.context_help": "Skonfiguruj sterowanie dla trybu kamery lub sekwencera. Przypisania sekwencera mają pierwszeństwo, gdy panel jest widoczny, a odtwarzanie zatrzymane."
 }

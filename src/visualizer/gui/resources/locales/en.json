@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Delete",
   "gamepad.profile.import": "Import...",
   "gamepad.profile.export": "Export...",
-  "gamepad.profile.replace": "Replace"
+  "gamepad.profile.replace": "Replace",
+  "gamepad.binding.sequencer": "Sequencer",
+  "gamepad.binding.add_keyframe": "Add keyframe",
+  "gamepad.binding.remove_selected_keyframe": "Delete selected keyframe",
+  "gamepad.binding.previous_keyframe": "Previous keyframe",
+  "gamepad.binding.next_keyframe": "Next keyframe",
+  "gamepad.binding.context_help": "Configure controls for each camera mode or the Sequencer. Sequencer assignments take priority while the panel is visible and playback is stopped."
 }

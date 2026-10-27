@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "削除",
   "gamepad.profile.import": "インポート...",
   "gamepad.profile.export": "エクスポート...",
-  "gamepad.profile.replace": "置き換え"
+  "gamepad.profile.replace": "置き換え",
+  "gamepad.binding.sequencer": "シーケンサー",
+  "gamepad.binding.add_keyframe": "キーフレームを追加",
+  "gamepad.binding.remove_selected_keyframe": "選択中のキーフレームを削除",
+  "gamepad.binding.previous_keyframe": "前のキーフレーム",
+  "gamepad.binding.next_keyframe": "次のキーフレーム",
+  "gamepad.binding.context_help": "カメラモードまたはシーケンサーの操作を設定します。パネルが表示され再生が停止している間は、シーケンサーの割り当てが優先されます。"
 }

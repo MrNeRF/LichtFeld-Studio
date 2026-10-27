@@ -465,3 +465,90 @@ TEST(GamepadProfiles, EditsAndResetAreConfinedToActiveProfile) {
     EXPECT_FLOAT_EQ(profiles.value["profiles"][0]["settings"]["look_speed"].get<float>(), 2.1f);
     EXPECT_EQ(GamepadProfiles::fromJson(profiles.value).value, profiles.value);
 }
+
+TEST_F(NavigationTest, SequencerDefaultsAreContextualAndFireOnlyOncePerPress) {
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_FALSE(tick().add_keyframe);
+    sample.buttons.fill(false);
+    context.sequencer_open = true;
+    for (int i = 0; i < 3; ++i) tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_TRUE(tick().add_keyframe);
+    EXPECT_FALSE(tick().add_keyframe);
+    sample.buttons.fill(false); tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_TRUE(tick().remove_selected_keyframe);
+    sample.buttons.fill(false); tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_DPAD_LEFT] = true;
+    EXPECT_EQ(tick().keyframe_step, -1);
+    EXPECT_EQ(tick().keyframe_step, 0);
+    sample.buttons.fill(false); tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_DPAD_RIGHT] = true;
+    EXPECT_EQ(tick().keyframe_step, 1);
+}
+
+TEST_F(NavigationTest, OpeningAndClosingSequencerRequireNeutralAndNeverQueueHeldButtons) {
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    context.sequencer_open = true;
+    for (int i = 0; i < 10; ++i) EXPECT_FALSE(tick().active);
+    sample.buttons.fill(false);
+    for (int i = 0; i < 3; ++i) tick();
+    EXPECT_STREQ(session.status(), "ready");
+    context.allowed = false;
+    sample.pressed[SDL_GAMEPAD_BUTTON_WEST] = true;
+    EXPECT_FALSE(tick().active);
+    context.allowed = true;
+    EXPECT_FALSE(tick().active);
+    sample.pressed.fill(false);
+    for (int i = 0; i < 3; ++i) EXPECT_FALSE(tick().add_keyframe);
+    context.sequencer_open = false;
+    EXPECT_FALSE(tick().active);
+    EXPECT_STREQ(session.status(), "neutral");
+}
+
+TEST_F(NavigationTest, SequencerRemappingOverridesSharedCameraControlsOnlyWhileVisible) {
+    settings.bindings.common[0] = {SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_NORTH};
+    settings.validate();
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_EQ(tick().move.x, 1);
+    sample.buttons.fill(false);
+    context.sequencer_open = true;
+    for (int i = 0; i < 3; ++i) tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    auto intent = tick();
+    EXPECT_TRUE(intent.remove_selected_keyframe);
+    EXPECT_EQ(intent.move.x, 0);
+    sample.buttons.fill(false); tick();
+    settings.bindings.modes[gamepad_sequencer_scope][13] = GamepadBinding{};
+    intent = tick();
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    EXPECT_FALSE(tick().remove_selected_keyframe);
+    EXPECT_EQ(tick().move.x, 1);
+}
+
+TEST_F(NavigationTest, SimultaneousSequencerEditingCommandsAreIgnored) {
+    context.sequencer_open = true;
+    arm();
+    sample.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+    sample.buttons[SDL_GAMEPAD_BUTTON_NORTH] = true;
+    const auto intent = tick();
+    EXPECT_FALSE(intent.add_keyframe);
+    EXPECT_FALSE(intent.remove_selected_keyframe);
+    EXPECT_EQ(intent.keyframe_step, 0);
+}
+
+TEST_F(NavigationTest, LegacyProfilesGainSequencerDefaultsAndKeepExplicitOverrides) {
+    auto legacy = settings.json();
+    for (auto name : {"add_keyframe", "remove_selected_keyframe", "previous_keyframe", "next_keyframe"})
+        legacy["bindings"]["common"].erase(name);
+    auto restored = GamepadNavigationSettings::fromJson(legacy);
+    EXPECT_EQ(restored.bindings.resolve(gamepad_sequencer_scope, 12).positive,
+              SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_WEST);
+    restored.bindings.modes[gamepad_sequencer_scope][12] = GamepadBinding{};
+    const auto roundtrip = GamepadNavigationSettings::fromJson(restored.json());
+    EXPECT_EQ(roundtrip.bindings.resolve(gamepad_sequencer_scope, 12).positive, -1);
+    EXPECT_EQ(gamepad_modes.size(), 5); // Sequencer is an overlay, never a camera mode.
+}

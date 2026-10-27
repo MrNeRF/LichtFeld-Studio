@@ -456,7 +456,7 @@
         </div>
         <div class="section-content" data-if="gamepad_bindings_expanded">
           <div class="preferences-row">
-            <span class="preferences-label">@tr:gamepad.binding.context</span>
+            <span class="preferences-label" data-tooltip="gamepad.binding.context_help">@tr:gamepad.binding.context</span>
             <select class="preferences-select" data-value="gamepad_binding_scope">
               <option data-for="scope : gamepad_binding_scopes" data-attr-value="scope.id">{{ scope.label }}</option>
             </select>
@@ -481,12 +481,12 @@
               <div class="preferences-inline-actions preferences-assignment-options" data-if="binding.expanded">
                 <button class="btn btn--secondary" data-if="binding.continuous" data-class-active="binding.inverted" data-event-click="gamepad_binding_edit(binding.id, 'invert')">@tr:gamepad.binding.invert</button>
                 <button class="btn btn--secondary" data-if="binding.assigned" data-event-click="gamepad_binding_edit(binding.id, 'clear')">@tr:gamepad.binding.clear</button>
-                <button class="btn btn--secondary" data-if="binding.overridden" data-event-click="gamepad_binding_edit(binding.id, 'inherit')">@tr:gamepad.binding.inherit</button>
+                <button class="btn btn--secondary" data-if="binding.overridden" data-event-click="gamepad_binding_edit(binding.id, 'inherit')">{{ binding.inherit_label }}</button>
               </div>
             </div>
           </div>
           <div class="preferences-inline-actions">
-            <button class="btn btn--secondary" data-event-click="gamepad_binding_shoulder_preset()">@tr:gamepad.binding.shoulder_preset</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_shoulder_preset()" data-if="gamepad_binding_scope != 'sequencer'">@tr:gamepad.binding.shoulder_preset</button>
             <button class="btn btn--secondary" data-event-click="gamepad_binding_reset()">@tr:gamepad.binding.reset</button>
           </div>
         </div>

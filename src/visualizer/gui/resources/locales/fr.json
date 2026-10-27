@@ -3600,5 +3600,11 @@
   "gamepad.profile.delete": "Supprimer",
   "gamepad.profile.import": "Importer...",
   "gamepad.profile.export": "Exporter...",
-  "gamepad.profile.replace": "Remplacer"
+  "gamepad.profile.replace": "Remplacer",
+  "gamepad.binding.sequencer": "Séquenceur",
+  "gamepad.binding.add_keyframe": "Ajouter une image clé",
+  "gamepad.binding.remove_selected_keyframe": "Supprimer l’image clé sélectionnée",
+  "gamepad.binding.previous_keyframe": "Image clé précédente",
+  "gamepad.binding.next_keyframe": "Image clé suivante",
+  "gamepad.binding.context_help": "Configurez les commandes par mode de caméra ou pour le séquenceur. Les affectations du séquenceur sont prioritaires lorsque le panneau est visible et la lecture arrêtée."
 }
