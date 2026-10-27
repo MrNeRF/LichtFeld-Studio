@@ -33,8 +33,6 @@ class GamepadTestSection:
         model.bind("gamepad_test_id", lambda: str(self.state.get("selected", 0)),
                    lambda value: self._select_from_input("test", value))
         model.bind_func("gamepad_test_status", self.status)
-        model.bind_func("gamepad_test_axes", self.axes)
-        model.bind_func("gamepad_test_buttons", self.buttons)
         model.bind("gamepad_navigation_enabled", lambda: self.navigation.get("enabled", False),
                    lambda value: self.configure(enabled=bool(value)))
         model.bind("gamepad_navigation_id", lambda: str(self.navigation.get("selected", 0)),
@@ -268,7 +266,7 @@ class GamepadTestSection:
             self.handle.update_record_list("gamepad_test_button_rows", button_rows)
             self.handle.dirty("gamepad_test_buttons_empty")
         if changed:
-            for name in ("gamepad_test_id", "gamepad_test_status", "gamepad_test_axes", "gamepad_test_buttons"):
+            for name in ("gamepad_test_id", "gamepad_test_status"):
                 self.handle.dirty(name)
             for name in ("navigation_enabled", "navigation_id", "navigation_status", "navigation_show_status", "navigation_preset", "dead_zone", "look_speed", "move_speed"):
                 self.handle.dirty("gamepad_" + name)
@@ -279,16 +277,6 @@ class GamepadTestSection:
         if not self.state.get("devices"):
             return lf.ui.tr("gamepad.empty")
         return ""
-
-    def axes(self):
-        if not self.state.get("selected"):
-            return "—"
-        axes = self.state.get("axes", ())
-        present = self.state.get("has_axes", (True,) * 6)
-        return "   ".join(
-            f"{name} {value:+.2f}" if available else f"{name} —"
-            for name, value, available in zip(("LX", "LY", "RX", "RY", "LT", "RT"), axes, present)
-        )
 
     def axis_rows(self):
         values = self.state.get("axes", ())
@@ -302,9 +290,6 @@ class GamepadTestSection:
                          "group_start": index % 2 == 0,
                          "group": lf.ui.tr(("gamepad.left_stick", "gamepad.right_stick", "gamepad.triggers")[index // 2])})
         return rows
-
-    def buttons(self):
-        return ", ".join(self.button_names()) or "—"
 
     def button_names(self):
         return list(dict.fromkeys([*self.state.get("buttons", ()), *self._pressed]))

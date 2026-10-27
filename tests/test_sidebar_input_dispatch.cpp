@@ -270,7 +270,7 @@ namespace lfs::vis {
         EXPECT_FALSE(window_->gamepads().snapshot().available);
     }
 
-    TEST_F(SidebarInputDispatchTest, WindowPumpPreservesShortTriggerCrossingsForBothConsumers) {
+    TEST_F(SidebarInputDispatchTest, WindowPumpPreservesShortTriggerCrossingsAcrossDiagnosticReads) {
         window_->setInputController(nullptr);
         window_->setGamepadDiagnosticsActive(true);
         SDL_VirtualJoystickDesc desc;
@@ -298,8 +298,8 @@ namespace lfs::vis {
         window_->pollEvents();
         EXPECT_FLOAT_EQ(window_->gamepads().navigationSample().axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER], 0.f);
         EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
-        EXPECT_TRUE(window_->gamepads().takeDiagnosticSnapshot().sample.trigger_pressed[1]);
-        EXPECT_FALSE(window_->gamepads().takeDiagnosticSnapshot().sample.trigger_pressed[1]);
+        EXPECT_FLOAT_EQ(window_->gamepads().takeDiagnosticSnapshot().sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER], 0.f);
+        (void)window_->gamepads().takeDiagnosticSnapshot();
         EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
         EXPECT_TRUE(SDL_DetachVirtualJoystick(id));
         window_->setGamepadDiagnosticsActive(false);

@@ -5527,7 +5527,7 @@ namespace lfs::python {
                 devices.append(entry);
             }
             result["devices"] = devices;
-            nb::list axes, has_axes, buttons, pressed, labels;
+            nb::list axes, has_axes, buttons, pressed;
             for (auto axis : state.sample.axes)
                 axes.append(axis);
             for (auto present : state.sample.has_axis)
@@ -5538,22 +5538,17 @@ namespace lfs::python {
                 if (state.sample.pressed[i])
                     pressed.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
             }
-            for (auto label : state.sample.labels)
-                labels.append(static_cast<int>(label));
             result["axes"] = axes;
             result["has_axes"] = has_axes;
             result["buttons"] = buttons;
             result["pressed"] = pressed;
-            result["labels"] = labels;
-            nb::list raw_buttons, raw_pressed, has_buttons;
+            nb::list raw_buttons, raw_pressed;
             for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
                 raw_buttons.append(state.sample.buttons[i]);
                 raw_pressed.append(state.sample.pressed[i]);
-                has_buttons.append(state.sample.has_button[i]);
             }
             result["raw_buttons"] = raw_buttons;
             result["raw_pressed"] = raw_pressed;
-            result["has_buttons"] = has_buttons;
             return result;
         };
         m.def("get_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(false); }, "Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.");

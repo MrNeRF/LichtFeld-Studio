@@ -181,8 +181,6 @@ namespace lfs::vis::input {
             if (down && !found->trigger_down[index]) {
                 if (event.gaxis.which == impl_->state.navigation_selected)
                     impl_->state.navigation_sample.trigger_pressed[index] = true;
-                if (event.gaxis.which == impl_->state.selected)
-                    impl_->state.sample.trigger_pressed[index] = true;
             }
             found->trigger_down[index] = down;
             if (event.gaxis.which == impl_->state.navigation_selected)
@@ -196,12 +194,6 @@ namespace lfs::vis::input {
         }
     }
 
-    void GamepadService::beginFrame() {
-        impl_->state.sample.pressed.fill(false);
-        impl_->state.sample.trigger_pressed.fill(false);
-        consumeNavigationPresses();
-    }
-
     void GamepadService::consumeNavigationPresses() {
         impl_->state.navigation_sample.pressed.fill(false);
         impl_->state.navigation_sample.trigger_pressed.fill(false);
@@ -210,7 +202,6 @@ namespace lfs::vis::input {
     GamepadSnapshot GamepadService::takeDiagnosticSnapshot() {
         auto result = snapshot();
         impl_->state.sample.pressed.fill(false);
-        impl_->state.sample.trigger_pressed.fill(false);
         return result;
     }
 
@@ -282,8 +273,6 @@ namespace lfs::vis::input {
             const auto button = static_cast<SDL_GamepadButton>(i);
             sample.has_button[i] = SDL_GamepadHasButton(pad, button);
             sample.buttons[i] = sample.has_button[i] && SDL_GetGamepadButton(pad, button);
-            if (i < 4)
-                sample.labels[i] = SDL_GetGamepadButtonLabel(pad, button);
         }
         return previous != sample || std::any_of(sample.pressed.begin(), sample.pressed.end(), [](bool pressed) { return pressed; });
     }

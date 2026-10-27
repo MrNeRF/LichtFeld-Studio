@@ -38,7 +38,7 @@ def test_empty_state_and_no_calls_to_camera_api(section):
     subject.sync()
     assert subject.status() == "gamepad.empty"
     assert records["gamepad_test_devices"] == [{"id": "0", "label": "gamepad.none"}]
-    assert subject.axes() == "—"
+    assert all(row["value"] == "—" for row in records["gamepad_test_axis_rows"])
     assert not selected
     dirty.clear()
     subject.sync()
@@ -96,12 +96,12 @@ def test_identical_names_stay_distinct_and_removal_clears_sample(section):
                  selected=11, generation=1, axes=[0.5, 0, 0, 0, 0, 1], pressed=["south"])
     subject.sync()
     assert len({row["label"] for row in records["gamepad_test_devices"]}) == 3
-    assert "LX +0.50" in subject.axes()
-    assert subject.buttons() == "south"
+    assert records["gamepad_test_axis_rows"][0]["value"] == "+0.50"
+    assert records["gamepad_test_button_rows"] == [{"label": "south"}]
     state.update(selected=0, generation=0, axes=[], pressed=[])
     subject.sync()
-    assert subject.buttons() == "—"
-    assert subject.axes() == "—"
+    assert records["gamepad_test_button_rows"] == []
+    assert all(row["value"] == "—" for row in records["gamepad_test_axis_rows"])
     assert selected == []
 
 
@@ -152,12 +152,10 @@ def test_short_press_expires_and_missing_axis_is_not_reported_as_zero(section, m
     subject.sync()
     state["pressed"] = []
     subject.sync()
-    assert subject.buttons() == "south"
     assert records["gamepad_test_button_rows"] == [{"label": "south"}]
-    assert "LY —" in subject.axes()
+    assert records["gamepad_test_axis_rows"][1]["value"] == "—"
     now[0] += 0.3
     subject.sync()
-    assert subject.buttons() == "—"
     assert records["gamepad_test_button_rows"] == []
 
 

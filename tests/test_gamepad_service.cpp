@@ -114,7 +114,7 @@ TEST_F(GamepadServiceTest, DiagnosticsCanSampleWithoutReadingTheNavigationDevice
     EXPECT_FLOAT_EQ(service.snapshot().sample.axes[SDL_GAMEPAD_AXIS_LEFTX], 1.f);
 }
 
-TEST_F(GamepadServiceTest, TriggerCrossingsSurviveReleaseAndHaveIndependentConsumers) {
+TEST_F(GamepadServiceTest, TriggerCrossingsSurviveReleaseAndDiagnosticReads) {
     const auto id = attach();
     ASSERT_NE(id, 0u);
     pump();
@@ -134,8 +134,8 @@ TEST_F(GamepadServiceTest, TriggerCrossingsSurviveReleaseAndHaveIndependentConsu
         pump();
         EXPECT_FLOAT_EQ(service.navigationSample().axes[axis], 0.f);
         ASSERT_TRUE(service.navigationSample().trigger_pressed[index]);
-        ASSERT_TRUE(service.takeDiagnosticSnapshot().sample.trigger_pressed[index]);
-        EXPECT_FALSE(service.takeDiagnosticSnapshot().sample.trigger_pressed[index]);
+        (void)service.takeDiagnosticSnapshot();
+        (void)service.takeDiagnosticSnapshot();
         EXPECT_TRUE(service.navigationSample().trigger_pressed[index]);
         service.consumeNavigationPresses();
         EXPECT_FALSE(service.navigationSample().trigger_pressed[index]);
@@ -199,6 +199,16 @@ TEST_F(GamepadServiceTest, TriggerLatchSurvivesThresholdNoiseAndBothSampleConsum
             service.sample(); // neither diagnostic nor navigation reads may reset the latch
             EXPECT_TRUE(service.navigationSample().trigger_down[index]);
         }
+        SDL_Event noise{};
+        noise.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        noise.gaxis.which = id;
+        noise.gaxis.axis = static_cast<Uint8>(axis);
+        for (const Sint16 raw : {16320, 16448, 16320, 16448}) {
+            noise.gaxis.value = raw; // several crossings within a single pump
+            service.handleEvent(noise);
+        }
+        EXPECT_FALSE(service.navigationSample().trigger_pressed[index]);
+        EXPECT_TRUE(service.navigationSample().trigger_down[index]);
         move(-11000); // below .35: a real release rearms the command
         EXPECT_FALSE(service.navigationSample().trigger_down[index]);
         move(512);
@@ -270,7 +280,8 @@ TEST_F(GamepadServiceTest, SamplesNormalizeSticksAndTriggersAndKeepShortPresses)
     EXPECT_FLOAT_EQ(sample.axes[SDL_GAMEPAD_AXIS_LEFTX], -1);
     EXPECT_FLOAT_EQ(sample.axes[SDL_GAMEPAD_AXIS_RIGHTX], 1);
     EXPECT_FLOAT_EQ(sample.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER], 1);
-    service.beginFrame();
+    (void)service.takeDiagnosticSnapshot();
+    service.consumeNavigationPresses();
     SDL_Event press{};
     press.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
     press.gbutton.which = id;
@@ -281,7 +292,8 @@ TEST_F(GamepadServiceTest, SamplesNormalizeSticksAndTriggersAndKeepShortPresses)
     EXPECT_TRUE(service.sample());
     EXPECT_TRUE(service.snapshot().sample.pressed[SDL_GAMEPAD_BUTTON_SOUTH]);
     EXPECT_FALSE(service.snapshot().sample.buttons[SDL_GAMEPAD_BUTTON_SOUTH]);
-    service.beginFrame();
+    (void)service.takeDiagnosticSnapshot();
+    service.consumeNavigationPresses();
     EXPECT_FALSE(service.snapshot().sample.pressed[SDL_GAMEPAD_BUTTON_SOUTH]);
     EXPECT_FALSE(service.sample());
 }
