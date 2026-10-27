@@ -19,6 +19,8 @@ namespace lfs::core {
 namespace lfs::core::internal {
     class TensorVulkanInteropBackend;
     class GpuBackendOps;
+    class BackendWorkQueue;
+    struct BackendQueueCreateInfo;
     using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
     // backend_ops caches the resulting pointer in the calling thread.
@@ -36,6 +38,9 @@ namespace lfs::core::internal {
         virtual void set_selection(int selection) noexcept = 0;
         virtual int selected_device() = 0;
         virtual void bind_thread() = 0;
+        virtual std::array<uintptr_t, 2> bind_target(void*) = 0;
+        virtual void unbind_target(std::array<uintptr_t, 2>) noexcept = 0;
+        virtual void bridge_targets(void* consumer, void* producer) = 0;
         virtual GpuBackendOps& activate() = 0;
         virtual MemoryInfo memory_info(bool include_pool_stats) = 0;
         virtual size_t allocation_bytes(size_t bytes) = 0;
@@ -45,6 +50,7 @@ namespace lfs::core::internal {
         virtual Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>) = 0;
         virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) = 0;
         virtual SplatPublication publication() const = 0;
+        virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
     };
     using BackendRegistry = std::array<BackendDriver*, kGpuBackendCount>;
     void register_compiled_backends(BackendRegistry&);

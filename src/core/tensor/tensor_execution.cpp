@@ -2,13 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_execution.hpp"
 
+#include "backend/backend_driver.hpp"
 #include "backend/gpu_backend_ops.hpp"
-#include "backend/metal/metal_queue.hpp"
-#ifdef LFS_TENSOR_VULKAN
-#include "backend/vulkan/vk_context.hpp"
-#include "backend/vulkan/vk_memory.hpp"
-#include "backend/vulkan/vk_recorder.hpp"
-#endif
 #include "core/tensor_upload.hpp"
 #include "internal/tensor_impl.hpp"
 
@@ -23,39 +18,8 @@ namespace lfs::core {
     }
 
     TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target)
-        : backend_scope_(target.backend()), previous_target_(getCurrentCUDAStream()) {
-        if (gpu_backend_compiled(GpuBackend::HIP) && target.backend() == GpuBackend::HIP && target.native_handle() != nullptr)
-            throw std::invalid_argument("HIP Tensor accepts only its native default queue");
-#ifdef LFS_TENSOR_VULKAN
-        if (target.backend() == GpuBackend::Vulkan && target.native_handle() != nullptr) {
-            const auto id = reinterpret_cast<uint64_t>(target.native_handle());
-            auto context = internal::acquire_vulkan_context();
-            if (!context->recorders().owns_queue(id))
-                throw std::invalid_argument("Tensor execution target is not a Vulkan queue");
-            context->recorders().bind_queue(id);
-            rebound_vulkan_ = true;
-            return;
-        }
-#endif
-        if (target.backend() == GpuBackend::Metal) {
-            // Metal queues share one timeline; there is nothing to bind.
-            if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target.native_handle())))
-                throw std::invalid_argument("Tensor execution target is not a Metal queue");
-            return;
-        }
-        setCurrentCUDAStream(static_cast<cudaStream_t>(target.native_handle()));
-    }
-
-    TensorExecutionTarget::Scope::~Scope() {
-#ifdef LFS_TENSOR_VULKAN
-        if (rebound_vulkan_) {
-            if (const auto context = internal::try_live_vulkan_context())
-                context->recorders().unbind_queue();
-            return;
-        }
-#endif
-        setCurrentCUDAStream(static_cast<cudaStream_t>(previous_target_));
-    }
+        : backend_scope_(target.backend()), driver_(&internal::backend_driver(target.backend())), binding_(driver_->bind_target(target.native_handle())) {}
+    TensorExecutionTarget::Scope::~Scope() { driver_->unbind_target(binding_); }
 
     void TensorExecutionTarget::wait() const {
         internal::backend_ops(backend_).synchronize_stream(
@@ -65,31 +29,7 @@ namespace lfs::core {
     void TensorExecutionTarget::wait_for(TensorExecutionTarget producer) const {
         if (backend_ != producer.backend_)
             throw std::invalid_argument("Tensor queue bridge backend mismatch");
-#ifdef LFS_TENSOR_VULKAN
-        if (backend_ == GpuBackend::Vulkan) {
-            internal::acquire_vulkan_context()->recorders().bridge_queues(
-                reinterpret_cast<uint64_t>(target_),
-                reinterpret_cast<uint64_t>(producer.target_));
-            return;
-        }
-#endif
-        if (backend_ == GpuBackend::Metal) {
-            // Later Metal batches already follow every submitted batch.
-            if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target_)) ||
-                !internal::metal_queue::valid(reinterpret_cast<uint64_t>(producer.target_)))
-                throw std::invalid_argument("Tensor queue bridge needs live Metal queues");
-            return;
-        }
-        if (gpu_backend_compiled(GpuBackend::HIP) && backend_ == GpuBackend::HIP) {
-            (void)internal::backend_ops(backend_).bridge(
-                internal::ExecContext{static_cast<cudaStream_t>(producer.target_)},
-                internal::ExecContext{static_cast<cudaStream_t>(target_)});
-            return;
-        }
-        if (backend_ != GpuBackend::CUDA)
-            throw std::runtime_error("Explicit tensor queue bridges are unsupported on this backend");
-        waitForCUDAStream(static_cast<cudaStream_t>(target_),
-                          static_cast<cudaStream_t>(producer.target_));
+        internal::backend_driver(backend_).bridge_targets(target_, producer.target_);
     }
 
     void TensorExecutionTarget::set_name(const char* name) const {
@@ -125,42 +65,23 @@ namespace lfs::core {
 
     Tensor Tensor::from_blob(void* data, TensorShape shape, Device device, DataType dtype,
                              TensorExecutionTarget target) {
-        if (gpu_backend_compiled(GpuBackend::HIP) && device == Device::GPU && target.backend() == GpuBackend::HIP) {
-            if (!target.is_default_queue())
-                throw std::invalid_argument("HIP raw views require the native default queue");
-            const size_t width = dtype_size(dtype);
-            if (shape.elements() > SIZE_MAX / width)
-                throw std::invalid_argument("HIP raw view byte count overflow");
-            auto& ops = internal::backend_ops(GpuBackend::HIP);
-            const auto storage = ops.borrow_native_range(data, shape.elements() * width);
-            if (storage.byte_offset % width)
-                throw std::invalid_argument("HIP raw view offset is not aligned");
-            Tensor result = from_blob(storage.data, std::move(shape), Device::CPU, dtype);
-            result.device_ = Device::GPU;
-            result.storage_offset_ = storage.byte_offset / width;
-            result.storage_meta_ = std::shared_ptr<StorageMeta>(const_cast<StorageMeta*>(storage.meta), [](StorageMeta*) {});
-            result.view_generation_snapshot_ = storage.meta->generation.load(std::memory_order_relaxed);
-            return result;
-        }
-#ifdef LFS_TENSOR_VULKAN
-        if (device == Device::GPU && target.backend() == GpuBackend::Vulkan) {
-            const auto storage = internal::acquire_vulkan_context()->memory().borrow_address(
-                data, shape.elements() * dtype_size(dtype));
-            LFS_ASSERT_MSG(storage.byte_offset % dtype_size(dtype) == 0,
-                           "Vulkan tensor view offset is not aligned");
-            // Like the raw CUDA overload, this view borrows the caller's arena.
-            Tensor result = from_blob(storage.data, std::move(shape), Device::CPU, dtype);
-            result.device_ = Device::GPU;
-            result.storage_offset_ = storage.byte_offset / dtype_size(dtype);
-            result.storage_meta_ = std::shared_ptr<StorageMeta>(const_cast<StorageMeta*>(storage.meta), [](StorageMeta*) {});
-            result.view_generation_snapshot_ = storage.meta->generation.load(std::memory_order_relaxed);
-            return result;
-        }
-#endif
-        if (device == Device::GPU && target.backend() != GpuBackend::CUDA)
-            throw std::runtime_error("Raw device tensor views are unsupported on this backend");
-        return from_blob(data, std::move(shape), device, dtype,
-                         static_cast<cudaStream_t>(target.native_handle()));
+        if (device == Device::CPU)
+            return from_blob(data, std::move(shape), device, dtype, static_cast<cudaStream_t>(target.native_handle()));
+        const size_t width = dtype_size(dtype);
+        if (!width || shape.elements() > SIZE_MAX / width)
+            throw std::invalid_argument("Raw tensor view byte count overflow");
+        const TensorExecutionTarget::Scope scope(target);
+        const auto storage = internal::backend_ops(target.backend()).borrow_native_range(data, shape.elements() * width);
+        if (!storage.meta)
+            return from_blob(data, std::move(shape), device, dtype, static_cast<cudaStream_t>(target.native_handle()));
+        if (storage.byte_offset % width)
+            throw std::invalid_argument("Raw tensor view offset is not aligned");
+        Tensor result = from_blob(storage.data, std::move(shape), Device::CPU, dtype);
+        result.device_ = Device::GPU;
+        result.storage_offset_ = storage.byte_offset / width;
+        result.storage_meta_ = std::shared_ptr<StorageMeta>(const_cast<StorageMeta*>(storage.meta), [](StorageMeta*) {});
+        result.view_generation_snapshot_ = storage.meta->generation.load(std::memory_order_relaxed);
+        return result;
     }
 
     Tensor Tensor::to(Device device, TensorExecutionTarget target) const {

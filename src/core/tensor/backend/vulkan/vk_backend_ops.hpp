@@ -13,6 +13,8 @@ namespace lfs::core::internal {
     public:
         std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
         std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+        void name_queue(ExecContext, const char*) override;
+        StorageRef borrow_native_range(void*, size_t) override;
         std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
         std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
         void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;

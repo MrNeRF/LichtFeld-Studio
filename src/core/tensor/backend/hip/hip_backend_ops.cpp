@@ -2952,3 +2952,7 @@ namespace lfs::core::internal {
         return std::make_unique<Completion>(*this);
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    void HipBackendOps::name_queue(ExecContext, const char*) {}
+} // namespace lfs::core::internal

@@ -273,3 +273,10 @@ namespace lfs::core::internal {
         return std::make_unique<CudaCompletion>();
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    StorageRef CudaBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return {GpuBackend::CUDA, pointer, 0, DataType::Float32, nullptr}; }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+}

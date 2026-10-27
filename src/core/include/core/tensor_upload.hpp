@@ -5,11 +5,15 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_execution.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
+namespace lfs::core::internal {
+    class BackendWorkQueue;
+}
 namespace lfs::core {
     class Tensor;
     // Reusable asynchronous H2D slot. Owns both tensors until the queued copy
@@ -97,8 +101,8 @@ namespace lfs::core {
 
         private:
             GpuBackendScope backend_scope_;
-            void* previous_target_ = nullptr;
-            bool rebound_vulkan_ = false;
+            internal::BackendWorkQueue* native_ = nullptr;
+            std::array<uintptr_t, 2> binding_{};
         };
         [[nodiscard]] void* native_handle() const;
         [[nodiscard]] GpuBackend backend() const;

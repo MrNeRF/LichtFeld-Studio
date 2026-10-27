@@ -41,19 +41,20 @@ namespace lfs::core::internal {
         std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
         std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
         std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
-        LFS_CORE_API BackendQueueLease execution_lease(ExecContext) override;
-        bool drain_queue_for_destruction() noexcept override;
+        LFS_CORE_API BackendQueueLease execution_lease(ExecContext);
+        bool drain_queue_for_destruction() noexcept;
         ExpressionCacheStats expression_cache_stats() override;
         LFS_CORE_API uint64_t storage_address(StorageRef, size_t required_bytes);
 
         // Non-owning view of a live Tensor allocation. The arena owner must
         // outlive the returned view, as for the existing raw-view APIs.
         LFS_CORE_API StorageRef borrow_native_range(void* pointer, size_t bytes) override;
-        LFS_CORE_API bool queue_ready(ExecContext) override;
+        LFS_CORE_API bool queue_ready(ExecContext);
         void push_range(const char*) override;
         void pop_range() override;
+        void name_queue(ExecContext, const char*) override;
         LFS_CORE_API void shared_image(const LfsHipSharedImage&, StorageRef source, StorageRef destination, StorageRef auxiliary, ExecContext);
-        void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext) override;
+        void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext);
         LFS_CORE_API Tensor shared_image_resize(const Tensor&, int height, int width, unsigned mode, int kernel_size, ExecContext);
         Tensor image_warp(const Tensor&, const UndistortParams&, int mode, bool inverse, Tensor* validity, ExecContext) override;
         void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;

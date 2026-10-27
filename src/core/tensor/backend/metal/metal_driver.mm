@@ -2,12 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/tensor_impl.hpp"
 #include "../backend_driver.hpp"
+#include "../backend_work_queue.hpp"
 #include "../native_export.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "core/assert.hpp"
 #include "core/gpu_device_selection.hpp"
 #include "metal_backend_ops.hpp"
 #include "metal_context.hpp"
+#include "metal_queue.hpp"
 #include <Metal/Metal.h>
 #include <atomic>
 #include <charconv>
@@ -20,6 +22,19 @@ namespace {
     public:
         std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_metal_vulkan_interop(device); }
         SplatPublication publication() const override { return SplatPublication::Copied; }
+        std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_metal_backend_work_queue(info); }
+        std::array<uintptr_t, 2> bind_target(void* target) override
+        {
+            if (!metal_queue::valid(reinterpret_cast<uint64_t>(target)))
+                throw std::invalid_argument("Tensor execution target is not a Metal queue");
+            return { reinterpret_cast<uintptr_t>(getCurrentCUDAStream()), 0 };
+        }
+        void unbind_target(std::array<uintptr_t, 2> token) noexcept override { setCurrentCUDAStream(reinterpret_cast<cudaStream_t>(token[0])); }
+        void bridge_targets(void* consumer, void* producer) override
+        {
+            if (!metal_queue::valid(reinterpret_cast<uint64_t>(consumer)) || !metal_queue::valid(reinterpret_cast<uint64_t>(producer)))
+                throw std::invalid_argument("Tensor queue bridge needs live Metal queues");
+        }
         const char* name() const noexcept override { return "Metal"; }
         bool available() override { return metal_backend_available(); }
         bool live() noexcept override { return metal_backend_live(); }

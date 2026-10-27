@@ -320,3 +320,11 @@ namespace lfs::core::internal {
         return std::make_unique<VulkanCompletion>(std::move(target));
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    StorageRef VulkanBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return acquire_vulkan_context()->memory().borrow_address(pointer, bytes); }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    void VulkanBackendOps::name_queue(ExecContext, const char*) {}
+} // namespace lfs::core::internal

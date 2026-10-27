@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/tensor_impl.hpp"
 #include "../backend_driver.hpp"
+#include "../backend_work_queue.hpp"
 #include "../gpu_backend_ops.hpp"
 #include "../native_export.hpp"
 #include "../tensor_vulkan_interop.hpp"
@@ -24,6 +25,14 @@ namespace lfs::core::internal {
         public:
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_cuda_driver_vulkan_interop(device); }
             SplatPublication publication() const override { return cuda_vulkan_direct_interop() ? SplatPublication::RendererStorage : SplatPublication::Copied; }
+            std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_cuda_work_queue(info); }
+            std::array<uintptr_t, 2> bind_target(void* target) override {
+                const auto previous = reinterpret_cast<uintptr_t>(getCurrentCUDAStream());
+                setCurrentCUDAStream(static_cast<cudaStream_t>(target));
+                return {previous, 0};
+            }
+            void unbind_target(std::array<uintptr_t, 2> token) noexcept override { setCurrentCUDAStream(reinterpret_cast<cudaStream_t>(token[0])); }
+            void bridge_targets(void* consumer, void* producer) override { waitForCUDAStream(static_cast<cudaStream_t>(consumer), static_cast<cudaStream_t>(producer)); }
             const char* name() const noexcept override { return "CUDA"; }
             bool available() override {
                 static const bool available = [] {

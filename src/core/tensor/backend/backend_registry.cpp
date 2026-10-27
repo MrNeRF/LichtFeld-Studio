@@ -3,6 +3,7 @@
 #include "../internal/expression_runtime.hpp"
 #include "../internal/tensor_impl.hpp"
 #include "backend_driver.hpp"
+#include "backend_work_queue.hpp"
 #include "core/assert.hpp"
 #include "gpu_backend_ops.hpp"
 #include "native_export.hpp"
@@ -25,6 +26,10 @@ namespace lfs::core::internal {
                            ? SplatPublication::Copied
                            : publication_;
             }
+            std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) override { throw_unavailable(); }
+            std::array<uintptr_t, 2> bind_target(void*) override { throw_unavailable(); }
+            void unbind_target(std::array<uintptr_t, 2>) noexcept override {}
+            void bridge_targets(void*, void*) override { throw_unavailable(); }
             const char* name() const noexcept override { return name_; }
             bool available() override { return false; }
             bool live() noexcept override { return false; }
@@ -94,28 +99,5 @@ namespace lfs::core::internal {
 
 namespace lfs::core::internal {
     GpuBackendOps::~GpuBackendOps() = default;
-
-    BackendQueueLease GpuBackendOps::execution_lease(ExecContext) {
-        throw std::runtime_error("Native execution leases are unsupported on this backend");
-    }
-    StorageRef GpuBackendOps::borrow_native_range(void*, size_t) {
-        throw std::runtime_error("Native storage views are unsupported on this backend");
-    }
-    bool GpuBackendOps::queue_ready(ExecContext) {
-        throw std::runtime_error("Native queue polling is unsupported on this backend");
-    }
-    bool GpuBackendOps::drain_queue_for_destruction() noexcept {
-        return false; // Unsupported is never evidence that work has drained.
-    }
-    void GpuBackendOps::enqueue_host_callback(void (*)(void*), void*, ExecContext) {
-        throw std::runtime_error("Native host callbacks are unsupported on this backend");
-    }
-    void GpuBackendOps::push_range(const char*) {
-        throw std::runtime_error("GPU diagnostic ranges are unsupported on this backend");
-    }
-    void GpuBackendOps::pop_range() {
-        throw std::runtime_error("GPU diagnostic ranges are unsupported on this backend");
-    }
-    void GpuBackendOps::name_queue(ExecContext, const char*) {}
 
 } // namespace lfs::core::internal

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../internal/tensor_impl.hpp"
 #include "../backend_driver.hpp"
+#include "../backend_work_queue.hpp"
 #include "../native_export.hpp"
 #include "../tensor_vulkan_interop.hpp"
 #include "core/assert.hpp"
@@ -10,6 +11,7 @@
 #include "vk_backend_ops.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
+#include "vk_recorder.hpp"
 #include <atomic>
 #include <charconv>
 #include <cstring>
@@ -21,6 +23,28 @@ namespace lfs::core::internal {
         public:
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_vulkan_vulkan_interop(device); }
             SplatPublication publication() const override { return SplatPublication::Shared; }
+            std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_vulkan_work_queue(info); }
+            std::array<uintptr_t, 2> bind_target(void* target) override {
+                const auto previous = reinterpret_cast<uintptr_t>(getCurrentCUDAStream());
+                if (target) {
+                    auto context = acquire_vulkan_context();
+                    const auto id = reinterpret_cast<uint64_t>(target);
+                    if (!context->recorders().owns_queue(id))
+                        throw std::invalid_argument("Tensor execution target is not a Vulkan queue");
+                    context->recorders().bind_queue(id);
+                    return {previous, 1};
+                }
+                setCurrentCUDAStream(nullptr);
+                return {previous, 0};
+            }
+            void unbind_target(std::array<uintptr_t, 2> token) noexcept override {
+                if (token[1]) {
+                    if (auto context = try_live_vulkan_context())
+                        context->recorders().unbind_queue();
+                } else
+                    setCurrentCUDAStream(reinterpret_cast<cudaStream_t>(token[0]));
+            }
+            void bridge_targets(void* consumer, void* producer) override { acquire_vulkan_context()->recorders().bridge_queues(reinterpret_cast<uint64_t>(consumer), reinterpret_cast<uint64_t>(producer)); }
             const char* name() const noexcept override { return "Vulkan"; }
             bool available() override { return vulkan_backend_probe_available(); }
             bool live() noexcept override { return vulkan_backend_live(); }

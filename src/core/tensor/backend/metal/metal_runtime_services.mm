@@ -219,3 +219,11 @@ std::unique_ptr<BackendCompletion> MetalBackendOps::create_completion(BackendCom
     return std::make_unique<MetalCompletion>();
 }
 }
+
+namespace lfs::core::internal {
+StorageRef MetalBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { throw std::runtime_error("Raw device tensor views are unsupported on this backend"); }
+}
+
+namespace lfs::core::internal {
+void MetalBackendOps::name_queue(ExecContext, const char*) { }
+}

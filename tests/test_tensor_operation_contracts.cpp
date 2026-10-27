@@ -13,9 +13,11 @@
 #include "tensor_backend_contract.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <gtest/gtest-spi.h>
 #include <string>
 #include <vector>
@@ -509,6 +511,43 @@ namespace {
         reduction.output(reduction.fold(fused::Fold::Sum, term, 1), DataType::Float32);
         const fused::Kernel sum(reduction);
         ASSERT_NO_FATAL_FAILURE(expect_values(sum({2, 3}, {image})[0], {2}, {6, 15}));
+    }
+
+    TEST_P(TensorOperationContracts, WorkQueueOrdersCallbacksAndRestoresItsScope) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Work queues require GPU storage";
+        const auto backend = *GetParam().backend;
+        const auto previous = TensorExecutionTarget::current();
+        for (const auto mode : {TensorWorkQueue::Mode::Independent, TensorWorkQueue::Mode::LegacyOrdered}) {
+            TensorWorkQueue queue(backend, mode);
+            const auto input = values({1, 2, 3}, {3});
+            Tensor result;
+            {
+                const TensorWorkQueue::Scope scope(queue);
+                EXPECT_EQ(TensorExecutionTarget::current().backend(), queue.backend());
+                result = input.mul(2.f);
+            }
+            EXPECT_EQ(TensorExecutionTarget::current(), previous);
+            std::atomic<bool> called{false};
+            queue.enqueue_host_callback([](void* pointer) { static_cast<std::atomic<bool>*>(pointer)->store(true); }, &called);
+            queue.wait();
+            EXPECT_TRUE(called.load());
+            ASSERT_NO_FATAL_FAILURE(expect_values(result, {3}, {2, 4, 6}));
+        }
+    }
+    TEST_P(TensorOperationContracts, FirstUseOnANewWorkerActivatesTheSelectedBackend) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU worker activation requires GPU storage";
+        const auto backend = *GetParam().backend;
+        const auto result = std::async(std::launch::async, [backend] {
+                                const GpuBackendScope scope(backend);
+                                TensorWorkQueue queue(backend);
+                                Tensor output;
+                                auto completion = queue.execute([&] { output = Tensor::full({3}, 4.f, Device::GPU).mul(2.f); });
+                                completion.wait();
+                                return output.to_vector();
+                            }).get();
+        EXPECT_EQ(result, (std::vector<float>{8, 8, 8}));
     }
 
     TEST_P(TensorOperationContracts, BackendSelftestCanRecreateItsExecutionContext) {

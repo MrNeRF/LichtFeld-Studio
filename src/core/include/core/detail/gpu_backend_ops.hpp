@@ -422,17 +422,13 @@ namespace lfs::core {
             virtual std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) = 0;
             virtual std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) = 0;
             virtual std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) = 0;
-            virtual BackendQueueLease execution_lease(ExecContext);
-            virtual StorageRef borrow_native_range(void* pointer, size_t bytes);
-            virtual bool queue_ready(ExecContext);
-            virtual bool drain_queue_for_destruction() noexcept;
-            virtual void enqueue_host_callback(void (*callback)(void*), void* user, ExecContext);
+            virtual StorageRef borrow_native_range(void* pointer, size_t bytes) = 0;
             virtual void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) = 0;
             virtual ExpressionCacheStats expression_cache_stats() = 0;
 
-            virtual void push_range(const char* name);
-            virtual void pop_range();
-            virtual void name_queue(ExecContext context, const char* name);
+            virtual void push_range(const char* name) = 0;
+            virtual void pop_range() = 0;
+            virtual void name_queue(ExecContext context, const char* name) = 0;
 
             virtual void synchronize_stream(ExecContext context) = 0;
             virtual void synchronize_device() = 0;
@@ -447,6 +443,7 @@ namespace lfs::core {
         public:
             std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
             std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+            StorageRef borrow_native_range(void*, size_t) override;
             std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
             std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
             void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;

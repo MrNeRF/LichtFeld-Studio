@@ -24,29 +24,6 @@ namespace lfs::core::internal {
         bool complete = false;
         bool source_consumed = false;
     };
-    // Compile out optional native ownership, including its destructors, in
-    // builds that cannot construct the backend. get() is used only in compiled
-    // backend branches; an accidental access fails instead of inventing state.
-    template <GpuBackend Backend, class State>
-    class CompiledBackendState {
-        struct Empty {};
-        [[no_unique_address]] std::conditional_t<gpu_backend_compiled(Backend), State, Empty> state_;
-
-    public:
-        State& get() {
-            if constexpr (gpu_backend_compiled(Backend))
-                return state_;
-            else
-                throw std::logic_error("State requested for an uncompiled GPU backend");
-        }
-        const State& get() const {
-            if constexpr (gpu_backend_compiled(Backend))
-                return state_;
-            else
-                throw std::logic_error("State requested for an uncompiled GPU backend");
-        }
-    };
-
     // Optional native ownership primitives. Implementations and SDK types stay
     // in backend directories; shared Tensor code sees only these contracts.
     struct BackendQueueLease {
