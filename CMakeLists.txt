@@ -1655,6 +1655,11 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DES
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
         DESTINATION "${INSTALL_RESOURCE_DIR}")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
+if(LFS_MACOS_PORTABLE_APP)
+    # src/visualizer installs the node templates for the other layouts.
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/node_templates"
+            DESTINATION "${INSTALL_RESOURCE_DIR}")
+endif()
 
 # Plugin development documentation
 set(DOC_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/doc/LichtFeld-Studio")
