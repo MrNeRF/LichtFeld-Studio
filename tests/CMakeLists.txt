@@ -34,6 +34,13 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_collision_preview_cache_tests test_collision_preview_cache.cpp)
+target_compile_features(lichtfeld_collision_preview_cache_tests PRIVATE cxx_std_23)
+target_include_directories(lichtfeld_collision_preview_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+target_link_libraries(lichtfeld_collision_preview_cache_tests PRIVATE GTest::gtest)
+add_test(NAME lichtfeld.collision_preview_cache COMMAND lichtfeld_collision_preview_cache_tests)
+set_tests_properties(lichtfeld.collision_preview_cache PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+
 add_executable(lichtfeld_batch_process_tests test_batch_process.cpp)
 target_compile_features(lichtfeld_batch_process_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_batch_process_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
