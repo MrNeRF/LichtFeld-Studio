@@ -2328,6 +2328,33 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheVideoWhenAudioOutlastsIt) {
     EXPECT_EQ(metadata["frames"].size(), 9u);
 }
 
+TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC for sparse FPS extraction";
+
+    TempDir temp("stream_copy_tail");
+    const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
+                        "tests/data/video/h264_stream_copy.mp4";
+    for (const double end_time : {-1.0, 0.4}) {
+        SCOPED_TRACE(end_time);
+        auto params = extractionParams(source, temp.path / std::to_string(end_time));
+        params.mode = ExtractionMode::FPS;
+        params.fps = 3.0;
+        params.end_time = end_time;
+
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+        EXPECT_EQ(countPngFiles(params.output_dir), 1u);
+        const auto metadata = readMetadata(params.output_dir);
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], "keyframe_seek");
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["estimated_targets"], 1);
+        ASSERT_EQ(metadata["frames"].size(), 1u);
+        EXPECT_DOUBLE_EQ(metadata["frames"][0]["timestamp"].get<double>(), 0.0);
+    }
+}
+
 TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
     if (!cudaAvailable())
         GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
