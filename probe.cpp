@@ -49,42 +49,26 @@ int wmain() {
         {"handle rename", [](const path& a, const path& b) { return rename_by_handle(fs::native_path(a, true), fs::native_path(b, true), false); }},
         {"handle rename posix", [](const path& a, const path& b) { return rename_by_handle(fs::native_path(a, true), fs::native_path(b, true), true); }},
     };
+    using Query = BOOLEAN(NTAPI*)();
+    auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAreLongPathsEnabled"));
+    std::printf("process long paths enabled: %d\n", query ? static_cast<int>(query()) : -1);
     int n = 0;
-    for (int depth : {0, 12}) {
-        for (bool ofstream_write : {true, false}) {
-            for (const auto& method : methods) {
-                auto dir = base / ("p" + std::to_string(n++));
-                for (int i = 0; i < depth; ++i)
-                    dir /= path(u8"unicode_\u6E2C\u8A66_\u00E0_component_01234567890123456789");
-                std::error_code e;
-                fs::create_directories(dir, e);
-                const auto file = dir / "network.bin", renamed = dir / "renamed.bin";
-                unsigned long write_error = 0;
-                if (ofstream_write) {
-                    std::ofstream out(fs::native_path(file), std::ios::binary);
-                    out << "network";
-                    write_error = out ? 0 : 1;
-                } else {
-                    HANDLE h = CreateFileW(fs::native_path(file).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-                    write_error = h == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-                    DWORD w = 0;
-                    if (h != INVALID_HANDLE_VALUE) {
-                        WriteFile(h, "network", 7, &w, nullptr);
-                        CloseHandle(h);
-                    }
-                }
-                std::error_code size_error;
-                const auto size = fs::file_size(file, size_error);
-                HANDLE probe = CreateFileW(fs::native_path(file, true).c_str(), DELETE, 7, nullptr, OPEN_EXISTING, 0, nullptr);
-                const auto delete_open = probe == INVALID_HANDLE_VALUE ? GetLastError() : 0;
-                if (probe != INVALID_HANDLE_VALUE)
-                    CloseHandle(probe);
-                const auto result = method.run(file, renamed);
-                std::printf("depth=%2d %-8s %-22s mkdir=%d write=%lu size=%llu/%d deleteOpen=%lu rename=%lu exists=%d\n", depth,
-                            ofstream_write ? "ofstream" : "win32", method.name, e.value(), write_error,
-                            static_cast<unsigned long long>(size), size_error.value(), delete_open, result,
-                            static_cast<int>(fs::exists(renamed)));
+    for (int depth : {0, 3, 4, 5, 6, 7, 8, 10, 12}) {
+        for (int m : {0, 4}) {
+            const auto& method = methods[m];
+            auto dir = base / ("p" + std::to_string(n++));
+            for (int i = 0; i < depth; ++i)
+                dir /= path(u8"unicode_\u6E2C\u8A66_\u00E0_component_01234567890123456789");
+            std::error_code e;
+            fs::create_directories(dir, e);
+            const auto file = dir / "network.bin", renamed = dir / "renamed.bin";
+            {
+                std::ofstream out(fs::native_path(file), std::ios::binary);
+                out << "network";
             }
+            const auto result = method.run(file, renamed);
+            std::printf("depth=%2d len=%3zu %-22s mkdir=%d rename=%lu exists=%d\n", depth, fs::native_path(file, true).native().size(),
+                        method.name, e.value(), result, static_cast<int>(fs::exists(renamed)));
         }
     }
     return 0;
