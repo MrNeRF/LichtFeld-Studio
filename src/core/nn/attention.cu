@@ -172,6 +172,100 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        // flash_attn_tiled_kernel without a mask for a few query rows over many keys, one block per row: the scores of a key tile, the
+        // tile maximum and each output dimension's accumulation run in parallel, every value in the order and form the
+        // single-thread row uses, and the softmax denominator stays one sequential sum, so the output is bitwise equal.
+        template <int Bc, int Dmax>
+        __global__ void __launch_bounds__(Dmax)
+            flash_attn_row_kernel(const void* __restrict__ q_ptr, const void* __restrict__ k_ptr,
+                                  const void* __restrict__ v_ptr, void* __restrict__ o_ptr, int batch, int heads,
+                                  int n_q, int n_k, int d, float scale, bool is_half) {
+            static_assert(Bc == 32 && Dmax >= Bc, "one warp scores a key tile");
+            __shared__ float Qs[Dmax];
+            __shared__ float Ks[Bc * Dmax];
+            __shared__ float Vs[Bc * Dmax];
+            __shared__ float Ps[Bc];
+            __shared__ float shared_max;
+            __shared__ float shared_inv;
+
+            const int tid = static_cast<int>(threadIdx.x);
+            const int q_row = static_cast<int>(blockIdx.x);
+            const int bh = static_cast<int>(blockIdx.y);
+            const int b = bh / heads;
+            const int h = bh % heads;
+            const long long q_head = (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_q) * d;
+            const long long kv_head = (static_cast<long long>(b) * heads + h) * static_cast<long long>(n_k) * d;
+
+            Qs[tid] = tid < d ? device::ld_strided(q_ptr, q_head + static_cast<long long>(q_row) * d + tid, is_half)
+                              : 0.0f;
+            float acc = 0.0f;
+            float m_i = -FLT_MAX;
+            float l_i = 0.0f;
+            for (int k0 = 0; k0 < n_k; k0 += Bc) {
+                for (int i = tid; i < Bc * Dmax; i += Dmax) {
+                    const int k_idx = k0 + i / Dmax;
+                    const int c = i % Dmax;
+                    float kv = 0.0f;
+                    float vv = 0.0f;
+                    if (c < d && k_idx < n_k) {
+                        const long long base = kv_head + static_cast<long long>(k_idx) * d + c;
+                        kv = device::ld_strided(k_ptr, base, is_half);
+                        vv = device::ld_strided(v_ptr, base, is_half);
+                    }
+                    Ks[i] = kv;
+                    Vs[i] = vv;
+                }
+                __syncthreads();
+
+                if (tid < Bc) {
+                    const int k_idx = k0 + tid;
+                    float dot = -FLT_MAX;
+                    if (k_idx < n_k) {
+                        dot = 0.0f;
+#pragma unroll
+                        for (int dd = 0; dd < Dmax; ++dd) {
+                            dot += Qs[dd] * Ks[tid * Dmax + dd];
+                        }
+                        dot *= scale;
+                    }
+                    const float row_max = warp_max(dot);
+                    const float m_new = fmaxf(m_i, row_max);
+                    Ps[tid] = dot == -FLT_MAX ? 0.0f : expf(dot - m_new);
+                    if (tid == 0) {
+                        shared_max = m_new;
+                    }
+                }
+                __syncthreads();
+
+                const float m_new = shared_max;
+                const float alpha = (m_i == -FLT_MAX) ? 0.0f : expf(m_i - m_new);
+                float vdot = acc * alpha;
+#pragma unroll
+                for (int j = 0; j < Bc; ++j) {
+                    vdot += Ps[j] * Vs[j * Dmax + tid];
+                }
+                acc = vdot;
+                if (tid == 0) {
+                    float l_add = 0.0f;
+#pragma unroll
+                    for (int j = 0; j < Bc; ++j) {
+                        l_add += Ps[j];
+                    }
+                    l_i = l_i * alpha + l_add;
+                }
+                m_i = m_new;
+                __syncthreads();
+            }
+
+            if (tid == 0) {
+                shared_inv = (l_i == 0.0f) ? 0.0f : 1.0f / l_i;
+            }
+            __syncthreads();
+            if (tid < d) {
+                device::st_strided(o_ptr, q_head + static_cast<long long>(q_row) * d + tid, acc * shared_inv, is_half);
+            }
+        }
+
         // fp16 tensor-core attention. Br query rows × one (batch, head).
         // Q stays in smem (scaled by 1/sqrt(d)); K/V stream in Bc tiles.
         // P is packed into its own buffer so Q is not overwritten. O lives in
@@ -425,6 +519,7 @@ namespace lfs::core::nn::kernels {
                 local_sum += expf(v - row_max);
             }
             float wsum = warp_sum(local_sum);
+            __syncthreads();
             if ((tid & 31) == 0) {
                 red[tid / 32] = wsum;
             }
@@ -446,6 +541,67 @@ namespace lfs::core::nn::kernels {
                                             is_half);
                 }
                 device::st_strided(y, base + c, expf(v - row_max) * inv, is_half);
+            }
+        }
+
+        // softmax_kernel for fp32 rows without a mask, holding each thread's strided elements in registers: one read and
+        // one write per element instead of three reads, with the same partition, order and reductions, so the output
+        // is bitwise equal.
+        template <int kPerThread>
+        __global__ void __launch_bounds__(256)
+            softmax_rows_registers_kernel(const float* __restrict__ x, float* __restrict__ y, int cols) {
+            const int tid = static_cast<int>(threadIdx.x);
+            const long long base = static_cast<long long>(blockIdx.x) * cols;
+            float values[kPerThread];
+            float local_max = -FLT_MAX;
+#pragma unroll
+            for (int i = 0; i < kPerThread; ++i) {
+                const int c = tid + i * 256;
+                values[i] = c < cols ? __ldg(&x[base + c]) : -FLT_MAX;
+                local_max = fmaxf(local_max, values[i]);
+            }
+            __shared__ float red[32];
+            float wmax = warp_max(local_max);
+            if ((tid & 31) == 0) {
+                red[tid / 32] = wmax;
+            }
+            __syncthreads();
+            if (tid < 32) {
+                wmax = warp_max(tid < 8 ? red[tid] : -FLT_MAX);
+                if (tid == 0) {
+                    red[0] = wmax;
+                }
+            }
+            __syncthreads();
+            const float row_max = red[0];
+
+            float local_sum = 0.0f;
+#pragma unroll
+            for (int i = 0; i < kPerThread; ++i) {
+                if (tid + i * 256 < cols) {
+                    local_sum += expf(values[i] - row_max);
+                }
+            }
+            float wsum = warp_sum(local_sum);
+            __syncthreads();
+            if ((tid & 31) == 0) {
+                red[tid / 32] = wsum;
+            }
+            __syncthreads();
+            if (tid < 32) {
+                wsum = warp_sum(tid < 8 ? red[tid] : 0.0f);
+                if (tid == 0) {
+                    red[0] = wsum;
+                }
+            }
+            __syncthreads();
+            const float inv = red[0] > 0.0f ? 1.0f / red[0] : 0.0f;
+#pragma unroll
+            for (int i = 0; i < kPerThread; ++i) {
+                const int c = tid + i * 256;
+                if (c < cols) {
+                    y[base + c] = expf(values[i] - row_max) * inv;
+                }
             }
         }
 
@@ -906,6 +1062,16 @@ namespace lfs::core::nn::kernels {
             return;
         }
 
+        // A handful of unmasked query rows would leave one thread per row reducing over every key.
+        if (!has_mask && n_q <= 16 && n_k >= 256) {
+            const dim3 rows(n_q, batch * heads);
+            const bool narrow = d <= 64;
+            const auto kernel = narrow ? flash_attn_row_kernel<32, 64> : flash_attn_row_kernel<32, kMaxD>;
+            kernel<<<rows, narrow ? 64 : kMaxD, 0, stream>>>(q, k, v, o, batch, heads, n_q, n_k, d, scale, is_half);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.rows");
+            return;
+        }
+
         if (d <= 64) {
             constexpr int Br = 64;
             constexpr int Bc = 32;
@@ -929,6 +1095,17 @@ namespace lfs::core::nn::kernels {
                  long long mask_stride_row, long long mask_stride_col, bool has_mask,
                  DataType dtype, cudaStream_t stream) {
         if (rows <= 0 || cols <= 0) {
+            return;
+        }
+        if (!has_mask && dtype == DataType::Float32 && cols >= 4096 && cols <= 256 * 128) {
+            const auto* in = static_cast<const float*>(x);
+            auto* out = static_cast<float*>(y);
+            const int per_thread = (cols + 255) / 256;
+            const auto kernel = per_thread <= 32   ? softmax_rows_registers_kernel<32>
+                                : per_thread <= 64 ? softmax_rows_registers_kernel<64>
+                                                   : softmax_rows_registers_kernel<128>;
+            kernel<<<rows, 256, 0, stream>>>(in, out, cols);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.softmax.registers");
             return;
         }
         const int threads = cols >= 256 ? 256 : (cols >= 128 ? 128 : 64);

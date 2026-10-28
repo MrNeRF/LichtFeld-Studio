@@ -812,6 +812,19 @@ namespace lfs::core {
             std::string log_level = "info";
         };
 
+        struct VideoMaskParameters {
+            std::filesystem::path input_path, output_path, model_path;
+            std::vector<std::array<float, 3>> points;
+            std::optional<std::array<float, 4>> box;
+            std::array<double, 4> circle{0.5, 0.5, 0.0, 0.0};
+            int seed_frame = 0;
+            double fps = 1.0, start_time = 0.0, end_time = -1.0;
+            float fisheye_fov = 200, view_fov = 160;
+            int dilation = 12;
+            bool recenter = false, require_operator = false;
+            bool overwrite = false, no_download = false, download_only = false;
+        };
+
         // Modern C++23 functions returning expected values
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path);
         LFS_CORE_API std::expected<OptimizationParameters, std::string> read_optim_params_from_json(

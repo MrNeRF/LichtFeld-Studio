@@ -1558,6 +1558,9 @@ namespace lfs::io {
                             }
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
+                            if (params.frame_written)
+                                params.frame_written({batch_filenames[i], batch_encode_w, batch_encode_h,
+                                                      batch_meta.at(i).timestamp, batch_meta.at(i).source_frame});
                             if (params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
                                                         batch_meta[i].timestamp,
@@ -1681,6 +1684,8 @@ namespace lfs::io {
                                                  lfs::core::path_to_utf8(fname));
                     } else {
                         ++written_count;
+                        if (params.frame_written)
+                            params.frame_written({fname, write_w, write_h, best->timestamp, best->source_frame});
                         if (params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
                                                     best->timestamp,
@@ -1908,6 +1913,8 @@ namespace lfs::io {
                                                     cpu_contiguous_buffer, params.format,
                                                     params.jpg_quality)) {
                             ++written_count;
+                            if (params.frame_written)
+                                params.frame_written({filename, hw_rot_w, hw_rot_h, current_frame_time, current_src_frame});
                             if (params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                         current_frame_time,
@@ -2029,6 +2036,8 @@ namespace lfs::io {
                                                 cpu_contiguous_buffer, params.format,
                                                 params.jpg_quality)) {
                         ++written_count;
+                        if (params.frame_written)
+                            params.frame_written({filename, sw_rot_w, sw_rot_h, current_frame_time, current_src_frame});
                         if (params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                     current_frame_time,

@@ -720,6 +720,7 @@ namespace {
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
+                "mask-video -- Generate SAM2 masks for a video or extracted frames\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
                 "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
@@ -2122,7 +2123,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
 
     if (args.size() >= 2 && !args[1].starts_with('-') &&
         args[1] != "convert" && args[1] != "mesh2splat" &&
-        args[1] != "mesh-to-splat" && args[1] != "preprocess" &&
+        args[1] != "mesh-to-splat" && args[1] != "preprocess" && args[1] != "mask-video" &&
         args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
@@ -2731,6 +2732,115 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::CompareMode{std::move(params)};
     }
 
+    std::expected<lfs::core::args::ParsedArgs, std::string> parseVideoMaskArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        ::args::ArgumentParser parser("LichtFeld Studio - SAM2 video masking\n",
+                                      "Input is a video file or a dataset root containing images/. Masks contain 0 for ignored pixels and 255 for retained pixels.\n"
+                                      "Examples:\n  LichtFeld-Studio mask-video clip.mp4 --output dataset --fps 1\n"
+                                      "  LichtFeld-Studio mask-video dataset --seed 0.5,0.8 --seed-frame 0\n");
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "input", "Video file or dataset root");
+        ::args::ValueFlag<std::string> output(parser, "folder", "Output dataset root (required for video input)", {'o', "output"});
+        ::args::ValueFlag<std::string> model(parser, "file", "Local SAM2.1 video .lfw weights", {"model"});
+        ::args::ValueFlag<double> fps(parser, "fps", "Extracted frames per second (default: 1)", {"fps"});
+        ::args::ValueFlag<double> start(parser, "seconds", "Video trim start", {"start"});
+        ::args::ValueFlag<double> end(parser, "seconds", "Video trim end", {"end"});
+        ::args::ValueFlagList<std::string> seed(parser, "x,y[,label]", "Normalized operator seed; repeat for multiple points, label 1 or 0", {"seed"});
+        ::args::ValueFlag<int> seed_frame(parser, "index", "Zero-based extracted frame for seed (default: 0)", {"seed-frame"});
+        ::args::ValueFlag<std::string> box(parser, "x0,y0,x1,y1", "Normalized operator seed box", {"seed-box"});
+        ::args::ValueFlag<std::string> circle(parser, "cx,cy,rx,ry", "Normalized fisheye image circle", {"circle"});
+        ::args::Flag fisheye(parser, "fisheye", "Use a centered image circle with radii 0.5", {"fisheye"});
+        ::args::Flag recenter(parser, "recenter", "Recenter the operator in a fisheye view", {"recenter"});
+        ::args::ValueFlag<float> fisheye_fov(parser, "degrees", "Fisheye field of view (default: 200)", {"fisheye-fov"});
+        ::args::ValueFlag<float> view_fov(parser, "degrees", "Recentered field of view (default: 160)", {"view-fov"});
+        ::args::ValueFlag<int> dilation(parser, "pixels", "Mask dilation radius (default: 12)", {"dilation"});
+        ::args::Flag require_operator(parser, "require-operator", "Fail when no operator can be localized", {"require-operator"});
+        ::args::Flag overwrite(parser, "overwrite", "Replace existing generated masks and extracted frames", {'y', "overwrite"});
+        ::args::Flag no_download(parser, "no-download", "Require cached or local weights", {"no-download"});
+        ::args::Flag download_only(parser, "download-only", "Download/verify weights and exit", {"download-only"});
+        parser.Prog(std::string(argv[0]) + " mask-video");
+        try {
+            parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+        lfs::core::param::VideoMaskParameters params;
+        if (input)
+            params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        if (output)
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        if (model)
+            params.model_path = lfs::core::utf8_to_path(::args::get(model));
+        if (fps)
+            params.fps = ::args::get(fps);
+        if (start)
+            params.start_time = ::args::get(start);
+        if (end)
+            params.end_time = ::args::get(end);
+        if (seed_frame)
+            params.seed_frame = ::args::get(seed_frame);
+        if (fisheye_fov)
+            params.fisheye_fov = ::args::get(fisheye_fov);
+        if (view_fov)
+            params.view_fov = ::args::get(view_fov);
+        if (dilation)
+            params.dilation = ::args::get(dilation);
+        params.recenter = recenter;
+        params.require_operator = require_operator;
+        params.overwrite = overwrite;
+        params.no_download = no_download;
+        params.download_only = download_only;
+        if (fisheye)
+            params.circle = {0.5, 0.5, 0.5, 0.5};
+        const auto numbers = [](std::string text) {
+            std::vector<double> values;
+            std::replace(text.begin(), text.end(), ',', ' ');
+            std::istringstream stream(text);
+            double value;
+            while (stream >> value)
+                values.push_back(value);
+            if (!stream.eof())
+                values.clear();
+            return values;
+        };
+        for (const auto& point : ::args::get(seed)) {
+            const auto v = numbers(point);
+            if ((v.size() != 2 && v.size() != 3) || !(v[0] >= 0 && v[0] <= 1 && v[1] >= 0 && v[1] <= 1) ||
+                (v.size() == 3 && v[2] != 0 && v[2] != 1))
+                return std::unexpected("--seed expects normalized x,y and optional label 0 or 1");
+            params.points.push_back({float(v[0]), float(v[1]), v.size() == 3 ? float(v[2]) : 1.0f});
+        }
+        if (box) {
+            const auto v = numbers(::args::get(box));
+            if (v.size() != 4 || !(v[0] >= 0 && v[1] >= 0 && v[2] <= 1 && v[3] <= 1 && v[0] < v[2] && v[1] < v[3]))
+                return std::unexpected("--seed-box expects normalized x0,y0,x1,y1 bounds");
+            params.box = {float(v[0]), float(v[1]), float(v[2]), float(v[3])};
+            if (params.points.empty())
+                params.points.push_back({float((v[0] + v[2]) / 2), float((v[1] + v[3]) / 2), 1});
+        }
+        if (circle) {
+            const auto v = numbers(::args::get(circle));
+            if (v.size() != 4 || !std::ranges::all_of(v, [](double x) { return std::isfinite(x); }) ||
+                !(v[2] > 0 && v[3] > 0))
+                return std::unexpected("--circle expects finite cx,cy and positive rx,ry");
+            std::copy_n(v.begin(), 4, params.circle.begin());
+        }
+        if (!(params.fps > 0 && params.fps <= 1000) || !std::isfinite(params.start_time) || params.start_time < 0 ||
+            !std::isfinite(params.end_time) || (params.end_time != -1 && params.end_time <= params.start_time))
+            return std::unexpected("Invalid frame rate or trim range");
+        if (params.seed_frame < 0 || params.dilation < 0 || params.dilation > 128 ||
+            !(params.fisheye_fov > 0 && params.fisheye_fov < 360 && params.view_fov > 0 && params.view_fov < 360))
+            return std::unexpected("Invalid seed frame, dilation or field of view");
+        if (params.recenter && params.circle[2] <= 0)
+            return std::unexpected("--recenter requires --fisheye or --circle");
+        if (!params.download_only && params.input_path.empty())
+            return std::unexpected(std::format("Missing video or dataset path\n\n{}", parser.Help()));
+        return core_args::VideoMaskMode{std::move(params)};
+    }
+
     std::expected<lfs::core::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
         namespace core_args = lfs::core::args;
         namespace param = lfs::core::param;
@@ -3147,6 +3257,8 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return std::unexpected(std::move(error));
         } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
             return parseMesh2SplatArgs(argc, argv);
+        } else if (arg1 == "mask-video") {
+            return parseVideoMaskArgs(argc, argv);
         } else if (arg1 == "preprocess") {
             return parsePreprocessArgs(argc, argv);
         } else if (arg1 == "compare") {

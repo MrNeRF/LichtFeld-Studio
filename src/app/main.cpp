@@ -21,6 +21,7 @@
 #include "git_version.h"
 #include "lfs_core_abi_stamp.h"
 #include "preprocessing/preprocess.hpp"
+#include "preprocessing/video_mask_command.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
@@ -163,6 +164,10 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
                 preflightGpuOrExit(false);
                 return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VideoMaskMode>) {
+                if (!mode.params.download_only)
+                    preflightGpuOrExit(false);
+                return lfs::preprocessing::run_video_masking(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::CompareMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_compare(mode.params);

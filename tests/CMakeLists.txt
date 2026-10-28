@@ -942,6 +942,8 @@ set(TEST_FILES
     test_weight_file_paths.cpp
     test_moge2.cpp
     test_lpips.cpp
+    test_sam2.cpp
+    test_video_masking.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
@@ -1196,6 +1198,7 @@ endif()
 
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
+    lfs_preprocessing
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries
@@ -1431,6 +1434,7 @@ string(CONCAT LFS_NIGHTLY_TEST_FILTER
 )
 
 string(CONCAT LFS_SLOW_TEST_FILTER
+    "VideoMaskingPipeline.*:VideoMaskExtraction.*:"
     "*CheckpointResumeTest.TrainSaveLoadResume/tiny_*:"
     "TrainingSetupRegressionTest.*:"
     "EvaluationSplitTest.*:"

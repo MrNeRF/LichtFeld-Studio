@@ -164,6 +164,28 @@ namespace lfs::core::nn {
     [[nodiscard]] LFS_CORE_API Tensor resize2d(const Tensor& input, int out_h, int out_w,
                                                ResizeMode mode, CoordTransform coord);
 
+    // Separable bilinear downsampling with antialiasing, NCHW input.
+    [[nodiscard]] LFS_CORE_API Tensor resize2d_bilinear_antialiased(const Tensor& input,
+                                                                    int out_h, int out_w);
+
+    // PIL RGB bicubic resampling, including byte rounding after each axis. Input is NCHW in [0, 1].
+    [[nodiscard]] LFS_CORE_API Tensor resize2d_pil_bicubic(const Tensor& input, int out_h, int out_w);
+
+    // Round to the bfloat16 storage grid while retaining Float32 tensor storage.
+    [[nodiscard]] LFS_CORE_API Tensor round_bfloat16(const Tensor& input);
+
+    [[nodiscard]] LFS_CORE_API Tensor dilate_binary_disk(const Tensor& input, int radius);
+
+    // Sets background (score <= 0) components of at most eight 8-connected pixels to `fill`, per NCHW plane.
+    [[nodiscard]] LFS_CORE_API Tensor fill_small_background(const Tensor& scores, float fill);
+
+    // Sets foreground (score > 0) components of at most eight 8-connected pixels to `fill`, per NCHW plane.
+    [[nodiscard]] LFS_CORE_API Tensor remove_small_foreground(const Tensor& scores, float fill);
+
+    // Axial rotary position encoding on [B, heads, N, d]; trailing pointer tokens are not rotated.
+    [[nodiscard]] LFS_CORE_API Tensor rotary_embedding_2d(const Tensor& input, int height, int width,
+                                                          int excluded_tokens = 0);
+
     [[nodiscard]] LFS_CORE_API Tensor max_pool2d(const Tensor& input, int kernel_h, int kernel_w,
                                                  int stride_h, int stride_w, int pad_h, int pad_w);
 

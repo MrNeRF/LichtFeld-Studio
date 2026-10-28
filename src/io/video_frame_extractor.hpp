@@ -79,6 +79,13 @@ namespace lfs::io {
         VideoFrameExtractor();
         ~VideoFrameExtractor();
 
+        struct WrittenFrame {
+            std::filesystem::path path;
+            int width = 0, height = 0;
+            double timestamp = 0;
+            int source_frame = 0;
+        };
+
         struct Params {
             std::filesystem::path video_path;
             std::filesystem::path output_dir;
@@ -90,6 +97,7 @@ namespace lfs::io {
             SharpnessParams sharpness;
             std::function<void(int, int, int)> progress_callback; // (current, total, discarded)
             std::function<bool()> cancel_requested;
+            std::function<void(const WrittenFrame&)> frame_written;
 
             // Trim range
             double start_time = 0.0;

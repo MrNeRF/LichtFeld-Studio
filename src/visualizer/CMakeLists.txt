@@ -241,6 +241,7 @@ target_link_libraries(lfs_visualizer
         lfs_diagnostics
         lfs_video
         lfs_geometry
+        lfs_preprocessing
         lfs_io
         lfs_rendering_tensor
         lfs_training

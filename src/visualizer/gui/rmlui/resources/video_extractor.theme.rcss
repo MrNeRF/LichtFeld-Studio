@@ -1,0 +1,25 @@
+body,
+.row-label,
+.field-label,
+.toggle-label {
+    color: @{text};
+}
+
+.section-rule,
+.section-rule__label,
+.inline-note {
+    color: @{text_dim};
+}
+
+.section-rule__lead,
+.section-rule__line {
+    background-color: @{alpha(border,0.65)};
+}
+
+.status-section--warning {
+    border-color: @{warning};
+}
+
+.status-section--warning .status-text {
+    color: @{warning};
+}
