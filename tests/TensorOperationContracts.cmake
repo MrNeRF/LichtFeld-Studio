@@ -14,6 +14,14 @@ target_include_directories(tensor_operation_contracts PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../src)
 target_link_libraries(tensor_operation_contracts PRIVATE lfs_core GTest::gtest)
 
+# A fresh, non-GTest process is needed to register the exit callback before the
+# first driver lookup. The CPU runner invokes it even on hosts without a GPU.
+add_executable(tensor_backend_shutdown_contracts
+    ${CMAKE_CURRENT_LIST_DIR}/test_tensor_backend_shutdown.cpp)
+target_compile_features(tensor_backend_shutdown_contracts PRIVATE cxx_std_23)
+target_link_libraries(tensor_backend_shutdown_contracts PRIVATE lfs_core)
+add_dependencies(tensor_operation_contracts tensor_backend_shutdown_contracts)
+
 set(_tensor_cpu_filter "Backends/TensorOperationContracts.*/CPU:Backends/TensorBackendSemantics.*/CPU")
 add_test(NAME TensorOperationContracts.CPU
     COMMAND tensor_operation_contracts "--gtest_filter=${_tensor_cpu_filter}")
@@ -59,6 +67,7 @@ if(_tensor_contract_backends)
 endif()
 add_test(NAME TensorOperationContracts.Runner
     COMMAND ${CMAKE_COMMAND} "-DRUNNER=$<TARGET_FILE:tensor_operation_contracts>"
+    "-DEXIT_RUNNER=$<TARGET_FILE:tensor_backend_shutdown_contracts>"
     "-DBACKEND=${_tensor_listing_backend}"
     -P ${CMAKE_CURRENT_LIST_DIR}/cmake/test_tensor_contract_runner.cmake)
 set_tests_properties(TensorOperationContracts.Runner PROPERTIES LABELS "cpu;tensor;runner" TIMEOUT 120)

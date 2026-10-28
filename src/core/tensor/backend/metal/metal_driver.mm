@@ -128,7 +128,7 @@ namespace {
 }
 void register_metal_backend(BackendRegistry& registry)
 {
-    static MetalDriver driver;
-    registry[static_cast<size_t>(GpuBackend::Metal)] = &driver;
+    static auto* const driver = new MetalDriver();
+    registry[static_cast<size_t>(GpuBackend::Metal)] = driver;
 }
 }

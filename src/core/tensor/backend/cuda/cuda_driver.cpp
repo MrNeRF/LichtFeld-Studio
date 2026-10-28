@@ -223,8 +223,8 @@ namespace lfs::core::internal {
         };
     } // namespace
     void register_cuda_backend(BackendRegistry& registry) {
-        static CudaDriver driver;
-        registry[static_cast<size_t>(GpuBackend::CUDA)] = &driver;
+        static auto* const driver = new CudaDriver();
+        registry[static_cast<size_t>(GpuBackend::CUDA)] = driver;
     }
 } // namespace lfs::core::internal
 

@@ -29,6 +29,11 @@ Immutable thread-binding policy may be cached per thread; dynamic availability
 must not be cached with it. A required device binding still runs at every scope,
 including nested scopes, so external device changes cannot bypass rebinding.
 
+Driver control objects have process lifetime, like activated operation objects.
+Exit hooks registered before the first registry lookup must still be able to call
+them during standalone-interpreter shutdown. Native resources are released by
+explicit backend shutdown, independently of the control objects' lifetime.
+
 ## Targets and transfer ownership
 
 Shared upload, fence, completion, queue, elapsed-time and readback objects own one
@@ -120,6 +125,8 @@ not a usable null kernel.
 backend. `test_tensor_backend_semantics.cpp` has private access for low-level
 ownership and service checks; public operation tests use public Tensor APIs.
 `tensor_queue_contracts` checks ordering, retained storage and callbacks.
+The CPU runner also executes a fresh-process exit contract whose callback is
+registered before any driver lookup, without creating GPU contexts.
 
 Hosted runners without GPUs execute CPU contracts and runner checks while still
 compiling the enabled native interfaces. A required GPU backend that is missing

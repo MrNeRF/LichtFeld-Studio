@@ -139,7 +139,7 @@ namespace lfs::core::internal {
         };
     } // namespace
     void register_hip_backend(BackendRegistry& registry) {
-        static HipDriver driver;
-        registry[static_cast<size_t>(GpuBackend::HIP)] = &driver;
+        static auto* const driver = new HipDriver();
+        registry[static_cast<size_t>(GpuBackend::HIP)] = driver;
     }
 } // namespace lfs::core::internal

@@ -228,7 +228,7 @@ namespace lfs::core::internal {
         };
     } // namespace
     void register_vulkan_backend(BackendRegistry& registry) {
-        static VulkanDriver driver;
-        registry[static_cast<size_t>(GpuBackend::Vulkan)] = &driver;
+        static auto* const driver = new VulkanDriver();
+        registry[static_cast<size_t>(GpuBackend::Vulkan)] = driver;
     }
 } // namespace lfs::core::internal

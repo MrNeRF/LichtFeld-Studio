@@ -28,7 +28,9 @@ namespace lfs::core::internal {
     struct BackendQueueCreateInfo;
     using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
-    // backend_ops caches the resulting pointer in the calling thread.
+    // backend_ops caches the resulting pointer in the calling thread. Registered
+    // drivers have process lifetime, like the activated ops, so late exit hooks
+    // can still call them. Native resources are released explicitly by shutdown.
     struct BackendRendererAccess {
         bool shares_vulkan = false, needs_vulkan_interop = false, metal = false;
     };
