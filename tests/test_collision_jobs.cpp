@@ -15,7 +15,6 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include <cuda_runtime.h>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
