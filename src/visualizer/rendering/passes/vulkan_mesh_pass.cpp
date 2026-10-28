@@ -2607,9 +2607,9 @@ namespace lfs::vis {
             }
             // Replace only the retired slot; other in-flight frames retain their buffers.
             collision_frames[params.frame_slot] = std::move(resources);
-            if (!collision_frames[params.frame_slot].empty())
+            if (std::ranges::any_of(collision_frames, [](const auto& owners) { return !owners.empty(); }))
                 collision_frames_release_at = now + std::chrono::seconds(5);
-            collision_cache.maintain(now, collisionUploadRetired);
+            collision_cache.maintain(now, collisionUploadRetired, frame_counter);
             if (collision_cache.stats().attempts && frame_counter % 120 == 0) {
                 const auto& stats = collision_cache.stats();
                 LOG_DEBUG("Collision preview cache: attempts={}, hits={}, failures={}, evictions={}, resident_bytes={}, pending_bytes={}",
@@ -3183,14 +3183,17 @@ namespace lfs::vis {
         if (!impl_)
             return false;
         const auto now = std::chrono::steady_clock::now();
-        impl_->collision_cache.maintain(now, Impl::collisionUploadRetired);
+        impl_->collision_cache.maintain(now, Impl::collisionUploadRetired, impl_->frame_counter);
         if (impl_->collision_frames_release_at && now >= *impl_->collision_frames_release_at) {
             // Idle maintenance does not acquire a frame slot or wait on a fence.
             // Conservatively keep all frame owners until every submitted draw
             // has retired and no frame is being recorded.
             if (!impl_->context->hasActiveFrame() &&
                 impl_->context->retiredFrameSubmitSerial() >= impl_->context->lastSuccessfulFrameSubmitSerial()) {
-                impl_->collision_frames.clear();
+                for (auto& owners : impl_->collision_frames)
+                    std::erase_if(owners, [&](const auto& resource) {
+                        return !impl_->collision_cache.requestedInFrame(resource->owner.get(), impl_->frame_counter);
+                    });
                 impl_->collision_frames_release_at.reset();
             } else {
                 impl_->collision_frames_release_at = now + std::chrono::milliseconds(250);

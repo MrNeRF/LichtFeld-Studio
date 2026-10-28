@@ -50,6 +50,7 @@ namespace lfs::vis::detail {
             const bool reactivated = entry.last_frame != frame && entry.last_frame + 1 < frame;
             entry.last_frame = frame;
             entry.last_used = now;
+            entry.inactive_since.reset();
             if (entry.status == CollisionUploadStatus::Ready) {
                 if (auto resource = entry.weak.lock()) {
                     entry.resident = resource;
@@ -99,6 +100,11 @@ namespace lfs::vis::detail {
                        : nullptr;
         }
 
+        bool requestedInFrame(const Source* source, uint64_t frame) const {
+            const auto it = entries_.find(source);
+            return it != entries_.end() && it->second.last_frame == frame;
+        }
+
         // Called by the viewer's idle loop too: retries must not depend on input
         // producing another frame. Hidden entries retain their failure history
         // but never schedule rendering. Pending uploads only schedule fence polls.
@@ -109,8 +115,8 @@ namespace lfs::vis::detail {
                     result = due;
             };
             for (const auto& [_, entry] : entries_) {
-                if (entry.status == CollisionUploadStatus::Ready && entry.resident)
-                    consider(entry.last_used + idle_);
+                if (entry.status == CollisionUploadStatus::Ready && entry.resident && entry.last_frame != frame)
+                    consider(entry.inactive_since.value_or(entry.last_used) + idle_);
                 else if (entry.status == CollisionUploadStatus::PendingFailure)
                     consider(now + std::chrono::milliseconds(250));
                 else if (entry.status == CollisionUploadStatus::RetryableFailure &&
@@ -129,17 +135,22 @@ namespace lfs::vis::detail {
         }
 
         template <typename Retired>
-        void maintain(Time now, Retired&& retired) {
+        void maintain(Time now, Retired&& retired, std::optional<uint64_t> visible_frame = {}) {
             stats_.resident_bytes = 0;
             stats_.pending_bytes = 0;
             for (auto it = entries_.begin(); it != entries_.end();) {
                 auto& entry = it->second;
+                const bool visible = visible_frame && entry.last_frame == *visible_frame;
+                if (visible)
+                    entry.inactive_since.reset();
+                else if (!entry.inactive_since)
+                    entry.inactive_since = visible_frame ? now : entry.last_used;
                 if (entry.status == CollisionUploadStatus::PendingFailure && retired(*entry.resident)) {
                     entry.resident.reset();
                     entry.status = CollisionUploadStatus::RetryableFailure;
                 }
                 if (entry.status == CollisionUploadStatus::Ready && entry.resident) {
-                    if (now - entry.last_used >= idle_)
+                    if (!visible && now - *entry.inactive_since >= idle_)
                         evict(entry);
                     else
                         stats_.resident_bytes += entry.bytes;
@@ -185,6 +196,7 @@ namespace lfs::vis::detail {
             std::shared_ptr<Resource> resident;
             CollisionUploadStatus status = CollisionUploadStatus::RetryableFailure;
             Time last_used{}, next_retry{};
+            std::optional<Time> inactive_since;
             uint64_t last_frame = 0;
             size_t bytes = 0;
             unsigned failures = 0;

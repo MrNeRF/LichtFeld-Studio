@@ -256,6 +256,7 @@ namespace {
         auto uploaded = request();
         const std::weak_ptr<Resource> weak = uploaded;
         uploaded.reset();
+        ++frame; // hidden by the last prepared view
         EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::seconds(5));
         now += std::chrono::seconds(5);
         maintain();
@@ -310,6 +311,36 @@ namespace {
         now += std::chrono::seconds(5);
         maintain();
         EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+    }
+
+    TEST_F(CollisionPreviewCache, VisibleVolumeSurvivesIdleWithoutAnotherUpload) {
+        auto uploaded = request();
+        const std::weak_ptr<Resource> weak = uploaded;
+        uploaded.reset();
+        now += std::chrono::seconds(100);
+        cache.maintain(now, retired, frame);
+        EXPECT_FALSE(weak.expired());
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+        EXPECT_EQ(request(), weak.lock());
+        EXPECT_EQ(cache.stats().attempts, 1u);
+    }
+
+    TEST_F(CollisionPreviewCache, HideGraceStartsWhenHiddenAfterLongVisibleIdle) {
+        auto uploaded = request();
+        const std::weak_ptr<Resource> weak = uploaded;
+        uploaded.reset();
+        now += std::chrono::seconds(100);
+        cache.maintain(now, retired, frame);
+        ++frame;
+        cache.maintain(now, retired, frame);
+        EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::seconds(5));
+        now += std::chrono::seconds(4);
+        cache.maintain(now, retired, frame);
+        EXPECT_FALSE(weak.expired());
+        now += std::chrono::seconds(1);
+        cache.maintain(now, retired, frame);
+        EXPECT_TRUE(weak.expired());
         EXPECT_FALSE(cache.nextDeadline(frame, now));
     }
 } // namespace
