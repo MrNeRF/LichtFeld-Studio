@@ -67,7 +67,7 @@ jobs:
               Set-SmbServerConfiguration -EnableLeasing $false -Force
               "leasing off: " + (& .\one.exe "$share\n$i" 12)
               Set-SmbServerConfiguration -EnableLeasing $true -Force
-              foreach ($d in 6, 8, 9, 10, 11) { "depth $d: " + (& .\one.exe "$share\d$i-$d" $d) }
+              foreach ($d in 6, 8, 9, 10, 11) { "depth ${d}: " + (& .\one.exe "$share\d$i-$d" $d) }
             }
             if ($i -lt 20) { Start-Sleep -Seconds 600 }
           }
