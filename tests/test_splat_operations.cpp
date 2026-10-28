@@ -38,7 +38,9 @@ namespace {
             EXPECT_TRUE(identifiers.insert(descriptor.identifier).second);
             EXPECT_TRUE(kinds.insert(descriptor.kind).second);
             EXPECT_EQ(splatOperationDescriptor(descriptor.kind), &descriptor);
-            EXPECT_TRUE(descriptor.supportsOwner(NodeType::SPLAT));
+            EXPECT_EQ(descriptor.supportsOwner(NodeType::SPLAT),
+                      descriptor.storage != SplatOperationStorage::CommandOnly &&
+                          descriptor.scope == SplatOperationScope::Object);
             for (const auto type : {NodeType::GROUP, NodeType::DATASET, NodeType::POINTCLOUD,
                                     NodeType::MESH, NodeType::CAMERA, NodeType::PLY_SEQUENCE})
                 EXPECT_FALSE(descriptor.supportsOwner(type));
@@ -89,6 +91,48 @@ namespace {
         ASSERT_FALSE(expected.empty());
         const std::set<std::string> actual(tools.begin(), tools.end());
         EXPECT_EQ(actual, expected);
+    }
+
+    TEST(SplatOperationCatalogTest, GlobalSelectionAndViewportStateCannotBeOwnedByASplat) {
+        for (const auto kind : {SplatOperationKind::Select, SplatOperationKind::SelectAll,
+                                SplatOperationKind::SelectNone, SplatOperationKind::SelectInvert,
+                                SplatOperationKind::SelectGrow, SplatOperationKind::SelectShrink,
+                                SplatOperationKind::SelectByOpacity, SplatOperationKind::SelectByScale,
+                                SplatOperationKind::SelectionGroups, SplatOperationKind::Mirror,
+                                SplatOperationKind::DeleteSelection, SplatOperationKind::CopySelection,
+                                SplatOperationKind::CutSelection, SplatOperationKind::PasteSelection,
+                                SplatOperationKind::GroupSelection}) {
+            const auto* descriptor = splatOperationDescriptor(kind);
+            ASSERT_NE(descriptor, nullptr);
+            EXPECT_EQ(descriptor->scope, SplatOperationScope::SceneSelection);
+            EXPECT_FALSE(descriptor->supportsOwner(NodeType::SPLAT));
+        }
+        for (const auto kind : {SplatOperationKind::SelectionDepthFilter, SplatOperationKind::SelectionCropFilter}) {
+            const auto* descriptor = splatOperationDescriptor(kind);
+            ASSERT_NE(descriptor, nullptr);
+            EXPECT_EQ(descriptor->scope, SplatOperationScope::ViewportTool);
+            EXPECT_FALSE(descriptor->supportsOwner(NodeType::SPLAT));
+        }
+        const auto* simplify = splatOperationDescriptor(SplatOperationKind::Simplify);
+        EXPECT_EQ(simplify->scope, SplatOperationScope::Object);
+        EXPECT_FALSE(simplify->supportsOwner(NodeType::SPLAT)); // Source target, not a persisted recipe.
+        EXPECT_EQ(splatOperationDescriptor(SplatOperationKind::WriteGaussianField)->scope, SplatOperationScope::Object);
+    }
+
+    TEST(SplatOperationCatalogTest, VolumeActionsMatchExistingCommandsAndAreNotInventedForOtherTools) {
+        for (const auto& descriptor : splatOperationDescriptors()) {
+            const bool volume = descriptor.storage == SplatOperationStorage::SceneVolume;
+            const auto& caps = descriptor.capabilities;
+            EXPECT_EQ(caps.fit, volume);
+            EXPECT_EQ(caps.reset, volume);
+            EXPECT_EQ(caps.invert, volume);
+            EXPECT_EQ(caps.apply_to_geometry, volume);
+            EXPECT_EQ(caps.remove_element, volume || descriptor.kind == SplatOperationKind::Collision);
+            if (volume) {
+                EXPECT_EQ(descriptor.scope, SplatOperationScope::Object);
+                EXPECT_TRUE(descriptor.supportsOwner(NodeType::SPLAT));
+            }
+        }
     }
 
     TEST_F(SplatOperationsTest, CropSnapshotPreservesPayloadAndSeparatesVisibilityFromEnabled) {

@@ -32,13 +32,29 @@ multi-selection support or advertise a group-owned operation.
 
 ## Descriptors and permissions
 
-All descriptors describe a single splat context. None enables group owners or
-reordering. Capabilities describe implemented paths, not whether an action is
+The catalog can be used in a splat editing context without assigning every
+entry to that splat. `scope` explicitly identifies the authoritative state:
+
+| Scope | Meaning | Entries |
+| --- | --- | --- |
+| `Object` | Node/payload state or a command with explicit object targets | Volumes, collision results, simplification request, transforms, duplicate/reparent, field writes |
+| `SceneSelection` | Shared selection/mask, selection groups or commands consuming it | Selection tools and queries, grow/shrink, mirror, selection clipboard/editing, group selection |
+| `ViewportTool` | Shared tool/view settings, not an object's property | Selection depth and crop filters |
+
+Object commands may resolve multiple selected nodes. Scope describes the state
+being edited, not how many targets the command accepts. `supportsOwner(SPLAT)`
+is true only for existing object-backed volumes and collision results; a
+command such as simplification can target a splat without owning a persistent
+recipe on it. No entry enables group owners or reordering. Capabilities describe implemented paths, not whether an action is
 currently allowed: live training, locks, hydration, selection and active jobs
 still require the existing application poll/validation services.
 
 Crop volumes expose editable parameters, local enable state and helper display
-paths. Collisions expose generation/export, but no persistent editable recipe
+paths. Their action capabilities also include Fit, Reset, Invert, Apply to
+geometry and Remove element, corresponding to the existing crop command paths.
+Apply is a geometry edit, not a promise that applying can be reversed later
+without undo. Remove deletes the volume node; it is distinct from disabling its
+effect. Collisions expose removal of their result node and generation/export, but no persistent editable recipe
 or independent operation enable switch. Simplification is command-only: its
 parameters live in the current request, not in a recoverable operation on every
 resulting splat. Selection, transforms and editing remain commands rather than
@@ -47,6 +63,25 @@ being mislabeled as nondestructive modifiers.
 The existing crop tool can convert or replace other crop volume shapes. This
 catalog does not promise that arbitrary crop shapes coexist or form an ordered
 stack, nor does it change those replacement rules.
+
+## Volume actions and existing routes
+
+These are discoverable capabilities, not new dispatch IDs or setters. The
+caller still validates the current target and uses the established command.
+
+| Action capability | Crop Box | Ellipsoid | Crop Polygon |
+| --- | --- | --- | --- |
+| `fit` | `CropBoxFitOperator` / `cap::fitCropBoxToParent` | `EllipsoidFitOperator` / `cap::fitEllipsoidToParent` | `GizmoManager::fitSelectedCropPolygon` / `cap::fitCropPolygonToParent` |
+| `reset` | `CropBoxResetOperator` / `cap::resetCropBox` | `EllipsoidResetOperator` / `cap::resetEllipsoid` | `GizmoManager::resetSelectedCropPolygon` / `cap::resetCropPolygon` |
+| `invert` | Existing volume update / crop inverse command | Existing volume update / crop inverse command | Existing volume update / crop inverse command |
+| `apply_to_geometry` | `ApplyCropBox` | `ApplyEllipsoid` | `ApplyCropPolygon` |
+| `remove_element` | Existing crop-volume deletion | Existing crop-volume deletion | Existing crop-volume deletion |
+
+`fit_crop_tool`, `reset_crop_tool`, `toggle_crop_tool_inverse`,
+`apply_crop_tool` and `delete_crop_tool_volume` are current UI entry points.
+Some resolve the active shape/selection; future inspector callers must establish
+or resolve the intended target through the same validated command path rather
+than assuming these entry points accept an arbitrary UUID.
 
 ## Reading existing scene data
 
