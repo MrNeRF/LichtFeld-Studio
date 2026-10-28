@@ -1043,6 +1043,7 @@ if(NOT LFS_HAS_CUDA)
             test_mesh_mask_kernels.cpp
             test_training_ops_parity.cpp
             test_flip.cpp
+            test_masked_ssim_metrics.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
