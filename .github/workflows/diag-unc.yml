@@ -27,12 +27,24 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include probe.cpp /Fe:probe.exe
+          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include sweep.cpp /Fe:sweep.exe
           if errorlevel 1 exit /b 1
-          set PROBE_ROOT=%PROBE_UNC%\a
-          probe.exe
-          set PROBE_ROOT=%PROBE_UNC%\b
-          probe.exe
+          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include probe2.cpp /Fe:probe2.exe
+          if errorlevel 1 exit /b 1
+          echo == length sweep, fresh session
+          set PROBE_ROOT=%PROBE_UNC%
+          sweep.exe
+          echo == probe 2 without FileRenameInfoEx
+          set PROBE_ROOT=%PROBE_UNC%\release
+          set PROBE_NOPOSIX=1
+          probe2.exe
+          echo == probe 2 verbatim
+          set PROBE_NOPOSIX=
+          set PROBE_ROOT=%PROBE_UNC%\debug
+          probe2.exe
+          echo == length sweep after FileRenameInfoEx
+          set PROBE_ROOT=%PROBE_UNC%\later
+          sweep.exe
       - name: Client and server SMB settings
         shell: pwsh
         run: |
