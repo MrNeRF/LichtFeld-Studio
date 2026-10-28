@@ -77,6 +77,7 @@ set(CORE_SOURCES
         memory_domain.cpp
         operator_callbacks.cpp
         animatable_property.cpp
+        splat_operations.cpp
         argument_parser.cpp
         camera.cpp
         collision_volume.cpp
