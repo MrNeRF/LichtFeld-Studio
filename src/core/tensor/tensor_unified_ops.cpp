@@ -366,7 +366,13 @@ namespace lfs::core {
         return promotion_rank(a) >= promotion_rank(b) ? a : b;
     }
 
-    void Tensor::adopt_native_tensor_allocation(internal::NativeTensorAllocation allocation, const size_t bytes) {
+#if defined(_MSC_VER)
+    __forceinline void
+#else
+    void
+#endif
+    Tensor::adopt_native_tensor_allocation(internal::NativeTensorAllocation&& allocation, const size_t bytes,
+                                           internal::GpuBackendOps& backend) {
         auto storage = allocation.storage;
         storage.dtype = dtype_;
         const auto target = static_cast<cudaStream_t>(allocation.target);
@@ -374,34 +380,37 @@ namespace lfs::core {
         const bool accounted = !allocation.owner && internal::allocation_accounted(storage);
         if (accounted)
             record_storage_allocation(internal::allocation_accounting(storage), bytes);
-        try {
-            if (allocation.owner) {
-                adopt_storage(storage.data, [owner = allocation.owner](void*) { (void)owner; });
-            } else {
-                adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
-                    if (!data)
-                        return;
-                    if (storage.meta) {
-                        StorageMeta metadata;
-                        metadata.backend = storage.backend;
-                        metadata.gpu_descriptor = descriptor;
-                        auto released = storage;
-                        released.meta = &metadata;
-                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
-                    } else {
-                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
-                    }
-                    if (accounted)
-                        Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
-                });
-            }
-        } catch (...) {
+        // Keep rollback separate from the normal owner: an explicit catch here prevents
+        // MSVC from inlining this per-allocation path. Native deallocation is noexcept.
+        const auto release_unadopted = [&](internal::NativeTensorAllocation*) noexcept {
             if (!allocation.owner)
-                internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
+                backend.deallocate(storage, internal::ExecContext{target});
             if (accounted)
                 record_storage_deallocation(internal::allocation_accounting(storage), bytes);
-            throw;
+        };
+        std::unique_ptr<internal::NativeTensorAllocation, decltype(release_unadopted)> rollback(
+            &allocation, release_unadopted);
+        if (allocation.owner) {
+            adopt_storage(storage.data, [owner = allocation.owner](void*) { (void)owner; });
+        } else {
+            adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
+                if (!data)
+                    return;
+                if (storage.meta) {
+                    StorageMeta metadata;
+                    metadata.backend = storage.backend;
+                    metadata.gpu_descriptor = descriptor;
+                    auto released = storage;
+                    released.meta = &metadata;
+                    internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
+                } else {
+                    internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
+                }
+                if (accounted)
+                    Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
+            });
         }
+        (void)rollback.release();
         data_ = data_owner_.get();
         compute_alignment();
         ensure_state();
@@ -468,7 +477,7 @@ namespace lfs::core {
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
                 auto allocation = backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t), .kind = args.exact_allocation ? internal::TensorAllocationKind::Exact : internal::TensorAllocationKind::Pooled, .allow_arena = !args.exact_allocation, .label = args.exact_allocation ? "tensor.exact" : "tensor.storage", .operation = args.exact_allocation ? "tensor.empty_exact" : "tensor.allocate"});
                 const bool borrowed_owner = bool(allocation.owner);
-                result.adopt_native_tensor_allocation(std::move(allocation), bytes);
+                result.adopt_native_tensor_allocation(std::move(allocation), bytes, backend_ops);
                 if (borrowed_owner)
                     return result;
 
@@ -678,7 +687,7 @@ namespace lfs::core {
 
             if (result.device_ == Device::GPU) {
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
-                result.adopt_native_tensor_allocation(backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t)}), bytes);
+                result.adopt_native_tensor_allocation(backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t)}), bytes, backend_ops);
                 const auto s = result.stream();
 
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {

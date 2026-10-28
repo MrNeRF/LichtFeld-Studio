@@ -67,6 +67,12 @@ Native allocation flags carry accounting, labeling and teardown policy. Shared
 adoption and deleters consume that policy. They must not derive ownership from
 backend names or dereference allocator metadata after shutdown.
 
+If host-side owner construction fails, adoption must release the unowned native
+allocation and balance its accounting before propagating the exception. Borrowed
+storage remains owned by its external owner. The normal deleter resolves the
+backend on the releasing thread; an allocation-time adapter reference must not
+bypass a required thread binding during later destruction.
+
 Exact allocation is an intent: CUDA selects its exact pool path, while other
 adapters preserve their native sizing behavior. Empty allocations retain logical
 shape and placement without activating an allocator or creating a context;
