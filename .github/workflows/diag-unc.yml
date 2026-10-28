@@ -29,38 +29,12 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include probe.cpp /Fe:probe.exe
           if errorlevel 1 exit /b 1
-          copy probe.exe probe_aware.exe
-          mt.exe -nologo -manifest aware.manifest -outputresource:probe_aware.exe;#1
-          copy probe.exe probe_unaware.exe
-          mt.exe -nologo -manifest unaware.manifest -outputresource:probe_unaware.exe;#1
-          echo == no manifest
           set PROBE_ROOT=%PROBE_UNC%\a
           probe.exe
-          echo == aware manifest
           set PROBE_ROOT=%PROBE_UNC%\b
-          probe_aware.exe
-          echo == unaware manifest
-          set PROBE_ROOT=%PROBE_UNC%\c
-          probe_unaware.exe
-      - name: Same sweep from pwsh
+          probe.exe
+      - name: Client and server SMB settings
         shell: pwsh
         run: |
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class W {
-            [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-            static extern bool MoveFileExW(string a, string b, uint flags);
-            public static int Move(string a, string b) { return MoveFileExW(a, b, 1) ? 0 : Marshal.GetLastWin32Error(); }
-          }
-          '@
-          $component = 'unicode_' + [char]0x6E2C + [char]0x8A66 + '_' + [char]0x00E0 + '_component_01234567890123456789'
-          foreach ($root in @('\\?\UNC\localhost\lfs-unc-tests\d', '\\?\UNC\localhost\lfs-unc-tests\lfs-native-fs-10639208555200')) {
-            foreach ($depth in 0, 6, 8, 10, 12) {
-              $dir = "$root\q$depth"
-              for ($i = 0; $i -lt $depth; $i++) { $dir += "\$component" }
-              [System.IO.Directory]::CreateDirectory($dir) | Out-Null
-              [System.IO.File]::WriteAllText("$dir\network.bin", 'network')
-              "pwsh depth={0,2} len={1} move={2}" -f $depth, "$dir\network.bin".Length, [W]::Move("$dir\network.bin", "$dir\renamed.bin")
-            }
-          }
+          Get-SmbClientConfiguration | Format-List *
+          Get-SmbServerConfiguration | Format-List EnableLeasing, EnableOplocks, EnableStrictNameChecking, EncryptData
