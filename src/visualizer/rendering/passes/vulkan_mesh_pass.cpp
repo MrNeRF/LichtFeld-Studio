@@ -16,6 +16,7 @@
 #include "window/vulkan_result.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <format>
@@ -183,6 +184,10 @@ namespace lfs::vis {
         };
         std::vector<std::vector<std::shared_ptr<CollisionFrame>>> collision_frames;
         std::unordered_map<const core::CollisionVolume*, std::weak_ptr<CollisionFrame>> collision_cache;
+        uint64_t collision_upload_attempts = 0;
+        uint64_t collision_upload_successes = 0;
+        uint64_t collision_upload_bytes = 0;
+        uint64_t collision_cache_hits = 0;
 
         VkSampler sampler = VK_NULL_HANDLE;
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
@@ -2583,6 +2588,8 @@ namespace lfs::vis {
                     break;
                 auto& cached = collision_cache[item.collision.get()];
                 auto resource = cached.lock();
+                if (resource)
+                    ++collision_cache_hits;
                 if (!resource) {
                     resource = std::make_shared<CollisionFrame>();
                     resource->owner = item.collision;
@@ -2597,6 +2604,25 @@ namespace lfs::vis {
         }
 
         void uploadCollision(CollisionFrame& frame) {
+            const auto started = std::chrono::steady_clock::now();
+            ++collision_upload_attempts;
+            struct UploadMeasurement {
+                Impl& pass;
+                CollisionFrame& frame;
+                std::chrono::steady_clock::time_point started;
+                ~UploadMeasurement() {
+                    const auto bytes = (frame.owner->words.size() + 4) * sizeof(uint32_t);
+                    if (frame.descriptor) {
+                        ++pass.collision_upload_successes;
+                        pass.collision_upload_bytes += bytes;
+                    }
+                    LOG_DEBUG("Collision preview upload: ready={}, bytes={}, cpu_ms={:.3f}, attempts={}, successes={}, uploaded_bytes={}, cache_hits={}",
+                              frame.descriptor != VK_NULL_HANDLE, bytes,
+                              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+                              pass.collision_upload_attempts, pass.collision_upload_successes,
+                              pass.collision_upload_bytes, pass.collision_cache_hits);
+                }
+            } measurement{*this, frame, started};
             frame.device = device;
             frame.allocator = allocator;
             const auto& volume = *frame.owner;
