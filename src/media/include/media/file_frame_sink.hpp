@@ -58,6 +58,8 @@ namespace lfs::media {
         FileFrameSinkOptions options_;
         bool active_ = false;
         std::shared_ptr<const detail::JpegMetadata> jpeg_metadata_;
+        std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
+        int applied_rotation_ = 0;
         std::unordered_set<std::filesystem::path> filenames_;
         struct ExistingFrame {
             std::filesystem::path path;

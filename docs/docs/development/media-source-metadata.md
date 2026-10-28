@@ -556,8 +556,10 @@ creating EXIF GPS fixes or replacing temporal telemetry. The opt-in includes
 retained GPS, identifiers, private payloads and source locator bytes together.
 It does not provide selective redaction.
 
-Small source envelopes share the Standard XMP tree with frame properties. Larger
-envelopes use Adobe Extended XMP: one RDF tree split into APP1 chunks, an uppercase
+Small source envelopes share the Standard XMP tree with frame properties, reserving
+space for the largest supported frame fields within APP1 capacity. They do not
+require MD5. Larger envelopes use Adobe Extended XMP: one RDF tree split into APP1
+chunks, an uppercase
 MD5 identifier, and the Standard XMP `xmpNote:HasExtendedXMP` link. MD5 is used for
 that format identifier, not authentication. A provider without MD5 rejects that
 large-packet write. Serialized source XML is bounded to 32 MiB; existing input
@@ -571,7 +573,13 @@ copies encoded bytes into the existing atomic file service without recompression
 The metadata option and a SHA-256 of the prepared static source packet participate
 in checkpoint identity. Changing either rejects resume before adopting images.
 This includes a different source locator even when its file bytes are identical:
-retained JPEG provenance must agree with the final manifest. The manifest records
+retained JPEG provenance must agree with the final manifest. Embedded frame records
+also bind the timestamp origin alongside its integer clock. The manifest records
 `embedded_metadata_policy`.
 Image publication is atomic per file, while the sequence and its final manifest
 remain separate commits governed by the existing extraction/recovery contract.
+
+For ordinary CPU output the sink prepares source XML on its first frame and reuses
+it thereafter. An all-GPU batch job therefore keeps no unused CPU packet. Invalid
+or oversized metadata can fail that first write after directory creation, before
+any JPEG publication. Verified resume prepares its shared packet at session start.

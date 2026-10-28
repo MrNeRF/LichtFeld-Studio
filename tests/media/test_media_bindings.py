@@ -1144,7 +1144,21 @@ class MediaBindings(unittest.TestCase):
             output.files.embed_source_metadata = enabled
             media.MediaIngest.extract_files(request, output)
             self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in files])
+            record_path = output.files.output_directory / ".media-ingest-checkpoint/frame-0.json"
+            original_record = record_path.read_bytes()
+            record = json.loads(original_record)
+            if not enabled:
+                self.assertNotIn("timestamp_origin", record)
             if enabled:
+                self.assertEqual(record["timestamp_origin"], 1)
+                record["timestamp_origin"] = 2
+                record_path.write_text(json.dumps(record), encoding="utf-8")
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.extract_files(request, output)
+                self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in files])
+                record_path.write_bytes(original_record)
+                media.MediaIngest.extract_files(request, output)
+                self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in files])
                 original_source = request.input
                 alias = self.root / "same-bytes-different-source-path.mkv"
                 shutil.copyfile(original_source, alias)
@@ -1175,6 +1189,27 @@ class MediaBindings(unittest.TestCase):
         for image in output.files.output_directory.glob("*.jpg"):
             _, _, _, _, catalog, chunks = jpeg_metadata_fixture.read(image.read_bytes())
             self.assertGreater(chunks, 1)
+            # Decode the whole pixel stream, not only its metadata/header.
+            decoded = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                                               "-v", "error", "-i", str(image), "-f", "rawvideo",
+                                               "-pix_fmt", "rgb24", "-"], timeout=30)
+            self.assertEqual(len(decoded), 64 * 32 * 3)
+            data = image.read_bytes()
+            offset = 2
+            extended_offsets = []
+            while data[offset:offset + 2] != b"\xff\xda":
+                length = int.from_bytes(data[offset + 2:offset + 4], "big")
+                if data[offset + 4:].startswith(b"http://ns.adobe.com/xmp/extension/\0"):
+                    extended_offsets.append(offset + 4)
+                offset += 2 + length
+            with self.assertRaises(AssertionError):
+                jpeg_metadata_fixture.read(data[:offset])
+            damaged = bytearray(data)
+            at = extended_offsets[0] + 67
+            total = int.from_bytes(damaged[at:at + 4], "big")
+            damaged[at:at + 4] = (total + 1).to_bytes(4, "big")
+            with self.assertRaises(AssertionError):
+                jpeg_metadata_fixture.read(damaged)
             self.assertEqual(catalog, manifest["source_metadata"])
             tags = catalog["metadata"]["source_metadata"]["tags"]
             observed = {bytes.fromhex(t["key_bytes"]).lower(): bytes.fromhex(t["value_bytes"]) for t in tags}

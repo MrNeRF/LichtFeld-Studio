@@ -13,10 +13,12 @@ def read(data):
     standard = extension = exif = None
     chunks = []
     original = bytearray(data[:2])
+    saw_scan = False
     offset = 2
     while offset < len(data):
         marker = data[offset:offset + 2]
         if marker == b"\xff\xda":
+            saw_scan = True
             original.extend(data[offset:])
             break
         length = int.from_bytes(data[offset + 2:offset + 4], "big")
@@ -36,6 +38,8 @@ def read(data):
         else:
             original.extend(data[offset:offset + 2 + length])
         offset += 2 + length
+    if not saw_scan or not data.endswith(b"\xff\xd9"):
+        raise AssertionError("missing JPEG scan/end")
     if exif is None or standard is None:
         raise AssertionError("missing EXIF/XMP")
     if exif[:4] != b"II*\0":
@@ -58,11 +62,13 @@ def read(data):
     link = standard.find(".//{http://ns.adobe.com/xmp/note/}HasExtendedXMP")
     if link is not None:
         parts = bytearray()
+        expected_total = chunks[0][1] if chunks else 0
         for guid, total, at, chunk in chunks:
-            if guid != link.text or at != len(parts):
+            if (guid != link.text or at != len(parts) or total != expected_total or
+                    not chunk or at > total or len(chunk) > total - at):
                 raise AssertionError("bad Extended XMP linkage")
             parts.extend(chunk)
-        if not chunks or len(parts) != total or hashlib.md5(parts).hexdigest().upper() != link.text:
+        if not chunks or len(parts) != expected_total or hashlib.md5(parts).hexdigest().upper() != link.text:
             raise AssertionError("bad Extended XMP digest/extent")
         extension = ET.fromstring(parts)
     elif chunks:

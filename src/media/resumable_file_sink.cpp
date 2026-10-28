@@ -302,6 +302,8 @@ namespace lfs::media::detail {
             const auto& pts = *frame.info.source_timestamp;
             record["pts"] = {pts.ticks, pts.time_base.numerator, pts.time_base.denominator};
         }
+        if (output_.files.embed_source_metadata)
+            record["timestamp_origin"] = static_cast<int>(frame.info.timestamp_origin);
         if (lfs::core::native_fs::exists(record_path)) {
             const auto old = readRecord(record_path);
             if (!old)

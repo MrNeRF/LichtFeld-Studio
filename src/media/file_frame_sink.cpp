@@ -49,18 +49,17 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::AVIF)
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
+        source_metadata_.reset();
         jpeg_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata) {
             if (options_.format != FrameFileFormat::JPEG)
                 return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG output");
             if (!session.source_metadata)
                 return sinkError(ErrorCode::InvalidArgument, "JPEG metadata requires an explicit source observation");
-            if (!jpeg_metadata_) {
-                auto prepared = detail::prepareJpegMetadata(*session.source_metadata, session.applied_rotation);
-                if (!prepared)
-                    return SinkResult::failure(prepared.error());
-                jpeg_metadata_ = std::make_shared<const detail::JpegMetadata>(std::move(*prepared));
-            }
+            // GPU extraction writes its encoded batch directly. Keep only the
+            // owned catalog until this sink actually receives a CPU frame.
+            source_metadata_ = jpeg_metadata_ ? nullptr : session.source_metadata;
+            applied_rotation_ = session.applied_rotation;
         }
         std::error_code directory_error;
         lfs::core::native_fs::create_directories(options_.output_directory, directory_error);
@@ -90,7 +89,8 @@ namespace lfs::media {
         if (!required)
             return SinkResult::failure(required.error());
         if (options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF && frame.layout.format != FramePixelFormat::RGB8)
-            return sinkError(ErrorCode::Unsupported, "PNG/JPEG file sink requires RGB8; use EXR, TIFF16, JXL or AVIF for float samples");
+            return sinkError(ErrorCode::Unsupported,
+                             "PNG/JPEG file sink requires RGB8; use EXR, TIFF16, JXL or AVIF for float samples");
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * pixelBytes(frame.layout.format);
         const auto height = static_cast<std::size_t>(frame.layout.height);
         if (row_bytes > std::numeric_limits<std::size_t>::max() / height)
@@ -130,6 +130,15 @@ namespace lfs::media {
                             pixels + row * frame.layout.row_stride, row_bytes);
             pixels = packed.data();
         }
+        if (source_metadata_) {
+            auto prepared =
+                detail::prepareJpegMetadata(*source_metadata_, applied_rotation_);
+            if (!prepared)
+                return SinkResult::failure(prepared.error());
+            jpeg_metadata_ =
+                std::make_shared<const detail::JpegMetadata>(std::move(*prepared));
+            source_metadata_.reset();
+        }
         if (jpeg_metadata_) {
             std::vector<std::uint8_t> encoded;
             auto result = core::image_codecs::encode_jpeg_memory(
@@ -149,6 +158,7 @@ namespace lfs::media {
             return sinkError(ErrorCode::FailedPrecondition, "File sink is not active");
         active_ = false;
         jpeg_metadata_.reset();
+        source_metadata_.reset();
         for (const auto& old : existing_frames_) {
             if (filenames_.contains(old.path))
                 continue;
@@ -173,5 +183,6 @@ namespace lfs::media {
     void FileFrameSink::abort(const SinkSummary&) noexcept {
         active_ = false;
         jpeg_metadata_.reset();
+        source_metadata_.reset();
     }
 } // namespace lfs::media

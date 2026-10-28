@@ -4,6 +4,7 @@
 #include "media_json.hpp"
 #include "xmp_metadata.hpp"
 #include <algorithm>
+#include <limits>
 
 namespace lfs::media::detail {
     namespace {
@@ -12,8 +13,14 @@ namespace lfs::media::detail {
         constexpr std::size_t max_packet_bytes = 32 * 1024 * 1024;
         constexpr std::size_t max_payload_bytes = 65533;
         constexpr std::string_view tree_start =
-            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-            "<rdf:Description rdf:about=\"\" xmlns:lfs=\"https://lichtfeld.io/ns/media/1.0/\" xmlns:n=\"http://ns.adobe.com/xmp/note/\">";
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF "
+            "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            "<rdf:Description rdf:about=\"\" "
+            "xmlns:lfs=\"https://lichtfeld.io/ns/media/1.0/\" "
+            "xmlns:n=\"http://ns.adobe.com/xmp/note/\">";
+        constexpr std::string_view packet_start =
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>";
+        constexpr std::string_view packet_end = "<?xpacket end=\"w\"?>";
         constexpr std::string_view tree_end = "</rdf:Description></rdf:RDF></x:xmpmeta>";
         Error metadataError(ErrorCode code, std::string detail) {
             return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(detail), .detection = LFS_SOURCE_SITE_CURRENT()});
@@ -48,6 +55,31 @@ namespace lfs::media::detail {
             out += "</lfs:";
             out += name;
             out += ">";
+        }
+        void frameProperties(std::string& tree, int width, int height,
+                             int applied_rotation, const FrameInfo& info) {
+            property(tree, "MetadataPolicy", jpeg_metadata_policy);
+            property(tree, "PixelWidth", std::to_string(width));
+            property(tree, "PixelHeight", std::to_string(height));
+            property(tree, "Orientation", "1");
+            property(tree, "AppliedClockwiseRotation", std::to_string(applied_rotation));
+            if (info.legacy_source_frame > 0)
+                property(tree, "SourceFrame", std::to_string(info.legacy_source_frame));
+            if (info.source_timestamp &&
+                info.source_timestamp->time_base.denominator > 0 &&
+                info.source_timestamp->time_base.numerator > 0) {
+                property(tree, "SourceTimestampTicks",
+                         std::to_string(info.source_timestamp->ticks));
+                property(tree, "SourceTimeBaseNumerator",
+                         std::to_string(info.source_timestamp->time_base.numerator));
+                property(tree, "SourceTimeBaseDenominator",
+                         std::to_string(info.source_timestamp->time_base.denominator));
+                property(
+                    tree, "TimestampOrigin",
+                    info.timestamp_origin == TimestampOrigin::Presentation ? "presentation"
+                    : info.timestamp_origin == TimestampOrigin::BestEffort ? "best_effort"
+                                                                           : "missing");
+            }
         }
         std::vector<std::uint8_t> exif(int width, int height) {
             // Classic little-endian TIFF. IFD0: orientation=1 and ExifIFD.
@@ -94,7 +126,21 @@ namespace lfs::media::detail {
             JpegMetadata result;
             result.applied_rotation = applied_rotation;
             property(result.source_properties, "SourceMetadata", json);
-            if (result.source_properties.size() < 48 * 1024)
+            // Reserve only the largest frame envelope this writer can produce.
+            // A valid Standard packet must not depend on the MD5 provider.
+            FrameInfo largest;
+            largest.legacy_source_frame = std::numeric_limits<int>::max();
+            largest.source_timestamp = Timestamp{
+                std::numeric_limits<int64_t>::min(),
+                {std::numeric_limits<int>::max(), std::numeric_limits<int>::max()}};
+            largest.timestamp_origin = TimestampOrigin::Presentation;
+            std::string envelope;
+            frameProperties(envelope, std::numeric_limits<int>::max(),
+                            std::numeric_limits<int>::max(), applied_rotation, largest);
+            const auto overhead = sizeof(standard_signature) + packet_start.size() +
+                                  tree_start.size() + envelope.size() +
+                                  tree_end.size() + packet_end.size();
+            if (result.source_properties.size() <= max_payload_bytes - overhead)
                 return result;
             const auto tree = std::string(tree_start) + result.source_properties + std::string(tree_end);
             if (tree.size() > max_packet_bytes)
@@ -127,27 +173,14 @@ namespace lfs::media::detail {
         if (jpeg.size() < 4 || jpeg[0] != 0xff || jpeg[1] != 0xd8)
             return SinkResult::failure(metadataError(ErrorCode::DataLoss, "JPEG encoder returned an invalid header"));
         try {
-            std::string tree = "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>";
+            std::string tree(packet_start);
             tree += tree_start;
-            property(tree, "MetadataPolicy", jpeg_metadata_policy);
-            property(tree, "PixelWidth", std::to_string(width));
-            property(tree, "PixelHeight", std::to_string(height));
-            property(tree, "Orientation", "1");
-            property(tree, "AppliedClockwiseRotation", std::to_string(metadata.applied_rotation));
-            if (info.legacy_source_frame > 0)
-                property(tree, "SourceFrame", std::to_string(info.legacy_source_frame));
-            if (info.source_timestamp && info.source_timestamp->time_base.denominator > 0 && info.source_timestamp->time_base.numerator > 0) {
-                property(tree, "SourceTimestampTicks", std::to_string(info.source_timestamp->ticks));
-                property(tree, "SourceTimeBaseNumerator", std::to_string(info.source_timestamp->time_base.numerator));
-                property(tree, "SourceTimeBaseDenominator", std::to_string(info.source_timestamp->time_base.denominator));
-                property(tree, "TimestampOrigin", info.timestamp_origin == TimestampOrigin::Presentation ? "presentation" : info.timestamp_origin == TimestampOrigin::BestEffort ? "best_effort"
-                                                                                                                                                                                 : "missing");
-            }
+            frameProperties(tree, width, height, metadata.applied_rotation, info);
             tree += metadata.source_properties;
             if (!metadata.extended_guid.empty())
                 tree += "<n:HasExtendedXMP>" + metadata.extended_guid + "</n:HasExtendedXMP>";
             tree += tree_end;
-            tree += "<?xpacket end=\"w\"?>";
+            tree += packet_end;
             if (tree.size() + sizeof(standard_signature) > max_payload_bytes)
                 return SinkResult::failure(metadataError(ErrorCode::ResourceExhausted, "JPEG Standard XMP exceeds APP1 capacity"));
             std::vector<std::uint8_t> markers;

@@ -126,7 +126,7 @@ int runFrameSinkUnitContracts() {
         next.source_metadata.emplace();
         auto next_catalog = catalogContainerMetadata(std::move(next));
         require(next_catalog.has_value(), "construct second static source observation");
-        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*next_catalog));
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*next_catalog);
         require(no_replace.begin(session).has_value() && !no_replace.write(file_view),
                 "embedded JPEG honors atomic no-replace");
         no_replace.abort({SinkOutcome::Failed, 0, {}});
@@ -149,10 +149,19 @@ int runFrameSinkUnitContracts() {
         options.output_directory = directory / "jpeg-metadata-over-budget";
         options.image_output.cancelled = {};
         FileFrameSink bounded(options);
-        const auto refused = bounded.begin(session);
+        require(bounded.begin(session).has_value(),
+                "CPU metadata preparation waits for a CPU frame");
+        const auto refused = bounded.write(file_view);
         require(!refused && refused.error().code() == lfs::ErrorCode::ResourceExhausted &&
-                    !std::filesystem::exists(options.output_directory),
+                    std::filesystem::is_empty(options.output_directory),
                 "XML-expanded provenance is bounded before output publication");
+        bounded.abort({SinkOutcome::Failed, 0, {}});
+        session.source_metadata =
+            std::make_shared<const SourceMetadataCatalog>(*next_catalog);
+        require(bounded.begin(session).has_value() &&
+                    bounded.write(file_view).has_value() &&
+                    bounded.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                "aborted lazy preparation does not retain the previous catalog");
     }
     // Isolate JXL from legacy assertions and stale-file fixtures below.
     {

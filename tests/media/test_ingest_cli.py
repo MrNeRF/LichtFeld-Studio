@@ -636,6 +636,25 @@ class IngestCLI(unittest.TestCase):
         self.assertFalse(value["md5_verified"])
         self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
 
+    def test_jpeg_standard_export_does_not_require_md5(self):
+        source = self.root / "standard-export.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()),
+                        "-map", "0:v:0", "-c:v", "copy", "-metadata", "comment=" + "A" * 16000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        config = self.root / "no-md5-export.cnf"
+        config.write_text('openssl_conf = init\n[init]\nalg_section = algorithms\n[algorithms]\ndefault_properties = fips=yes\n', encoding="utf-8")
+        output = self.root / "standard-without-md5"
+        completed = subprocess.run([str(CLI), "extract", str(source), "--output", str(output),
+                                    "--format", "jpeg", "--interval", "1", "--end", "0.2",
+                                    "--embed-source-metadata"], capture_output=True, text=True,
+                                   env=dict(os.environ, OPENSSL_CONF=str(config)), timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertGreater(json.loads(completed.stdout)["frames_accepted"], 0)
+        for image in output.glob("*.jpg"):
+            data = image.read_bytes()
+            self.assertIn(b"http://ns.adobe.com/xap/1.0/\0", data)
+            self.assertNotIn(b"http://ns.adobe.com/xmp/extension/\0", data)
+
     def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
         packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()
         child = self._rdf_packet('<t:Make>secondary</t:Make>').encode()
