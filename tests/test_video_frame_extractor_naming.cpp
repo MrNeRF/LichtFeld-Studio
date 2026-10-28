@@ -196,12 +196,10 @@ namespace {
         return count;
     }
 
-    uint64_t hashFile(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
+    uint64_t hashPixels(const unsigned char* pixels, const std::size_t size) {
         uint64_t hash = 14695981039346656037ull;
-        char byte = 0;
-        while (input.get(byte))
-            hash = (hash ^ static_cast<uint8_t>(byte)) * 1099511628211ull;
+        for (std::size_t index = 0; index < size; ++index)
+            hash = (hash ^ pixels[index]) * 1099511628211ull;
         return hash;
     }
 
@@ -2638,15 +2636,23 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
 
+    // Keep the original NVDEC pixel reference independent of PNG compression.
     const std::vector<uint64_t> expected_hashes{
-        10352205363336413648ull, 7130132853937651006ull,
-        5101170480245039264ull, 7651893699709116084ull,
-        16033737104459939555ull, 3741773652504481905ull};
+        4447340953764640790ull, 6700247232541181701ull,
+        18018889043452171844ull, 15686283614649312191ull,
+        3742041256909694354ull, 8649771673398531241ull};
     std::vector<uint64_t> hashes;
     for (int index = 1; index <= frame_count; ++index) {
+        SCOPED_TRACE(index);
         const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
         ASSERT_TRUE(std::filesystem::exists(frame));
-        hashes.push_back(hashFile(frame));
+        const auto [pixels, width, height, channels] = lfs::core::load_image(frame);
+        ASSERT_NE(pixels, nullptr);
+        const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> image(pixels, lfs::core::free_image);
+        ASSERT_EQ(width, 64);
+        ASSERT_EQ(height, 48);
+        ASSERT_EQ(channels, 3);
+        hashes.push_back(hashPixels(pixels, static_cast<std::size_t>(width) * height * channels));
     }
     EXPECT_EQ(hashes, expected_hashes);
 }
