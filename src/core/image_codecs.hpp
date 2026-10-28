@@ -177,4 +177,13 @@ namespace lfs::core::image_codecs {
                                                const std::optional<std::string>& comment, const AtomicFileOptions&,
                                                bool jpeg_full_chroma = false);
 
+    // PNG-only XMP packet fragments, borrowed for this synchronous call. Emits one
+    // uncompressed iTXt before IDAT using the existing serial/parallel encoder.
+    // The caller supplies UTF-8 XML; NUL and oversized chunk payloads reject
+    // before publication. Empty metadata preserves the existing byte stream.
+    LFS_IMAGE_CODECS_API Status write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                                               int width, int height, int channels, int jpeg_quality,
+                                               const std::optional<std::string>& comment, const AtomicFileOptions&,
+                                               bool jpeg_full_chroma, std::span<const std::string_view> png_xmp);
+
 } // namespace lfs::core::image_codecs

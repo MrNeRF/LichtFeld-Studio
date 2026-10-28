@@ -11,7 +11,7 @@
 
 namespace lfs::media {
     namespace detail {
-        struct JpegMetadata;
+        struct EmbeddedImageMetadata;
         class ResumableFileSink;
     } // namespace detail
     enum class FrameFileFormat { PNG,
@@ -41,7 +41,7 @@ namespace lfs::media {
         // Extraction retains its source-frame numbering. Rendered output uses
         // the zero-based delivery ordinal without inventing a source frame.
         FrameFileNumbering numbering = FrameFileNumbering::SourceFrame;
-        // Required EXIF output geometry and XMP static source provenance; JPEG only.
+        // Required static source XMP for JPEG/PNG; JPEG also writes EXIF output geometry.
         bool embed_source_metadata = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
@@ -54,10 +54,10 @@ namespace lfs::media {
 
     private:
         friend class detail::ResumableFileSink;
-        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::JpegMetadata>);
+        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::EmbeddedImageMetadata>);
         FileFrameSinkOptions options_;
         bool active_ = false;
-        std::shared_ptr<const detail::JpegMetadata> jpeg_metadata_;
+        std::shared_ptr<const detail::EmbeddedImageMetadata> embedded_metadata_;
         std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
         int applied_rotation_ = 0;
         std::unordered_set<std::filesystem::path> filenames_;

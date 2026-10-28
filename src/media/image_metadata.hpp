@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+#include "media/file_frame_sink.hpp"
+#include "media/source_metadata.hpp"
+#include <cstdio>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace lfs::media::detail {
+    inline constexpr char jpeg_metadata_policy[] = "jpeg-static-source-xmp-v1";
+    inline constexpr char png_metadata_policy[] = "png-static-source-xmp-v1";
+    [[nodiscard]] std::string_view embeddedMetadataPolicy(FrameFileFormat);
+    // One prepared static observation per writer session. JPEG alone needs
+    // Extended XMP markers when its Standard APP1 packet cannot hold the source.
+    struct EmbeddedImageMetadata {
+        FrameFileFormat format = FrameFileFormat::JPEG;
+        int applied_rotation = 0;
+        std::string source_properties;
+        std::string extended_guid;
+        std::vector<std::uint8_t> extended_markers;
+    };
+    [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat);
+    [[nodiscard]] std::string_view pngXmpSuffix();
+    [[nodiscard]] Result<std::string> pngXmpPrefix(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&);
+    // Encoded bytes are produced by our JPEG encoders. Inserts metadata without
+    // recompression into the atomic writer's borrowed stream; never closes it.
+    [[nodiscard]] SinkResult writeJpegMetadata(FILE*, std::span<const std::uint8_t>,
+                                               const EmbeddedImageMetadata&, int width, int height, const FrameInfo&);
+} // namespace lfs::media::detail

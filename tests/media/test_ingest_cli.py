@@ -1952,9 +1952,33 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(manifest["embedded_metadata_policy"], "jpeg-static-source-xmp-v1")
         self.assertTrue(list(directory.glob("*.jpg")))
         self.assertIn(b"Exif\0\0", next(directory.glob("*.jpg")).read_bytes())
-        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-png-invalid",
-                                "--embed-source-metadata", code=2)
+        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-tiff-invalid",
+                                "--format", "tiff16", "--embed-source-metadata", code=2)
         self.assertEqual(result["error"]["code"], "InvalidArgument")
+
+    def test_embedded_png_metadata_cli_and_md5_independence(self):
+        source = self.root / "png-source-tags.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()), "-map", "0:v:0",
+                        "-c:v", "copy", "-metadata", "comment=" + 'A<&"' * 4000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        config = self.root / "png-no-md5.cnf"
+        config.write_text('openssl_conf = init\n[init]\nalg_section = algorithms\n[algorithms]\ndefault_properties = fips=yes\n', encoding="utf-8")
+        output = self.root / "embedded-png"
+        result = subprocess.run([str(CLI), "extract", str(source), "--output", str(output),
+                                 "--format", "png", "--interval", "1", "--end", "0.2", "--embed-source-metadata"],
+                                capture_output=True, env=dict(os.environ, OPENSSL_CONF=str(config)), timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "png-static-source-xmp-v1")
+        spec = importlib.util.spec_from_file_location("png_metadata_fixture", ROOT / "tests/media/png_metadata_fixture.py")
+        reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reader)
+        files = list(output.glob("*.png"))
+        self.assertTrue(files)
+        for image in files:
+            _, _, _, catalog = reader.read(image.read_bytes())
+            self.assertEqual(catalog, manifest["source_metadata"])
+            self.assertGreater(image.stat().st_size, 65535)
 
     def test_capabilities_and_help(self):
         result,_=self.invoke("capabilities")

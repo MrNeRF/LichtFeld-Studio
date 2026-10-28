@@ -330,6 +330,20 @@ class ExtractionContracts(unittest.TestCase):
             self.assertEqual(facts["AppliedClockwiseRotation"], "90")
             self.assertEqual(catalog, manifest["source_metadata"])
 
+    def test_compatibility_api_embeds_png_source_metadata(self):
+        from png_metadata_fixture import read as read_png_metadata
+        result, output = self.extract(format="png", embed_source_metadata=True, rotation=90)
+        self.assertTrue(result["success"], result["error"])
+        manifest = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "png-static-source-xmp-v1")
+        images = list(output.glob("*.png"))
+        self.assertTrue(images)
+        for image in images:
+            _, size, facts, catalog = read_png_metadata(image.read_bytes())
+            self.assertEqual(size, (32, 64))
+            self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+            self.assertEqual(catalog, manifest["source_metadata"])
+
     def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
         reference, files = self.extract(format="jpg")
         self.assertTrue(reference["success"], reference["error"])

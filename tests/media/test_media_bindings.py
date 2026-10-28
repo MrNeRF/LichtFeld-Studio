@@ -26,6 +26,9 @@ _exif_spec.loader.exec_module(source_exif_fixture)
 _jpeg_spec = importlib.util.spec_from_file_location("jpeg_metadata_fixture", ROOT / "tests/media/jpeg_metadata_fixture.py")
 jpeg_metadata_fixture = importlib.util.module_from_spec(_jpeg_spec)
 _jpeg_spec.loader.exec_module(jpeg_metadata_fixture)
+_png_spec = importlib.util.spec_from_file_location("png_metadata_fixture", ROOT / "tests/media/png_metadata_fixture.py")
+png_metadata_fixture = importlib.util.module_from_spec(_png_spec)
+_png_spec.loader.exec_module(png_metadata_fixture)
 spec = importlib.util.spec_from_file_location("media_fixtures", ROOT / "scripts/prepare_media_fixtures.py")
 fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
@@ -1128,13 +1131,61 @@ class MediaBindings(unittest.TestCase):
         self.assertGreater(len(list(output.files.output_directory.glob("*.jpg"))), 0)
 
     def test_jpeg_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.JPEG, ".jpg")
+
+    def test_png_embedded_metadata_serial_parallel_and_unchanged_pixels(self):
+        for large in (False, True):
+            with self.subTest(parallel=large):
+                request = self.metadata_request()
+                request.end_seconds = 0.01
+                request.geometry.mode = media.ResizeMode.Custom if large else media.ResizeMode.Scale
+                if large:
+                    request.geometry.width, request.geometry.height = 1025, 3073
+                    request.geometry.clockwise_rotation = 0
+                else:
+                    request.geometry.scale = 0.5
+                    request.geometry.clockwise_rotation = 90
+                plain = media.FileExtraction()
+                plain.files.output_directory = self.root / ("png-plain-" + str(large))
+                media.MediaIngest.extract_files(request, plain)
+                output = media.FileExtraction()
+                output.files.output_directory = self.root / ("png-metadata-" + str(large))
+                output.files.embed_source_metadata = True
+                result = media.MediaIngest.extract_files(request, output)
+                self.assertGreater(result.frames_accepted, 0)
+                manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["embedded_metadata_policy"], "png-static-source-xmp-v1")
+                for image in output.files.output_directory.glob("*.png"):
+                    data = image.read_bytes()
+                    original, dimensions, facts, catalog = png_metadata_fixture.read(data)
+                    self.assertEqual(original, (plain.files.output_directory / image.name).read_bytes())
+                    self.assertEqual(dimensions, (1025, 3073) if large else (16, 32))
+                    self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), tuple(map(str, dimensions)))
+                    self.assertEqual(facts["MetadataPolicy"], "png-static-source-xmp-v1")
+                    self.assertEqual(facts["TimestampOrigin"], "best_effort")
+                    self.assertEqual(catalog, manifest["source_metadata"])
+                    decoded = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                                                       "-v", "error", "-i", str(image), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], timeout=30)
+                    self.assertEqual(len(decoded), dimensions[0] * dimensions[1] * 3)
+                    corrupted = bytearray(data)
+                    at = data.index(b"iTXt") + 4 + 22
+                    corrupted[at] ^= 1
+                    with self.assertRaises(AssertionError):
+                        png_metadata_fixture.read(corrupted)
+                    with self.assertRaises(AssertionError):
+                        png_metadata_fixture.read(data[:-12])
+
+    def test_png_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.PNG, ".png")
+
+    def _check_embedded_metadata_resume(self, file_format, extension):
         request = self.metadata_request()
         for enabled in (False, True):
-            output = self.resume_files(self.root / f"jpeg-metadata-resume-{enabled}")
-            output.files.format = media.FrameFileFormat.JPEG
+            output = self.resume_files(self.root / f"metadata-resume-{extension[1:]}-{enabled}")
+            output.files.format = file_format
             output.files.embed_source_metadata = enabled
             media.MediaIngest.extract_files(request, output)
-            files = sorted(output.files.output_directory.glob("*.jpg"))
+            files = sorted(output.files.output_directory.glob("*" + extension))
             self.assertTrue(files)
             before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in files]
             output.files.embed_source_metadata = not enabled
@@ -1215,10 +1266,11 @@ class MediaBindings(unittest.TestCase):
             observed = {bytes.fromhex(t["key_bytes"]).lower(): bytes.fromhex(t["value_bytes"]) for t in tags}
             self.assertEqual(observed[b"comment"], value.encode("utf-8"))
 
-    def test_jpeg_embedding_rejects_other_formats_before_output(self):
+    def test_embedding_rejects_other_formats_before_output(self):
         output = media.FileExtraction()
         output.files.embed_source_metadata = True
-        output.files.output_directory = self.root / "invalid-embedded-png"
+        output.files.format = media.FrameFileFormat.TIFF16
+        output.files.output_directory = self.root / "invalid-embedded-tiff"
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(self.request(), output)
         self.assertFalse(output.files.output_directory.exists())

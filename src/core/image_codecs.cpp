@@ -3169,6 +3169,25 @@ namespace lfs::core::image_codecs {
             out.push_back(static_cast<std::uint8_t>(value));
         }
 
+        // Keyword, separator, compression flag/method and empty language/translation.
+        constexpr char png_xmp_prefix[] = "XML:com.adobe.xmp\0\0\0\0";
+        bool valid_png_xmp(std::span<const std::string_view> parts) {
+            std::size_t remaining = PNG_UINT_31_MAX - sizeof(png_xmp_prefix);
+            for (const auto part : parts) {
+                if (part.size() > remaining || part.find('\0') != std::string_view::npos)
+                    return false;
+                remaining -= part.size();
+            }
+            return true;
+        }
+        // Only used after validation, or with the empty default packet.
+        std::size_t png_xmp_bytes(std::span<const std::string_view> parts) {
+            std::size_t size = 0;
+            for (const auto part : parts)
+                size += part.size();
+            return size;
+        }
+
         struct PngOutput {
             std::FILE* file = nullptr; // Borrowed; ownership stays outside C callbacks.
             EncodedMemory* memory = nullptr;
@@ -3183,10 +3202,15 @@ namespace lfs::core::image_codecs {
         };
 
         bool write_png_chunk(PngOutput& output, const char* type, const std::uint8_t* data, const std::size_t size,
-                             std::span<const std::uint8_t> tail = {}) {
+                             std::span<const std::uint8_t> tail = {}, std::span<const std::string_view> fragments = {}) {
             if (size > PNG_UINT_31_MAX || tail.size() > PNG_UINT_31_MAX - size)
                 return false;
-            const auto length = static_cast<std::uint32_t>(size + tail.size());
+            auto length = static_cast<std::uint32_t>(size + tail.size());
+            for (const auto fragment : fragments) {
+                if (fragment.size() > PNG_UINT_31_MAX - length)
+                    return false;
+                length += static_cast<std::uint32_t>(fragment.size());
+            }
             const std::array<std::uint8_t, 8> header{
                 std::uint8_t(length >> 24), std::uint8_t(length >> 16), std::uint8_t(length >> 8), std::uint8_t(length),
                 std::uint8_t(type[0]), std::uint8_t(type[1]), std::uint8_t(type[2]), std::uint8_t(type[3])};
@@ -3195,10 +3219,17 @@ namespace lfs::core::image_codecs {
                 crc = crc32_z(crc, data, size);
             if (!tail.empty())
                 crc = crc32_z(crc, tail.data(), tail.size());
+            for (const auto fragment : fragments)
+                if (!fragment.empty())
+                    crc = crc32_z(crc, reinterpret_cast<const Bytef*>(fragment.data()), fragment.size());
             const std::array<std::uint8_t, 4> trailer{
                 std::uint8_t(crc >> 24), std::uint8_t(crc >> 16), std::uint8_t(crc >> 8), std::uint8_t(crc)};
-            return output.write(header.data(), header.size()) && output.write(data, size) &&
-                   output.write(tail.data(), tail.size()) && output.write(trailer.data(), trailer.size());
+            if (!output.write(header.data(), header.size()) || !output.write(data, size) || !output.write(tail.data(), tail.size()))
+                return false;
+            for (const auto fragment : fragments)
+                if (!fragment.empty() && !output.write(reinterpret_cast<const std::uint8_t*>(fragment.data()), fragment.size()))
+                    return false;
+            return output.write(trailer.data(), trailer.size());
         }
 
         std::uint8_t paeth_predictor(const int a, const int b, const int c) {
@@ -3295,7 +3326,7 @@ namespace lfs::core::image_codecs {
         bool write_png_parallel(const std::filesystem::path& path, const std::uint8_t* pixels, const int width,
                                 const int height, const int channels, const int compression_level,
                                 const std::optional<std::string>& comment, std::string& error, FILE* borrowed,
-                                std::size_t row_stride, EncodedMemory* memory = nullptr) {
+                                std::size_t row_stride, EncodedMemory* memory = nullptr, std::span<const std::string_view> xmp = {}) {
             const auto row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
             const unsigned threads = std::max(1u, std::thread::hardware_concurrency());
             // About 8 MiB of pixels per stripe keeps every core busy without hurting the ratio.
@@ -3363,6 +3394,8 @@ namespace lfs::core::image_codecs {
                 ok = write_png_chunk(output, "tEXt", key.data(), key.size(),
                                      {reinterpret_cast<const std::uint8_t*>(comment->data()), comment->size()});
             }
+            if (ok && png_xmp_bytes(xmp))
+                ok = write_png_chunk(output, "iTXt", reinterpret_cast<const std::uint8_t*>(png_xmp_prefix), sizeof(png_xmp_prefix), {}, xmp);
             const std::uint8_t level_bits = level < 2 ? 0 : level < 6 ? 1
                                                         : level == 6  ? 2
                                                                       : 3;
@@ -3433,7 +3466,7 @@ namespace lfs::core::image_codecs {
         bool encode_png_serial(PngEncodeState* state, const std::uint8_t* data,
                                int width, int height, int channels, int bit_depth,
                                std::size_t row_stride, int compression_level,
-                               const std::optional<std::string>& comment) {
+                               const std::optional<std::string>& comment, std::span<const std::string_view> xmp = {}) {
             if (!state->png && !state->initialize())
                 return false;
             if (setjmp(png_jmpbuf(state->png)))
@@ -3454,6 +3487,15 @@ namespace lfs::core::image_codecs {
                 png_set_text(state->png, state->info, &text, 1);
             }
             png_write_info(state->png, state->info);
+            const auto xmp_size = png_xmp_bytes(xmp);
+            if (xmp_size) {
+                png_write_chunk_start(state->png, reinterpret_cast<png_const_bytep>("iTXt"), static_cast<png_uint_32>(sizeof(png_xmp_prefix) + xmp_size));
+                png_write_chunk_data(state->png, reinterpret_cast<png_const_bytep>(png_xmp_prefix), sizeof(png_xmp_prefix));
+                for (const auto part : xmp)
+                    if (!part.empty())
+                        png_write_chunk_data(state->png, reinterpret_cast<png_const_bytep>(part.data()), part.size());
+                png_write_chunk_end(state->png);
+            }
             if constexpr (std::endian::native == std::endian::little) {
                 if (bit_depth == 16)
                     png_set_swap(state->png);
@@ -3470,7 +3512,7 @@ namespace lfs::core::image_codecs {
     static bool write_png_stream(const std::filesystem::path& path, const void* data,
                                  const int width, const int height, const int channels, const int bit_depth,
                                  const int compression_level, const std::optional<std::string>& comment,
-                                 std::string& error, FILE* borrowed) {
+                                 std::string& error, FILE* borrowed, std::span<const std::string_view> xmp = {}) {
         if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bit_depth != 8 && bit_depth != 16) ||
             static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bit_depth / 8)) {
             error = "Unsupported PNG layout";
@@ -3479,7 +3521,7 @@ namespace lfs::core::image_codecs {
         const auto row_bytes = static_cast<std::size_t>(width) * channels * (bit_depth / 8);
         if (bit_depth == 8 && static_cast<std::size_t>(width) * height >= kParallelPngMinPixels)
             return write_png_parallel(path, static_cast<const std::uint8_t*>(data), width, height, channels,
-                                      compression_level, comment, error, borrowed, row_bytes);
+                                      compression_level, comment, error, borrowed, row_bytes, nullptr, xmp);
         // Preserve the file writer's preflight: failure to create the codec
         // must not open/truncate the destination.
         PngEncodeState state;
@@ -3495,7 +3537,7 @@ namespace lfs::core::image_codecs {
         }
         state.output.file = file;
         const bool encoded = encode_png_serial(&state, static_cast<const std::uint8_t*>(data), width, height,
-                                               channels, bit_depth, row_bytes, compression_level, comment);
+                                               channels, bit_depth, row_bytes, compression_level, comment, xmp);
         const bool closed = borrowed ? !std::ferror(borrowed) : std::fclose(owned.release()) == 0;
         if (!encoded)
             error = "PNG encode failed";
@@ -3933,11 +3975,11 @@ namespace lfs::core::image_codecs {
 
     static bool encode_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                                 const int width, const int height, const int channels, const int jpeg_quality,
-                                const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma, FILE* borrowed) {
+                                const std::optional<std::string>& comment, std::string& error, const bool jpeg_full_chroma, FILE* borrowed, std::span<const std::string_view> png_xmp) {
         auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
         if (extension == ".png")
-            return write_png_stream(path, data, width, height, channels, 8, 6, comment, error, borrowed);
+            return write_png_stream(path, data, width, height, channels, 8, 6, comment, error, borrowed, png_xmp);
         if (extension == ".tif" || extension == ".tiff")
             return write_tiff_stream(path, data, width, height, channels, error, borrowed);
         if (extension == ".jpg" || extension == ".jpeg") {
@@ -3960,7 +4002,9 @@ namespace lfs::core::image_codecs {
     Status write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                           const int width, const int height, const int channels, const int jpeg_quality,
                           const std::optional<std::string>& comment, const AtomicFileOptions& options,
-                          const bool jpeg_full_chroma) {
+                          const bool jpeg_full_chroma, std::span<const std::string_view> png_xmp) {
+        if (!valid_png_xmp(png_xmp) || (png_xmp_bytes(png_xmp) && lower_extension(path) != ".png"))
+            return Status::failure(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Invalid PNG XMP packet or output format", .detection = LFS_SOURCE_SITE_CURRENT()}));
         if (lower_extension(path) == ".avif") {
             if (comment && !comment->empty())
                 return Status::failure(make_error({.code = ErrorCode::Unsupported, .domain = ErrorDomain::IO, .detail = "AVIF metadata comments require an explicit metadata policy", .detection = LFS_SOURCE_SITE_CURRENT()}));
@@ -3980,10 +4024,16 @@ namespace lfs::core::image_codecs {
         }
         return writeFileAtomically(path, [&](FILE* stream) -> Status {
             std::string error;
-            if (!encode_image_u8(path, data, width, height, channels, jpeg_quality, comment, error, jpeg_full_chroma, stream))
+            if (!encode_image_u8(path, data, width, height, channels, jpeg_quality, comment, error, jpeg_full_chroma, stream, png_xmp))
                 return Status::failure(make_error({.code = error.starts_with("Unsupported") ? ErrorCode::InvalidArgument : ErrorCode::Unavailable,
                                                   .domain = ErrorDomain::IO, .detail = std::move(error), .detection = LFS_SOURCE_SITE_CURRENT()}));
             return {}; }, options);
+    }
+    Status write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
+                          const int width, const int height, const int channels, const int jpeg_quality,
+                          const std::optional<std::string>& comment, const AtomicFileOptions& options,
+                          const bool jpeg_full_chroma) {
+        return write_image_u8(path, data, width, height, channels, jpeg_quality, comment, options, jpeg_full_chroma, {});
     }
     bool write_image_u8(const std::filesystem::path& path, const std::uint8_t* data,
                         const int width, const int height, const int channels, const int jpeg_quality,

@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <stb_image.h>
+#include <zlib.h>
 
 namespace {
     namespace codec = lfs::core::image_codecs;
@@ -195,6 +196,126 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST(PngMemory, EmbeddedXmpStreamsThroughSerialAndParallelWithoutChangingImageBytes) {
+        const std::string packet =
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            "<rdf:Description rdf:about=\"\" xmlns:t=\"urn:lfs:test\"><t:value>owned &amp; static</t:value>"
+            "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
+        const auto read = [](const std::filesystem::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            return std::vector<uint8_t>{std::istreambuf_iterator<char>(input), {}};
+        };
+        for (const bool parallel : {false, true}) {
+            SCOPED_TRACE(parallel);
+            TemporaryPng temporary;
+            const int width = parallel ? 1025 : 19, height = parallel ? 3073 : 17, channels = parallel ? 3 : 4;
+            const auto source = pixels(width, height, channels, 8);
+            codec::PngEncodeOptions encoding;
+            encoding.comment = "keep the existing comment";
+            std::vector<uint8_t> plain;
+            ASSERT_TRUE(codec::encode_png_memory(source, width, height, channels, 8, size_t(width) * channels, plain, encoding));
+            lfs::core::AtomicFileOptions options{.overwrite = true, .durable = false, .create_directories = false};
+            const std::array parts{std::string_view(packet).substr(0, 13), std::string_view{}, std::string_view(packet).substr(13)};
+            ASSERT_TRUE(codec::write_image_u8(temporary.path, source.data(), width, height, channels, 90, encoding.comment, options, false, parts));
+            const auto encoded = read(temporary.path);
+            ASSERT_GE(encoded.size(), 8);
+            std::vector<uint8_t> stripped(encoded.begin(), encoded.begin() + 8);
+            size_t chunks = 0;
+            const auto u32 = [&](size_t at) { return (uint32_t(encoded[at]) << 24) | (uint32_t(encoded[at + 1]) << 16) | (uint32_t(encoded[at + 2]) << 8) | encoded[at + 3]; };
+            for (size_t offset = 8; offset < encoded.size();) {
+                ASSERT_GE(encoded.size() - offset, 12);
+                const auto size = u32(offset);
+                ASSERT_LE(size, encoded.size() - offset - 12);
+                EXPECT_EQ(u32(offset + 8 + size), crc32_z(0, encoded.data() + offset + 4, size_t(size) + 4));
+                if (std::memcmp(encoded.data() + offset + 4, "iTXt", 4) == 0) {
+                    ++chunks;
+                    constexpr char prefix[] = "XML:com.adobe.xmp\0\0\0\0";
+                    ASSERT_EQ(size, sizeof(prefix) + packet.size());
+                    EXPECT_EQ(std::memcmp(encoded.data() + offset + 8, prefix, sizeof(prefix)), 0);
+                    EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(encoded.data() + offset + 8 + sizeof(prefix)), packet.size()), packet);
+                } else {
+                    stripped.insert(stripped.end(), encoded.begin() + offset, encoded.begin() + offset + 12 + size);
+                }
+                offset += 12 + size;
+            }
+            EXPECT_EQ(chunks, 1);
+            EXPECT_EQ(stripped, plain);
+            check_decode(encoded, source, width, height, channels, 8);
+            const std::string bad_packet("invalid\0XMP", 11);
+            const std::array bad_parts{std::string_view(bad_packet)};
+            const auto invalid = codec::write_image_u8(temporary.path, source.data(), width, height, channels, 90, encoding.comment, options, false, bad_parts);
+            ASSERT_FALSE(invalid);
+            EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(read(temporary.path), encoded);
+            options.overwrite = false;
+            const auto collision = codec::write_image_u8(temporary.path, source.data(), width, height, channels, 90, encoding.comment, options, false, parts);
+            ASSERT_FALSE(collision);
+            EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
+            EXPECT_EQ(read(temporary.path), encoded);
+            options.overwrite = true;
+            // Cancel after encoding, before the atomic service publishes bytes.
+            options.cancelled = [calls = 0]() mutable { return ++calls > 1; };
+            const auto cancelled = codec::write_image_u8(temporary.path, source.data(), width, height, channels, 90, encoding.comment, options, false, parts);
+            ASSERT_FALSE(cancelled);
+            EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(read(temporary.path), encoded);
+            if (!parallel) {
+                // A valid packet larger than libpng's default text allocation
+                // budget must still leave pixel decoding usable.
+                auto large_packet = packet;
+                large_packet.insert(large_packet.find("owned"), 9 * 1024 * 1024, 'a');
+                options.cancelled = {};
+                const std::array large_parts{std::string_view(large_packet)};
+                ASSERT_TRUE(codec::write_image_u8(temporary.path, source.data(), width, height, channels, 90, encoding.comment, options, false, large_parts));
+                check_decode(read(temporary.path), source, width, height, channels, 8);
+            }
+        }
+    }
+
+    TEST(PngMemory, EmbeddedXmpRejectsOtherFormatsAndOversizedPacketsBeforePublication) {
+        TemporaryPng temporary;
+        const auto source = pixels(1, 1, 3, 8);
+        const std::vector<uint8_t> sentinel{1, 2, 3, 4};
+        lfs::core::AtomicFileOptions options{.overwrite = true, .durable = false, .create_directories = false};
+        const auto read = [&] {
+            std::ifstream input(temporary.path, std::ios::binary);
+            return std::vector<uint8_t>{std::istreambuf_iterator<char>(input), {}};
+        };
+        const auto rejected = [&](std::span<const std::string_view> parts) {
+            const auto result = codec::write_image_u8(temporary.path, source.data(), 1, 1, 3, 90, {}, options, false, parts);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+        };
+        temporary.path.replace_extension(".jpg");
+        const std::array packet{std::string_view("<xmp/>")};
+        rejected(packet);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path));
+        {
+            std::ofstream output(temporary.path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(sentinel.data()), sentinel.size());
+            ASSERT_TRUE(output);
+        }
+        rejected(packet);
+        EXPECT_EQ(read(), sentinel);
+        std::filesystem::remove(temporary.path);
+        temporary.path.replace_extension(".png");
+        // Reuse valid backing storage rather than constructing an out-of-bounds
+        // string_view or allocating a multi-gigabyte packet. The combined size
+        // exceeds the PNG 31-bit chunk limit before any image is published.
+        const std::string fragment(1024 * 1024, 'a');
+        const std::vector<std::string_view> oversized(2048, fragment);
+        rejected(oversized);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path));
+        {
+            std::ofstream output(temporary.path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(sentinel.data()), sentinel.size());
+            ASSERT_TRUE(output);
+        }
+        rejected(oversized);
+        EXPECT_EQ(read(), sentinel);
     }
 
     TEST(PngMemory, ConcurrentEncodersOwnIndependentState) {

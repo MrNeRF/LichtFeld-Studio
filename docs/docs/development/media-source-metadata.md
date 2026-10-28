@@ -509,9 +509,9 @@ sequences have no video input to observe; their metadata needs an explicitly
 identified source/consumer rather than an invented camera declaration.
 
 
-### Embedded JPEG extraction metadata
+### Embedded image extraction metadata
 
-JPEG video extraction accepts `FileFrameSinkOptions.embed_source_metadata` in C++ and
+JPEG and PNG video extraction accept `FileFrameSinkOptions.embed_source_metadata` in C++ and
 Python, or `--embed-source-metadata` in the CLI. The default is false. Enabling it
 also preserves the static source catalog in `extraction_metadata.json`, using the
 same observation collected from the open demuxer. Other output formats reject
@@ -540,7 +540,7 @@ image's EXIF directory.
 
 XMP uses the application namespace `https://lichtfeld.io/ns/media/1.0/`:
 
-- `MetadataPolicy`: `jpeg-static-source-xmp-v1`.
+- `MetadataPolicy`: `jpeg-static-source-xmp-v1` or `png-static-source-xmp-v1`.
 - `PixelWidth`, `PixelHeight`, `Orientation`: output pixel geometry.
 - `AppliedClockwiseRotation`: the physical extraction rotation in degrees.
 - `SourceFrame`: the existing one-based selected source-frame number, when known.
@@ -556,7 +556,7 @@ creating EXIF GPS fixes or replacing temporal telemetry. The opt-in includes
 retained GPS, identifiers, private payloads and source locator bytes together.
 It does not provide selective redaction.
 
-Small source envelopes share the Standard XMP tree with frame properties, reserving
+For JPEG, small source envelopes share the Standard XMP tree with frame properties, reserving
 space for the largest supported frame fields within APP1 capacity. They do not
 require MD5. Larger envelopes use Adobe Extended XMP: one RDF tree split into APP1
 chunks, an uppercase
@@ -568,12 +568,14 @@ packet and interpretation budgets and can report partial observations for large
 exports. The CPU opt-in uses the existing bounded JPEG memory encoder; its encoded
 image limit is 64 MiB, separate from metadata and encoder working memory.
 
-CPU and GPU encoders retain their pixel/quality/chroma policy. Metadata insertion
-copies encoded bytes into the existing atomic file service without recompression.
+CPU and GPU encoders retain their pixel/quality/chroma policy. JPEG metadata
+insertion copies encoded bytes into the existing atomic file service without
+recompression. PNG streams the XMP fragments through its encoder into the same
+atomic file service.
 The metadata option and a SHA-256 of the prepared static source packet participate
 in checkpoint identity. Changing either rejects resume before adopting images.
 This includes a different source locator even when its file bytes are identical:
-retained JPEG provenance must agree with the final manifest. Embedded frame records
+retained image provenance must agree with the final manifest. Embedded frame records
 also bind the timestamp origin alongside its integer clock. The manifest records
 `embedded_metadata_policy`.
 Image publication is atomic per file, while the sequence and its final manifest
@@ -582,4 +584,37 @@ remain separate commits governed by the existing extraction/recovery contract.
 For ordinary CPU output the sink prepares source XML on its first frame and reuses
 it thereafter. An all-GPU batch job therefore keeps no unused CPU packet. Invalid
 or oversized metadata can fail that first write after directory creation, before
-any JPEG publication. Verified resume prepares its shared packet at session start.
+any image publication. Verified resume prepares its shared packet at session start.
+
+#### PNG carrier and writer contract
+
+For PNG, `embed_source_metadata` writes one uncompressed `iTXt` chunk before
+`IDAT`, with keyword `XML:com.adobe.xmp`, empty language/translated keyword,
+and a read-only XMP packet (`xpacket end="r"`). Each chunk retains a valid PNG
+CRC. The packet uses the same source envelope and output/frame properties as JPEG;
+PNG pixel dimensions remain represented by `IHDR`. Physically applied rotation
+is recorded as output provenance. Original source EXIF stays in the catalog.
+
+The existing serial libpng and parallel stripe encoders stream the extra chunk
+during encoding. Their pixel compression, comment handling, color/alpha policy
+and default output bytes are unchanged. The extraction producer remains RGB8;
+the existing independent UINT16 PNG codec retains its previous contract. There is
+no intermediate full encoded-file copy for embedding. The static source XML is
+prepared once per session. A small frame prefix, the borrowed source XML and the
+read-only footer are streamed into one chunk without copying the full packet for
+each frame.
+PNG uses a single packet within the 32 MiB XML budget and requires no MD5 provider.
+This budget is separate from encoder working memory and metadata-reader limits.
+
+The core packed-byte writer has an explicit PNG-XMP overload. It borrows packet
+fragments for the synchronous call and accepts a caller-supplied UTF-8 XML packet;
+NUL-containing packets, oversized chunk payloads and non-PNG destinations reject
+before publication. Existing overloads remain available. The extraction facade
+constructs its ASCII-safe XML through the shared JPEG/PNG metadata writer.
+Atomic publication observes the combined request/file cancellation callback.
+Verified resume uses the same prepared packet, PNG-specific policy and source
+identity, plus per-frame clock/origin checks. Unsupported embedding formats fail
+before output creation. Image and manifest publication retain their existing
+separate recovery boundaries.
+
+Carrier reference: [PNG specification, textual information](https://www.w3.org/TR/png/#11textinfo).
