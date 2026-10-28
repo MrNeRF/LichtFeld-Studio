@@ -268,6 +268,18 @@ namespace {
         EXPECT_EQ(terminal.getAllText(), "hello world\nnext\n[0.123456789, 1.5]");
     }
 
+    TEST(PythonConsoleInputTest, OutputBeforeThePanelFirstDrawsKeepsItsLines) {
+        // MCP can run a script before the console panel draws; its lines must not stair-step.
+        auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
+        auto* const output = state.getOutputTerminal();
+        ASSERT_NE(output, nullptr);
+        output->clear();
+        state.addInfo("first");
+        state.addInfo("second");
+        EXPECT_EQ(state.getOutputText(), "first\nsecond");
+        output->clear();
+    }
+
     TEST(PythonConsoleInputTest, ClearDoesNothingOnPackagesTab) {
         auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
         state.setEditorText("print(1)");

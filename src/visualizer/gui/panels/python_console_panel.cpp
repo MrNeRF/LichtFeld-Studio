@@ -1390,6 +1390,9 @@ namespace lfs::vis::gui::panels {
         : terminal_(std::make_unique<terminal::TerminalWidget>(80, 24)),
           output_terminal_(std::make_unique<terminal::TerminalWidget>(80, 24)),
           editor_(std::make_unique<editor::PythonEditor>()) {
+        // Read-only from the start: scripts can print before the panel first draws, and only
+        // read-only terminals turn bare newlines into line ends.
+        output_terminal_->setReadOnly(true);
         g_python_console_state = this;
     }
 
@@ -1663,7 +1666,6 @@ namespace lfs::vis::gui::panels {
         state.setVisible(true);
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
-            output->setReadOnly(true);
             if (active_tab == 0) {
                 sync_terminal_view(pane, *output, pane.output_view, pane.output_view, input,
                                    font_size, true);
