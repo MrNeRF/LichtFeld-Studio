@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define XR_USE_GRAPHICS_API_VULKAN
 #include "openxr_service.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "preferences.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -23,9 +24,6 @@ namespace lfs::vis::vr {
         const float kSnapTurnRadians = glm::radians(30.0f);
         constexpr std::array<const char*, 9> kSessionStates = {
             "unknown", "idle", "ready", "synchronized", "visible", "focused", "stopping", "loss pending", "exiting"};
-        constexpr const char* kViewingStatus =
-            "Viewing in VR. Left stick moves, right stick turns and climbs, left stick click recenters.";
-
         [[nodiscard]] lfs::Error vrError(std::string message) {
             return lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Unavailable,
@@ -79,8 +77,14 @@ namespace lfs::vis::vr {
             PFN_xrGetVulkanGraphicsRequirements2KHR graphics_requirements = nullptr;
         } vk;
         bool lost = false;
-        std::string ready_status;
-        std::string status = "VR support is off.";
+        std::string runtime_name;
+        // A localization key and its argument; the UI localizes them when shown.
+        const char* status_key = "vr.status_off";
+        std::string status_detail;
+        void setStatus(const char* key, std::string detail = {}) {
+            status_key = key;
+            status_detail = std::move(detail);
+        }
         float move_speed = VrPreferences{}.move_speed;
 
         // Alive between start() and stop().
@@ -199,7 +203,7 @@ namespace lfs::vis::vr {
             XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
             if (auto st = check(xrGetInstanceProperties(instance, &properties), "xrGetInstanceProperties"); !st)
                 return st;
-            ready_status = std::format("Ready: {}.", properties.runtimeName);
+            runtime_name = properties.runtimeName;
             return {};
         }
 
@@ -424,7 +428,7 @@ namespace lfs::vis::vr {
                 } else if (event.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
                     lost = true;
                     s.ended = true;
-                    status = "Your OpenXR runtime was lost. Restart LichtFeld Studio to reconnect.";
+                    setStatus("vr.status_runtime_lost");
                 } else if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
                     const auto& change = reinterpret_cast<const XrEventDataReferenceSpaceChangePending&>(event);
                     if (change.session == s.handle && change.referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL)
@@ -763,15 +767,15 @@ namespace lfs::vis::vr {
     bool OpenXrService::prepare() {
         auto& p = *impl_;
         if (auto prepared = p.prepare(); !prepared) {
-            p.status = std::string(prepared.error().user_message());
+            p.setStatus("vr.status_unavailable", std::string(prepared.error().user_message()));
             if (p.instance)
                 xrDestroyInstance(p.instance);
             p.instance = XR_NULL_HANDLE;
             p.system = XR_NULL_SYSTEM_ID;
             return false;
         }
-        p.status = p.ready_status;
-        LOG_INFO("OpenXR {}", p.status);
+        p.setStatus("vr.status_ready", p.runtime_name);
+        LOG_INFO("OpenXR runtime ready: {}", p.runtime_name);
         return true;
     }
 
@@ -809,14 +813,15 @@ namespace lfs::vis::vr {
 
     void OpenXrService::setUnavailable(std::string reason) {
         auto& p = *impl_;
-        p.status = std::move(reason);
+        p.setStatus("vr.status_unavailable", std::move(reason));
         p.lost = true;
     }
 
     bool OpenXrService::available() const { return impl_->instance && impl_->system && !impl_->lost; }
     bool OpenXrService::active() const { return impl_->s.handle != XR_NULL_HANDLE; }
     bool OpenXrService::running() const { return impl_->s.running; }
-    const std::string& OpenXrService::status() const { return impl_->status; }
+    const char* OpenXrService::statusKey() const { return impl_->status_key; }
+    const std::string& OpenXrService::statusDetail() const { return impl_->status_detail; }
     const RenderingManager::VulkanFrameResult& OpenXrService::mirror() const { return impl_->s.mirror; }
     void OpenXrService::recenter() {
         if (active())
@@ -831,17 +836,17 @@ namespace lfs::vis::vr {
     lfs::Status OpenXrService::start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position) {
         auto& p = *impl_;
         if (!available())
-            return lfs::Status::failure(vrError(p.status));
+            return lfs::Status::failure(vrError(LOCF(p.status_key, p.status_detail)));
         if (active())
             return {};
         p.s.context = &context;
         auto started = p.startSession(rotation, position);
         if (!started) {
             stop();
-            p.status = std::string(started.error().user_message());
+            p.setStatus("vr.enter_failed", std::string(started.error().user_message()));
             return started;
         }
-        p.status = "Waiting for the headset.";
+        p.setStatus("vr.status_waiting");
         return {};
     }
 
@@ -864,7 +869,7 @@ namespace lfs::vis::vr {
             xrDestroyActionSet(s.action_set);
         s = {};
         if (available())
-            p.status = p.ready_status;
+            p.setStatus("vr.status_ready", p.runtime_name);
     }
 
     lfs::Result<bool> OpenXrService::frame(const glm::vec3 move, const RenderEyes& render) {
@@ -877,11 +882,11 @@ namespace lfs::vis::vr {
         if (!submitted) {
             p.abandonFrame();
             stop();
-            p.status = std::string(submitted.error().user_message());
+            p.setStatus("vr.stopped", std::string(submitted.error().user_message()));
             return submitted.error();
         }
         if (!p.s.ended && p.s.mirror.rendered)
-            p.status = kViewingStatus;
+            p.setStatus("vr.status_viewing");
         return !p.s.ended;
     }
 

@@ -25,7 +25,7 @@ namespace lfs::vis::vr {
         OpenXrService(const OpenXrService&) = delete;
         OpenXrService& operator=(const OpenXrService&) = delete;
 
-        // Finds the runtime and headset; status() explains a failure.
+        // Finds the runtime and headset; the status explains a failure.
         bool prepare();
         // Vulkan instance and device creation through the runtime; valid while available().
         [[nodiscard]] VulkanDeviceHooks deviceHooks();
@@ -34,7 +34,9 @@ namespace lfs::vis::vr {
         [[nodiscard]] bool active() const;
         // The runtime has begun the session and paces frames.
         [[nodiscard]] bool running() const;
-        [[nodiscard]] const std::string& status() const;
+        // Localization key of the status line and its argument.
+        [[nodiscard]] const char* statusKey() const;
+        [[nodiscard]] const std::string& statusDetail() const;
 
         // Reads the VR preferences; the view starts at the desktop camera.
         lfs::Status start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position);

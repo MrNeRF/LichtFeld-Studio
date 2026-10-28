@@ -2211,13 +2211,13 @@ namespace lfs::vis {
             {
                 LOG_TIMER("startup.window_manager.init"); // wraps Vulkan instance/device/swapchain bring-up
                 if (UserPreferences::instance().vrPreferences().enabled && !vr_->prepare())
-                    LOG_WARN("VR unavailable: {}", vr_->status());
+                    LOG_WARN("VR unavailable: {}", vr_->statusDetail());
                 const auto vr_hooks = vr_->available() ? std::optional(vr_->deviceHooks()) : std::nullopt;
                 if (!window_manager_->init(vr_hooks ? &*vr_hooks : nullptr)) {
                     return false;
                 }
                 if (vr_hooks && !window_manager_->deviceHooksError().empty())
-                    vr_->setUnavailable("VR unavailable: " + window_manager_->deviceHooksError());
+                    vr_->setUnavailable(window_manager_->deviceHooksError());
                 publishVrState();
             }
             window_initialized_ = true;
@@ -2745,7 +2745,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::publishVrState() {
-        app_store().vr_state.set({.available = vr_->available(), .active = vr_active_, .status = vr_->status()});
+        app_store().vr_state.set({.available = vr_->available(), .active = vr_active_, .status_key = vr_->statusKey(), .status_detail = vr_->statusDetail()});
     }
 
     void VisualizerImpl::updateVrSession() {
@@ -2766,7 +2766,7 @@ namespace lfs::vis {
         } else if (blocked || !hasRenderableGaussians(scene_manager_->getModelForRendering())) {
             lfs::ErrorBus::instance().publish(vrNotice(
                 lfs::ErrorCode::FailedPrecondition,
-                "Could not enter VR. It needs a Gaussian scene in edit mode, with no training, modal tool or export running.",
+                LOC("vr.enter_blocked"),
                 LFS_SOURCE_SITE_CURRENT()));
         } else {
             enterVr();
@@ -2778,7 +2778,7 @@ namespace lfs::vis {
                                       viewport_.getTranslation());
             !started) {
             lfs::ErrorBus::instance().publish(vrNotice(
-                lfs::ErrorCode::Unavailable, std::format("Could not enter VR. {}", started.error().user_message()),
+                lfs::ErrorCode::Unavailable, LOCF("vr.enter_failed", started.error().user_message()),
                 LFS_SOURCE_SITE_CURRENT()));
             publishVrState();
             return;
@@ -2828,7 +2828,7 @@ namespace lfs::vis {
         if (!frame) {
             LOG_ERROR("VR frame failed: {}", frame.error().user_message());
             lfs::ErrorBus::instance().publish(vrNotice(
-                lfs::ErrorCode::Unavailable, std::format("VR stopped. {}", frame.error().user_message()),
+                lfs::ErrorCode::Unavailable, LOCF("vr.stopped", frame.error().user_message()),
                 LFS_SOURCE_SITE_CURRENT()));
         }
         if (!frame || !*frame)

@@ -5877,7 +5877,7 @@ namespace lfs::python {
                 nb::dict result;
                 result["available"] = state.available;
                 result["active"] = state.active;
-                result["status"] = state.status;
+                result["status"] = LOCF(state.status_key, state.status_detail);
                 return result;
             },
             "Get whether VR can be entered, whether it is active, and the runtime status");

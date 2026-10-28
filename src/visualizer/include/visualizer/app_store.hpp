@@ -104,7 +104,8 @@ namespace lfs::vis {
         struct LFS_VIS_API VrState {
             bool available = false; // OpenXR runtime and headset ready; VR can be entered
             bool active = false;
-            std::string status;
+            std::string status_key = "vr.status_off"; // localized with status_detail when shown
+            std::string status_detail;
 
             bool operator==(const VrState&) const = default;
         };
