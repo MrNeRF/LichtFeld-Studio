@@ -3183,17 +3183,26 @@ namespace lfs::vis {
         if (!impl_)
             return false;
         const auto now = std::chrono::steady_clock::now();
+        const auto before = impl_->collision_cache.stats();
         impl_->collision_cache.maintain(now, Impl::collisionUploadRetired, impl_->frame_counter);
+        const auto& after = impl_->collision_cache.stats();
+        if (before.resident_bytes != after.resident_bytes || before.pending_bytes != after.pending_bytes ||
+            before.evictions != after.evictions)
+            LOG_DEBUG("Collision preview idle maintenance: resident_bytes={}, pending_bytes={}, evictions={}",
+                      after.resident_bytes, after.pending_bytes, after.evictions);
         if (impl_->collision_frames_release_at && now >= *impl_->collision_frames_release_at) {
             // Idle maintenance does not acquire a frame slot or wait on a fence.
             // Conservatively keep all frame owners until every submitted draw
             // has retired and no frame is being recorded.
             if (!impl_->context->hasActiveFrame() &&
                 impl_->context->retiredFrameSubmitSerial() >= impl_->context->lastSuccessfulFrameSubmitSerial()) {
+                size_t removed = 0;
                 for (auto& owners : impl_->collision_frames)
-                    std::erase_if(owners, [&](const auto& resource) {
+                    removed += std::erase_if(owners, [&](const auto& resource) {
                         return !impl_->collision_cache.requestedInFrame(resource->owner.get(), impl_->frame_counter);
                     });
+                if (removed)
+                    LOG_DEBUG("Collision preview retired {} hidden frame references", removed);
                 impl_->collision_frames_release_at.reset();
             } else {
                 impl_->collision_frames_release_at = now + std::chrono::milliseconds(250);
