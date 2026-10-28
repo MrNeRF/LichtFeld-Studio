@@ -1777,6 +1777,17 @@ namespace lfs::vis {
         }
     };
 
+    using SequencerPanelClockTest = SequencerFrameDemandTest;
+
+    TEST_F(SequencerPanelClockTest, PreservesIdleTimeForGestures) {
+        VisualizerImpl viewer(projectOptions());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        const float before = manager.panel_elapsed_time_;
+        manager.last_panel_frame_time_ = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+        EXPECT_FLOAT_EQ(manager.advancePanelClock(), .1f);
+        EXPECT_GE(manager.panel_elapsed_time_ - before, 2.f);
+    }
+
     TEST_F(SequencerFrameDemandTest, ApplyCurrentViewRecordsHistory) {
         VisualizerImpl viewer(projectOptions());
         auto& sequencer = viewer.getGuiManager()->sequencerUI();

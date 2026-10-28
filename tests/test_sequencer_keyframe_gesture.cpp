@@ -40,18 +40,20 @@ namespace lfs::vis {
             core::events::cmd::SequencerGoToKeyframe::when([this](const auto&) { ++visits_; });
         }
         void TearDown() override { lfs::event::EventBridge::instance().clear_all(); }
-        float x(float time) const { return time * width_ / 10.f; }
+        float x(float time) const { return (time - panel_.pan_offset_) * width_ * panel_.zoom_level_ / 10.f; }
+        void zoomTimeline() { panel_.zoom_level_ = 2.f; }
+        bool editingTime() const { return panel_.editing_keyframe_time_; }
         float time() const { return controller_.timeline().getKeyframeById(key_)->time; }
-        void input(float mouse_x, bool clicked, bool down, bool ctrl = false) {
+        void input(float mouse_x, bool clicked, bool down, bool ctrl = false, float wheel = 0.f) {
             PanelInputState state;
             state.mouse_x = mouse_x;
             state.mouse_y = 50.f * scale_;
             state.mouse_clicked[0] = clicked;
             state.mouse_down[0] = down;
             state.key_ctrl = ctrl;
+            state.mouse_wheel = wheel;
             state.time = clock_;
-            if (clicked)
-                clock_ += 1.f;
+            clock_ += .01f;
             panel_.handleTimelineInteraction({0.f, 0.f}, width_, 80.f * scale_, state);
         }
         gui::RmlUIManager manager_;
@@ -80,6 +82,7 @@ namespace lfs::vis {
             EXPECT_FLOAT_EQ(time(), 2.13f);
             EXPECT_EQ(controller_.timelineRevision(), revision);
             EXPECT_EQ(commits_, 0);
+            clock_ += .4f;
         }
         EXPECT_EQ(visits_, 3);
         EXPECT_EQ(controller_.selectedKeyframeId(), key_);
@@ -98,6 +101,64 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(committed_before_, 2.13f);
         EXPECT_NEAR(committed_after_, 2.13f + .4f * scale_, .00001f);
         EXPECT_EQ(visits_, 0);
+    }
+
+    TEST_P(SequencerKeyframeGestureTest, PanningDuringDragKeepsTheGrabPointUnderThePointer) {
+        zoomTimeline();
+        ui_.snap_to_grid = false;
+        const float grab_offset = 4.f * scale_;
+        const float press_x = x(2.13f) + grab_offset;
+        input(press_x, true, true);
+        const float mouse = press_x + 20.f * scale_;
+        input(mouse, false, true);
+        input(mouse, false, true, false, -1.f);
+        EXPECT_NEAR(x(time()), mouse - grab_offset, .001f);
+        input(mouse, false, false);
+        EXPECT_EQ(commits_, 1);
+    }
+
+    TEST_P(SequencerKeyframeGestureTest, SecondPressCanDragButOnlyAReleasedDoubleClickOpensEditing) {
+        const float press_x = x(2.13f) + 4.f * scale_;
+        input(press_x, true, true);
+        input(press_x, false, false);
+        clock_ = 10.1f;
+        input(press_x, true, true);
+        EXPECT_FALSE(editingTime());
+        input(press_x + 20.f * scale_, false, true, true);
+        input(press_x + 20.f * scale_, false, false, true);
+        EXPECT_FALSE(editingTime());
+        EXPECT_EQ(commits_, 1);
+        const float next_x = x(time()) + 4.f * scale_;
+        clock_ = 10.2f;
+        input(next_x, true, true);
+        input(next_x, false, false);
+        EXPECT_FALSE(editingTime()); // the preceding drag is not a first click
+        clock_ = 10.3f;
+        input(next_x, true, true);
+        EXPECT_FALSE(editingTime());
+        input(next_x, false, false);
+        EXPECT_TRUE(editingTime());
+    }
+
+    TEST_P(SequencerKeyframeGestureTest, LongSecondPressAndWidelySpacedClicksDoNotOpenEditing) {
+        const float press_x = x(2.13f) + 4.f * scale_;
+        input(press_x, true, true);
+        input(press_x, false, false);
+        clock_ = 10.1f;
+        input(press_x, true, true);
+        clock_ = 11.f;
+        input(press_x, false, false);
+        EXPECT_FALSE(editingTime());
+        clock_ = 11.1f;
+        input(press_x, true, true);
+        input(press_x, false, false);
+        EXPECT_FALSE(editingTime()); // the long press did not seed a double click
+        clock_ = 12.f;
+        input(press_x, true, true);
+        input(press_x, false, false);
+        EXPECT_FALSE(editingTime());
+        EXPECT_FLOAT_EQ(time(), 2.13f);
+        EXPECT_EQ(commits_, 0);
     }
 
     INSTANTIATE_TEST_SUITE_P(Scale, SequencerKeyframeGestureTest, testing::Values(1.f, 2.f));

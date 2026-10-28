@@ -422,13 +422,14 @@ namespace lfs::vis {
         bool dragging_playhead_ = false;
         bool dragging_keyframe_ = false;
         bool keyframe_drag_started_ = false;
+        bool keyframe_double_click_pending_ = false;
         bool dragging_scrollbar_ = false;
         bool dragged_keyframe_changed_ = false;
         bool film_strip_scrubbing_ = false;
         sequencer::KeyframeId dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
         float drag_start_mouse_x_ = 0.0f;
-        float drag_start_keyframe_time_ = 0.0f;
-        float drag_seconds_per_pixel_ = 0.0f;
+        float keyframe_press_time_ = 0.0f;
+        float drag_grab_offset_x_ = 0.0f;
         float scrollbar_drag_origin_x_ = 0.0f;
         float scrollbar_drag_origin_pan_ = 0.0f;
         std::optional<size_t> hovered_keyframe_;
@@ -472,7 +473,7 @@ namespace lfs::vis {
 
         // Double-click detection
         float last_click_time_ = 0.0f;
-        std::optional<size_t> last_clicked_keyframe_;
+        std::optional<sequencer::KeyframeId> last_clicked_keyframe_id_;
 
         bool hovered_ = false;
         bool wants_keyboard_ = false;

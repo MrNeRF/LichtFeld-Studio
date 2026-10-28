@@ -1504,8 +1504,9 @@ namespace lfs::vis::gui {
         last_panel_frame_time_ = now;
         if (!std::isfinite(delta_time) || delta_time < 0.0f)
             delta_time = 0.0f;
-        delta_time = std::min(delta_time, 0.1f);
+        // Gesture timing must include idle waits; only animation steps are capped.
         panel_elapsed_time_ += delta_time;
+        delta_time = std::min(delta_time, 0.1f);
         last_panel_delta_time_ = delta_time;
         return delta_time;
     }

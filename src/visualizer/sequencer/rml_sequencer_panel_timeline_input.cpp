@@ -587,42 +587,37 @@ namespace lfs::vis {
                 !mouse_in_scrollbar && !dragging_scrollbar_) {
                 const float current_time = input.time;
 
-                if (last_clicked_keyframe_ == i &&
-                    (current_time - last_click_time_) < DOUBLE_CLICK_TIME) {
-                    editing_keyframe_time_ = true;
-                    editing_keyframe_index_ = i;
-                    time_edit_buffer_ = fmt::format("{:.2f}", keyframes[i].time);
-                    last_clicked_keyframe_ = std::nullopt;
-                } else {
-                    last_click_time_ = current_time;
-                    last_clicked_keyframe_ = i;
-
-                    if (input.key_shift && controller_.hasSelection()) {
-                        const size_t first_sel = *controller_.selectedKeyframe();
-                        const size_t lo = std::min(first_sel, i);
-                        const size_t hi = std::max(first_sel, i);
-                        selected_keyframes_.clear();
-                        for (size_t j = lo; j <= hi; ++j) {
-                            if (!keyframes[j].is_loop_point)
-                                addSelectedKeyframe(selected_keyframes_, keyframes[j].id);
-                        }
-                    } else if (input.key_ctrl) {
-                        const auto id = keyframes[i].id;
-                        if (hasSelectedKeyframe(selected_keyframes_, id))
-                            removeSelectedKeyframe(selected_keyframes_, id);
-                        else
-                            addSelectedKeyframe(selected_keyframes_, id);
-                    } else {
-                        selected_keyframes_.clear();
-                        lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
-                        dragging_keyframe_ = true;
-                        keyframe_drag_started_ = false;
-                        dragged_keyframe_changed_ = false;
-                        dragged_keyframe_id_ = keyframes[i].id;
-                        drag_start_mouse_x_ = mx;
-                        drag_start_keyframe_time_ = keyframes[i].time;
-                        drag_seconds_per_pixel_ = width > 0.0f ? getDisplayEndTime() / width : 0.0f;
+                if (input.key_shift && controller_.hasSelection()) {
+                    const size_t first_sel = *controller_.selectedKeyframe();
+                    const size_t lo = std::min(first_sel, i);
+                    const size_t hi = std::max(first_sel, i);
+                    selected_keyframes_.clear();
+                    for (size_t j = lo; j <= hi; ++j) {
+                        if (!keyframes[j].is_loop_point)
+                            addSelectedKeyframe(selected_keyframes_, keyframes[j].id);
                     }
+                    last_clicked_keyframe_id_ = std::nullopt;
+                } else if (input.key_ctrl) {
+                    const auto id = keyframes[i].id;
+                    if (hasSelectedKeyframe(selected_keyframes_, id))
+                        removeSelectedKeyframe(selected_keyframes_, id);
+                    else
+                        addSelectedKeyframe(selected_keyframes_, id);
+                    last_clicked_keyframe_id_ = std::nullopt;
+                } else {
+                    keyframe_double_click_pending_ = last_clicked_keyframe_id_ == keyframes[i].id &&
+                                                     current_time >= last_click_time_ &&
+                                                     (current_time - last_click_time_) < DOUBLE_CLICK_TIME;
+                    keyframe_press_time_ = current_time;
+                    last_clicked_keyframe_id_ = std::nullopt;
+                    selected_keyframes_.clear();
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
+                    dragging_keyframe_ = true;
+                    keyframe_drag_started_ = false;
+                    dragged_keyframe_changed_ = false;
+                    dragged_keyframe_id_ = keyframes[i].id;
+                    drag_start_mouse_x_ = mx;
+                    drag_grab_offset_x_ = mx - timeToX(keyframes[i].time, pos.x, width);
                 }
             }
         }
@@ -651,12 +646,15 @@ namespace lfs::vis {
         if (dragging_keyframe_) {
             if (input.mouse_down[0]) {
                 const float delta_x = mx - drag_start_mouse_x_;
-                if (std::abs(delta_x) >= DRAG_THRESHOLD_PX * s)
+                if (std::abs(delta_x) >= DRAG_THRESHOLD_PX * s) {
                     keyframe_drag_started_ = true;
+                    keyframe_double_click_pending_ = false;
+                    last_clicked_keyframe_id_ = std::nullopt;
+                }
                 if (keyframe_drag_started_) {
                     // Preserve where the diamond was grabbed instead of jumping
                     // its center to the pointer on the initial click.
-                    float new_time = drag_start_keyframe_time_ + delta_x * drag_seconds_per_pixel_;
+                    float new_time = xToTime(mx - drag_grab_offset_x_, pos.x, width);
                     new_time = std::max(new_time, MIN_KEYFRAME_SPACING);
                     const bool effective_snap = ui_state_.snap_to_grid != (input.key_ctrl || input.key_super);
                     if (effective_snap)
@@ -668,13 +666,25 @@ namespace lfs::vis {
                 if (dragged_keyframe_changed_)
                     controller_.commitKeyframeTimeById(dragged_keyframe_id_);
 
-                if (!keyframe_drag_started_ && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX * s) {
+                const float press_duration = input.time - keyframe_press_time_;
+                const bool short_click = press_duration >= 0.0f && press_duration < DOUBLE_CLICK_TIME;
+                if (!keyframe_drag_started_ && short_click && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX * s) {
                     if (const auto index = controller_.timeline().findKeyframeIndex(dragged_keyframe_id_); index.has_value()) {
-                        lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
+                        if (keyframe_double_click_pending_) {
+                            editing_keyframe_time_ = true;
+                            editing_keyframe_index_ = *index;
+                            time_edit_buffer_ = fmt::format("{:.2f}", controller_.timeline().getKeyframe(*index)->time);
+                            last_clicked_keyframe_id_ = std::nullopt;
+                        } else {
+                            lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
+                            last_clicked_keyframe_id_ = dragged_keyframe_id_;
+                            last_click_time_ = keyframe_press_time_;
+                        }
                     }
                 }
                 dragging_keyframe_ = false;
                 keyframe_drag_started_ = false;
+                keyframe_double_click_pending_ = false;
                 const bool emit_keyframe_change = dragged_keyframe_changed_;
                 dragged_keyframe_changed_ = false;
                 dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
