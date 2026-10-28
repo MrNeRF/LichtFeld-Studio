@@ -41,6 +41,15 @@ target_link_libraries(lichtfeld_collision_preview_cache_tests PRIVATE GTest::gte
 add_test(NAME lichtfeld.collision_preview_cache COMMAND lichtfeld_collision_preview_cache_tests)
 set_tests_properties(lichtfeld.collision_preview_cache PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
 
+if(TARGET Vulkan::Vulkan)
+    add_executable(lichtfeld_collision_preview_vulkan_tests test_collision_preview_vulkan.cpp)
+    target_compile_features(lichtfeld_collision_preview_vulkan_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_preview_vulkan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
+    target_link_libraries(lichtfeld_collision_preview_vulkan_tests PRIVATE GTest::gtest Vulkan::Vulkan)
+    add_test(NAME lichtfeld.collision_preview_vulkan COMMAND lichtfeld_collision_preview_vulkan_tests)
+    set_tests_properties(lichtfeld.collision_preview_vulkan PROPERTIES LABELS "gpu;collision" TIMEOUT 30)
+endif()
+
 add_executable(lichtfeld_batch_process_tests test_batch_process.cpp)
 target_compile_features(lichtfeld_batch_process_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_batch_process_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
