@@ -567,6 +567,9 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, CameraViewKeysUseSceneUidsWithoutTrainerAndPreserveComparison) {
+        // core::Camera keeps its transforms on the device; the CPU-only CI runners have none.
+        if (int devices = 0; cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device unavailable";
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
         input::InputRouter router;

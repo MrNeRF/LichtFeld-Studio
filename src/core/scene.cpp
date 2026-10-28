@@ -817,7 +817,10 @@ namespace lfs::core {
 
         cudaDeviceSynchronize();
         lfs::core::Tensor::trim_memory_pool();
-        lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+        // get_arena() would create the arena, which needs a CUDA device.
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena->full_reset();
+        }
 
         notifyMutation(MutationType::CLEARED);
     }

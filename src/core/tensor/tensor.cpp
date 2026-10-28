@@ -925,7 +925,11 @@ namespace lfs::core {
     }
 
     void Tensor::trim_memory_pool() {
-        CudaMemoryPool::instance().trim_cached_memory();
+        // Like shutdown_memory_pool(), never initialize CUDA just to trim:
+        // a pool that no allocation has built holds nothing to release.
+        if (CudaMemoryPool* pool = try_live_cuda_memory_pool()) {
+            pool->trim_cached_memory();
+        }
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
