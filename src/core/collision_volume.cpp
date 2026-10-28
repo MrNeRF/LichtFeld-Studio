@@ -1,8 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "core/collision.hpp"
+#include "core/collision_volume.hpp"
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace lfs::core {
     void CollisionSettings::validate() const {
