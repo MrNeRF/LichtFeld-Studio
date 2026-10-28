@@ -217,7 +217,14 @@ namespace {
                 FAIL() << "Required UNC share unavailable: " << ec.message();
             GTEST_SKIP() << "Local administrative share unavailable: " << ec.message();
         }
-        const auto network_deep = share / deep_.lexically_relative(root_);
+        // Windows runners deny SMB renames of UNC paths longer than about 500 characters (seen since
+        // Defender platform 4.18.26100), so go just past MAX_PATH instead of the full local depth.
+        fs::path network_deep = share;
+        for (const auto& component : deep_.lexically_relative(root_)) {
+            network_deep /= component;
+            if (network_deep.native().size() > MAX_PATH)
+                break;
+        }
         const auto file = network_deep / "network.bin";
         {
             std::ofstream output(lfs::core::native_fs::native_path(file), std::ios::binary);
