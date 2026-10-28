@@ -133,6 +133,10 @@
       "version": "8.1.2#3"
     },
     {
+      "name": "ffnvcodec",
+      "version": "13.0.19.0"
+    },
+    {
       "name": "freetype",
       "version": "2.14.3"
     },
