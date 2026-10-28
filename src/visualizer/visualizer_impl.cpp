@@ -160,6 +160,8 @@ namespace lfs::vis {
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
         constexpr double kArenaRetryPollSeconds = 0.004;
+        // The runtime reports session changes only through polled events.
+        constexpr double kVrSessionPollSeconds = 0.01;
 
         [[nodiscard]] std::uint64_t viewInputFingerprint(const Viewport& viewport,
                                                          const SceneManager* scene_manager,
@@ -2563,7 +2565,8 @@ namespace lfs::vis {
                                                                    const bool drained_store_dirty) {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
-        demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
+        demand.scene_dirty = (rendering_manager_ && rendering_manager_->pollDirtyState()) ||
+                             (vr_active_ && vr_->mirror().rendered);
         demand.continuous_input = input_controller_ && input_controller_->needsCameraAnimationFrame();
         const bool plugin_preload_running = python::is_plugin_preload_running();
         const bool scene_playback_active = gui_manager_ &&
@@ -2649,11 +2652,9 @@ namespace lfs::vis {
     void VisualizerImpl::waitForNextEvent(const bool is_training, const bool continuous_animation) {
         if (!window_manager_)
             return;
-        if (vr_active_) {
+        if (vr_active_ && vr_->running()) {
             // xrWaitFrame paces the headset; desktop deadlines would cap it at the monitor rate.
             window_manager_->pollEvents();
-            if (!vr_->running())
-                window_manager_->waitEvents(0.01);
             return;
         }
 
@@ -2693,6 +2694,8 @@ namespace lfs::vis {
         }
         if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
             consider_timeout(kArenaRetryPollSeconds, "arena_retry");
+        if (vr_active_)
+            consider_timeout(kVrSessionPollSeconds, "vr_session");
         if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning()) {
             const double settle_wait = rendering_manager_->secondsUntilCameraSettle();
             if (std::isfinite(settle_wait))
@@ -3033,9 +3036,7 @@ namespace lfs::vis {
                 trainer_manager_ ? trainer_manager_->getCurrentIteration() : 0);
             rendering_manager_->pollParkedArenaRetry();
         }
-        FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
-        if (vr_active_ && vr_->mirror().rendered)
-            frame_demand.scene_dirty = true;
+        const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         const std::uint64_t current_view_fingerprint =
             viewInputFingerprint(viewport_, scene_manager_.get(), rendering_manager_.get());
         // Reactive state updates can change view inputs without publishing a
