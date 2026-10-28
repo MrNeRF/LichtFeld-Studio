@@ -35,6 +35,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -217,6 +218,33 @@ namespace {
             expect_floats(host<float>(alias), {3, 3, 3});
         }
         queue.wait();
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredAliasOutlivesTheFirstPublishedHandle) {
+        const DeferredSizeGuard guard;
+        Tensor pending;
+        const void* storage = nullptr;
+        {
+            const auto source = make<float>(DataType::Float32, {3}, {2, 3, 4});
+            auto deferred = source.add(1.f).mul(2.f).sub(3.f);
+            ASSERT_TRUE(deferred.is_deferred());
+            pending = deferred;
+            storage = deferred.data_ptr();
+            ASSERT_TRUE(pending.is_deferred());
+        }
+        // Publication must transfer only its local ownership snapshot, never
+        // steal the cached result needed by a still-deferred sibling.
+        const auto other = Tensor::full({3}, 11.f, device());
+        EXPECT_NE(other.storage_ptr(), storage);
+        EXPECT_EQ(std::as_const(pending).data_ptr(), storage);
+        expect_placement(pending);
+        expect_floats(host<float>(pending), {3, 5, 7});
+        auto view = pending.slice(0, 1, 3);
+        pending = Tensor{};
+        expect_floats(host<float>(view), {5, 7});
+        view.fill_(9.f);
+        expect_floats(host<float>(view), {9, 9});
+        expect_floats(host<float>(other), {11, 11, 11});
     }
 
     TEST_P(TensorBackendSemantics, UncompiledDriversDoNotAdvertiseNativeTargetsOrOwnership) {

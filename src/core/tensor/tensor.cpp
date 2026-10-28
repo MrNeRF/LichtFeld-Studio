@@ -622,7 +622,9 @@ namespace lfs::core {
             state_->lazy ? std::optional<GpuBackend>(state_->lazy->backend) : std::nullopt;
 
         data_ = published.data_;
-        data_owner_ = published.data_owner_;
+        // Transfer this local snapshot's references; lazy->result retains its
+        // own ownership for sibling handles that have not published yet.
+        data_owner_ = std::move(published.data_owner_);
         shape_ = published.shape_;
         strides_ = published.strides_;
         storage_offset_ = published.storage_offset_;
@@ -630,7 +632,7 @@ namespace lfs::core {
         device_ = published.device_;
         dtype_ = published.dtype_;
         is_view_ = published.is_view_;
-        storage_meta_ = published.storage_meta_;
+        storage_meta_ = std::move(published.storage_meta_);
 #ifndef NDEBUG
         view_generation_snapshot_ = published.view_generation_snapshot_;
 #endif
