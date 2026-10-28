@@ -461,6 +461,7 @@ body {
 .keyframe {
     display: block;
     position: absolute;
+    box-sizing: border-box;
     width: 14dp;
     height: 14dp;
     top: 50%;

@@ -185,6 +185,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_gamepad_service.cpp
         test_gamepad_navigation.cpp
         test_gamepad_sequencer.cpp
+        test_sequencer_keyframe_gesture.cpp
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
