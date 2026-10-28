@@ -26,11 +26,8 @@
 #include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
-#include "vr/openxr_service.hpp"
-#include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 
 #include <RmlUi/Core.h>
@@ -49,79 +46,6 @@
 namespace lfs::vis::gui {
 
     namespace {
-        constexpr std::string_view kVrMenu = "lichtfeld.native_vr";
-
-        vr::OpenXrService* vrService() {
-            auto* window = services().windowOrNull();
-            auto* context = window ? window->getVulkanContext() : nullptr;
-            return context ? &context->vr() : nullptr;
-        }
-
-        std::vector<MenuItemDesc> vrMenuItems() {
-            std::vector<MenuItemDesc> items;
-            auto* vr = vrService();
-            auto& preferences = UserPreferences::instance();
-            const auto add = [&](std::string label, int callback, bool enabled = true,
-                                 bool selected = false, std::string tooltip = {}) {
-                MenuItemDesc item;
-                item.type = callback == 0 ? MenuItemDesc::Type::Toggle : MenuItemDesc::Type::Item;
-                item.label = std::move(label);
-                item.callback_index = callback;
-                item.enabled = enabled;
-                item.selected = selected;
-                item.tooltip = std::move(tooltip);
-                items.push_back(std::move(item));
-            };
-            add("Enable VR Support (restart required)", 0, true, preferences.vrEnabled(),
-                "Connect the headset and select VDXR or SteamVR as your OpenXR runtime before restarting.");
-            auto* scene = services().sceneOrNull();
-            auto* trainer = services().trainerOrNull();
-            const bool eligible = scene && !scene->hasDataset() &&
-                                  scene->getScene().getTotalGaussianCount() > 0 &&
-                                  (!trainer || (!trainer->isTrainingActive() && !trainer->isCompletionPending())) &&
-                                  !op::operators().hasModalOperator();
-            const bool active = vr && (vr->active() || vr->requested());
-            add(active ? "Exit VR" : "Enter VR", 1, vr && (active || (vr->prepared() && eligible)),
-                false, "View-only navigation. Switch the trained model to edit mode first. Escape exits VR.");
-            add("Recenter", 2, vr && vr->active());
-            add(vr ? vr->status() : "VR unavailable", -1, false);
-            add("Resolution: 50%", 3, !active, false, "Applies on the next Enter VR.");
-            add("Resolution: 70%", 4, !active);
-            add("Resolution: 100%", 5, !active);
-            add(std::format("Scene units per meter: {:.3f}", preferences.vrSceneScale()), -1, false);
-            add("Scene scale: halve", 6, !active);
-            add("Scene scale: double", 7, !active);
-            add(std::format("Move speed: {:.2f} m/s", preferences.vrMoveSpeed()), -1, false);
-            add("Move slower", 8);
-            add("Move faster", 9);
-            return items;
-        }
-
-        void executeVrMenuCallback(const int index) {
-            auto& preferences = UserPreferences::instance();
-            auto* vr = vrService();
-            switch (index) {
-            case 0: preferences.setVrEnabled(!preferences.vrEnabled()); break;
-            case 1:
-                if (vr)
-                    vr->request(!(vr->active() || vr->requested()));
-                break;
-            case 2:
-                if (vr)
-                    vr->recenter();
-                break;
-            case 3: preferences.setVrResolutionScale(0.5f); break;
-            case 4: preferences.setVrResolutionScale(0.7f); break;
-            case 5: preferences.setVrResolutionScale(1.0f); break;
-            case 6: preferences.setVrSceneScale(preferences.vrSceneScale() * 0.5f); break;
-            case 7: preferences.setVrSceneScale(preferences.vrSceneScale() * 2.0f); break;
-            case 8: preferences.setVrMoveSpeed(preferences.vrMoveSpeed() * 0.5f); break;
-            case 9: preferences.setVrMoveSpeed(preferences.vrMoveSpeed() * 2.0f); break;
-            default: break;
-            }
-            if (auto* window = services().windowOrNull())
-                window->wakeEventLoop();
-        }
         float untruncatedContentWidth(Rml::Element* element) {
             assert(element);
 
@@ -1074,16 +998,10 @@ namespace lfs::vis::gui {
     void RmlMenuBar::updateLabels(const std::vector<std::string>& labels,
                                   const std::vector<std::string>& idnames) {
         assert(labels.size() == idnames.size());
-        auto all_labels = labels;
-        auto all_idnames = idnames;
-        if (vr::OpenXrService::compiled()) {
-            all_labels.push_back("VR");
-            all_idnames.emplace_back(kVrMenu);
-        }
-        if (all_labels == current_labels_ && all_idnames == current_idnames_)
+        if (labels == current_labels_ && idnames == current_idnames_)
             return;
-        current_labels_ = std::move(all_labels);
-        current_idnames_ = std::move(all_idnames);
+        current_labels_ = labels;
+        current_idnames_ = idnames;
         render_needed_ = true;
 
         if (open_menu_index_ >= static_cast<int>(current_idnames_.size())) {
@@ -1390,10 +1308,7 @@ namespace lfs::vis::gui {
                                     } else if (action == "callback") {
                                         const int cb_idx = clicked->GetAttribute<int>("data-callback-index", -1);
                                         if (cb_idx >= 0 && !clicked->HasAttribute("disabled")) {
-                                            if (open_menu_idname_ == kVrMenu)
-                                                executeVrMenuCallback(cb_idx);
-                                            else
-                                                python::execute_menu_callback(open_menu_idname_, cb_idx);
+                                            python::execute_menu_callback(open_menu_idname_, cb_idx);
                                         }
                                         closeDropdown();
                                         return;
@@ -1763,12 +1678,8 @@ namespace lfs::vis::gui {
             if (!operator_id.empty())
                 op::operators().invoke(operator_id);
         } else if (action == "callback") {
-            if (callback_index >= 0) {
-                if (open_menu_idname_ == kVrMenu)
-                    executeVrMenuCallback(callback_index);
-                else
-                    python::execute_menu_callback(open_menu_idname_, callback_index);
-            }
+            if (callback_index >= 0)
+                python::execute_menu_callback(open_menu_idname_, callback_index);
         } else {
             return true;
         }
@@ -1905,26 +1816,22 @@ namespace lfs::vis::gui {
         MenuDropdownContent content;
         content.menu_idname = current_idnames_[index];
 
-        if (content.menu_idname == kVrMenu) {
-            content.items = vrMenuItems();
-        } else {
-            python::collect_menu_content(
-                current_idnames_[index],
-                [](const python::MenuItemInfo* info, void* ctx) {
-                    auto* c = static_cast<MenuDropdownContent*>(ctx);
-                    MenuItemDesc item;
-                    item.type = static_cast<MenuItemDesc::Type>(info->type);
-                    item.label = info->label ? info->label : "";
-                    item.operator_id = info->operator_id ? info->operator_id : "";
-                    item.shortcut = info->shortcut ? info->shortcut : "";
-                    item.tooltip = info->tooltip ? info->tooltip : "";
-                    item.enabled = info->enabled;
-                    item.selected = info->selected;
-                    item.callback_index = info->callback_index;
-                    c->items.push_back(std::move(item));
-                },
-                &content);
-        }
+        python::collect_menu_content(
+            current_idnames_[index],
+            [](const python::MenuItemInfo* info, void* ctx) {
+                auto* c = static_cast<MenuDropdownContent*>(ctx);
+                MenuItemDesc item;
+                item.type = static_cast<MenuItemDesc::Type>(info->type);
+                item.label = info->label ? info->label : "";
+                item.operator_id = info->operator_id ? info->operator_id : "";
+                item.shortcut = info->shortcut ? info->shortcut : "";
+                item.tooltip = info->tooltip ? info->tooltip : "";
+                item.enabled = info->enabled;
+                item.selected = info->selected;
+                item.callback_index = info->callback_index;
+                c->items.push_back(std::move(item));
+            },
+            &content);
 
         dropdown_items_ = buildDropdownItems(content.items);
         rebuildDropdownDOM();

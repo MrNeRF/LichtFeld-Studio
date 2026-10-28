@@ -2,70 +2,55 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-#include "core/export.hpp"
+#include "core/error.hpp"
 #include "rendering/frame_contract.hpp"
+#include "rendering/rendering_manager.hpp"
+#include "window/vulkan_context.hpp"
 #include <array>
-#include <cstdint>
-#include <expected>
 #include <functional>
 #include <memory>
 #include <string>
-#include <vulkan/vulkan.h>
 
-namespace lfs::vis {
-    class VulkanContext;
+namespace lfs::vis::vr {
 
-    namespace vr {
-        struct EyeImage {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView view = VK_NULL_HANDLE;
-            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VkSemaphore ready = VK_NULL_HANDLE;
-            std::uint64_t ready_value = 0;
-            std::uint64_t generation = 0;
-            glm::ivec2 size{0};
-            glm::ivec2 alloc_size{0};
-            bool flip_y = false;
-        };
+    // Headset viewing through OpenXR. The instance is created once at startup
+    // when VR support is on; a session exists only while viewing in VR.
+    class OpenXrService {
+    public:
+        using EyeFrames = std::array<RenderingManager::VulkanFrameResult, 2>;
+        using RenderEyes = std::function<lfs::Result<EyeFrames>(const std::array<lfs::rendering::FrameView, 2>&)>;
 
-        // The public boundary deliberately contains no OpenXR headers. Desktop-only
-        // builds use the same interface without linking an XR loader.
-        class LFS_VIS_API OpenXrService {
-        public:
-            using RenderEyes = std::function<std::expected<std::array<EyeImage, 2>, std::string>(
-                const std::array<lfs::rendering::FrameView, 2>&)>;
+        OpenXrService();
+        ~OpenXrService();
+        OpenXrService(const OpenXrService&) = delete;
+        OpenXrService& operator=(const OpenXrService&) = delete;
 
-            OpenXrService();
-            ~OpenXrService();
-            OpenXrService(const OpenXrService&) = delete;
-            OpenXrService& operator=(const OpenXrService&) = delete;
+        // Finds the runtime and headset; status() explains a failure.
+        bool prepare();
+        // Vulkan instance and device creation through the runtime; valid while available().
+        [[nodiscard]] VulkanDeviceHooks deviceHooks();
+        void setUnavailable(std::string reason);
+        [[nodiscard]] bool available() const;
+        [[nodiscard]] bool active() const;
+        // The runtime has begun the session and paces frames.
+        [[nodiscard]] bool running() const;
+        [[nodiscard]] const std::string& status() const;
 
-            static bool compiled();
-            bool prepare();
-            bool prepared() const;
-            VkResult createVulkanInstance(const VkInstanceCreateInfo& info, VkInstance& instance);
-            VkPhysicalDevice graphicsDevice(VkInstance instance);
-            VkResult createVulkanDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo& info, VkDevice& device);
+        // Reads the VR preferences; the view starts at the desktop camera.
+        lfs::Status start(VulkanContext& context, const glm::mat3& rotation, const glm::vec3& position);
+        void stop();
+        void recenter();
+        void snapTurn(int direction);
+        void setMoveSpeed(float meters_per_second);
+        // move: keyboard axes (+x right, +y up, +z back). Returns false once the
+        // runtime ends the session; a failure stops it.
+        lfs::Result<bool> frame(glm::vec3 move, const RenderEyes& render);
+        // Left eye of the last submitted frame, for the desktop window.
+        [[nodiscard]] const RenderingManager::VulkanFrameResult& mirror() const;
 
-            std::expected<void, std::string> start(VulkanContext& context,
-                                                   const glm::mat3& rotation,
-                                                   const glm::vec3& position);
-            // Only VulkanContext's post-device-drain boundary may pass true.
-            void stop(bool graphics_retired = false);
-            void reportUnavailable(std::string reason);
-            bool active() const;
-            bool running() const;
-            bool requested() const;
-            void request(bool enabled);
-            void recenter();
-            void setKeyboardNavigation(glm::vec3 movement, float turn, bool recenter);
-            const std::string& status() const;
-            std::expected<void, std::string> frame(const RenderEyes& render);
-            EyeImage mirror() const;
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
 
-        private:
-            struct Impl;
-            std::unique_ptr<Impl> impl_;
-        };
-    } // namespace vr
-} // namespace lfs::vis
+} // namespace lfs::vis::vr

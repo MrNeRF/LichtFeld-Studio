@@ -49,8 +49,6 @@
 #include "visualizer/preferences.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
-#include "vr/openxr_service.hpp"
-#include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keyboard.h>
@@ -592,6 +590,34 @@ namespace lfs::vis {
         viewport_.camera.clearTransientMotion();
         onWindowFocusLost();
         std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
+    }
+
+    glm::vec3 InputController::vrMovement() const {
+        const auto axis = [this](const int positive, const int negative) {
+            return static_cast<float>(keys_movement_[positive]) - static_cast<float>(keys_movement_[negative]);
+        };
+        return {axis(3, 1), axis(4, 5), axis(2, 0)}; // fwd, left, back, right, up, down
+    }
+
+    void InputController::handleVrKey(const int physical_key, const int logical_key, const int action,
+                                      const int mods, const bool gui_owned) {
+        if (action == input::ACTION_RELEASE) {
+            armPhysicalMovementKey(physical_key, false);
+            return;
+        }
+        if (gui_owned)
+            return;
+        if (action == input::ACTION_PRESS) {
+            switch (bindings_.getActionForKey(input::ToolMode::VR, logical_key, mods)) {
+            case input::Action::EXIT_VR: cmd::SetVrActive{.active = false}.emit(); return;
+            case input::Action::VR_RECENTER: cmd::RecenterVr{}.emit(); return;
+            case input::Action::VR_SNAP_TURN_LEFT: cmd::SnapTurnVr{.direction = -1}.emit(); return;
+            case input::Action::VR_SNAP_TURN_RIGHT: cmd::SnapTurnVr{.direction = 1}.emit(); return;
+            default: break;
+            }
+        }
+        if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) == 0)
+            armPhysicalMovementKey(physical_key, true);
     }
 
     void InputController::initialize() {
@@ -2020,15 +2046,6 @@ namespace lfs::vis {
 
     void InputController::handleKey(const int physical_key, const int logical_key,
                                     const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
-        if (vr_viewing_) {
-            if (logical_key == input::KEY_ESCAPE && action == input::ACTION_PRESS) {
-                if (auto* window = services().windowOrNull()) {
-                    if (auto* context = window->getVulkanContext())
-                        context->vr().request(false);
-                }
-            }
-            return;
-        }
         if ((action == input::ACTION_PRESS || action == input::ACTION_REPEAT) && hasViewportKeyboardFocus())
             pauseGamepadNavigation();
         // Clear before any GUI/modal early return, including owned key releases.
@@ -2075,6 +2092,10 @@ namespace lfs::vis {
         // Forward to binding capture before Python panels or modal operators consume keys.
         if (action == input::ACTION_PRESS && bindings_.isCapturing()) {
             bindings_.captureKey(physical_key, logical_key, mods);
+            return;
+        }
+        if (vr_viewing_) {
+            handleVrKey(physical_key, logical_key, action, mods, gui_consumed || wants_text_input);
             return;
         }
 
@@ -4441,6 +4462,8 @@ namespace lfs::vis {
     }
 
     input::ToolMode InputController::getCurrentToolMode() const {
+        if (vr_viewing_)
+            return input::ToolMode::VR;
         if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox")
             return input::ToolMode::CROP_BOX;
         if (selection_tool_ && selection_tool_->isEnabled())

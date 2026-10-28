@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 38; // Add scale distance tool shortcut.
+        constexpr int PROFILE_VERSION = 39; // Add VR snap turn, recenter and exit actions.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::TOOL_SCALE_DISTANCE;
+        constexpr Action LAST_ACTION = Action::EXIT_VR;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -1809,8 +1809,13 @@ namespace lfs::vis::input {
         std::vector<std::pair<ToolMode, Action>> missing;
         for (const auto mode : kAllToolModes) {
             for (const auto action : core_actions) {
+                // A mode's own default on the same trigger shadows a global one,
+                // as Escape exits walk and VR instead of cancelling a polygon.
                 const bool required = std::ranges::any_of(defaults, [&](const Binding& b) {
-                    return b.action == action && applies(b, mode);
+                    return b.action == action && applies(b, mode) &&
+                           (b.mode == mode || std::ranges::none_of(defaults, [&](const Binding& local) {
+                                return local.mode == mode && triggersOverlap(local.trigger, b.trigger);
+                            }));
                 });
                 if (!required)
                     continue;
@@ -2135,6 +2140,10 @@ namespace lfs::vis::input {
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
         profile.bindings.push_back({ToolMode::WALK, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_WALK, "Exit Walk"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_LEFT, MODIFIER_NONE}, Action::VR_SNAP_TURN_LEFT, "Snap Turn Left"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_RIGHT, MODIFIER_NONE}, Action::VR_SNAP_TURN_RIGHT, "Snap Turn Right"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_R, MODIFIER_NONE}, Action::VR_RECENTER, "Recenter VR"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_VR, "Exit VR"});
         profile.bindings.push_back({ToolMode::CROP_BOX,
                                     KeyTrigger{KEY_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
@@ -2268,6 +2277,10 @@ namespace lfs::vis::input {
         case Action::INSERT_CROP_POLYGON_VERTEX: return "Insert Crop Polygon Vertex";
         case Action::REMOVE_CROP_POLYGON_VERTEX: return "Remove Crop Polygon Vertex";
         case Action::EXIT_WALK: return "Exit Walk";
+        case Action::VR_SNAP_TURN_LEFT: return "Snap Turn Left";
+        case Action::VR_SNAP_TURN_RIGHT: return "Snap Turn Right";
+        case Action::VR_RECENTER: return "Recenter VR";
+        case Action::EXIT_VR: return "Exit VR";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
@@ -2372,6 +2385,10 @@ namespace lfs::vis::input {
         case Action::INSERT_CROP_POLYGON_VERTEX: return "insert_crop_polygon_vertex";
         case Action::REMOVE_CROP_POLYGON_VERTEX: return "remove_crop_polygon_vertex";
         case Action::EXIT_WALK: return "exit_walk";
+        case Action::VR_SNAP_TURN_LEFT: return "vr_snap_turn_left";
+        case Action::VR_SNAP_TURN_RIGHT: return "vr_snap_turn_right";
+        case Action::VR_RECENTER: return "vr_recenter";
+        case Action::EXIT_VR: return "exit_vr";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
@@ -2415,6 +2432,7 @@ namespace lfs::vis::input {
             {ToolMode::ALIGN, "align", "Align"},
             {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
             {ToolMode::WALK, "walk", "Walk"},
+            {ToolMode::VR, "vr", "VR"},
         };
     } // namespace
 
@@ -2677,7 +2695,7 @@ namespace lfs::vis::input {
 
         // Escape cancels capture except when capturing its own Cancel action.
         if (key == KEY_ESCAPE && capture_state_.action != Action::CANCEL_POLYGON &&
-            capture_state_.action != Action::EXIT_WALK) {
+            capture_state_.action != Action::EXIT_WALK && capture_state_.action != Action::EXIT_VR) {
             cancelCapture();
             return;
         }
@@ -3068,6 +3086,10 @@ namespace lfs::vis::input {
         case Action::CAMERA_SET_HOME:
         case Action::CAMERA_RESTORE_HOME:
         case Action::EXIT_WALK:
+        case Action::VR_SNAP_TURN_LEFT:
+        case Action::VR_SNAP_TURN_RIGHT:
+        case Action::VR_RECENTER:
+        case Action::EXIT_VR:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:

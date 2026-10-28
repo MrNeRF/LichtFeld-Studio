@@ -67,6 +67,7 @@
     "tbb",
     "tiff",
     "openexr",
+    "openxr-loader",
     "vulkan",
     {
       "name": "vulkan-loader",
@@ -90,10 +91,6 @@
     "zstd"
   ],
   "features": {
-    "openxr": {
-      "description": "Optional native OpenXR VR viewer",
-      "dependencies": ["openxr-loader"]
-    },
     "tests": {
       "description": "Dependencies used only by the C++ test targets",
       "dependencies": [

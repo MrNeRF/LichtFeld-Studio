@@ -23,11 +23,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERL
 # Keep test-only packages out of the application dependency graph. Command-line
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
-list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation openxr)
-option(LFS_ENABLE_OPENXR "Build native OpenXR VR viewing support" OFF)
-if(LFS_ENABLE_OPENXR)
-    list(APPEND VCPKG_MANIFEST_FEATURES openxr)
-endif()
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
 if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_PANEL_LAYOUT_TESTS OR BUILD_VISUALIZER_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()

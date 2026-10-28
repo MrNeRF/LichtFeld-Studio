@@ -2981,6 +2981,15 @@ def get_mcp_access_token() -> str:
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
 
+def get_vr_state() -> dict:
+    """Get whether VR can be entered, whether it is active, and the runtime status"""
+
+def get_vr_preferences() -> dict:
+    """Get the VR preferences"""
+
+def set_vr_preferences(enabled: bool, resolution_scale: float, scene_units_per_meter: float, move_speed: float, persist: bool = True) -> None:
+    """Set the VR preferences; VR support takes effect after restart"""
+
 def get_mcp_port_override() -> int | None:
     """Get the MCP port set on the command line for this session, or None"""
 

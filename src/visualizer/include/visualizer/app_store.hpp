@@ -101,6 +101,14 @@ namespace lfs::vis {
             }
         };
 
+        struct LFS_VIS_API VrState {
+            bool available = false; // OpenXR runtime and headset ready; VR can be entered
+            bool active = false;
+            std::string status;
+
+            bool operator==(const VrState&) const = default;
+        };
+
         struct LFS_VIS_API ImportOverlayState {
             bool active = false;
             bool show_completion = false;
@@ -238,6 +246,7 @@ namespace lfs::vis {
             GalleryStateValue,
             AlignStateGeneration,
             ScaleDistanceStateGeneration,
+            VrStateValue,
         };
 
         AppStore();
@@ -281,6 +290,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> align_state_generation;
         lfs::core::reactive::Observable<std::uint64_t> scale_distance_state_generation;
+        lfs::core::reactive::Observable<VrState> vr_state;
 
     private:
         lfs::core::reactive::Store store_;

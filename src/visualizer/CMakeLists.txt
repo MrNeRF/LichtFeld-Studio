@@ -225,11 +225,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 )
 
 # Set include directories
-if(LFS_ENABLE_OPENXR)
-    find_package(OpenXR CONFIG REQUIRED)
-    target_link_libraries(lfs_visualizer PRIVATE OpenXR::openxr_loader)
-    target_compile_definitions(lfs_visualizer PRIVATE LFS_ENABLE_OPENXR=1)
-endif()
 target_include_directories(lfs_visualizer
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -240,6 +235,8 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
+
+find_package(OpenXR CONFIG REQUIRED)
 
 target_link_libraries(lfs_visualizer
         PRIVATE
@@ -267,6 +264,7 @@ target_link_libraries(lfs_visualizer
         nfd::nfd
         vterm
         fmt::fmt-header-only
+        OpenXR::openxr_loader
 )
 
 set_property(SOURCE

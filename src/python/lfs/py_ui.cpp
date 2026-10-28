@@ -5871,6 +5871,47 @@ namespace lfs::python {
             "Persist and immediately apply MCP HTTP server preferences");
 
         m.def(
+            "get_vr_state",
+            [] {
+                const auto state = vis::app_store().vr_state.get();
+                nb::dict result;
+                result["available"] = state.available;
+                result["active"] = state.active;
+                result["status"] = state.status;
+                return result;
+            },
+            "Get whether VR can be entered, whether it is active, and the runtime status");
+
+        m.def(
+            "get_vr_preferences",
+            [] {
+                const auto preferences = vis::UserPreferences::instance().vrPreferences();
+                nb::dict result;
+                result["enabled"] = preferences.enabled;
+                result["resolution_scale"] = preferences.resolution_scale;
+                result["scene_units_per_meter"] = preferences.scene_units_per_meter;
+                result["move_speed"] = preferences.move_speed;
+                return result;
+            },
+            "Get the VR preferences");
+
+        m.def(
+            "set_vr_preferences",
+            [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
+               const float move_speed, const bool persist) {
+                invoke_on_viewer([=] {
+                    lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
+                                                             .resolution_scale = resolution_scale,
+                                                             .scene_units_per_meter = scene_units_per_meter,
+                                                             .move_speed = move_speed,
+                                                             .persist = persist}
+                        .emit();
+                });
+            },
+            nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
+            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
+
+        m.def(
             "get_mcp_port_override",
             []() -> std::optional<int> {
                 nb::gil_scoped_release release;

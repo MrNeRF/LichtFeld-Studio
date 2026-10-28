@@ -14,9 +14,7 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "preferences.hpp"
 #include "rendering/vulkan_wait.hpp"
-#include "vr/openxr_service.hpp"
 #include "vulkan_result.hpp"
 
 #include <algorithm>
@@ -659,19 +657,9 @@ namespace lfs::vis {
         return fail(std::format("{}: {}", detail_on_fail, result.error().detail()));
     }
 
-    VulkanContext::VulkanContext() : vr_(std::make_unique<vr::OpenXrService>()) {}
-
-    vr::OpenXrService& VulkanContext::vr() { return *vr_; }
-
-    int32_t VulkanContext::withGraphicsQueue(const std::function<int32_t()>& operation) {
-        const std::shared_lock device_lock(device_queue_access_mutex_);
-        const std::lock_guard queue_lock(graphics_queue_mutex_);
-        return operation();
-    }
-
-    bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height, const bool allow_vr) {
-        if (allow_vr && owns_scene_runtimes_ && UserPreferences::instance().vrEnabled() && !vr_->prepare())
-            LOG_WARN("VR startup unavailable: {}", vr_->status());
+    bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height,
+                             VulkanDeviceHooks hooks) {
+        device_hooks_ = std::move(hooks);
         transparent_surface_ = (SDL_GetWindowFlags(window) & SDL_WINDOW_TRANSPARENT) != 0;
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
@@ -694,19 +682,17 @@ namespace lfs::vis {
             timed("vulkan_init.createCommandPool", [&] { return createCommandPool(); }) &&
             timed("vulkan_init.createCommandBuffers", [&] { return createCommandBuffers(); }) &&
             timed("vulkan_init.createSyncObjects", [&] { return createSyncObjects(); });
+        device_hooks_ = {};
         return initialized;
     }
 
     void VulkanContext::shutdown() {
-        vr_->stop();
         // AMB-B3: latch before any device wait so concurrent UI waits observe Shutdown.
         context_shutdown_started_.store(true, std::memory_order_release);
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
             const VkResult idle_result = lfs::rendering::vk_device_wait_idle_synced(device_);
-            if (idle_result == VK_SUCCESS || idle_result == VK_ERROR_DEVICE_LOST)
-                vr_->stop(true);
             if (idle_result != VK_SUCCESS) {
                 LOG_ERROR("Vulkan shutdown could not retire device work before destruction (device={:#x}, pending_immediate_submits={}, frame_active={}, frame_slot={}, result={}({}))",
                           vkHandleValue(device_),
@@ -2384,8 +2370,8 @@ namespace lfs::vis {
         create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         create_info.ppEnabledExtensionNames = extensions.data();
 
-        const VkResult result = vr_->prepared()
-                                    ? vr_->createVulkanInstance(create_info, instance_)
+        const VkResult result = device_hooks_.create_instance
+                                    ? device_hooks_.create_instance(create_info, instance_)
                                     : vkCreateInstance(&create_info, nullptr, &instance_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
@@ -2586,11 +2572,6 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::pickPhysicalDevice() {
-        const VkPhysicalDevice xr_device = vr_->prepared() ? vr_->graphicsDevice(instance_) : VK_NULL_HANDLE;
-        if (vr_->prepared() && xr_device == VK_NULL_HANDLE)
-            return fail(vr_->status());
-        if (xr_device != VK_NULL_HANDLE && !vulkanDeviceMatchesCudaDevice(xr_device, 0))
-            return fail("OpenXR selected a GPU different from CUDA device 0; VR requires the same NVIDIA GPU");
         uint32_t count = 0;
         LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
                                  "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
@@ -2612,8 +2593,6 @@ namespace lfs::vis {
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
         VkPhysicalDevice first_discrete = VK_NULL_HANDLE;
         for (const auto device : devices) {
-            if (xr_device != VK_NULL_HANDLE && device != xr_device)
-                continue;
             const QueueFamilies families = findQueueFamilies(device);
             if (!families.complete() || !deviceSupportsSwapchain(device)) {
                 continue;
@@ -2671,6 +2650,10 @@ namespace lfs::vis {
         }
         if (physical_device_ == VK_NULL_HANDLE) {
             return fail("No Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
+        }
+        if (device_hooks_.required_physical_device &&
+            device_hooks_.required_physical_device(instance_) != physical_device_) {
+            return fail("The device hooks require a different GPU than the one selected for rendering");
         }
 
         VkPhysicalDeviceProperties props{};
@@ -3004,8 +2987,8 @@ namespace lfs::vis {
         create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         create_info.ppEnabledExtensionNames = extensions.data();
 
-        const VkResult result = vr_->prepared()
-                                    ? vr_->createVulkanDevice(physical_device_, create_info, device_)
+        const VkResult result = device_hooks_.create_device
+                                    ? device_hooks_.create_device(physical_device_, create_info, device_)
                                     : vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);

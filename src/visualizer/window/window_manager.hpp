@@ -25,6 +25,7 @@ namespace lfs::vis {
 
     class InputController;
     class VulkanContext;
+    struct VulkanDeviceHooks;
     namespace gui {
         class NativeDragContext;
         class NativeDragScheduler;
@@ -61,7 +62,10 @@ namespace lfs::vis {
         WindowManager(const WindowManager&) = delete;
         WindowManager& operator=(const WindowManager&) = delete;
 
-        bool init();
+        // When Vulkan cannot start through device_hooks, init retries with plain
+        // Vulkan and deviceHooksError() keeps the reason.
+        bool init(const VulkanDeviceHooks* device_hooks = nullptr);
+        [[nodiscard]] const std::string& deviceHooksError() const { return device_hooks_error_; }
 
         void setInitialWindowState(PersistentWindowState state);
         [[nodiscard]] PersistentWindowState persistentWindowState() const;
@@ -139,6 +143,7 @@ namespace lfs::vis {
         input::GamepadSample gamepad_wake_sample_;
         bool gamepad_diagnostics_active_ = false;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        std::string device_hooks_error_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
         std::function<bool()> native_transfer_frame_;

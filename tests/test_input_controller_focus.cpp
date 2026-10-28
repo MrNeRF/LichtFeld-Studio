@@ -1583,6 +1583,44 @@ namespace lfs::vis {
         EXPECT_FALSE(controller.isCameraDragging());
     }
 
+    TEST_F(InputControllerFocusTest, VrViewingTurnsKeysIntoVrCommandsAndHeldMovement) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        lfs::event::ScopedHandler handlers;
+        std::vector<bool> active_requests;
+        std::vector<int> turns;
+        int recenters = 0;
+        handlers.subscribe<core::events::cmd::SetVrActive>(
+            [&](const auto& event) { active_requests.push_back(event.active); });
+        handlers.subscribe<core::events::cmd::SnapTurnVr>([&](const auto& event) { turns.push_back(event.direction); });
+        handlers.subscribe<core::events::cmd::RecenterVr>([&](const auto&) { ++recenters; });
+        const auto key = [&](const int code, const int action) {
+            controller.handleKey(code, action, input::KEYMOD_NONE);
+        };
+
+        controller.setVrViewing(true);
+        key(input::KEY_LEFT, input::ACTION_PRESS);
+        key(input::KEY_RIGHT, input::ACTION_PRESS);
+        key(input::KEY_R, input::ACTION_PRESS);
+        key(input::KEY_W, input::ACTION_PRESS);
+        key(input::KEY_Q, input::ACTION_PRESS);
+        EXPECT_EQ(turns, (std::vector<int>{-1, 1}));
+        EXPECT_EQ(recenters, 1);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f, 1.0f, -1.0f));
+        key(input::KEY_W, input::ACTION_RELEASE);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f, 1.0f, 0.0f));
+        key(input::KEY_ESCAPE, input::ACTION_PRESS);
+        EXPECT_EQ(active_requests, std::vector<bool>{false});
+
+        controller.setVrViewing(false);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f));
+        key(input::KEY_R, input::ACTION_PRESS);
+        key(input::KEY_ESCAPE, input::ACTION_PRESS);
+        EXPECT_EQ(recenters, 1);
+        EXPECT_EQ(active_requests.size(), 1u);
+    }
+
     TEST_F(InputControllerFocusTest, TrackballModeAllowsPerfectTopView) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -2436,6 +2474,7 @@ namespace lfs::vis {
         struct MenuAccelerator {
             std::string source;
             Action action = Action::NONE;
+            ToolMode mode = ToolMode::GLOBAL;
             bool save_project = false;
         };
         const auto menu_root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/lfs_plugins";
@@ -2457,23 +2496,28 @@ namespace lfs::vis {
                          .save_project = true});
                     continue;
                 }
+                const auto identifier = [&](const std::size_t from) {
+                    auto end = from;
+                    while (end < line.size() &&
+                           (std::isalnum(static_cast<unsigned char>(line[end])) || line[end] == '_'))
+                        ++end;
+                    return std::string_view(line).substr(from, end - from);
+                };
                 auto action_start = line.find("Action.", start);
                 if (action_start == std::string::npos)
                     action_start = line.find("action.", start);
                 ASSERT_NE(action_start, std::string::npos)
                     << entry.path().filename().string() << ": " << line;
-                action_start += 7;
-                auto action_end = action_start;
-                while (action_end < line.size() &&
-                       (std::isalnum(static_cast<unsigned char>(line[action_end])) ||
-                        line[action_end] == '_'))
-                    ++action_end;
-                const auto action = actionFromName(
-                    std::string_view(line).substr(action_start, action_end - action_start));
+                const auto action = actionFromName(identifier(action_start + 7));
                 ASSERT_TRUE(action)
                     << entry.path().filename().string() << ": " << line;
+                // Mode shortcuts name their mode: keymap_shortcut(action, ToolMode.X).
+                const auto mode_start = line.find("ToolMode.", action_start);
                 menu_accelerators.push_back(
-                    {.source = entry.path().filename().string(), .action = *action});
+                    {.source = entry.path().filename().string(),
+                     .action = *action,
+                     .mode = mode_start == std::string::npos ? ToolMode::GLOBAL
+                                                             : toolModeFromName(identifier(mode_start + 9))});
             }
         }
         ASSERT_FALSE(menu_accelerators.empty());
@@ -2494,10 +2538,13 @@ namespace lfs::vis {
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
         handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
         handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
+        handlers.subscribe<core::events::cmd::SetVrActive>(record(Action::EXIT_VR));
+        handlers.subscribe<core::events::cmd::RecenterVr>(record(Action::VR_RECENTER));
 
         const auto default_profile = InputBindings::createDefaultProfile();
         for (const auto& accelerator : menu_accelerators) {
             SCOPED_TRACE(accelerator.source);
+            controller.setVrViewing(accelerator.mode == ToolMode::VR);
             if (accelerator.save_project) {
                 const auto before = dispatched[Action::NONE];
                 const int physical_key = sdlScancodeToAppKey(SDL_SCANCODE_S);
@@ -2515,7 +2562,7 @@ namespace lfs::vis {
 
             const auto binding = std::ranges::find_if(
                 default_profile.bindings, [&](const auto& candidate) {
-                    return candidate.mode == ToolMode::GLOBAL &&
+                    return candidate.mode == accelerator.mode &&
                            candidate.action == accelerator.action;
                 });
             ASSERT_NE(binding, default_profile.bindings.end())
@@ -2528,7 +2575,7 @@ namespace lfs::vis {
             const int physical_key = sdlScancodeToAppKey(scancode);
             const int logical_key = sdlShortcutKeyToAppKey(
                 scancode, SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
-            EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+            EXPECT_EQ(bindings.getActionForKey(accelerator.mode, logical_key,
                                                trigger->modifiers),
                       accelerator.action);
             const auto before = dispatched[accelerator.action];

@@ -16,7 +16,6 @@
 #include "python/python_runtime.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rendering_manager.hpp"
-#include "vr/openxr_service.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
@@ -749,7 +748,7 @@ namespace lfs::vis {
             (void)gamepads_.select(0);
     }
 
-    bool WindowManager::init() {
+    bool WindowManager::init(const VulkanDeviceHooks* const device_hooks) {
         configureValidationLayerSearchPath();
         // Preserve the initiating press when this same gesture activates us.
         SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
@@ -866,14 +865,13 @@ namespace lfs::vis {
         framebuffer_size_ = glm::ivec2(fb_w, fb_h);
 
         vulkan_context_ = std::make_unique<VulkanContext>();
-        bool graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y);
-        if (!graphics_ready && vulkan_context_->vr().prepared()) {
-            const auto vr_error = vulkan_context_->lastError();
-            LOG_WARN("VR graphics initialization failed; retrying desktop mode: {}", vr_error);
-            vulkan_context_.reset();
+        bool graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y,
+                                                    device_hooks ? *device_hooks : VulkanDeviceHooks{});
+        if (!graphics_ready && device_hooks) {
+            device_hooks_error_ = vulkan_context_->lastError();
+            LOG_WARN("Vulkan init through device hooks failed; retrying without them: {}", device_hooks_error_);
             vulkan_context_ = std::make_unique<VulkanContext>();
-            graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y, false);
-            vulkan_context_->vr().reportUnavailable("VR unavailable: " + vr_error);
+            graphics_ready = vulkan_context_->init(window_, framebuffer_size_.x, framebuffer_size_.y);
         }
         if (!graphics_ready) {
             std::cerr << "Failed to initialize Vulkan context: " << vulkan_context_->lastError() << std::endl;

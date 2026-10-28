@@ -62,7 +62,10 @@ namespace lfs::vis {
         ~InputController();
 
         void initialize();
+        // While viewing in VR only movement and VR key actions apply.
         void setVrViewing(bool enabled);
+        // Held movement keys as axes: +x right, +y up, +z back.
+        [[nodiscard]] glm::vec3 vrMovement() const;
 
         // Set align tool
         void setAlignTool(std::shared_ptr<tools::AlignTool> tool) {
@@ -224,6 +227,7 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        void handleVrKey(int physical_key, int logical_key, int action, int mods, bool gui_owned);
         bool vr_viewing_ = false;
         bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure, Viewport* target = nullptr);
         void pauseGamepadNavigation();

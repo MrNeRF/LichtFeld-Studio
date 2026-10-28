@@ -53,7 +53,8 @@ namespace lfs::vis {
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
           align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0),
-          scale_distance_state_generation(store_, Field::ScaleDistanceStateGeneration, "scale_distance_state_generation", 0) {}
+          scale_distance_state_generation(store_, Field::ScaleDistanceStateGeneration, "scale_distance_state_generation", 0),
+          vr_state(store_, Field::VrStateValue, "vr_state", VrState{}) {}
 
     AppStore& app_store() {
         static AppStore instance;

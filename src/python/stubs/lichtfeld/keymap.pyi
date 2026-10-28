@@ -201,6 +201,14 @@ class Action(enum.Enum):
 
     EXIT_WALK = 98
 
+    VR_SNAP_TURN_LEFT = 100
+
+    VR_SNAP_TURN_RIGHT = 101
+
+    VR_RECENTER = 102
+
+    EXIT_VR = 103
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 
@@ -217,6 +225,8 @@ class ToolMode(enum.Enum):
     CROP_BOX = 7
 
     WALK = 8
+
+    VR = 9
 
 class Modifier(enum.Enum):
     NONE = 0

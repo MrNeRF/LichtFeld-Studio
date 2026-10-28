@@ -50,9 +50,9 @@ TEST(OutputSlotRing, AcquireRoundRobinWraps) {
 
 TEST(OutputSlotRing, VrEyeSlotsDoNotAliasDesktopOrPreview) {
     OutputSlotRing ring;
-    ASSERT_GE(OutputSlotRing::kOutputSlotCount, 6u);
-    const auto left = lfs::vis::vksplatOutputSlotIndex(lfs::vis::VksplatOutputSlot::VrLeft);
-    const auto right = lfs::vis::vksplatOutputSlotIndex(lfs::vis::VksplatOutputSlot::VrRight);
+    // VksplatViewportRenderer::OutputSlot::VrLeft and VrRight are the last two logical slots.
+    constexpr std::size_t left = OutputSlotRing::kOutputSlotCount - 2;
+    constexpr std::size_t right = OutputSlotRing::kOutputSlotCount - 1;
     ring.slotAt(0, 0) = makeSlot(0x10);
     ring.slotAt(3, 0) = makeSlot(0x20);
     ring.slotAt(left, 1) = makeSlot(0x30);

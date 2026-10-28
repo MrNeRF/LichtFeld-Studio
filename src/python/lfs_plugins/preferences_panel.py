@@ -87,6 +87,16 @@ class PreferencesPanel(Panel):
         "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         **{f"theme_vignette_{name}": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")
            for name in ("intensity", "radius", "softness")},
+        "vr_resolution_scale": ScrubFieldSpec(0.25, 1.5, 0.05, "%.2f"),
+        "vr_scene_units_per_meter": ScrubFieldSpec(0.001, 1000.0, 0.001, "%.3f"),
+        "vr_move_speed": ScrubFieldSpec(0.1, 10.0, 0.1, "%.1f"),
+    }
+
+    VR_PREFERENCE_DEFAULTS = {
+        "enabled": False,
+        "resolution_scale": 0.7,
+        "scene_units_per_meter": 1.0,
+        "move_speed": 1.5,
     }
 
     EXPANDABLE_SECTIONS = (
@@ -185,6 +195,11 @@ class PreferencesPanel(Panel):
         model.bind_func("show_input_gamepad", lambda: self._section == "input" and self._input_page == "gamepad")
         model.bind_func("show_gamepad_controls", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "controls")
         model.bind_func("show_gamepad_test", lambda: self._section == "input" and self._input_page == "gamepad" and self._gamepad_page == "test")
+        model.bind_func("show_input_vr", lambda: self._section == "input" and self._input_page == "vr")
+        for key in self.VR_PREFERENCE_DEFAULTS:
+            model.bind("vr_" + key, lambda k=key: lf.ui.get_vr_preferences()[k],
+                       lambda value, k=key: self._set_vr_preference(k, value))
+        model.bind_func("vr_status", lambda: lf.ui.get_vr_state()["status"])
         model.bind_func("show_interface", lambda: self._section == "interface")
         model.bind_func("show_file_associations", self._show_file_associations)
         model.bind_func("has_file_associations", self._has_file_associations)
@@ -482,6 +497,8 @@ class PreferencesPanel(Panel):
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
             tuple(vignette_value(name) for name in ("enabled", "intensity", "radius", "softness")),
+            tuple(lf.ui.get_vr_preferences().values()),
+            lf.ui.get_vr_state()["status"],
         )
 
     @staticmethod
@@ -948,6 +965,8 @@ class PreferencesPanel(Panel):
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
             return float(lf.ui.get_navigation_speed_preference())
+        if prop.startswith("vr_"):
+            return float(lf.ui.get_vr_preferences()[prop.removeprefix("vr_")])
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
@@ -955,6 +974,9 @@ class PreferencesPanel(Panel):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value, persist=False)
             if self._handle:
                 self._handle.dirty(prop)
+            return
+        if prop.startswith("vr_"):
+            self._set_vr_preference(prop.removeprefix("vr_"), value, persist=False)
             return
         if prop == "zoom_speed":
             lf.ui.set_zoom_speed_preference(float(value), persist=False)
@@ -966,10 +988,21 @@ class PreferencesPanel(Panel):
         if prop.startswith("theme_vignette_"):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value)
             return
+        if prop.startswith("vr_"):
+            self._set_vr_preference(prop.removeprefix("vr_"), value)
+            return
         if prop == "zoom_speed":
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
             self._set_navigation_speed(value)
+
+    def _set_vr_preference(self, key, value, persist=True):
+        preferences = lf.ui.get_vr_preferences()
+        # Range inputs snap in float32; three decimals cover every VR step.
+        preferences[key] = bool(value) if key == "enabled" else round(float(value), 3)
+        lf.ui.set_vr_preferences(*(preferences[name] for name in self.VR_PREFERENCE_DEFAULTS), persist=persist)
+        if self._handle:
+            self._handle.dirty("vr_" + key)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1589,11 +1622,11 @@ class PreferencesPanel(Panel):
     def _dirty_input_pages(self):
         if self._handle:
             for name in ("input_expanded", "input_page_title", "show_input_navigation", "show_input_shortcuts", "show_input_gamepad",
-                         "show_gamepad_controls", "show_gamepad_test", "show_section_reset", "reset_section_label"):
+                         "show_gamepad_controls", "show_gamepad_test", "show_input_vr", "show_section_reset", "reset_section_label"):
                 self._handle.dirty(name)
 
     def _set_input_page(self, page):
-        if page not in ("navigation", "shortcuts", "gamepad"):
+        if page not in ("navigation", "shortcuts", "gamepad", "vr"):
             return
         self._set_section("input")
         if self._input_page == page:
@@ -1829,9 +1862,11 @@ class PreferencesPanel(Panel):
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
-        elif section in ("input", "input_navigation", "input_shortcuts", "input_gamepad"):
+        elif section in ("input", "input_navigation", "input_shortcuts", "input_gamepad", "input_vr"):
             if section in ("input", "input_shortcuts"):
                 self._keymap.reset_to_default()
+            if section in ("input", "input_vr"):
+                lf.ui.set_vr_preferences(*self.VR_PREFERENCE_DEFAULTS.values())
             if section in ("input", "input_gamepad"):
                 self._gamepad_test.deactivate(release_discovery=False)
                 reset_error = self._gamepad_test.reset(all_profiles=True) if section == "input" else self._gamepad_test.reset()
@@ -1888,6 +1923,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("new_project_align_grid")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
+            for key in (*self.VR_PREFERENCE_DEFAULTS, "status"):
+                self._handle.dirty("vr_" + key)
             self._handle.dirty("camera_browse_repeat")
             self._handle.dirty("camera_browse_repeat_rate")
             self._handle.dirty("view_snap")

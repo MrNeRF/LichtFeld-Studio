@@ -105,6 +105,10 @@ namespace lfs::core {
             EVENT(ForceExit, bool discard_autosave = false;);
             EVENT(SwitchToEditMode, );
             EVENT(ResetCamera, );
+            EVENT(SetVrActive, bool active;);
+            EVENT(RecenterVr, );
+            EVENT(SnapTurnVr, int direction;); // -1 left, +1 right
+            EVENT(SetVrPreferences, bool enabled; float resolution_scale; float scene_units_per_meter; float move_speed; bool persist;);
             EVENT(ShowWindow, std::string window_name; bool show;);
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);

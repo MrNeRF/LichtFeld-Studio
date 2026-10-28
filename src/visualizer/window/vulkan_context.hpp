@@ -22,7 +22,6 @@
 #include <expected>
 #include <format>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -47,9 +46,15 @@
 struct SDL_Window;
 
 namespace lfs::vis {
-    namespace vr {
-        class OpenXrService;
-    }
+
+    // Lets another API that must own the Vulkan objects (such as a headset
+    // runtime) create the instance and device. Unset hooks use plain Vulkan.
+    struct VulkanDeviceHooks {
+        std::function<VkResult(const VkInstanceCreateInfo&, VkInstance&)> create_instance;
+        // Init fails when the GPU chosen for rendering is not this device.
+        std::function<VkPhysicalDevice(VkInstance)> required_physical_device;
+        std::function<VkResult(VkPhysicalDevice, const VkDeviceCreateInfo&, VkDevice&)> create_device;
+    };
 
     class VulkanContext {
         friend struct VulkanContextTestAccess;
@@ -60,14 +65,21 @@ namespace lfs::vis {
             Exact,
         };
 
-        LFS_VIS_API VulkanContext();
+        VulkanContext() = default;
         LFS_VIS_API ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
 
-        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height, bool allow_vr = true);
-        LFS_VIS_API int32_t withGraphicsQueue(const std::function<int32_t()>& operation);
+        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height,
+                              VulkanDeviceHooks hooks = {});
+        // Runs an external API call that may submit to the shared graphics queue.
+        template <class Operation>
+        decltype(auto) withGraphicsQueue(Operation&& operation) {
+            const std::shared_lock device_lock(device_queue_access_mutex_);
+            const std::lock_guard queue_lock(graphics_queue_mutex_);
+            return std::forward<Operation>(operation)();
+        }
         void setSceneRuntimeOwnership(bool owns) { owns_scene_runtimes_ = owns; }
         LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
@@ -209,7 +221,6 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] VkInstance instance() const { return instance_; }
-        [[nodiscard]] LFS_VIS_API vr::OpenXrService& vr();
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
         [[nodiscard]] VkQueue graphicsQueue() const { return graphics_queue_; }
@@ -495,7 +506,6 @@ namespace lfs::vis {
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] std::string makeAllocationDiagnosticLabel(std::string_view label);
-        std::unique_ptr<vr::OpenXrService> vr_;
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -623,6 +633,7 @@ namespace lfs::vis {
         bool geometry_shader_enabled_ = false;
         std::mutex graphics_queue_mutex_;
         std::shared_mutex device_queue_access_mutex_;
+        VulkanDeviceHooks device_hooks_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

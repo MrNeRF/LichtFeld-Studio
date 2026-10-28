@@ -90,7 +90,8 @@ namespace lfs::vis::gui {
                     return error.severity() == lfs::Severity::Warning ? Keys::EXPORT_WARNING
                                                                       : Keys::EXPORT_FAILED;
                 }
-                if (op == error_op::kNewProject || op == error_op::kProjectSettings || op == "enter_walk") {
+                if (op == error_op::kNewProject || op == error_op::kProjectSettings || op == "enter_walk" ||
+                    op == "vr") {
                     return Keys::GENERIC;
                 }
                 return Keys::FILE_OPEN_FAILED;

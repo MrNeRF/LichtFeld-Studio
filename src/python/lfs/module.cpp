@@ -2992,6 +2992,12 @@ NB_MODULE(lichtfeld, m) {
         "reset_camera", []() { lfs::core::events::cmd::ResetCamera{}.emit(); },
         "Reset camera to default position and orientation");
     m.def(
+        "set_vr_active", [](const bool active) { lfs::core::events::cmd::SetVrActive{.active = active}.emit(); },
+        nb::arg("active"), "Enter or exit VR viewing");
+    m.def(
+        "recenter_vr", []() { lfs::core::events::cmd::RecenterVr{}.emit(); },
+        "Put the VR view back at the desktop camera");
+    m.def(
         "focus_selection", []() -> bool {
             auto* const controller = lfs::vis::InputController::instance();
             return controller ? controller->focusSelection() : false;

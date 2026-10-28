@@ -115,7 +115,15 @@ namespace lfs::vis {
             Ring = 3,
         };
 
-        using OutputSlot = VksplatOutputSlot;
+        enum class OutputSlot : std::size_t {
+            Main = 0,
+            SplitLeft = 1,
+            SplitRight = 2,
+            Preview = 3,
+            VrLeft = 4,
+            VrRight = 5,
+        };
+        static_assert(OutputSlotRing::kOutputSlotCount == static_cast<std::size_t>(OutputSlot::VrRight) + 1);
 
         struct SelectionMaskRequest {
             lfs::rendering::FrameView frame_view;

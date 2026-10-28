@@ -18,6 +18,7 @@
         <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
         <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_shortcuts" data-event-click="input_page('shortcuts')">@tr:preferences.input_shortcuts</button>
         <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_gamepad" data-event-click="input_page('gamepad')">@tr:preferences.input_gamepad</button>
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_vr" data-event-click="input_page('vr')">@tr:preferences.input_vr</button>
       </div>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
@@ -512,6 +513,36 @@
             <span class="preferences-description" data-if="gamepad_test_buttons_empty">—</span>
             <span class="preferences-metric-token" data-for="button : gamepad_test_button_rows">{{ button.label }}</span>
           </div>
+        </div>
+      </div>
+      <div class="preferences-section" data-if="show_input_vr">
+        <div class="section-content">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.vr_enabled_help">
+            <span class="preferences-label">@tr:preferences.vr_enabled</span>
+            <input type="checkbox" data-checked="vr_enabled" />
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.vr_resolution_scale_help">
+            <span class="setting-row__label-col">@tr:preferences.vr_resolution_scale</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="vr_resolution_scale" min="0.25" max="1.5" step="0.05" />
+              <span class="slider-value">{{ vr_resolution_scale | format_float(2) }}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.vr_scene_units_per_meter_help">
+            <span class="setting-row__label-col">@tr:preferences.vr_scene_units_per_meter</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="vr_scene_units_per_meter" min="0.001" max="1000" step="0.001" />
+              <span class="slider-value">{{ vr_scene_units_per_meter | format_float(3) }}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.vr_move_speed_help">
+            <span class="setting-row__label-col">@tr:preferences.vr_move_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="vr_move_speed" min="0.1" max="10" step="0.1" />
+              <span class="slider-value">{{ vr_move_speed | format_float(1) }}</span>
+            </div>
+          </div>
+          <span class="preferences-description">{{ vr_status }}</span>
         </div>
       </div>
       <div class="preferences-section" data-if="show_input_navigation">

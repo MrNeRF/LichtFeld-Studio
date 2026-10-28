@@ -6,7 +6,6 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
-#include "vksplat_output_slot.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
@@ -45,7 +44,7 @@ namespace lfs::vis {
     // GPU-free: timeline complete/wait are injected; no Vulkan/CUDA calls.
     class LFS_VIS_API OutputSlotRing {
     public:
-        static constexpr std::size_t kOutputSlotCount = kVksplatOutputSlotCount;
+        static constexpr std::size_t kOutputSlotCount = 6;
         static constexpr std::size_t kFrameRingSize = 3;
 
         // Poll whether a timeline value has already retired. May throw.

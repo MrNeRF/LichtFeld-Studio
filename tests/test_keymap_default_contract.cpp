@@ -82,7 +82,9 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
                           Action::PREVIOUS_SIDEBAR_CATEGORY);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
-                          mode == ToolMode::WALK ? Action::EXIT_WALK : Action::CANCEL_POLYGON);
+                          mode == ToolMode::WALK ? Action::EXIT_WALK
+                          : mode == ToolMode::VR ? Action::EXIT_VR
+                                                 : Action::CANCEL_POLYGON);
                 if (mode == ToolMode::SELECTION)
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_ENTER, MODIFIER_CTRL),
                               Action::ASSET_GALLERY_PRIMARY);
@@ -100,8 +102,17 @@ namespace lfs::vis::input {
                         ? Action::DELETE_SELECTED
                         : Action::DELETE_NODE;
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_DELETE, MODIFIER_NONE),
-                          mode == ToolMode::WALK ? Action::NONE : delete_action);
+                          mode == ToolMode::WALK || mode == ToolMode::VR ? Action::NONE
+                                                                         : delete_action);
             }
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_LEFT, MODIFIER_NONE),
+                      Action::VR_SNAP_TURN_LEFT);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_RIGHT, MODIFIER_NONE),
+                      Action::VR_SNAP_TURN_RIGHT);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_R, MODIFIER_NONE),
+                      Action::VR_RECENTER);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_W, MODIFIER_NONE),
+                      Action::CAMERA_MOVE_FORWARD);
             EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT,
                                                 MODIFIER_NONE),
                       Action::SELECTION_REPLACE);
@@ -296,6 +307,18 @@ namespace lfs::vis::input {
                                      static_cast<int>(ToolMode::GLOBAL);
                       }),
                       0);
+            std::filesystem::remove(path);
+        }
+
+        TEST_F(KeymapTest, DefaultProfileLoadsWithoutCoreShortcutWarning) {
+            const std::filesystem::path path =
+                std::filesystem::temp_directory_path() / "lfs_default_keymap_core.json";
+            InputBindings bindings;
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            CoreShortcutWarning warning;
+            auto subscription = lfs::ErrorBus::instance().subscribe(warning);
+            ASSERT_TRUE(bindings.loadProfileFromFile(path));
+            EXPECT_EQ(warning.count, 0) << warning.message;
             std::filesystem::remove(path);
         }
     } // namespace

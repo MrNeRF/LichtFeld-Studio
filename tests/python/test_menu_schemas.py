@@ -42,6 +42,8 @@ def _install_lichtfeld_stub(monkeypatch):
         "panel_enabled": [],
         "panels": {},
         "main_panel_active_tab": None,
+        "vr": {"available": False, "active": False, "status": "No OpenXR runtime"},
+        "vr_calls": [],
     }
 
     ui = SimpleNamespace(
@@ -119,6 +121,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_selection=lambda: state["has_gaussian_selection"],
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_split_view_mode=lambda: "independent_dual",
+        get_vr_state=lambda: dict(state["vr"]),
         get_active_tool=lambda: state["active_tool"],
         copy_gaussian_selection=lambda: state.__setitem__("copy_called", True),
         cut_gaussian_selection=lambda: state.__setitem__("cut_called", True),
@@ -144,8 +147,10 @@ def _install_lichtfeld_stub(monkeypatch):
             CAMERA_RESET_HOME="camera_reset_home",
             CAMERA_SET_HOME="camera_set_home",
             CAMERA_RESTORE_HOME="camera_restore_home",
+            EXIT_VR="exit_vr",
+            VR_RECENTER="vr_recenter",
         ),
-        ToolMode=SimpleNamespace(GLOBAL="global"),
+        ToolMode=SimpleNamespace(GLOBAL="global", VR="vr"),
         is_bound=lambda _action, _mode: True,
         get_trigger_description=lambda action, _mode: {
             "undo": "Ctrl+Z",
@@ -162,6 +167,8 @@ def _install_lichtfeld_stub(monkeypatch):
             "camera_reset_home": "H",
             "camera_set_home": "Shift+H",
             "camera_restore_home": "Ctrl+H",
+            "exit_vr": "Escape",
+            "vr_recenter": "R",
         }.get(action, "Unbound"),
     )
 
@@ -174,6 +181,8 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.toggle_ui = lambda: state.__setitem__("ui_toggled", True)
     lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
+    lf_stub.set_vr_active = lambda active: state["vr_calls"].append(("active", active))
+    lf_stub.recenter_vr = lambda: state["vr_calls"].append(("recenter",))
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
         can_redo=lambda: False,
@@ -346,9 +355,9 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert appearance[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
-    assert view_items[7]["label"] == "tr:menu.view.performance_hud"
-    assert view_items[7]["shortcut"] == "F10"
-    view_items[7]["callback"]()
+    assert view_items[10]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[10]["shortcut"] == "F10"
+    view_items[10]["callback"]()
     assert state.get("vram_hud_toggled") is True
     assert [(item["label"], item["shortcut"]) for item in view_items[:3]] == [
         ("tr:menu.view.home_view", "H"),
@@ -369,13 +378,42 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
         "open_preferences": "Alt+P",
         "copy_selection": "Alt+C",
     }.get(action, "")
-    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == "Ctrl+F10"
+    assert view_mod.ViewMenu().menu_items()[10]["shortcut"] == "Ctrl+F10"
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == "Alt+P"
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == "Alt+C"
     keymap.is_bound = lambda _action, _mode: False
-    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == ""
+    assert view_mod.ViewMenu().menu_items()[10]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == ""
+
+
+def test_view_menu_vr_entries_follow_runtime_state(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
+    for name in ("lfs_plugins.layouts", "lfs_plugins.layouts.menus", "lfs_plugins.view_menu"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    view_mod = import_module("lfs_plugins.view_menu")
+
+    enter, recenter = view_mod.ViewMenu().menu_items()[7:9]
+    assert (enter["label"], enter["enabled"], enter["tooltip"], enter["shortcut"]) == (
+        "tr:menu.view.enter_vr", False, "No OpenXR runtime", "")
+    assert (recenter["enabled"], recenter["shortcut"]) == (False, "R")
+
+    state["vr"] = {"available": True, "active": False, "status": "Ready"}
+    enter = view_mod.ViewMenu().menu_items()[7]
+    assert enter["enabled"] and "tooltip" not in enter
+    enter["callback"]()
+
+    state["vr"]["active"] = True
+    exit_vr, recenter = view_mod.ViewMenu().menu_items()[7:9]
+    assert (exit_vr["label"], exit_vr["shortcut"]) == ("tr:input_settings.action.exit_vr", "Escape")
+    assert recenter["enabled"]
+    exit_vr["callback"]()
+    recenter["callback"]()
+    assert state["vr_calls"] == [("active", True), ("active", False), ("recenter",)]
 
 
 def _import_tools_menu(monkeypatch):

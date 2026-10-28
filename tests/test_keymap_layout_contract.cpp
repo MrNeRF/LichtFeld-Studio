@@ -123,11 +123,15 @@ namespace lfs::vis::input {
                         SCOPED_TRACE(entry.path().filename().string() + " " +
                                      getActionName(binding.action) + " mode " +
                                      std::to_string(static_cast<int>(mode)));
+                        // A mode binding with the same key replaces the inherited action.
+                        const auto local = std::ranges::find_if(defaults.bindings, [&](const Binding& b) {
+                            const auto* key = std::get_if<KeyTrigger>(&b.trigger);
+                            return b.mode == mode && key && key->key == trigger->key &&
+                                   key->modifiers == trigger->modifiers;
+                        });
                         EXPECT_EQ(bindings.getActionForShortcut(mode, physical, logical,
                                                                 trigger->modifiers),
-                                  mode == ToolMode::WALK && binding.action == Action::CANCEL_POLYGON
-                                      ? Action::EXIT_WALK
-                                      : binding.action);
+                                  local != defaults.bindings.end() ? local->action : binding.action);
                     }
                 }
             }

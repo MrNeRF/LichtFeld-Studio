@@ -632,6 +632,12 @@ def free_icon(texture_id: int) -> None:
 def reset_camera() -> None:
     """Reset camera to default position and orientation"""
 
+def set_vr_active(active: bool) -> None:
+    """Enter or exit VR viewing"""
+
+def recenter_vr() -> None:
+    """Put the VR view back at the desktop camera"""
+
 def focus_selection() -> bool:
     """
     Focus the active viewport on the selection, or the whole scene when nothing is selected

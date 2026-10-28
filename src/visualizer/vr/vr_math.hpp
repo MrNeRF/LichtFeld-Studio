@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
+#include <optional>
 #include <rendering/coordinate_conventions.hpp>
-#include <stdexcept>
 
 namespace lfs::vis::vr {
 
@@ -18,8 +18,8 @@ namespace lfs::vis::vr {
         float left, right, up, down;
     };
 
-    [[nodiscard]] inline rendering::CameraIntrinsics eyeIntrinsics(const EyeFov fov,
-                                                                   const glm::ivec2 size) {
+    [[nodiscard]] inline std::optional<rendering::CameraIntrinsics> eyeIntrinsics(const EyeFov fov,
+                                                                                  const glm::ivec2 size) {
         const auto valid_angle = [](const float angle) {
             return std::isfinite(angle) && std::abs(angle) < glm::half_pi<float>();
         };
@@ -27,7 +27,7 @@ namespace lfs::vis::vr {
             !valid_angle(fov.left) || !valid_angle(fov.right) ||
             !valid_angle(fov.up) || !valid_angle(fov.down) ||
             fov.left >= fov.right || fov.down >= fov.up) {
-            throw std::invalid_argument("Invalid VR eye FOV or image size");
+            return std::nullopt;
         }
         const float left = std::tan(fov.left);
         const float right = std::tan(fov.right);
@@ -35,7 +35,7 @@ namespace lfs::vis::vr {
         const float down = std::tan(fov.down);
         const float fx = static_cast<float>(size.x) / (right - left);
         const float fy = static_cast<float>(size.y) / (up - down);
-        return {.focal_x = fx, .focal_y = fy, .center_x = -left * fx, .center_y = up * fy};
+        return rendering::CameraIntrinsics{.focal_x = fx, .focal_y = fy, .center_x = -left * fx, .center_y = up * fy};
     }
 
     namespace detail {
@@ -46,14 +46,6 @@ namespace lfs::vis::vr {
                        : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         }
     } // namespace detail
-
-    // Camera-to-world matrix, RH +X right, +Y up, -Z forward (also tracking axes).
-    // GLM quaternion construction is (w, x, y, z), unlike XrQuaternionf.
-    [[nodiscard]] inline glm::mat4 poseMatrix(const glm::quat orientation, const glm::vec3 position) {
-        glm::mat4 pose = glm::mat4_cast(detail::normalizedOrientation(orientation));
-        pose[3] = glm::vec4(position, 1.0f);
-        return pose;
-    }
 
     // Remove pitch/roll, preserving projected forward heading about world +Y.
     // Looking straight up/down uses the projected right axis; invalid/zero input
@@ -71,9 +63,8 @@ namespace lfs::vis::vr {
         return glm::angleAxis(yaw, glm::vec3(0.0f, 1.0f, 0.0f));
     }
 
-    // Tracking-to-visualizer-world rig. Position is in scene units; tracked
-    // positions are in meters. Keep orientation yaw-only for level navigation
-    // (arbitrary rig orientation is supported). Scale must be finite and > 0.
+    // Tracking-to-visualizer-world rig, RH +X right, +Y up, -Z forward. Position
+    // is in scene units; tracked positions are in meters. Scale must be > 0.
     struct NavigationRig {
         glm::vec3 position{0.0f};
         glm::quat orientation{1.0f, 0.0f, 0.0f, 0.0f};
@@ -86,15 +77,20 @@ namespace lfs::vis::vr {
                     .translation = position + rig * (tracked_position * scene_units_per_meter)};
         }
 
-        // Positive radians turn left about WORLD +Y. Compensate rig translation
-        // so the actual tracked head center remains fixed, even away from origin.
+        // Places the tracked head at the target position facing the target's
+        // heading; tracked pitch/roll stay physical head motion.
+        void recenter(const glm::quat head_orientation, const glm::vec3 head_position,
+                      const glm::quat target_orientation, const glm::vec3 target_position) {
+            orientation = yawOnlyOrientation(target_orientation) * glm::inverse(yawOnlyOrientation(head_orientation));
+            position = target_position - orientation * (head_position * scene_units_per_meter);
+        }
+
+        // Positive radians turn left about world +Y around the tracked head.
         void snapTurn(const float radians, const glm::vec3 tracked_head_position) {
-            const glm::vec3 head_world = cameraPose(glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
-                                                    tracked_head_position)
-                                             .translation;
+            const glm::vec3 head_world = position + detail::normalizedOrientation(orientation) *
+                                                        (tracked_head_position * scene_units_per_meter);
             orientation = detail::normalizedOrientation(
-                glm::angleAxis(radians, glm::vec3(0.0f, 1.0f, 0.0f)) *
-                detail::normalizedOrientation(orientation));
+                glm::angleAxis(radians, glm::vec3(0.0f, 1.0f, 0.0f)) * detail::normalizedOrientation(orientation));
             position = head_world - orientation * (tracked_head_position * scene_units_per_meter);
         }
     };
@@ -118,25 +114,17 @@ namespace lfs::vis::vr {
         return value / magnitude * deadzone(magnitude, threshold);
     }
 
-    // One signed pulse at engagement, then no pulse until |axis| <= release.
+    // One signed pulse when |axis| reaches 0.7, then none until |axis| <= 0.3.
     // Switching directly to the opposite side does not re-arm. Invalid input
-    // behaves as neutral. Throws for thresholds not satisfying 0<=release<engage<=1.
+    // behaves as neutral.
     class SnapTurnHysteresis {
     public:
-        explicit SnapTurnHysteresis(const float engage = 0.7f, const float release = 0.3f)
-            : engage_(engage),
-              release_(release) {
-            if (!std::isfinite(engage) || !std::isfinite(release) ||
-                release < 0.0f || engage > 1.0f || release >= engage)
-                throw std::invalid_argument("Invalid snap-turn hysteresis thresholds");
-        }
-
         [[nodiscard]] int update(const float axis) {
-            if (!std::isfinite(axis) || std::abs(axis) <= release_) {
+            if (!std::isfinite(axis) || std::abs(axis) <= kRelease) {
                 reset();
                 return 0;
             }
-            if (!armed_ || std::abs(axis) < engage_)
+            if (!armed_ || std::abs(axis) < kEngage)
                 return 0;
             armed_ = false;
             return axis > 0.0f ? 1 : -1;
@@ -145,8 +133,8 @@ namespace lfs::vis::vr {
         void reset() { armed_ = true; }
 
     private:
-        float engage_;
-        float release_;
+        static constexpr float kEngage = 0.7f;
+        static constexpr float kRelease = 0.3f;
         bool armed_ = true;
     };
 

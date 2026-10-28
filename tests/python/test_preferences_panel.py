@@ -90,6 +90,8 @@ def preferences_panel_module(monkeypatch):
         camera_browse_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
+        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5},
+        vr_writes=[],
         project_location="",
         embed_dataset_by_default=False,
         project_manager_preferences={
@@ -174,6 +176,11 @@ def preferences_panel_module(monkeypatch):
         set_clipboard_text=lambda text: setattr(state, "clipboard_text", text),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        get_vr_preferences=lambda: dict(state.vr_preferences),
+        set_vr_preferences=lambda *values, persist=True: (
+            state.vr_preferences.update(zip(state.vr_preferences, values)),
+            state.vr_writes.append(persist)),
+        get_vr_state=lambda: {"available": False, "active": False, "status": "VR support is off."},
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: state.project_location,
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
@@ -259,12 +266,16 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR")
                 )
             },
         ),
         Action=SimpleNamespace(
             EXIT_WALK=SimpleNamespace(name="EXIT_WALK", value=999),
+            VR_SNAP_TURN_LEFT=SimpleNamespace(name="VR_SNAP_TURN_LEFT", value=100),
+            VR_SNAP_TURN_RIGHT=SimpleNamespace(name="VR_SNAP_TURN_RIGHT", value=101),
+            VR_RECENTER=SimpleNamespace(name="VR_RECENTER", value=102),
+            EXIT_VR=SimpleNamespace(name="EXIT_VR", value=103),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),
@@ -1435,11 +1446,29 @@ def test_shortcut_search_keeps_matching_sections_and_typed_bindings(preferences_
 
 def test_input_page_labels_and_search_exist_in_all_locales():
     root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
-    keys = ["preferences." + key for key in ("input_navigation", "input_shortcuts", "input_gamepad", "gamepad_controls", "gamepad_diagnostics")]
+    keys = ["preferences." + key for key in ("input_navigation", "input_shortcuts", "input_gamepad", "input_vr", "gamepad_controls", "gamepad_diagnostics")]
     keys += ["input_settings." + key for key in ("search_commands", "clear_search", "no_matches")]
     for path in root.glob("*.json"):
         values = json.loads(path.read_text(encoding="utf-8"))
         assert all(values.get(key) for key in keys), path.name
+
+
+def test_vr_page_edits_all_preferences_and_resets_only_vr(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._set_input_page("vr")
+    assert panel._section == "input" and panel._input_page == "vr"
+    panel._set_vr_preference("enabled", 1)
+    panel._set_scrub_value("vr_move_speed", 3)
+    assert panel._get_scrub_value("vr_move_speed") == 3.0
+    panel._commit_scrub_value("vr_move_speed", 3)
+    assert state.vr_writes == [True, False, True]
+    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0}
+    panel._set_zoom_speed(42)
+    panel._reset_section("input_vr")
+    assert state.vr_preferences == module.PreferencesPanel.VR_PREFERENCE_DEFAULTS
+    assert state.zoom_speed == 42
 
 
 def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):

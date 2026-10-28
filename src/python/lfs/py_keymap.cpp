@@ -203,7 +203,11 @@ namespace lfs::python {
             .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
             .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX)
             .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE)
-            .value("EXIT_WALK", Action::EXIT_WALK);
+            .value("EXIT_WALK", Action::EXIT_WALK)
+            .value("VR_SNAP_TURN_LEFT", Action::VR_SNAP_TURN_LEFT)
+            .value("VR_SNAP_TURN_RIGHT", Action::VR_SNAP_TURN_RIGHT)
+            .value("VR_RECENTER", Action::VR_RECENTER)
+            .value("EXIT_VR", Action::EXIT_VR);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
@@ -214,7 +218,8 @@ namespace lfs::python {
             .value("SCALE", ToolMode::SCALE)
             .value("ALIGN", ToolMode::ALIGN)
             .value("CROP_BOX", ToolMode::CROP_BOX)
-            .value("WALK", ToolMode::WALK);
+            .value("WALK", ToolMode::WALK)
+            .value("VR", ToolMode::VR);
 
         // Expose Modifier enum
         nb::enum_<Modifier>(keymap, "Modifier")

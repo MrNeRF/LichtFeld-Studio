@@ -68,31 +68,6 @@ if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BU
     set_tests_properties(lichtfeld.native_filesystem PROPERTIES LABELS "cpu;windows;filesystem" TIMEOUT 30)
 endif()
 
-# Pure camera/navigation contracts: no headset, OpenXR loader or GPU required.
-add_executable(lichtfeld_vr_math_tests test_vr_math.cpp test_vksplat_output_slot.cpp)
-target_compile_features(lichtfeld_vr_math_tests PRIVATE cxx_std_23)
-target_include_directories(lichtfeld_vr_math_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/visualizer
-    ${CMAKE_SOURCE_DIR}/src/rendering/include)
-target_link_libraries(lichtfeld_vr_math_tests PRIVATE GTest::gtest_main glm::glm)
-add_test(NAME lichtfeld.vr_math COMMAND lichtfeld_vr_math_tests)
-set_tests_properties(lichtfeld.vr_math PROPERTIES LABELS "fast;cpu;vr" TIMEOUT 30)
-
-# Compile the production service's disabled branch even in XR-enabled builds.
-# No XR loader, CUDA driver, or visualizer DLL is needed by this executable.
-add_executable(lichtfeld_openxr_disabled_tests
-    test_openxr_disabled.cpp
-    ${CMAKE_SOURCE_DIR}/src/visualizer/vr/openxr_service.cpp)
-target_compile_features(lichtfeld_openxr_disabled_tests PRIVATE cxx_std_23)
-target_compile_definitions(lichtfeld_openxr_disabled_tests PRIVATE LFS_STATIC_BUILD=1)
-target_include_directories(lichtfeld_openxr_disabled_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/visualizer
-    ${CMAKE_SOURCE_DIR}/src/rendering/include
-    ${CMAKE_SOURCE_DIR}/src/core/include)
-target_link_libraries(lichtfeld_openxr_disabled_tests PRIVATE GTest::gtest_main glm::glm Vulkan::Headers)
-add_test(NAME lichtfeld.openxr_disabled COMMAND lichtfeld_openxr_disabled_tests)
-set_tests_properties(lichtfeld.openxr_disabled PROPERTIES LABELS "fast;cpu;vr" TIMEOUT 30)
-
 # Exercise a real EXE/DLL boundary: linking the same static runner into both
 # modules would pass same-module tests but split callback and initialization state.
 # Windows CI enables the focused visualizer tests without the full test suite.
@@ -1075,7 +1050,7 @@ list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
 list(APPEND TEST_FILES test_output_image_pool.cpp)
 # Epic #1568 / #1567: output slot ring (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_output_slot_ring.cpp)
-list(APPEND TEST_FILES test_vksplat_output_slot.cpp)
+list(APPEND TEST_FILES test_vr_math.cpp)
 list(APPEND TEST_FILES test_split_output_lifetime.cpp)
 # Epic #1577 / #1574: readback ticket ring (GPU-free host bookkeeping).
 list(APPEND TEST_FILES test_readback_ticket_ring.cpp)

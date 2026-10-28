@@ -1326,41 +1326,46 @@ namespace lfs::vis {
             vksplat_viewport_renderer_->releaseVrResources();
     }
 
-    std::expected<std::array<vr::EyeImage, 2>, std::string> RenderingManager::renderVrEyes(
+    RenderSettings RenderingManager::vrRenderSettings(RenderSettings settings) {
+        settings.split_view_mode = SplitViewMode::Disabled;
+        settings.orthographic = settings.equirectangular = settings.depth_view = false;
+        settings.point_cloud_mode = false;
+        settings.show_grid = settings.show_coord_axes = settings.show_pivot = false;
+        settings.show_camera_frustums = settings.show_rings = settings.show_center_markers = false;
+        settings.desaturate_unselected = false;
+        return settings;
+    }
+
+    lfs::Result<std::array<RenderingManager::VulkanFrameResult, 2>> RenderingManager::renderVrEyes(
         VulkanContext& context, SceneManager& scene,
         const std::array<lfs::rendering::FrameView, 2>& views) {
-        const auto* trainer = scene.getTrainerManager();
-        if (trainer && (trainer->isTrainingActive() || trainer->isCompletionPending()))
-            return std::unexpected("VR rendering is unavailable while training owns the model.");
-        if (context.rendererTerminalState() != RendererTerminalState::Running)
-            return std::unexpected("VR rendering stopped after a GPU failure.");
+        const auto unavailable = [](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
         last_vulkan_context_ = &context;
-        // Retire previous desktop mirror reads before transitioning/reusing eyes.
+        // The desktop mirror of the previous frame still samples the eye images.
         if (!context.waitForSubmittedFrames())
-            return std::unexpected("Could not retire the desktop VR mirror.");
+            return unavailable("Could not retire the desktop VR mirror.");
         auto snapshot = scene.buildRenderState({.current_geometry = true});
         if (!hasRenderableGaussians(snapshot.combined_model))
-            return std::unexpected("VR requires a visible Gaussian model in edit mode.");
-        // RAD/LoD files contain internal hierarchy nodes as well as renderable
-        // leaves. Never rasterize the hierarchy or borrow a desktop-only selection.
+            return unavailable("VR requires a visible Gaussian model in edit mode.");
+        // LoD files hold hierarchy nodes besides the renderable leaves.
         const auto leaves = lodLeafRenderView(*snapshot.combined_model);
         const auto& model = leaves ? *leaves : *snapshot.combined_model;
         if (!vksplat_viewport_renderer_)
             vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
         vksplat_viewport_renderer_->setLiveSubmitCallback({});
-        auto settings = getSettings();
-        settings.split_view_mode = SplitViewMode::Disabled;
-        settings.orthographic = false;
-        settings.equirectangular = false;
-        settings.show_rings = settings.show_center_markers = false;
-        settings.desaturate_unselected = false;
-        settings.show_camera_frustums = false;
-        settings.depth_view = false;
-        std::array<vr::EyeImage, 2> images{};
-        for (size_t i = 0; i < 2; ++i) {
-            Viewport viewport(size_t(views[i].size.x), size_t(views[i].size.y));
+        const auto settings = vrRenderSettings(getSettings());
+        std::array<VulkanFrameResult, 2> eyes{};
+        for (std::size_t i = 0; i < eyes.size(); ++i) {
+            Viewport viewport(static_cast<std::size_t>(views[i].size.x), static_cast<std::size_t>(views[i].size.y));
             viewport.setViewMatrix(views[i].rotation, views[i].translation);
-            FrameContext frame{
+            const FrameContext frame{
                 .viewport = viewport,
                 .scene_manager = &scene,
                 .model = &model,
@@ -1381,23 +1386,26 @@ namespace lfs::vis {
             request.require_exact_depth = false;
             request.raster_backend = lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
-            auto result = vksplat_viewport_renderer_->render(
+            const auto result = vksplat_viewport_renderer_->render(
                 context, model, request, false,
                 i == 0 ? VksplatViewportRenderer::OutputSlot::VrLeft : VksplatViewportRenderer::OutputSlot::VrRight);
             if (!result)
-                return std::unexpected(result.error());
-            images[i] = {.image = result->image,
-                         .view = result->image_view,
-                         .layout = result->image_layout,
-                         .ready = result->completion_semaphore,
-                         .ready_value = result->completion_value,
-                         .generation = result->generation,
-                         .size = result->size,
-                         .alloc_size = result->alloc_size,
-                         .flip_y = result->flip_y};
+                return unavailable(result.error());
+            eyes[i] = {.external_image = result->image,
+                       .external_image_view = result->image_view,
+                       .external_image_layout = result->image_layout,
+                       .external_image_generation = result->generation,
+                       .completion_semaphore = result->completion_semaphore,
+                       .completion_value = result->completion_value,
+                       .image_generation = result->generation,
+                       .size = result->size,
+                       .alloc_size = result->alloc_size,
+                       .flip_y = result->flip_y,
+                       .matches_viewport_extent = true,
+                       .rendered = true};
         }
         retainVksplatScratch();
-        return images;
+        return eyes;
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(
