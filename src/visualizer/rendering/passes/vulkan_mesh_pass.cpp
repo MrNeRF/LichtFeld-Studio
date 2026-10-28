@@ -2605,11 +2605,20 @@ namespace lfs::vis {
                 if (resource)
                     resources.push_back(std::move(resource));
             }
+            collision_cache.maintain(now, collisionUploadRetired, frame_counter);
+            // Keep this retired slot's existing owners through the hidden grace
+            // period too. The cache's byte budget can exclude an oversized
+            // resource, but hiding it for a few UI frames must not force another
+            // synchronous upload when it is immediately shown again.
+            for (const auto& previous : collision_frames[params.frame_slot]) {
+                if (collision_cache.retainFrameOwner(previous->owner.get(), frame_counter, now) &&
+                    std::ranges::find(resources, previous) == resources.end())
+                    resources.push_back(previous);
+            }
             // Replace only the retired slot; other in-flight frames retain their buffers.
             collision_frames[params.frame_slot] = std::move(resources);
             if (std::ranges::any_of(collision_frames, [](const auto& owners) { return !owners.empty(); }))
                 collision_frames_release_at = now + std::chrono::seconds(5);
-            collision_cache.maintain(now, collisionUploadRetired, frame_counter);
             if (collision_cache.stats().attempts && frame_counter % 120 == 0) {
                 const auto& stats = collision_cache.stats();
                 LOG_DEBUG("Collision preview cache: attempts={}, hits={}, failures={}, evictions={}, resident_bytes={}, pending_bytes={}",

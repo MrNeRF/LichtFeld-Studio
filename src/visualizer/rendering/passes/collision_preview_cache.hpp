@@ -105,6 +105,18 @@ namespace lfs::vis::detail {
             return it != entries_.end() && it->second.last_frame == frame;
         }
 
+        // A retired frame slot may keep its existing ownership during the
+        // hidden grace period. This never allocates or promotes cache storage:
+        // oversized previews otherwise disappear after two hidden UI frames,
+        // even when immediately re-enabled.
+        bool retainFrameOwner(const Source* source, uint64_t frame, Time now) const {
+            const auto it = entries_.find(source);
+            if (it == entries_.end() || it->second.status != CollisionUploadStatus::Ready)
+                return false;
+            const auto& entry = it->second;
+            return entry.last_frame == frame || !entry.inactive_since || now - *entry.inactive_since < idle_;
+        }
+
         // Called by the viewer's idle loop too: retries must not depend on input
         // producing another frame. Hidden entries retain their failure history
         // but never schedule rendering. Pending uploads only schedule fence polls.

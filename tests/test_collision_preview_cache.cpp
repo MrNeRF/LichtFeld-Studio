@@ -343,6 +343,50 @@ namespace {
         EXPECT_TRUE(weak.expired());
         EXPECT_FALSE(cache.nextDeadline(frame, now));
     }
+    TEST_F(CollisionPreviewCache, OversizedFrameOwnersSurviveRepeatedHiddenFramesOnlyDuringGrace) {
+        std::vector<std::shared_ptr<Resource>> slots{request(200), {}};
+        auto original = slots[0];
+        const std::weak_ptr<Resource> weak = original;
+        cache.maintain(now, retired, frame);
+        EXPECT_EQ(cache.stats().resident_bytes, 0u);
+        for (int i = 0; i < 8; ++i) {
+            ++frame;
+            now += std::chrono::milliseconds(100);
+            cache.maintain(now, retired, frame);
+            // Model the renderer replacing a retired frame slot while opacity
+            // is zero: existing ownership survives, with no upload or draw.
+            auto& slot = slots[i % slots.size()];
+            if (slot && !cache.retainFrameOwner(slot->owner.get(), frame, now))
+                slot.reset();
+            EXPECT_EQ(cache.ready(source.get()), original);
+            EXPECT_EQ(cache.stats().resident_bytes, 0u);
+        }
+        EXPECT_EQ(request(200), original);
+        EXPECT_EQ(cache.stats().attempts, 1u);
+        ++frame;
+        cache.maintain(now, retired, frame);
+        now += std::chrono::seconds(5);
+        EXPECT_FALSE(cache.retainFrameOwner(source.get(), frame, now));
+        EXPECT_FALSE(cache.retainFrameOwner(nullptr, frame, now));
+        slots.clear();
+        original.reset();
+        EXPECT_TRUE(weak.expired());
+    }
+
+    TEST_F(CollisionPreviewCache, ActiveSiblingDoesNotExtendHiddenFrameOwnerGrace) {
+        auto hidden = request(200);
+        const auto hidden_source = source;
+        source = std::make_shared<Source>();
+        auto visible = request(200);
+        cache.maintain(now, retired, frame);
+        EXPECT_TRUE(cache.retainFrameOwner(hidden_source.get(), frame, now));
+        now += std::chrono::seconds(5);
+        visible = request(200);
+        cache.maintain(now, retired, frame);
+        EXPECT_FALSE(cache.retainFrameOwner(hidden_source.get(), frame, now));
+        EXPECT_TRUE(cache.retainFrameOwner(source.get(), frame, now));
+        EXPECT_EQ(cache.stats().resident_bytes, 0u);
+    }
 } // namespace
 
 int main(int argc, char** argv) {
