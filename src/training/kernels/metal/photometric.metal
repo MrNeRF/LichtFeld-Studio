@@ -284,76 +284,69 @@ static void photo_ssim(constant PhotoForwardParams& p, thread const float* v, co
     }
 }
 
-// One output tile of the separable 11x11 gaussian SSIM. Sums the loss terms of
-// the tile's pixels into loss_sum (and the mask into mask_sum) per kPhotoLossMode.
-// weighted_end is one past the last tile whose mask window held a weight other
-// than one; tiles only increase within a group, so it needs no reset per tile.
+// Loads one channel of the tile's span into s0 and s1 (decoupled: s0, s1, s2).
+// With mask, also loads the span's mask weights into sm and returns whether any
+// of them is not one.
 template <bool Decoupled>
-static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, const uint2 t, const uint rank,
-                               threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
-                               threadgroup float* sm, threadgroup float* conv, threadgroup atomic_uint* weighted_end,
-                               thread float& loss_sum, thread float& mask_sum) {
+static bool photo_load_channel(constant PhotoForwardParams& p, const uint base, const int y0, const int x0,
+                               const uint rank, threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
+                               threadgroup float* sm, const bool mask, const float inv_mask_scale) {
+    const int H = p.height, W = p.width;
+    bool partial_support = false;
+    for (uint i = rank; i < kPhotoSpanCells; i += uint(kPhotoTile * kPhotoTile)) {
+        const int gy = y0 + int(i / kPhotoSpan) - kPhotoHalo;
+        const int gx = x0 + int(i % kPhotoSpan) - kPhotoHalo;
+        const bool in = gx >= 0 && gx < W && gy >= 0 && gy < H;
+        const uint g = in ? base + uint(gy) * uint(W) + uint(gx) : 0;
+        s0[i] = in ? p.prediction[g] : 0.0f;
+        if (mask) {
+            const float weight = (in ? photo_mask(p.mask, uint(gy) * uint(W) + uint(gx)) : 1.0f) * inv_mask_scale;
+            sm[i] = weight;
+            partial_support = partial_support || weight != 1.0f;
+        }
+        if (Decoupled) {
+            s1[i] = in ? p.raw[g] : 0.0f;
+            s2[i] = in ? photo_target(p.target, g) : 0.0f;
+        } else {
+            s1[i] = in ? photo_target(p.target, g) : 0.0f;
+        }
+    }
+    return partial_support;
+}
+
+// The channels of one output tile; the first is already loaded. Weighted tiles
+// normalize each window by its mass, the others keep the unmasked window sums.
+// Each kind gets its own loop: picking the window code per channel inside one
+// loop made the masked kernel about 15% slower on an M3 Ultra.
+template <bool Decoupled, bool Weighted>
+static void photo_tile_channels(constant PhotoForwardParams& p, const uint b, const int y0, const int x0, const uint2 t,
+                                const uint rank, threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
+                                threadgroup float* sm, threadgroup float* conv,
+                                thread float& ssim_sum, thread float& cs_sum, thread float& l1_sum) {
     constexpr int kQuantities = Decoupled ? 6 : 5;
     const int H = p.height, W = p.width, C = p.channels;
-    const uint per_image = p.tiles_x * p.tiles_y;
-    const uint b = tile / per_image;
-    const uint within = tile % per_image;
-    const int y0 = int(within / p.tiles_x) * kPhotoTile;
-    const int x0 = int(within % p.tiles_x) * kPhotoTile;
     const int px = x0 + int(t.x), py = y0 + int(t.y);
     const bool inside = px < W && py < H;
     const uint plane = uint(H) * uint(W);
     const uint pixel = inside ? uint(py) * uint(W) + uint(px) : 0;
     const uint center = (t.y + kPhotoHalo) * kPhotoSpan + t.x + kPhotoHalo;
-    const int anchor_x = min(x0 + kPhotoTile / 2, W - 1);
-    const int anchor_y = min(y0 + kPhotoTile / 2, H - 1);
-    const float inv_mask_scale = kPhotoMaskedWindow ? 1.0f / fmax(1.0f, photo_mask(p.mask, uint(anchor_y) * uint(W) + uint(anchor_x))) : 1.0f;
-
-    float ssim_sum = 0.0f, cs_sum = 0.0f, l1_sum = 0.0f;
     for (int c = 0; c < C; ++c) {
         const uint base = (b * uint(C) + uint(c)) * plane;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        bool partial_support = false;
-        for (uint i = rank; i < kPhotoSpanCells; i += uint(kPhotoTile * kPhotoTile)) {
-            const int gy = y0 + int(i / kPhotoSpan) - kPhotoHalo;
-            const int gx = x0 + int(i % kPhotoSpan) - kPhotoHalo;
-            const bool in = gx >= 0 && gx < W && gy >= 0 && gy < H;
-            const uint g = in ? base + uint(gy) * uint(W) + uint(gx) : 0;
-            s0[i] = in ? p.prediction[g] : 0.0f;
-            if (kPhotoMaskedWindow) {
-                const float weight = (in ? photo_mask(p.mask, uint(gy) * uint(W) + uint(gx)) : 1.0f) * inv_mask_scale;
-                sm[i] = weight;
-                partial_support = partial_support || weight != 1.0f;
-            }
-            if (Decoupled) {
-                s1[i] = in ? p.raw[g] : 0.0f;
-                s2[i] = in ? photo_target(p.target, g) : 0.0f;
-            } else {
-                s1[i] = in ? photo_target(p.target, g) : 0.0f;
-            }
+        if (c > 0) {
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            photo_load_channel<Decoupled>(p, base, y0, x0, rank, s0, s1, s2, sm, false, 1.0f);
+            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
-        if (kPhotoMaskedWindow && simd_any(partial_support) && simd_is_first())
-            atomic_fetch_max_explicit(weighted_end, tile + 1, memory_order_relaxed);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        // A tile whose whole window has weight one keeps the unmasked rounding and mass one.
-        const bool weighted = kPhotoMaskedWindow && atomic_load_explicit(weighted_end, memory_order_relaxed) == tile + 1;
-
-        if (weighted)
-            photo_horizontal<Decoupled, true>(t, s0, s1, s2, sm, conv);
-        else
-            photo_horizontal<Decoupled, false>(t, s0, s1, s2, sm, conv);
+        photo_horizontal<Decoupled, Weighted>(t, s0, s1, s2, sm, conv);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         float v[7];
-        if (weighted)
-            photo_vertical<kQuantities + 1>(t, conv, v);
-        else
-            photo_vertical<kQuantities>(t, conv, v);
+        photo_vertical<kQuantities + (Weighted ? 1 : 0)>(t, conv, v);
         if (!inside)
             continue;
-        const float inv_window = weighted ? (v[kQuantities] >= 1.0e-30f ? 1.0f / v[kQuantities] : 0.0f) : 1.0f;
+        const float inv_window = Weighted ? (v[kQuantities] >= 1.0e-30f ? 1.0f / v[kQuantities] : 0.0f) : 1.0f;
         const float derivative_weight = kPhotoMaskedWindow ? sm[center] * inv_window : 1.0f;
-        if (weighted)
+        if (Weighted)
             for (int k = 0; k < kQuantities; ++k) v[k] *= inv_window;
 
         const uint index = base + pixel;
@@ -370,6 +363,46 @@ static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, 
         if (kPhotoLossMode >= 2)
             l1_sum += fabs(s0[center] - (Decoupled ? s2[center] : s1[center]));
     }
+}
+
+// One output tile of the separable 11x11 gaussian SSIM. Sums the loss terms of
+// the tile's pixels into loss_sum (and the mask into mask_sum) per kPhotoLossMode.
+// weighted_end is one past the last tile whose mask window held a weight other
+// than one; tiles only increase within a group, so it needs no reset per tile.
+template <bool Decoupled>
+static void photo_forward_tile(constant PhotoForwardParams& p, const uint tile, const uint2 t, const uint rank,
+                               threadgroup float* s0, threadgroup float* s1, threadgroup float* s2,
+                               threadgroup float* sm, threadgroup float* conv, threadgroup atomic_uint* weighted_end,
+                               thread float& loss_sum, thread float& mask_sum) {
+    const int H = p.height, W = p.width, C = p.channels;
+    const uint per_image = p.tiles_x * p.tiles_y;
+    const uint b = tile / per_image;
+    const uint within = tile % per_image;
+    const int y0 = int(within / p.tiles_x) * kPhotoTile;
+    const int x0 = int(within % p.tiles_x) * kPhotoTile;
+    const int px = x0 + int(t.x), py = y0 + int(t.y);
+    const bool inside = px < W && py < H;
+    const uint plane = uint(H) * uint(W);
+    const uint pixel = inside ? uint(py) * uint(W) + uint(px) : 0;
+    const uint center = (t.y + kPhotoHalo) * kPhotoSpan + t.x + kPhotoHalo;
+    const int anchor_x = min(x0 + kPhotoTile / 2, W - 1);
+    const int anchor_y = min(y0 + kPhotoTile / 2, H - 1);
+    const float inv_mask_scale = kPhotoMaskedWindow ? 1.0f / fmax(1.0f, photo_mask(p.mask, uint(anchor_y) * uint(W) + uint(anchor_x))) : 1.0f;
+
+    // The first channel's loads also bring in the mask weights, which every channel shares.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const bool partial_support = photo_load_channel<Decoupled>(p, b * uint(C) * plane, y0, x0, rank, s0, s1, s2, sm,
+                                                               kPhotoMaskedWindow, inv_mask_scale);
+    if (kPhotoMaskedWindow && simd_any(partial_support) && simd_is_first())
+        atomic_fetch_max_explicit(weighted_end, tile + 1, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // A tile whose whole window has weight one keeps the unmasked rounding and mass one.
+    const bool weighted = kPhotoMaskedWindow && atomic_load_explicit(weighted_end, memory_order_relaxed) == tile + 1;
+    float ssim_sum = 0.0f, cs_sum = 0.0f, l1_sum = 0.0f;
+    if (weighted)
+        photo_tile_channels<Decoupled, true>(p, b, y0, x0, t, rank, s0, s1, s2, sm, conv, ssim_sum, cs_sum, l1_sum);
+    else
+        photo_tile_channels<Decoupled, false>(p, b, y0, x0, t, rank, s0, s1, s2, sm, conv, ssim_sum, cs_sum, l1_sum);
     if (!inside)
         return;
 
