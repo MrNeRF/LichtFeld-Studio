@@ -68,7 +68,7 @@ namespace lfs::core::internal {
             TensorCompletion finish() {
                 ++counter_;
                 timeline_->signal(counter_);
-                return TensorCompletionAccess::cuda(stream_.stream, timeline_->point(counter_));
+                return TensorCompletionAccess::record(GpuBackend::CUDA, {.target = {stream_.stream}, .timeline = timeline_->point(counter_)});
             }
             void settle_failed() { (void)cudaStreamSynchronize(stream_.stream); }
             TensorCompletion execute(const std::function<void()>& commands, uint64_t value) override { return execute_commands(*this, GpuBackend::CUDA, commands, value); }

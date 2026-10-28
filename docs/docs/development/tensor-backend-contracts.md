@@ -23,6 +23,12 @@ Native drivers own device and target policy, inventory, pressure services,
 protocol capabilities and context shutdown. Unsupported native features must be
 reported explicitly; a foreign SDK must never receive another backend's handles.
 
+An unavailable driver has no native target, device selection or renderer-storage
+access. Legacy API defaults belong to their compatibility implementations.
+Immutable thread-binding policy may be cached per thread; dynamic availability
+must not be cached with it. A required device binding still runs at every scope,
+including nested scopes, so external device changes cannot bypass rebinding.
+
 ## Targets and transfer ownership
 
 Shared upload, fence, completion, queue, elapsed-time and readback objects own one
@@ -44,6 +50,11 @@ source and destination and check the producer's execution errors before exposing
 bytes. A zero-byte completion still represents an error snapshot. Queue cleanup
 must distinguish a checked execution error from a failure to drain; a drain
 failure cannot justify releasing live storage or unloading its module.
+
+One completion factory consumes the native record, supplied target/value,
+timeline source and release policy. A zero-valued record still performs native
+capture. Imported timelines can retain an existing obligation without recording
+another native marker; these choices belong to the native caller.
 
 ## Allocations
 
@@ -67,6 +78,10 @@ shape descriptors or issue native profiling calls solely for exact allocations.
 Memory-pressure recovery follows the failing allocation's domain, rather than
 the currently selected Tensor backend. An unavailable CUDA runtime must not
 prevent another backend's pressure episode from recovering.
+
+Device domains map explicitly to their backend. Host domains do not query a GPU
+or inherit a device safety reserve. Native recovery policy handles terminal
+runtime failures without treating unmapped domains as CUDA.
 
 ## Operation semantics
 

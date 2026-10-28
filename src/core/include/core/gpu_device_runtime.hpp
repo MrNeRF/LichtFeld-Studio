@@ -17,6 +17,7 @@ namespace lfs::core {
     LFS_CORE_API int gpu_device_count(GpuBackend backend);
     // Cold pressure services preserve each backend's native headroom and cache policy.
     LFS_CORE_API MemoryInfo gpu_pressure_memory_info(GpuBackend backend, bool free_query);
+    LFS_CORE_API bool gpu_pressure_recovery_blocked(GpuBackend backend);
     LFS_CORE_API void register_gpu_pressure_clients(MemoryPressureCoordinator& coordinator);
     LFS_CORE_API void record_gpu_pressure_breadcrumb();
     // Known backing storage extent, including reserved tensor capacity. Excludes allocator

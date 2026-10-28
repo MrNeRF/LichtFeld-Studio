@@ -18,6 +18,7 @@
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
+#include <array>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -26,6 +27,7 @@
 #include <print>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
+#include <tuple>
 #include <utility>
 
 // SIMD intrinsics for CPU optimization
@@ -344,11 +346,20 @@ namespace lfs::core {
         append("cuda_direct", state.cuda_direct);
         oss << "; ";
         append("vulkan_external", state.vulkan_external);
+        const std::array entries{
+            std::tuple{StorageAccountingKind::CudaDirect, "cuda_direct", &state.cuda_direct},
+            std::tuple{StorageAccountingKind::VulkanOwned, "vulkan_owned", &state.vulkan_owned},
+            std::tuple{StorageAccountingKind::VulkanExternal, "vulkan_external", &state.vulkan_external},
+            std::tuple{StorageAccountingKind::HipOwned, "hip_owned", &state.hip_owned},
+        };
         for (const auto backend : kCompiledGpuBackends) {
             if (const auto kind = internal::backend_driver(backend).supplementary_accounting()) {
-                if (*kind == StorageAccountingKind::HipOwned) {
+                for (const auto& [entry_kind, label, counter] : entries) {
+                    if (entry_kind != *kind)
+                        continue;
                     oss << "; ";
-                    append("hip_owned", state.hip_owned);
+                    append(label, *counter);
+                    break;
                 }
             }
         }

@@ -59,6 +59,7 @@ namespace lfs::core::internal {
                 device_fault_await_and_consume_or_throw(static_cast<cudaStream_t>(target), "tensor.masking.index_select.assert", location);
             }
             MemoryInfo pressure_memory_info(bool free_query) override { return cuda_pressure_memory_info(free_query); }
+            bool pressure_recovery_blocked() const noexcept override { return cuda_is_unavailable(); }
             void register_pressure_clients(MemoryPressureCoordinator& coordinator) override { register_cuda_pressure_clients(coordinator); }
 
             void* current_target() const noexcept override { return getCurrentCUDAStream(); }
@@ -148,6 +149,7 @@ namespace lfs::core::internal {
                     (void)cudaGetLastError();
                 return current;
             }
+            bool needs_thread_binding() const noexcept override { return true; }
             void bind_thread() override {
 
                 const int selected = selection_.load(std::memory_order_acquire);
@@ -225,3 +227,9 @@ namespace lfs::core::internal {
         registry[static_cast<size_t>(GpuBackend::CUDA)] = &driver;
     }
 } // namespace lfs::core::internal
+
+namespace lfs::core {
+    int selected_cuda_device() {
+        return internal::backend_driver(GpuBackend::CUDA).selected_device();
+    }
+} // namespace lfs::core

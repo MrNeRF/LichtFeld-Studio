@@ -31,11 +31,13 @@ namespace lfs::core::internal {
 
             NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
                 const bool direct = kind == TensorAllocationKind::Direct;
-                return {.storage = {.backend = GpuBackend::HIP, .flags = allocation_flags(StorageAccountingKind::HipOwned, direct, false, false, direct ? AllocationLabel::HipDirect : AllocationLabel::None)}, .target = nullptr, .external_kind = direct ? "cuda.direct" : ""};
+                const StorageRef storage{.backend = GpuBackend::HIP, .flags = allocation_flags(StorageAccountingKind::HipOwned, direct, false, false, direct ? AllocationLabel::HipDirect : AllocationLabel::None)};
+                return {.storage = storage, .target = nullptr, .external_kind = allocation_label(storage)};
             }
 
             void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
             MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
+            bool pressure_recovery_blocked() const noexcept override { return false; }
             void register_pressure_clients(MemoryPressureCoordinator&) override {}
 
             void* current_target() const noexcept override { return nullptr; }
@@ -72,6 +74,7 @@ namespace lfs::core::internal {
                     selected_ = select_hip_device(LFS_HIP_RUNTIME_DEFAULT_MODULE, requested_);
                 return selected_;
             }
+            bool needs_thread_binding() const noexcept override { return false; }
             void bind_thread() override {}
             std::optional<std::string> validate_options(const TensorBackendOptions& options, int& ordinal) override {
                 ordinal = -1;

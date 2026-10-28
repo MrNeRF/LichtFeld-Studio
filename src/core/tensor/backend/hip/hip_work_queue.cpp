@@ -34,7 +34,7 @@ namespace lfs::core::internal {
             void wait_timeline(uint64_t value) override { consumer_.wait(value); }
             void* timeline() const override { return nullptr; }
             void begin(uint64_t value) { consumer_.wait(value); }
-            TensorCompletion finish() { return TensorCompletionAccess::hip(); }
+            TensorCompletion finish() { return TensorCompletionAccess::record(GpuBackend::HIP, {}); }
             void settle_failed() { ops_.synchronize_stream({}); }
             TensorCompletion execute(const std::function<void()>& commands, uint64_t value) override { return execute_commands(*this, GpuBackend::HIP, commands, value); }
             void validate_readback_ring() const override {}

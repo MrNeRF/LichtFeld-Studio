@@ -85,7 +85,7 @@ namespace lfs::core::internal {
                 else
                     consumer_completion_ = context_->recorders().wait_external({}, static_cast<VkSemaphore>(consumer_.point().semaphore), value, {});
             }
-            TensorCompletion finish() { return TensorCompletionAccess::vulkan(std::max(consumer_completion_, context_->recorders().flush_current())); }
+            TensorCompletion finish() { return TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = std::max(consumer_completion_, context_->recorders().flush_current()), .settle_on_release = false, .use_recorded_timeline = true}); }
             void settle_failed() { context_->recorders().wait_all(); }
             TensorCompletion execute(const std::function<void()>& commands, uint64_t value) override { return execute_commands(*this, GpuBackend::Vulkan, commands, value); }
             void validate_readback_ring() const override {

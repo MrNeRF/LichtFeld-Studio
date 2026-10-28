@@ -51,7 +51,7 @@ namespace lfs::core::internal {
                                           .dst = destination_,
                                           .bytes = source.bytes(),
                                           .synchronous = false});
-                completion_ = TensorCompletionAccess::vulkan(context_->recorders().pending_value(destination_));
+                completion_ = TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = context_->recorders().pending_value(destination_), .settle_on_release = false, .use_recorded_timeline = true});
                 return {};
             }
             BackendUploadSubmission enqueue_bytes(Tensor& destination, std::span<const std::byte> source, BackendQueueTarget target, bool in_batch) override {

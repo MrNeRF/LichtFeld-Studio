@@ -1683,6 +1683,7 @@ namespace lfs::core::internal {
     void HipBackendOps::release_stream(ExecContext execution) { synchronize_stream(execution); }
     void HipBackendOps::synchronize_stream(ExecContext execution) {
         queue(execution);
+        ensure_initialized();
         std::lock_guard lock(impl_->mutex);
         impl_->sync();
     }

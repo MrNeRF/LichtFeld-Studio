@@ -36,6 +36,7 @@ namespace lfs::core::internal {
 
             void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
             MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
+            bool pressure_recovery_blocked() const noexcept override { return false; }
             void register_pressure_clients(MemoryPressureCoordinator&) override {}
 
             void* current_target() const noexcept override { return nullptr; }
@@ -87,6 +88,7 @@ namespace lfs::core::internal {
             }
             int device_count() override { return vulkan_device_count(); }
             int selected_device() override { return 0; }
+            bool needs_thread_binding() const noexcept override { return false; }
             void bind_thread() override {}
             void set_selection(int) noexcept override {}
             std::optional<std::string> validate_options(const TensorBackendOptions&, int& ordinal) override {

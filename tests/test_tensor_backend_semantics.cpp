@@ -6,10 +6,12 @@
 // reporting. Each case runs on the CPU and on every available GPU backend.
 
 #include "core/error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/backend_driver.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "core/tensor/backend/native_allocation.hpp"
 #include "core/tensor/internal/expression_runtime.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_fused.hpp"
@@ -24,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -95,6 +98,85 @@ namespace {
             else
                 EXPECT_FLOAT_EQ(got[i], want[i]) << i;
         }
+    }
+
+    TEST_P(TensorBackendSemantics, UncompiledDriversDoNotAdvertiseNativeTargetsOrOwnership) {
+        using namespace lfs::core;
+        for (const auto backend : kGpuBackends) {
+            if (gpu_backend_compiled(backend))
+                continue;
+            auto& driver = internal::backend_driver(backend);
+            EXPECT_EQ(driver.current_target(), nullptr);
+            EXPECT_EQ(driver.canonical_home_target(reinterpret_cast<void*>(uintptr_t{1})), nullptr);
+            const auto access = driver.renderer_access();
+            EXPECT_FALSE(access.shares_vulkan);
+            EXPECT_FALSE(access.needs_vulkan_interop);
+            EXPECT_FALSE(access.metal);
+            EXPECT_FALSE(driver.needs_thread_binding());
+            EXPECT_THROW((void)driver.selected_device(), TensorError);
+            EXPECT_THROW((void)driver.allocation_bytes(16), TensorError);
+            const auto empty = driver.empty_tensor_allocation(internal::TensorAllocationKind::Direct);
+            EXPECT_EQ(empty.storage.backend, backend);
+            EXPECT_EQ(empty.storage.data, nullptr);
+            EXPECT_EQ(empty.target, nullptr);
+            EXPECT_FALSE(empty.owner);
+            EXPECT_STREQ(empty.external_kind, "");
+        }
+        if constexpr (!gpu_backend_compiled(GpuBackend::CUDA))
+            EXPECT_EQ(selected_cuda_device(), 0);
+    }
+
+    TEST_P(TensorBackendSemantics, CachedWorkerReopensAfterAnotherThreadShutsDown) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU context lifecycle";
+        const auto backend = *GetParam().backend;
+        std::promise<std::exception_ptr> ready;
+        auto initialized = ready.get_future();
+        std::promise<void> resume;
+        auto resumed = resume.get_future();
+        auto worker = std::async(std::launch::async, [&] {
+            bool announced = false;
+            try {
+                auto& cached = lfs::core::internal::backend_ops(backend);
+                cached.synchronize_device();
+                ready.set_value(nullptr);
+                announced = true;
+                resumed.wait();
+                // Synchronization, not allocation or a new scope, must reopen
+                // the worker's cached adapter after the other thread shuts down.
+                cached.synchronize_device();
+                cached.device_barrier();
+                cached.synchronize_stream({});
+                lfs::core::gpu_device_barrier(backend);
+                return std::exception_ptr{};
+            } catch (...) {
+                if (!announced)
+                    ready.set_value(std::current_exception());
+                return std::current_exception();
+            }
+        });
+        const auto initialization_error = initialized.get();
+        const auto shutdown = initialization_error ? lfs::Status{} : lfs::core::shutdown_gpu_backend(backend);
+        // Always release/join the worker before assertions can exit the test.
+        resume.set_value();
+        const auto synchronization_error = worker.get();
+        if (initialization_error)
+            EXPECT_NO_THROW(std::rethrow_exception(initialization_error));
+        EXPECT_TRUE(shutdown);
+        if (synchronization_error)
+            EXPECT_NO_THROW(std::rethrow_exception(synchronization_error));
+        EXPECT_NO_THROW(Tensor::full({3}, 7.f, Device::GPU).cpu());
+    }
+
+    TEST_P(TensorBackendSemantics, EmptyDirectAllocationUsesItsNativeLabel) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU allocation metadata";
+        const auto backend = *GetParam().backend;
+        const auto allocation = lfs::core::internal::backend_driver(backend).empty_tensor_allocation(
+            lfs::core::internal::TensorAllocationKind::Direct);
+        EXPECT_EQ(allocation.storage.backend, backend);
+        EXPECT_EQ(allocation.storage.data, nullptr);
+        EXPECT_STREQ(allocation.external_kind, lfs::core::internal::allocation_label(allocation.storage));
     }
 
     TEST_P(TensorBackendSemantics, ExpressionCacheRejectsAnInvalidFreshKernel) {

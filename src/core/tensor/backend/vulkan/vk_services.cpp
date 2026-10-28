@@ -55,9 +55,11 @@ namespace lfs::core::internal {
                 bytes_ = bytes;
                 completion_ = {};
                 pending_ = true;
-                completion_ = TensorCompletionAccess::vulkan(bytes
-                                                                 ? context_->memory().copy_to_readback(source, storage_, bytes)
-                                                                 : context_->recorders().flush_current());
+                completion_ = TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = bytes
+                                                                                               ? context_->memory().copy_to_readback(source, storage_, bytes)
+                                                                                               : context_->recorders().flush_current(),
+                                                                                  .settle_on_release = false,
+                                                                                  .use_recorded_timeline = true});
             }
 
             void wait() override {
@@ -485,7 +487,7 @@ namespace lfs::core::internal {
                     if (tensor && tensor->is_valid() && gpu_backend_of(*tensor) == GpuBackend::Vulkan)
                         storage.push_back(storage_ref(*tensor));
                 }
-                return TensorCompletionAccess::vulkan(context->recorders().flush_storages(storage));
+                return TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = context->recorders().flush_storages(storage), .settle_on_release = false, .use_recorded_timeline = true});
             }
 
             void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point) override {

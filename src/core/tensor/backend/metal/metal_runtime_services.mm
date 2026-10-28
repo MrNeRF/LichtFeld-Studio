@@ -42,7 +42,7 @@ namespace {
             serial_ = meta ? meta->pending_value.load(std::memory_order_acquire) : 0;
             in_batch_ = in_batch;
             const bool complete = in_batch ? metal_queue::completed(serial_) : metal_queue::ready(serial_);
-            completion_ = complete ? TensorCompletion {} : TensorCompletionAccess::metal(serial_);
+            completion_ = complete ? TensorCompletion {} : TensorCompletionAccess::record(GpuBackend::Metal, { .value = serial_, .settle_on_release = false });
             return { complete, true };
         }
         BackendUploadSubmission enqueue_bytes(Tensor& destination, std::span<const std::byte> source, BackendQueueTarget target, bool in_batch) override

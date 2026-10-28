@@ -15,29 +15,22 @@ namespace lfs::core::internal {
     namespace {
         class UnavailableDriver final : public BackendDriver {
             GpuBackend backend_;
-            const char* direct_label_;
             const char* name_;
-            int default_device_;
-            SplatPublication publication_;
 
         public:
-            void* canonical_home_target(void* target) const noexcept override { return default_device_ >= 0 ? target : nullptr; }
+            void* canonical_home_target(void*) const noexcept override { return nullptr; }
             std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
             void synchronize_tensor_target(const Tensor&, void*) override {}
             void shutdown_compatibility_pool() override {}
             void set_pool_iteration(int) override {}
             std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
 
-            explicit UnavailableDriver(GpuBackend backend, const char* name, int device = -1, SplatPublication publication = SplatPublication::Copied, const char* direct_label = "cuda.direct")
-                : backend_(backend), direct_label_(direct_label), name_(name), default_device_(device), publication_(publication) {}
+            explicit UnavailableDriver(GpuBackend backend, const char* name)
+                : backend_(backend), name_(name) {}
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) override { throw_unavailable(); }
-            SplatPublication publication() const override {
-                return publication_ == SplatPublication::RendererStorage && !cuda_vulkan_direct_interop()
-                           ? SplatPublication::Copied
-                           : publication_;
-            }
+            SplatPublication publication() const override { return SplatPublication::Copied; }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) override { throw_unavailable(); }
-            NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override { return {.storage = {.backend = backend_}, .target = current_target(), .external_kind = kind == TensorAllocationKind::Direct ? direct_label_ : ""}; }
+            NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind) override { return {.storage = {.backend = backend_}}; }
             void complete_checked_index(void*, SourceSite) override { throw_unavailable(); }
             std::array<uintptr_t, 2> bind_target(void*) override { throw_unavailable(); }
             void unbind_target(std::array<uintptr_t, 2>) noexcept override {}
@@ -57,22 +50,22 @@ namespace lfs::core::internal {
             }
             void set_selection(int) noexcept override {}
             int selected_device() override {
-                if (default_device_ >= 0)
-                    return default_device_;
-                throw std::runtime_error(std::format("GPU backend '{}' is not compiled into this build", name_));
+                throw TensorError(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
+            bool needs_thread_binding() const noexcept override { return false; }
             void bind_thread() override {}
-            void* current_target() const noexcept override { return default_device_ >= 0 ? getCurrentCUDAStream() : nullptr; }
-            BackendRendererAccess renderer_access() const noexcept override { return {publication_ != SplatPublication::Copied, publication_ == SplatPublication::RendererStorage, false}; }
+            void* current_target() const noexcept override { return nullptr; }
+            BackendRendererAccess renderer_access() const noexcept override { return {}; }
             GpuBackendOps& activate() override {
                 LFS_ASSERT_MSG(false, std::format("GPU backend '{}' is not compiled into this build", name_));
                 std::unreachable();
             }
             MemoryInfo memory_info(bool) override { return {}; }
             MemoryInfo pressure_memory_info(bool) override { return {}; }
+            bool pressure_recovery_blocked() const noexcept override { return false; }
             void register_pressure_clients(MemoryPressureCoordinator&) override {}
             size_t allocation_bytes(size_t) override {
-                throw std::runtime_error(std::format("GPU backend '{}' is not compiled into this build", name_));
+                throw TensorError(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
             lfs::Status shutdown() override { return {}; }
             TensorExportDevice dlpack_device(const Tensor&) override { reject_dlpack_export(name()); }
@@ -81,7 +74,7 @@ namespace lfs::core::internal {
         };
         const BackendRegistry& drivers() {
             static const BackendRegistry registry = [] {
-                static UnavailableDriver cuda{GpuBackend::CUDA, "CUDA", 0, SplatPublication::RendererStorage}, vulkan{GpuBackend::Vulkan, "Vulkan", -1, SplatPublication::Shared, ""}, metal{GpuBackend::Metal, "Metal"}, hip{GpuBackend::HIP, "HIP"};
+                static UnavailableDriver cuda{GpuBackend::CUDA, "CUDA"}, vulkan{GpuBackend::Vulkan, "Vulkan"}, metal{GpuBackend::Metal, "Metal"}, hip{GpuBackend::HIP, "HIP"};
                 BackendRegistry result{&cuda, &vulkan, &metal, &hip};
                 register_compiled_backends(result);
                 return result;

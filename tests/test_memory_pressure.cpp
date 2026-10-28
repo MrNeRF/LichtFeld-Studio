@@ -262,6 +262,11 @@ TEST_F(MemoryPressureTest, HostClientsDoNotRunForDeviceFailure) {
     EXPECT_EQ(host_calls, 1);
 }
 
+TEST_F(MemoryPressureTest, HostDomainsHaveNoDeviceSafetyReserve) {
+    EXPECT_EQ(coordinator().reserve_bytes(MemoryDomain::PinnedHost), 0u);
+    EXPECT_EQ(coordinator().reserve_bytes(MemoryDomain::PageableHost), 0u);
+}
+
 TEST_F(MemoryPressureTest, ContextGatesRenderSafeClients) {
     coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 0; });
     int calls = 0;
@@ -355,7 +360,7 @@ namespace {
             MemoryPressureCoordinator::instance().reset_for_testing();
         }
         MemoryDomain domain() const {
-            return GetParam() == GpuBackend::CUDA ? MemoryDomain::CudaDevice : MemoryDomain::VulkanDevice;
+            return device_memory_domain(GetParam());
         }
         std::optional<GpuBackendScope> scope;
     };

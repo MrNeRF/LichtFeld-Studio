@@ -45,6 +45,7 @@ namespace lfs::core::internal {
         virtual std::optional<std::string> validate_options(const TensorBackendOptions&, int& selection) = 0;
         virtual void set_selection(int selection) noexcept = 0;
         virtual int selected_device() = 0;
+        virtual bool needs_thread_binding() const noexcept = 0;
         virtual void bind_thread() = 0;
         virtual void* current_target() const noexcept = 0;
         virtual BackendRendererAccess renderer_access() const noexcept = 0;
@@ -54,6 +55,7 @@ namespace lfs::core::internal {
         virtual GpuBackendOps& activate() = 0;
         virtual MemoryInfo memory_info(bool include_pool_stats) = 0;
         virtual MemoryInfo pressure_memory_info(bool free_query) = 0;
+        virtual bool pressure_recovery_blocked() const noexcept = 0;
         virtual void register_pressure_clients(MemoryPressureCoordinator&) = 0;
         virtual size_t allocation_bytes(size_t bytes) = 0;
         virtual lfs::Status shutdown() = 0;

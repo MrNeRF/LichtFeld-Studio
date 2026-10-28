@@ -62,7 +62,7 @@ namespace lfs::core::internal {
                 else
                     wait_metal_queue_consumer(consumer_.device(), consumer_.point().semaphore, value);
             }
-            TensorCompletion finish() { return bridge_ ? bridge_->signal() : TensorCompletionAccess::metal(metal_queue::submit()); }
+            TensorCompletion finish() { return bridge_ ? bridge_->signal() : TensorCompletionAccess::record(GpuBackend::Metal, {.value = metal_queue::submit(), .settle_on_release = false}); }
             void settle_failed() {
                 if (bridge_)
                     bridge_->signal().wait();

@@ -166,7 +166,7 @@ namespace lfs::core {
                     if (bytes)
                         LFS_CUDA_CHECK(cudaMemcpyAsync(host_, cuda_const_address(source), bytes,
                                                        cudaMemcpyDeviceToHost, stream_));
-                    completion_ = TensorCompletionAccess::cuda(stream_);
+                    completion_ = TensorCompletionAccess::record(GpuBackend::CUDA, {.target = {stream_}});
                 }
 
                 void wait() override {
@@ -845,7 +845,7 @@ namespace lfs::core::internal {
                 cudaExternalSemaphoreSignalParams signal{};
                 signal.params.fence.value = ++value_;
                 LFS_CUDA_CHECK(cudaSignalExternalSemaphoresAsync(&timeline_import_->imported, &signal, 1, stream_));
-                return TensorCompletionAccess::external(target_.device, {timeline_, value_, shared_from_this()});
+                return TensorCompletionAccess::record(GpuBackend::Vulkan, {.timeline = {timeline_, value_, shared_from_this()}, .external_device = target_.device, .settle_on_release = false, .record = false});
             }
 
             void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point) override {

@@ -63,6 +63,9 @@ namespace lfs::core {
     MemoryInfo gpu_pressure_memory_info(GpuBackend backend, bool free_query) {
         return internal::backend_driver(backend).pressure_memory_info(free_query);
     }
+    bool gpu_pressure_recovery_blocked(GpuBackend backend) {
+        return internal::backend_driver(backend).pressure_recovery_blocked();
+    }
     void register_gpu_pressure_clients(MemoryPressureCoordinator& coordinator) {
         for (const auto backend : kCompiledGpuBackends)
             internal::backend_driver(backend).register_pressure_clients(coordinator);
@@ -270,6 +273,9 @@ namespace lfs::core {
 
         std::atomic<int> process_backend_state{kUnconfigured};
         thread_local std::optional<GpuBackend> scoped_backend;
+        // Native policy is immutable. Cache it once per thread, without
+        // caching dynamic availability or skipping required device rebinding.
+        thread_local std::array<std::optional<internal::BackendDriver*>, kGpuBackendCount> scope_bindings;
         std::mutex options_mutex;
         TensorBackendOptions backend_options;
         bool options_frozen = false;
@@ -340,10 +346,6 @@ namespace lfs::core {
 
     int selected_hip_device() {
         return internal::backend_driver(GpuBackend::HIP).selected_device();
-    }
-
-    int selected_cuda_device() {
-        return internal::backend_driver(GpuBackend::CUDA).selected_device();
     }
 
     void activate_selected_cuda_device() {
@@ -434,7 +436,15 @@ namespace lfs::core {
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)
         : previous_(scoped_backend) {
-        internal::backend_driver(backend).bind_thread();
+        const auto index = static_cast<size_t>(backend);
+        LFS_ASSERT_MSG(index < kGpuBackendCount, "Unknown GPU backend");
+        auto& binding = scope_bindings[index];
+        if (!binding) {
+            auto& driver = internal::backend_driver(backend);
+            binding = driver.needs_thread_binding() ? &driver : nullptr;
+        }
+        if (*binding)
+            (*binding)->bind_thread();
         scoped_backend = backend;
     }
 
@@ -550,42 +560,19 @@ namespace lfs::core {
     VulkanTimelinePoint TensorCompletion::timeline() const { return impl_ ? impl_->point : VulkanTimelinePoint{}; }
     TensorCompletion::~TensorCompletion() = default;
 
-    TensorCompletion TensorCompletionAccess::hip() {
+    TensorCompletion TensorCompletionAccess::record(GpuBackend backend, internal::NativeCompletionRecord record) {
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        result.impl_->completion(GpuBackend::HIP).record({}, 0);
-        return result;
-    }
-    TensorCompletion TensorCompletionAccess::cuda(cudaStream_t stream, VulkanTimelinePoint point) {
-        TensorCompletion result;
-        result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        result.impl_->point = std::move(point);
-        result.impl_->completion(GpuBackend::CUDA).record({stream}, 0);
-        return result;
-    }
-    TensorCompletion TensorCompletionAccess::vulkan(uint64_t value) {
-        TensorCompletion result;
-        result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        result.impl_->settle_on_release = false;
-        auto& completion = result.impl_->completion(GpuBackend::Vulkan);
-        completion.record({}, value);
-        result.impl_->point = completion.timeline();
-        return result;
-    }
-    TensorCompletion TensorCompletionAccess::metal(uint64_t serial, VulkanTimelinePoint point) {
-        TensorCompletion result;
-        result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        result.impl_->settle_on_release = false;
-        result.impl_->point = std::move(point);
-        result.impl_->completion(GpuBackend::Metal).record({}, serial);
-        return result;
-    }
-    TensorCompletion TensorCompletionAccess::external(void* device, VulkanTimelinePoint point) {
-        TensorCompletion result;
-        result.impl_ = std::make_shared<TensorCompletion::Impl>();
-        result.impl_->settle_on_release = false;
-        result.impl_->point = point;
-        result.impl_->completion(GpuBackend::Vulkan, {.external_device = device, .external_point = std::move(point)});
+        result.impl_->settle_on_release = record.settle_on_release;
+        result.impl_->point = std::move(record.timeline);
+        internal::BackendCompletionTarget imported;
+        if (!record.record)
+            imported = {.external_device = record.external_device, .external_point = result.impl_->point};
+        auto& completion = result.impl_->completion(backend, std::move(imported));
+        if (record.record)
+            completion.record(record.target, record.value);
+        if (record.use_recorded_timeline)
+            result.impl_->point = completion.timeline();
         return result;
     }
 

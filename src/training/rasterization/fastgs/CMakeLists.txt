@@ -39,6 +39,7 @@ target_include_directories(fastlfs_backend
 # The arena singleton resolves from lfs_core when this static backend reaches its final link.
 target_link_libraries(fastlfs_backend
         PUBLIC
+        lfs_backend_configuration
         CUDA::cudart
         CUDA::curand
         ${CUDA_CUDA_LIBRARY}
