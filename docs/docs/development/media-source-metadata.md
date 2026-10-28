@@ -568,8 +568,10 @@ packet and interpretation budgets and can report partial observations for large
 exports. The CPU opt-in uses the existing bounded JPEG memory encoder; its encoded
 image limit is 64 MiB, separate from metadata and encoder working memory.
 
-CPU and GPU encoders retain their pixel/quality/chroma policy. Metadata insertion
-copies encoded bytes into the existing atomic file service without recompression.
+CPU and GPU encoders retain their pixel/quality/chroma policy. JPEG metadata
+insertion copies encoded bytes into the existing atomic file service without
+recompression. PNG streams the XMP fragments through its encoder into the same
+atomic file service.
 The metadata option and a SHA-256 of the prepared static source packet participate
 in checkpoint identity. Changing either rejects resume before adopting images.
 This includes a different source locator even when its file bytes are identical:

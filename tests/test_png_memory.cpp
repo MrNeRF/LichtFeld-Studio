@@ -275,6 +275,49 @@ namespace {
         }
     }
 
+    TEST(PngMemory, EmbeddedXmpRejectsOtherFormatsAndOversizedPacketsBeforePublication) {
+        TemporaryPng temporary;
+        const auto source = pixels(1, 1, 3, 8);
+        const std::vector<uint8_t> sentinel{1, 2, 3, 4};
+        lfs::core::AtomicFileOptions options{.overwrite = true, .durable = false, .create_directories = false};
+        const auto read = [&] {
+            std::ifstream input(temporary.path, std::ios::binary);
+            return std::vector<uint8_t>{std::istreambuf_iterator<char>(input), {}};
+        };
+        const auto rejected = [&](std::span<const std::string_view> parts) {
+            const auto result = codec::write_image_u8(temporary.path, source.data(), 1, 1, 3, 90, {}, options, false, parts);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+        };
+        temporary.path.replace_extension(".jpg");
+        const std::array packet{std::string_view("<xmp/>")};
+        rejected(packet);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path));
+        {
+            std::ofstream output(temporary.path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(sentinel.data()), sentinel.size());
+            ASSERT_TRUE(output);
+        }
+        rejected(packet);
+        EXPECT_EQ(read(), sentinel);
+        std::filesystem::remove(temporary.path);
+        temporary.path.replace_extension(".png");
+        // Reuse valid backing storage rather than constructing an out-of-bounds
+        // string_view or allocating a multi-gigabyte packet. The combined size
+        // exceeds the PNG 31-bit chunk limit before any image is published.
+        const std::string fragment(1024 * 1024, 'a');
+        const std::vector<std::string_view> oversized(2048, fragment);
+        rejected(oversized);
+        EXPECT_FALSE(std::filesystem::exists(temporary.path));
+        {
+            std::ofstream output(temporary.path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(sentinel.data()), sentinel.size());
+            ASSERT_TRUE(output);
+        }
+        rejected(oversized);
+        EXPECT_EQ(read(), sentinel);
+    }
+
     TEST(PngMemory, ConcurrentEncodersOwnIndependentState) {
         std::vector<std::future<bool>> jobs;
         for (int i = 0; i < 8; ++i)
