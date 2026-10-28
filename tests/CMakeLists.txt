@@ -1022,6 +1022,7 @@ if(NOT LFS_HAS_CUDA)
         test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
         test_lod_page_cache.cpp
+        test_colmap_text_images.cpp
     )
     if(LFS_TENSOR_VULKAN)
         list(APPEND TEST_SOURCES
@@ -1566,6 +1567,7 @@ set(TEST_FILES
     test_colmap_binary_error_taxonomy.cpp
     test_colmap_binary_parallel_parse.cpp
     test_colmap_camera_import.cpp
+    test_colmap_text_images.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_text_input_native_keys.cpp
