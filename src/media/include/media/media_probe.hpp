@@ -31,12 +31,16 @@ namespace lfs::media {
                                    RotateTag,
                                    DisplayMatrix };
     struct Orientation {
+        static constexpr std::size_t max_rotate_tag_bytes = 4096;
         OrientationSource source = OrientationSource::None;
         std::optional<std::string> rotate_tag;
         std::optional<std::array<int32_t, 9>> display_matrix;
         // Clockwise degrees. Unknown/malformed values are not replaced with zero.
         std::optional<double> clockwise_degrees;
         std::optional<bool> reflected;
+        // Oversized tag text is omitted; numeric interpretation still borrows
+        // the demuxer value. Raw collection has its own explicit byte budget.
+        bool rotate_tag_limited = false;
     };
     struct ColorDescription {
         std::optional<std::string> primaries;

@@ -3,6 +3,7 @@
 #include "core/image_codecs.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/frame_sink.hpp"
+#include "media/video_frame_extractor.hpp"
 #include <chrono>
 #include <fstream>
 #include <iterator>
@@ -17,6 +18,18 @@ namespace {
 } // namespace
 int runFrameSinkUnitContracts() {
     using namespace lfs::media;
+    {
+        lfs::io::VideoFrameExtractor engine;
+        lfs::io::VideoFrameExtractor::Params params;
+        params.preserve_source_metadata = true;
+        std::string error;
+        require(!engine.extract(params, error) && engine.lastError() && engine.lastError()->code() == lfs::ErrorCode::InvalidArgument,
+                "metadata preservation without a manifest is rejected before input I/O");
+        params.generate_metadata = true;
+        MemoryFrameSink sink(1024, 4);
+        require(!engine.extractToSink(params, sink, error) && engine.lastError() && engine.lastError()->code() == lfs::ErrorCode::InvalidArgument,
+                "memory delivery cannot silently discard requested metadata preservation");
+    }
     std::vector<uint8_t> pixels{1, 2, 3, 99, 99, 4, 5, 6};
     FrameView frame{{1, 2, 5, FramePixelFormat::RGB8}, {}, pixels};
     frame.info.source_timestamp = Timestamp{-42, {1, 1000}};

@@ -17,9 +17,11 @@
 #include "media/hdr_renderer.hpp"
 #include "media/hdr_tonemap.hpp"
 #include "media/media_backends.hpp"
+#include "media/media_json.hpp"
 #include "media/media_options.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/sws_packed_rgb.hpp"
+#include "source_metadata_internal.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -44,6 +46,7 @@ extern "C" {
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
@@ -1019,6 +1022,11 @@ namespace lfs::io {
             outcome_ = ExtractionOutcome::Failed;
             failure_.reset();
             error.clear();
+            if (params.preserve_source_metadata && (!params.generate_metadata || (provided_sink && !legacy_file_policy))) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Source metadata preservation requires file extraction with a manifest", .detection = LFS_SOURCE_SITE_CURRENT()});
+                error = std::string(failure_->detail());
+                return false;
+            }
             const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
@@ -1047,6 +1055,10 @@ namespace lfs::io {
                     throw ExtractionCancelled{};
                 if (!result)
                     throw std::runtime_error("Frame sink failed: " + std::string(result.error().detail()));
+            };
+            const auto throw_if_cancelled = [&]() {
+                if (params.cancel_requested && params.cancel_requested())
+                    throw ExtractionCancelled{};
             };
             const auto abort_sink = [&](media::SinkOutcome outcome) {
                 if (sink_started) {
@@ -1490,9 +1502,32 @@ namespace lfs::io {
                         : AV_NOPTS_VALUE;
 
                 media::SinkSession session;
-                if (external_sink)
+                if (external_sink || params.preserve_source_metadata)
                     session.source = media::detail::describeContext(fmt_ctx);
                 session.source.stream_info_probed = probe.metadata_complete;
+                nlohmann::json source_metadata;
+                if (params.preserve_source_metadata) {
+                    throw_if_cancelled();
+                    try {
+                        auto observed = session.source;
+                        media::detail::collectContextMetadata(fmt_ctx, observed);
+                        const auto catalog = media::catalogContainerMetadata(std::move(observed), {}, media::detail::sourceMetadataLocator(params.video_path));
+                        if (!catalog) {
+                            failure_ = catalog.error();
+                            throw std::runtime_error(std::string(failure_->detail()));
+                        }
+                        const auto summary = media::summarizeSourceMetadata(*catalog);
+                        if (!summary) {
+                            failure_ = summary.error();
+                            throw std::runtime_error(std::string(failure_->detail()));
+                        }
+                        source_metadata = media::json_detail::sourceMetadataResult(*catalog, *summary);
+                    } catch (const std::bad_alloc&) {
+                        failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata snapshot allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
+                        throw;
+                    }
+                    throw_if_cancelled();
+                }
                 const bool swap_dimensions = params.rotation == 90 || params.rotation == 270;
                 session.output = {swap_dimensions ? out_height : out_width,
                                   swap_dimensions ? out_width : out_height,
@@ -1540,10 +1575,6 @@ namespace lfs::io {
                 const bool full_gpu_pipeline_available = using_hw_decode && gpu_encoding_enabled &&
                                                          hw_device_type == AV_HWDEVICE_TYPE_CUDA && gpu_jpeg->canConvertHardware() &&
                                                          !needs_scale && !convert_hdr_to_sdr;
-                const auto throw_if_cancelled = [&]() {
-                    if (params.cancel_requested && params.cancel_requested())
-                        throw ExtractionCancelled{};
-                };
                 std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer;
                 std::vector<unsigned char> hdr_sdr_buffer;
                 HdrTonemapTiming hdr_timing_total{};
@@ -2545,11 +2576,15 @@ namespace lfs::io {
                     params.progress_callback(completed_count, completed_count, skipped_count);
 
                 check_sink(sink.prepareComplete({media::SinkOutcome::Completed, accepted_frames, {}}));
-                if (!custom_sink && params.generate_metadata && !saved_frames.empty()) {
+                if (!custom_sink && params.generate_metadata && (!saved_frames.empty() || params.preserve_source_metadata)) {
                     const std::filesystem::path meta_path = params.output_dir / "extraction_metadata.json";
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
+                        if (params.preserve_source_metadata) {
+                            root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
+                            root["source_metadata"] = std::move(source_metadata);
+                        }
                         root["provenance"] = {{"ffmpeg_version", av_version_info()},
                                               {"avcodec_version", avcodec_version()},
                                               {"avformat_version", avformat_version()}};
@@ -2823,6 +2858,7 @@ namespace lfs::io {
                             root["sharpness"]["effective_candidates_per_window"] = eff;
                         }
 
+                        root["frames"] = nlohmann::json::array();
                         auto& frames = root["frames"];
                         for (const auto& f : saved_frames) {
                             frames.push_back({{"file", f.filename},
@@ -2836,7 +2872,10 @@ namespace lfs::io {
 
                         // SDR historically replaces its manifest; float output has
                         // an explicit collision policy. Preserve both contracts.
-                        const auto result = core::writeTextFileAtomically(meta_path, root.dump(2),
+                        const auto text = params.preserve_source_metadata
+                                              ? root.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)
+                                              : root.dump(2);
+                        const auto result = core::writeTextFileAtomically(meta_path, text,
                                                                           {.overwrite = !float_output || params.overwrite_metadata,
                                                                            .durable = false,
                                                                            .create_directories = false,

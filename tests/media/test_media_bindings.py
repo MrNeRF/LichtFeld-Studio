@@ -28,6 +28,92 @@ fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
 media = None
 MEDIA_ERROR = None
+METADATA_CLI = None
+
+
+class SourceMetadataBindings(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="lfs-python-metadata-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_catalog_and_summary_match_cli_and_legacy_exif(self):
+        cli = METADATA_CLI
+        if cli is None or not cli.is_file():
+            self.fail("--cli must identify the production metadata CLI")
+        for carrier in ("jpeg", "png", "tiff", "limited_tiff"):
+            with self.subTest(carrier=carrier):
+                path = self.root / ("metadata é 日本語." + ("tiff" if carrier == "limited_tiff" else carrier))
+                if carrier == "limited_tiff":
+                    source_exif_fixture.write_tiff(path, xmp_packets=[b"x" * (1024 * 1024 + 1)])
+                else:
+                    source_exif_fixture.write_camera_metadata(path, carrier=carrier)
+                original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                encoded = media.MediaIngest.source_metadata_json(path)
+                result = json.loads(encoded)
+                reference = subprocess.run([str(cli), "source-metadata", str(path)],
+                                           check=True, capture_output=True, timeout=30)
+                self.assertEqual(result, json.loads(reference.stdout))
+                self.assertEqual(result["schema_version"], 1)
+                self.assertTrue(result["success"])
+                self.assertEqual(result["metadata"]["image_exif"],
+                                 json.loads(media.MediaIngest.source_exif_json(path)))
+                if carrier == "limited_tiff":
+                    self.assertEqual(result["metadata"]["image_xmp"]["status"], "limited")
+                    self.assertTrue(result["summary"]["limited"])
+                else:
+                    facts = {f["semantic"]: f for f in result["summary"]["facts"]}
+                    self.assertEqual(facts["camera.make"]["value"], "Test Camera")
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+                path.unlink()
+                self.assertEqual(json.loads(encoded), result)
+
+    def test_remaining_carriers_use_the_same_catalog_contract(self):
+        for carrier in ("jxl", "avif", "heic"):
+            with self.subTest(carrier=carrier):
+                path = self.root / ("metadata." + carrier)
+                if carrier == "jxl":
+                    shutil.copyfile(ROOT / "tests/data/jxl/rgb8.jxl", path)
+                else:
+                    source_exif_fixture.write_heif_metadata(path, carrier=carrier)
+                original, stamp = path.read_bytes(), path.stat().st_mtime_ns
+                result = json.loads(media.MediaIngest.source_metadata_json(path))
+                reference = subprocess.run([str(METADATA_CLI), "source-metadata", str(path)],
+                                           check=True, capture_output=True, timeout=30)
+                self.assertEqual(result, json.loads(reference.stdout))
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), (original, stamp))
+
+    def test_concurrent_calls_keep_results_independent(self):
+        valid = self.root / "valid.tiff"
+        invalid = self.root / "invalid.tiff"
+        source_exif_fixture.write_tiff(valid)
+        invalid.write_bytes(b"II*\0")
+        expected = media.MediaIngest.source_metadata_json(valid)
+        def read(index):
+            return index, json.loads(media.MediaIngest.source_metadata_json(valid if index % 2 else invalid))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for index, result in pool.map(read, range(24)):
+                if index % 2:
+                    self.assertEqual(result, json.loads(expected))
+                else:
+                    self.assertEqual(result["metadata"]["image_exif"]["status"], "malformed")
+
+    @unittest.skipIf(os.name == "nt", "Native non-UTF-8 filename bytes are POSIX-specific")
+    def test_native_filename_bytes_and_pathlike(self):
+        native = os.fsencode(self.root) + b"/metadata-\xff.jpg"
+        path = Path(os.fsdecode(native))
+        try:
+            source_exif_fixture.write_jpeg(path)
+        except OSError as error:
+            if error.errno == errno.EILSEQ:
+                self.skipTest("The filesystem rejects non-UTF-8 filename bytes")
+            raise
+        class NativePath:
+            def __fspath__(self):
+                return os.fsdecode(native)
+        result = json.loads(media.MediaIngest.source_metadata_json(NativePath()))
+        self.assertEqual(result["metadata"]["source_locator_bytes"], native.hex())
+        self.assertTrue(result["summary"]["facts"])
 
 
 class MediaBindings(unittest.TestCase):
@@ -809,6 +895,238 @@ class MediaBindings(unittest.TestCase):
         del request, report, file_report
         self.assertEqual(before, frames[0].pixels)
 
+    def metadata_request(self, multitrack=False):
+        request = self.request()
+        path = self.root / (self._testMethodName + ".mkv")
+        command = [os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-y", "-i", str(request.input)]
+        if multitrack:
+            command += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono,aformat=sample_fmts=s16"]
+        command += ["-map", "0:v:0", "-c:v", "copy"]
+        if multitrack:
+            command += ["-map", "1:a:0", "-c:a", "pcm_s16le", "-metadata:s:a:0", "title=AUDIO_METADATA_SENTINEL", "-shortest"]
+        command += ["-metadata", "comment=STATIC_METADATA_SENTINEL", "-metadata", "location=+01.2500+002.5000/",
+                    "-write_crc32", "0", str(path)]
+        subprocess.run(command, check=True, capture_output=True, timeout=30)
+        request.input = path
+        return request
+
+    def test_source_metadata_manifest_survives_empty_selection_and_resume(self):
+        request = self.metadata_request()
+        request.sharpness.enabled = True
+        request.sharpness.threshold = 1e30
+        for resume in (False, True):
+            for preserve in (False, True):
+                with self.subTest(resume=resume, preserve=preserve):
+                    files = media.FileExtraction()
+                    files.files.output_directory = self.root / f"metadata-empty-{resume}-{preserve}"
+                    files.write_metadata = True
+                    files.resume = resume
+                    files.preserve_source_metadata = preserve
+                    report = media.MediaIngest.extract_files(request, files)
+                    self.assertEqual(report.frames_accepted, 0)
+                    self.assertGreater(report.discarded, 0)
+                    path = files.files.output_directory / "extraction_metadata.json"
+                    self.assertEqual(path.is_file(), preserve)
+                    if not preserve:
+                        continue
+                    manifest = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual(manifest["frames"], [])
+                    self.assertTrue(manifest["source_metadata"]["success"])
+                    previous = manifest["source_metadata"]
+                    self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 0)
+                    repeated = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual(repeated["frames"], [])
+                    self.assertEqual(repeated["source_metadata"], previous)
+        # An empty extraction must replace an older nonempty frame manifest.
+        files = media.FileExtraction()
+        files.preserve_source_metadata = True
+        files.files.output_directory = self.root / "metadata-empty-replaces-old"
+        request.sharpness.enabled = False
+        self.assertGreater(media.MediaIngest.extract_files(request, files).frames_accepted, 0)
+        path = files.files.output_directory / "extraction_metadata.json"
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        request.sharpness.enabled = True
+        before = path.read_bytes()
+        cancelled = [False]
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, files, cancelled=lambda: cancelled[0],
+                                            progress=lambda value: cancelled.__setitem__(0, value.processed == value.estimated))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 0)
+        current = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(previous["frames"])
+        self.assertEqual(current["frames"], [])
+        self.assertEqual(current["source_metadata"], previous["source_metadata"])
+        files.files.output_directory = self.root / "metadata-empty-collision"
+        files.files.output_directory.mkdir()
+        collision = files.files.output_directory / "extraction_metadata.json"
+        collision.mkdir()
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, files)
+        self.assertTrue(collision.is_dir())
+
+    def test_source_metadata_oversized_rotation_stays_bounded_through_extraction(self):
+        value = "9" * (9 * 1024 * 1024)
+        request = self.request()
+        source = self.root / "oversized-rotation.mkv"
+        subprocess.run([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-y",
+                        "-i", str(request.input), "-map", "0:v:0", "-c:v", "copy",
+                        "-metadata:s:v:0", "ROTATX=ROTATION_PLACEHOLDER", "-live", "1",
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        # Resize only the metadata EBML elements. Streaming output has no
+        # finite Segment size or cue offsets to invalidate when tags grow.
+        def rewrite(elements):
+            result = bytearray()
+            offset = 0
+            while offset < len(elements):
+                def width(first, maximum):
+                    for count in range(1, maximum + 1):
+                        if first & (1 << (8 - count)):
+                            return count
+                    raise AssertionError("invalid EBML fixture integer")
+                id_size = width(elements[offset], 4)
+                identifier = elements[offset:offset + id_size]
+                size_offset = offset + id_size
+                size_width = width(elements[size_offset], 8)
+                size_bytes = elements[size_offset:size_offset + size_width]
+                size = int.from_bytes(size_bytes, "big") & ((1 << (7 * size_width)) - 1)
+                unknown = size == (1 << (7 * size_width)) - 1
+                begin = size_offset + size_width
+                end = len(elements) if unknown else begin + size
+                self.assertLessEqual(end, len(elements))
+                payload = elements[begin:end]
+                if identifier == b"\x11\x4d\x9b\x74":
+                    offset = end
+                    continue  # Optional SeekHead offsets precede the resized tags.
+                if identifier in (b"\x18\x53\x80\x67", b"\x12\x54\xc3\x67", b"\x73\x73", b"\x67\xc8"):
+                    payload = rewrite(payload)
+                elif identifier == b"\x44\x87" and payload == b"ROTATION_PLACEHOLDER":
+                    payload = value.encode("utf-8")
+                elif identifier == b"\x45\xa3" and payload == b"ROTATX":
+                    payload = b"ROTATE"
+                if not unknown:
+                    count = next(count for count in range(1, 9) if len(payload) < (1 << (7 * count)) - 1)
+                    size_bytes = (len(payload) | (1 << (7 * count))).to_bytes(count, "big")
+                result += identifier + size_bytes + payload
+                offset = end
+            return bytes(result)
+        original = source.read_bytes()
+        self.assertIn(b"ROTATION_PLACEHOLDER", original)
+        source.write_bytes(rewrite(original))
+        request.input = source
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "rotation-output"
+        files.preserve_source_metadata = True
+        self.assertEqual(media.MediaIngest.extract_files(request, files).frames_accepted, 4)
+        self.assertEqual(len(list(files.files.output_directory.glob("frame_*.png"))), 4)
+        path = files.files.output_directory / "extraction_metadata.json"
+        self.assertLess(path.stat().st_size, 128 * 1024)
+        snapshot = json.loads(path.read_text(encoding="utf-8"))["source_metadata"]
+        orientation = snapshot["metadata"]["description"]["streams"][0]["orientation"]
+        self.assertTrue(orientation["rotate_tag_limited"])
+        self.assertIsNone(orientation["rotate_tag"])
+        self.assertIsNone(orientation["clockwise_degrees"])
+        self.assertTrue(snapshot["summary"]["limited"])
+        observed = snapshot["metadata"]["source_metadata"]
+        self.assertTrue(observed["limited"])
+        probed = media.MediaIngest.probe(source)
+        self.assertTrue(probed.streams[0].orientation.rotate_tag_limited)
+
+    def test_source_metadata_is_opt_in_and_shared_by_output_frames(self):
+        request = self.metadata_request()
+        for preserve in (False, True):
+            files = media.FileExtraction()
+            files.files.output_directory = self.root / ("preserved" if preserve else "omitted")
+            files.write_metadata = True
+            files.preserve_source_metadata = preserve
+            media.MediaIngest.extract_files(request, files)
+            manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual("source_metadata" in manifest, preserve)
+            self.assertEqual("source_metadata_policy" in manifest, preserve)
+            if preserve:
+                self.assertEqual(manifest["source_metadata_policy"], "preserve_static_container_v1")
+                snapshot = manifest["source_metadata"]
+                description = snapshot["metadata"]["description"]
+                self.assertEqual(description["selected_video_stream"], manifest["input"]["video"]["stream_index"])
+                native = str(request.input).encode("utf-16-le") if os.name == "nt" else os.fsencode(request.input)
+                self.assertEqual(snapshot["metadata"]["source_locator_bytes"], native.hex())
+                self.assertEqual((snapshot["schema_version"], snapshot["success"]), (1, True))
+                observed = snapshot["metadata"]["source_metadata"]
+                tags = {bytes.fromhex(tag["key_bytes"]).lower(): bytes.fromhex(tag["value_bytes"]) for tag in observed["tags"]}
+                self.assertEqual(tags[b"comment"], b"STATIC_METADATA_SENTINEL")
+                self.assertEqual(tags[b"location"], b"+01.2500+002.5000/")
+                self.assertFalse(snapshot["summary"]["limited"])
+                self.assertGreater(len(manifest["frames"]), 1)
+                self.assertTrue(all("source_metadata" not in frame and "source_pts" in frame for frame in manifest["frames"]))
+        omitted, preserved = [self.root / name for name in ("omitted", "preserved")]
+        self.assertEqual({p.name: p.read_bytes() for p in omitted.glob("frame_*.png")},
+                         {p.name: p.read_bytes() for p in preserved.glob("frame_*.png")})
+
+    def test_source_metadata_keeps_other_stream_tags(self):
+        request = self.metadata_request(multitrack=True)
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "metadata-multitrack"
+        files.preserve_source_metadata = True
+        media.MediaIngest.extract_files(request, files)
+        manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        catalog = manifest["source_metadata"]["metadata"]
+        audio, = [stream for stream in catalog["description"]["streams"] if stream["kind"] == "audio"]
+        observed, = [stream for stream in catalog["source_metadata"]["streams"] if stream["stream_index"] == audio["index"]]
+        self.assertTrue(any(bytes.fromhex(tag["value_bytes"]) == b"AUDIO_METADATA_SENTINEL" for tag in observed["tags"]))
+
+    def test_source_metadata_preservation_all_image_formats(self):
+        request = self.metadata_request()
+        request.geometry.clockwise_rotation = 90
+        request.geometry.mode = media.ResizeMode.Scale
+        request.geometry.scale = 0.5
+        for name in ("PNG", "JPEG", "EXR", "TIFF16", "JXL", "AVIF"):
+            with self.subTest(format=name):
+                files = media.FileExtraction()
+                files.files.output_directory = self.root / ("metadata-" + name)
+                files.files.format = getattr(media.FrameFileFormat, name)
+                files.preserve_source_metadata = True
+                request.output_format = media.FramePixelFormat.RGB8 if name in ("PNG", "JPEG") else media.FramePixelFormat.RGBFloat32
+                request.input_color.transfer = media.ColorTransfer.Unspecified if name in ("PNG", "JPEG") else media.ColorTransfer.Linear
+                request.input_color.primaries = media.ColorPrimaries.Unspecified if name in ("PNG", "JPEG") else media.ColorPrimaries.Bt709
+                report = media.MediaIngest.extract_files(request, files)
+                manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(len(manifest["frames"]), report.frames_accepted)
+                self.assertEqual(manifest["output"]["size"], [16, 32])
+                dimensions = {fact["semantic"]: fact["value"] for fact in manifest["source_metadata"]["summary"]["facts"]}
+                self.assertEqual((dimensions["image.width"], dimensions["image.height"]), (64, 32))
+
+    def test_source_metadata_policy_is_bound_to_resume_identity(self):
+        request = self.metadata_request()
+        for preserve in (False, True):
+            with self.subTest(preserve=preserve):
+                files = self.resume_files(self.root / ("metadata-resume-" + str(preserve)))
+                files.preserve_source_metadata = preserve
+                self.interrupt_resume(request, files)
+                before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files.files.output_directory.glob("frame_*.png")}
+                files.preserve_source_metadata = not preserve
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.extract_files(request, files)
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in files.files.output_directory.glob("frame_*.png")})
+                files.preserve_source_metadata = preserve
+                media.MediaIngest.extract_files(request, files)
+                manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual("source_metadata" in manifest, preserve)
+
+    def test_non_utf8_source_tag_bytes_survive_manifest_transport(self):
+        request = self.metadata_request()
+        data = request.input.read_bytes()
+        self.assertIn(b"STATIC_METADATA_SENTINEL", data)
+        request.input.write_bytes(data.replace(b"STATIC_METADATA_SENTINEL", b"\xffTATIC_METADATA_SENTINEL"))
+        files = media.FileExtraction()
+        files.files.output_directory = self.root / "metadata-bytes"
+        files.preserve_source_metadata = True
+        media.MediaIngest.extract_files(request, files)
+        manifest = json.loads((files.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        tags = manifest["source_metadata"]["metadata"]["source_metadata"]["tags"]
+        comment, = [tag for tag in tags if bytes.fromhex(tag["key_bytes"]).lower() == b"comment"]
+        self.assertEqual(bytes.fromhex(comment["value_bytes"]), b"\xffTATIC_METADATA_SENTINEL")
+        self.assertIn("\ufffd", comment["value"])
+
     def test_budget_and_cancellation_failures(self):
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract(self.request(), payload_budget=1)
@@ -1220,8 +1538,10 @@ if __name__ == "__main__":
     parser.add_argument("--module-dir", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path, required=True)
     parser.add_argument("--dependency-dir", type=Path)
+    parser.add_argument("--cli", type=Path, help="Production media-ingest executable for metadata parity checks")
     parser.add_argument("--studio", action="store_true", help="Test the complete lichtfeld module")
     args, remaining = parser.parse_known_args()
+    METADATA_CLI = args.cli or args.runtime_dir / ("media-ingest.exe" if os.name == "nt" else "media-ingest")
     dll_handles = []
     if os.name == "nt":
         for directory in (args.runtime_dir, args.dependency_dir):

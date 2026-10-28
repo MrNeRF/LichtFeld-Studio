@@ -65,6 +65,7 @@ namespace lfs::media {
                 if (!handle)
                     return invalid("Metadata summary contains an invalid catalog reference");
                 const auto& stream = *catalog.streamDescription(*stream_reference);
+                summary.limited = summary.limited || stream.orientation.rotate_tag_limited;
                 if (stream.width && !append(*handle, "image.width", int64_t(*stream.width), MetadataUnit::Pixels))
                     break;
                 if (stream.height && !append(*handle, "image.height", int64_t(*stream.height), MetadataUnit::Pixels))

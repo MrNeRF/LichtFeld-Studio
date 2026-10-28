@@ -4,6 +4,7 @@
 #include "core/path_utils.hpp"
 #include "media/media_ingest.hpp"
 #include "media/source_exif_internal.hpp"
+#include "source_metadata_internal.hpp"
 #include <algorithm>
 #include <new>
 #include <type_traits>
@@ -79,23 +80,24 @@ namespace lfs::media {
             }
             return false;
         }
-        MetadataSourceLocator sourceLocator(const std::filesystem::path& path) {
-            MetadataSourceLocator result;
-            result.display = core::path_to_utf8(path);
-#ifdef _WIN32
-            result.encoding = MetadataPathEncoding::Utf16LE;
-            for (const auto unit : path.native()) {
-                const auto value = static_cast<std::uint16_t>(unit);
-                result.native_bytes.push_back(static_cast<char>(value & 255));
-                result.native_bytes.push_back(static_cast<char>(value >> 8));
-            }
-#else
-            result.encoding = MetadataPathEncoding::PosixBytes;
-            result.native_bytes = path.native();
-#endif
-            return result;
-        }
     } // namespace
+
+    MetadataSourceLocator detail::sourceMetadataLocator(const std::filesystem::path& path) {
+        MetadataSourceLocator result;
+        result.display = core::path_to_utf8(path);
+#ifdef _WIN32
+        result.encoding = MetadataPathEncoding::Utf16LE;
+        for (const auto unit : path.native()) {
+            const auto value = static_cast<std::uint16_t>(unit);
+            result.native_bytes.push_back(static_cast<char>(value & 255));
+            result.native_bytes.push_back(static_cast<char>(value >> 8));
+        }
+#else
+        result.encoding = MetadataPathEncoding::PosixBytes;
+        result.native_bytes = path.native();
+#endif
+        return result;
+    }
 
     std::optional<MetadataRecordHandle> SourceMetadataCatalog::bind(SourceMetadataReference reference) const {
         if (!storage_)
@@ -290,7 +292,7 @@ namespace lfs::media {
         try {
             auto collected = core::image_codecs::read_source_metadata(path, {}, xmp_limits);
             auto description = detail::describeSourceExif(std::move(collected.exif));
-            return catalogSourceMetadata(std::move(description), limits, sourceLocator(path), std::move(collected.xmp));
+            return catalogSourceMetadata(std::move(description), limits, detail::sourceMetadataLocator(path), std::move(collected.xmp));
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata collection allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         }
@@ -302,7 +304,7 @@ namespace lfs::media {
             auto description = MediaProbe::inspect(path, requested);
             if (!description)
                 return description.error();
-            return catalogContainerMetadata(std::move(*description), limits, sourceLocator(path));
+            return catalogContainerMetadata(std::move(*description), limits, detail::sourceMetadataLocator(path));
         } catch (const std::bad_alloc&) {
             return make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Container metadata collection allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
         }

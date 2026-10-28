@@ -74,7 +74,7 @@ namespace {
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
-                             "  [--name PATTERN] [--metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
+                             "  [--name PATTERN] [--metadata] [--preserve-source-metadata] [--resume] [--sharpness THRESHOLD] [--window]\n"
                              "  [--algorithm laplacian|tenengrad|combined] [--candidates N] [--hdr-to-sdr] [--quiet]\n"
                              "  TIFF16: [--tiff16-transfer srgb|bt709|linear] [--overwrite] (relative SDR only)\n"
                              "  AVIF: [--avif-quality 0..100 (enables lossy)] [--avif-speed 0..9] [--avif-depth 8|10|12] [--overwrite]\n"
@@ -100,7 +100,7 @@ namespace {
                 const auto summary = summarizeSourceMetadata(*result);
                 if (!summary)
                     return failed(summary.error());
-                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"metadata", json_detail::sourceMetadata(*result)}, {"summary", json_detail::metadataSummary(*summary)}}) << '\n';
+                std::cout << json_detail::dump(json_detail::sourceMetadataResult(*result, *summary)) << '\n';
                 return 0;
             }
             if (args.size() == 3 && args[1] == "source-metadata") {
@@ -110,7 +110,7 @@ namespace {
                 const auto summary = summarizeImageMetadata(*result);
                 if (!summary)
                     return failed(summary.error());
-                std::cout << json_detail::dump(json{{"schema_version", 1}, {"success", true}, {"metadata", json_detail::sourceMetadata(*result)}, {"summary", json_detail::metadataSummary(*summary)}}) << '\n';
+                std::cout << json_detail::dump(json_detail::sourceMetadataResult(*result, *summary)) << '\n';
                 return 0;
             }
             if (args.size() == 3 && args[1] == "source-exif") {
@@ -226,6 +226,8 @@ namespace {
                     request.input_color.primaries = parse<ColorPrimaries>(value());
                 } else if (flag == "--metadata")
                     output.write_metadata = true;
+                else if (flag == "--preserve-source-metadata")
+                    output.preserve_source_metadata = true;
                 else if (flag == "--resume")
                     output.resume = true;
                 else if (flag == "--quiet")

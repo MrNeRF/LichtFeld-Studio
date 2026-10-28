@@ -342,7 +342,12 @@ namespace lfs::media::json_detail {
         json result{{"container", media.container}, {"stream_info_probed", media.stream_info_probed}, {"start", timestamp(media.start)}, {"duration", timestamp(media.duration)}, {"selected_video_stream", optional(media.selected_video_stream)}, {"streams", json::array()}};
         for (const auto& s : media.streams) {
             result["streams"].push_back({{"index", s.index}, {"kind", streamKind(s.kind)}, {"codec", s.codec}, {"width", optional(s.width)}, {"height", optional(s.height)}, {"pixel_format", optional(s.pixel_format)}, {"time_base", rational(s.time_base)}, {"nominal_frame_rate", rational(s.nominal_frame_rate)}, {"average_frame_rate", rational(s.average_frame_rate)}, {"sample_aspect_ratio", rational(s.sample_aspect_ratio)}, {"start", timestamp(s.start)}, {"duration", timestamp(s.duration)}, {"declared_frame_count", optional(s.declared_frame_count)}, {"attached_picture", s.attached_picture}, {"default_disposition", s.default_disposition}, {"color", {{"primaries", optional(s.color.primaries)}, {"transfer", optional(s.color.transfer)}, {"matrix", optional(s.color.matrix)}, {"range", optional(s.color.range)}, {"component_depth", optional(s.color.component_depth)}}}, {"orientation", {{"source", orientationSource(s.orientation.source)}, {"rotate_tag", optional(s.orientation.rotate_tag)}, {"display_matrix", optional(s.orientation.display_matrix)}, {"clockwise_degrees", optional(s.orientation.clockwise_degrees)}, {"reflected", optional(s.orientation.reflected)}}}});
+            if (s.orientation.rotate_tag_limited)
+                result["streams"].back()["orientation"]["rotate_tag_limited"] = true;
         }
         return result;
+    }
+    inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
+        return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
     }
 } // namespace lfs::media::json_detail

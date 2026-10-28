@@ -349,7 +349,7 @@ When combined PNG collection continues after its first EXIF retention omission, 
 The regression corpus checks exact decoded Brotli bytes and aggregate statuses, high-expansion JXL output, near-`UINT64_MAX` box lengths, and a Linux sparse-file encoded-input ceiling. Opaque external-entity markup is preserved; on Linux an inotify watch verifies that the referenced local file is neither opened nor read. Zlib/deflate fixtures cover both HEIC and AVIF, EXIF and later-packet preservation, malformed/truncated/trailing streams, empty output and the exact 16 MiB provider boundary.
 ## Standard XMP property interpretation
 
-`summarizeImageMetadata` projects selected standard XMP properties from packets already retained in the catalog. The existing `source-metadata` CLI calls this summary. Collection and `MediaIngest::sourceMetadata` preserve original packets independently; normal probing, pixel decoding and training do not request interpretation. The Python catalog result remains the original catalog transport.
+`summarizeImageMetadata` projects selected standard XMP properties from packets already retained in the catalog. The existing `source-metadata` CLI calls this summary. Collection and `MediaIngest::sourceMetadata` preserve original packets independently; normal probing, pixel decoding and training do not request interpretation. Python callers can request the same image catalog and summary through `lichtfeld.media.MediaIngest.source_metadata_json(path)`.
 
 Expat recognizes expanded namespace URIs, not prefix spelling, in abbreviated attributes and simple RDF property elements. Supported fields are TIFF Make/Model/Orientation; EXIF ExposureTime, FNumber, FocalLength, GPSLatitude/Longitude, GPSAltitude/AltitudeRef, GPSMapDatum, DateTimeOriginal/Digitized; CIPA LensMake/LensModel; auxiliary Lens; XMP CreateDate/ModifyDate. Unknown properties remain in the packet. Structured or qualified forms of recognized properties yield Unsupported facts. This is a scalar projection rather than a complete RDF graph implementation; selected DJI source properties use the separate interpretation contract below.
 
@@ -422,3 +422,88 @@ Standard and Extended portions use the same bounded Expat parser and scalar proj
 Ordinary packets without extended declarations use the existing streaming projection. Extended inputs are prepared as a bounded set before projection so later duplicate/invalid associations cannot retroactively invalidate published facts. Parsers are released after each parse; owned parsed scalar text is bounded by aggregate input and per-packet text limits. One validated assembly buffer is used at a time and released after parsing. A standard declaration without retained fragments is reported explicitly; detecting this declaration can cause a second bounded interpretation pass over that catalog. These limits do not establish a whole-process memory ceiling or complete RDF graph support.
 
 Format reference: [Adobe XMP Specification Part 3, section 1.1.3.1](https://github.com/adobe/XMP-Toolkit-SDK/blob/main/docs/XMPSpecificationPart3.pdf).
+
+## Python image metadata access
+
+`lichtfeld.media.MediaIngest.source_metadata_json(path)` returns an owned JSON
+string with the same `schema_version`, `success`, `metadata` and `summary`
+fields as `media-ingest source-metadata INPUT`. It reuses the catalog reader,
+image summary and JSON serializers. Binary originals remain hex encoded;
+partial collection and interpretation retain their original states and
+provenance. The call uses the same default collection and summary budgets as
+the CLI. `source_exif_json` keeps its existing result format.
+
+The explicit call accepts the existing Python filesystem path conversion and
+releases the GIL during collection, interpretation and serialization. An
+empty source argument raises the existing LichtFeld error; filesystem argument
+conversion failures (including embedded NUL) raise TypeError. A missing file or an
+unsupported/malformed carrier can instead return catalog diagnostics, just as
+in the CLI. A successful call does not imply that every packet was parsed.
+Returned strings do not borrow catalog, parser or source-file storage.
+
+For example, a plugin can inspect the preserved declarations in-process:
+
+```python
+import json
+import lichtfeld
+
+result = json.loads(lichtfeld.media.MediaIngest.source_metadata_json(image_path))
+for fact in result["summary"]["facts"]:
+    if fact["state"] == "present" and not fact["ambiguous"]:
+        print(fact["semantic"], fact["value"], fact["unit"])
+```
+
+Validity and ambiguity are properties of the interpreted declaration, not a
+GNSS or calibration quality guarantee. Dataset/training loading does not
+request this operation automatically.
+
+## Preserving static source observations during extraction
+
+File extraction accepts `FileExtraction.preserve_source_metadata` in C++/Python
+and `--preserve-source-metadata` in the CLI. It is false by default. Enabling it
+also requests `extraction_metadata.json`, using the existing atomic manifest
+writer. A single `source_metadata` object contains the version-1 catalog and
+static stream summary; `source_metadata_policy` identifies
+`preserve_static_container_v1`. All listed output frames belong to that input;
+their existing `source_pts`, input stream index/timebase and output transform
+fields identify the extraction. The observation is stored once, rather than
+copied into every frame record.
+
+Collection uses the same opened FFmpeg context as extraction, before frame
+delivery, and the existing container collection/index/summary limits. It
+preserves demuxer-exposed tags and coded side data, with exact retained bytes in
+hex and explicit limited states. This is a bounded static observation, not an
+archive of all original container bytes or a scan of timed telemetry packets.
+The selected stream and other observed streams retain their identities.
+
+The stream description retains at most 4096 bytes of rotation-tag text.
+Larger text is omitted with `rotate_tag_limited: true`; numeric rotation is
+still interpreted from the demuxer value without copying it. The summary
+reports this omission as limited. Raw tags keep their separate collection
+budget, so an omitted description string can still have exact retained bytes
+in the catalog. Normal orientation JSON is unchanged.
+
+This opt-in includes any GPS, identifiers or other private data contained in
+tags or opaque payloads. Turning it off omits this snapshot from newly generated manifests; it does
+not redact files from earlier runs. There is no field-level privacy filter: a payload may contain information outside its
+visible tag name. Existing manifest filenames are not an anonymization feature.
+Original source declarations remain separate from output dimensions, rotation,
+resampling and color processing. They are not injected as current EXIF/XMP
+properties of the transformed images or asserted as per-frame GPS fixes.
+
+Resume includes the preservation policy in its existing input-digest and
+pipeline/provider identity checks. Switching it in either direction rejects a
+checkpoint before adopting/replacing recorded images. The final manifest is
+regenerated from a verified resumed run; completed images can survive an
+interruption before manifest publication. Images and the manifest are not a
+single filesystem transaction. Cancellation retains the existing extraction
+semantics and atomic publication checks.
+
+When every candidate is rejected, explicit source preservation still publishes
+the observation with an empty `frames` array. A resumed empty run regenerates
+that manifest. With source preservation disabled, the historical zero-frame
+behavior is unchanged.
+
+The CLI and Python bindings use this same file-extraction path. Rendered image
+sequences have no video input to observe; their metadata needs an explicitly
+identified source/consumer rather than an invented camera declaration.

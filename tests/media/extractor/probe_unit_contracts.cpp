@@ -3,6 +3,7 @@
 #include "core/image_codecs.hpp"
 #include "core/source_metadata.hpp"
 #include "media/decoded_video_frame_ffmpeg.hpp"
+#include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/video_player.hpp"
 extern "C" {
@@ -521,6 +522,35 @@ int runProbeUnitContracts() {
     av_dict_set(&video->metadata, "rotate", "45", 0);
     stream = detail::describeStream(video);
     require(stream.orientation.clockwise_degrees == 45 && legacyQuarterTurn(stream.orientation) == 0, "raw non-quarter angle retained without unsupported preview rotation");
+    for (const auto bytes : {Orientation::max_rotate_tag_bytes - 1, Orientation::max_rotate_tag_bytes,
+                             Orientation::max_rotate_tag_bytes + 1}) {
+        const auto value = std::string(bytes - 2, ' ') + "90";
+        require(av_dict_set(&video->metadata, "rotate", value.c_str(), 0) >= 0, "set bounded rotation fixture");
+        stream = detail::describeStream(video);
+        const bool limited = bytes > Orientation::max_rotate_tag_bytes;
+        require(stream.orientation.rotate_tag_limited == limited &&
+                    stream.orientation.rotate_tag.has_value() == !limited,
+                "rotation text retention has an exact inclusive byte bound");
+        require(stream.orientation.clockwise_degrees == 90 && legacyQuarterTurn(stream.orientation) == 90,
+                "omitting oversized text does not change numeric or legacy rotation");
+        auto observed = detail::describeContext(context.get());
+        detail::collectContextMetadata(context.get(), observed);
+        const auto catalog = catalogContainerMetadata(std::move(observed));
+        require(bool(catalog), "bounded rotation catalog");
+        const auto summary = summarizeSourceMetadata(*catalog);
+        require(summary && summary->limited == limited, "orientation text omission remains visible in the summary");
+        require(catalog->container()->source_metadata->streams[1].tags.back().value == value,
+                "raw tag collection retains its independent byte budget and exact original");
+        const auto json = json_detail::sourceMetadata(*catalog);
+        require(json["description"]["streams"][1]["orientation"].contains("rotate_tag_limited") == limited,
+                "normal orientation JSON is unchanged and omitted text is explicit");
+    }
+    const auto invalid_large = std::string(Orientation::max_rotate_tag_bytes + 1, '9');
+    require(av_dict_set(&video->metadata, "rotate", invalid_large.c_str(), 0) >= 0, "set oversized invalid rotation");
+    stream = detail::describeStream(video);
+    require(stream.orientation.rotate_tag_limited && !stream.orientation.clockwise_degrees &&
+                legacyQuarterTurn(stream.orientation) == 0,
+            "oversized malformed rotation stays unknown without matrix fallback");
     detail::discardNonVideoStreams(context.get(), 1);
     require(audio->discard == AVDISCARD_ALL && second->discard == AVDISCARD_ALL && video->discard == AVDISCARD_DEFAULT, "legacy discard policy");
     require(detail::findUsableHeaderVideoStream(nullptr) == -1, "null context");

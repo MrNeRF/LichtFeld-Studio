@@ -512,6 +512,12 @@ class FileExtraction:
     @resume.setter
     def resume(self, arg: bool, /) -> None: ...
 
+    @property
+    def preserve_source_metadata(self) -> bool: ...
+
+    @preserve_source_metadata.setter
+    def preserve_source_metadata(self, arg: bool, /) -> None: ...
+
 class Rational:
     def __init__(self) -> None: ...
 
@@ -564,6 +570,9 @@ class Orientation:
 
     @property
     def rotate_tag(self) -> str | None: ...
+
+    @property
+    def rotate_tag_limited(self) -> bool: ...
 
     @property
     def display_matrix(self) -> list[int] | None: ...
@@ -829,6 +838,12 @@ class ImageOutput:
 class MediaIngest:
     @staticmethod
     def capabilities() -> IngestCapabilities: ...
+
+    @staticmethod
+    def source_metadata_json(path: str | os.PathLike) -> str:
+        """
+        Read the original image metadata catalog and interpreted summary as JSON, using the source-metadata CLI schema and default limits. Collection and interpretation run with the GIL released; binary values are hex and partial results retain their status.
+        """
 
     @staticmethod
     def source_exif_json(path: str | os.PathLike) -> str:
