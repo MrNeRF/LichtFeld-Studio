@@ -668,17 +668,19 @@ namespace lfs::vis {
 
                 const float press_duration = input.time - keyframe_press_time_;
                 const bool short_click = press_duration >= 0.0f && press_duration < DOUBLE_CLICK_TIME;
-                if (!keyframe_drag_started_ && short_click && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX * s) {
+                if (!keyframe_drag_started_ && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX * s) {
                     if (const auto index = controller_.timeline().findKeyframeIndex(dragged_keyframe_id_); index.has_value()) {
-                        if (keyframe_double_click_pending_) {
+                        if (keyframe_double_click_pending_ && short_click) {
                             editing_keyframe_time_ = true;
                             editing_keyframe_index_ = *index;
                             time_edit_buffer_ = fmt::format("{:.2f}", controller_.timeline().getKeyframe(*index)->time);
                             last_clicked_keyframe_id_ = std::nullopt;
                         } else {
                             lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
-                            last_clicked_keyframe_id_ = dragged_keyframe_id_;
-                            last_click_time_ = keyframe_press_time_;
+                            if (short_click) {
+                                last_clicked_keyframe_id_ = dragged_keyframe_id_;
+                                last_click_time_ = keyframe_press_time_;
+                            }
                         }
                     }
                 }

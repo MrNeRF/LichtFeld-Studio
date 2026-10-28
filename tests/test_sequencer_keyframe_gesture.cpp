@@ -144,19 +144,23 @@ namespace lfs::vis {
         const float press_x = x(2.13f) + 4.f * scale_;
         input(press_x, true, true);
         input(press_x, false, false);
+        EXPECT_EQ(visits_, 1);
         clock_ = 10.1f;
         input(press_x, true, true);
         clock_ = 11.f;
         input(press_x, false, false);
         EXPECT_FALSE(editingTime());
+        EXPECT_EQ(visits_, 2); // a long release still goes to the keyframe
         clock_ = 11.1f;
         input(press_x, true, true);
         input(press_x, false, false);
         EXPECT_FALSE(editingTime()); // the long press did not seed a double click
+        EXPECT_EQ(visits_, 3);
         clock_ = 12.f;
         input(press_x, true, true);
         input(press_x, false, false);
         EXPECT_FALSE(editingTime());
+        EXPECT_EQ(visits_, 4);
         EXPECT_FLOAT_EQ(time(), 2.13f);
         EXPECT_EQ(commits_, 0);
     }
@@ -191,11 +195,12 @@ namespace {
     };
 
     TEST_P(SequencerKeyframeLayoutTest, SelectionKeepsTheDiamondSizeAndCenter) {
-        const auto css = std::string(PROJECT_ROOT_PATH) + "/src/visualizer/gui/rmlui/resources/sequencer.rcss";
+        const auto source = std::string(PROJECT_ROOT_PATH) + "/src/visualizer/gui/rmlui/resources/keyframe_layout_test.rml";
         auto* doc = context_->LoadDocumentFromMemory(
-            "<rml><head><link type='text/rcss' href='" + css + "'/></head><body>"
-                                                               "<div style='position:relative;width:600px;height:100px;'>"
-                                                               "<div id='diamond' class='keyframe' style='left:200px;background-color:#6699cc;border-color:#ffffff;'/></div></body></rml>");
+            "<rml><head><link type='text/rcss' href='sequencer.rcss'/></head><body>"
+            "<div style='position:relative;width:600px;height:100px;'>"
+            "<div id='diamond' class='keyframe' style='left:200px;background-color:#6699cc;border-color:#ffffff;'/></div></body></rml>",
+            source);
         ASSERT_NE(doc, nullptr);
         doc->Show();
         context_->Update();
