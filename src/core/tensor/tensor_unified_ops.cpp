@@ -366,65 +366,62 @@ namespace lfs::core {
         return promotion_rank(a) >= promotion_rank(b) ? a : b;
     }
 
-#if defined(_MSC_VER)
-    __forceinline void
-#else
-    void
-#endif
-    Tensor::adopt_native_tensor_allocation(internal::NativeTensorAllocation&& allocation, const size_t bytes,
-                                           internal::GpuBackendOps& backend) {
-        auto storage = allocation.storage;
-        storage.dtype = dtype_;
-        const auto target = static_cast<cudaStream_t>(allocation.target);
-        const auto descriptor = storage.meta ? storage.meta->gpu_descriptor : GpuStorageDescriptor{};
-        const bool accounted = !allocation.owner && internal::allocation_accounted(storage);
-        if (accounted)
-            record_storage_allocation(internal::allocation_accounting(storage), bytes);
-        // Keep rollback separate from the normal owner: an explicit catch here prevents
-        // MSVC from inlining this per-allocation path. Native deallocation is noexcept.
-        const auto release_unadopted = [&](internal::NativeTensorAllocation*) noexcept {
-            if (!allocation.owner)
-                backend.deallocate(storage, internal::ExecContext{target});
-            if (accounted)
-                record_storage_deallocation(internal::allocation_accounting(storage), bytes);
-        };
-        std::unique_ptr<internal::NativeTensorAllocation, decltype(release_unadopted)> rollback(
-            &allocation, release_unadopted);
-        if (allocation.owner) {
-            adopt_storage(storage.data, [owner = allocation.owner](void*) { (void)owner; });
-        } else {
-            adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
-                if (!data)
-                    return;
-                if (storage.meta) {
-                    StorageMeta metadata;
-                    metadata.backend = storage.backend;
-                    metadata.gpu_descriptor = descriptor;
-                    auto released = storage;
-                    released.meta = &metadata;
-                    internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
-                } else {
-                    internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
-                }
-                if (accounted)
-                    Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
-            });
-        }
-        (void)rollback.release();
-        data_ = data_owner_.get();
-        compute_alignment();
-        ensure_state();
-        state_->stream = target;
-        storage_meta_->backend = storage.backend;
-        storage_meta_->gpu_descriptor = descriptor;
-        if (!storage.meta)
-            storage_meta_->gpu_descriptor.byte_size = bytes;
-        storage_meta_->external_kind = allocation.external_kind;
-        storage_meta_->external_owner = std::move(allocation.owner);
-    }
-
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
         Tensor result;
+        // Keep adoption local: an exported member would require interposable calls
+        // on ELF and prevent inlining this per-allocation path.
+        const auto adopt_native_tensor_allocation = [](Tensor& result, internal::NativeTensorAllocation&& allocation,
+                                                       const size_t bytes,
+                                                       internal::GpuBackendOps& backend) static {
+            auto storage = allocation.storage;
+            storage.dtype = result.dtype_;
+            const auto target = static_cast<cudaStream_t>(allocation.target);
+            const auto descriptor = storage.meta ? storage.meta->gpu_descriptor : GpuStorageDescriptor{};
+            const bool accounted = !allocation.owner && internal::allocation_accounted(storage);
+            if (accounted)
+                record_storage_allocation(internal::allocation_accounting(storage), bytes);
+            // Keep rollback separate from the normal owner so failed adoption releases
+            // native storage exactly once. Native deallocation is noexcept.
+            const auto release_unadopted = [&](internal::NativeTensorAllocation*) noexcept {
+                if (!allocation.owner)
+                    backend.deallocate(storage, internal::ExecContext{target});
+                if (accounted)
+                    record_storage_deallocation(internal::allocation_accounting(storage), bytes);
+            };
+            std::unique_ptr<internal::NativeTensorAllocation, decltype(release_unadopted)> rollback(
+                &allocation, release_unadopted);
+            if (allocation.owner) {
+                result.adopt_storage(storage.data, [owner = allocation.owner](void*) { (void)owner; });
+            } else {
+                result.adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
+                    if (!data)
+                        return;
+                    if (storage.meta) {
+                        StorageMeta metadata;
+                        metadata.backend = storage.backend;
+                        metadata.gpu_descriptor = descriptor;
+                        auto released = storage;
+                        released.meta = &metadata;
+                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
+                    } else {
+                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
+                    }
+                    if (accounted)
+                        Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
+                });
+            }
+            (void)rollback.release();
+            result.data_ = result.data_owner_.get();
+            result.compute_alignment();
+            result.ensure_state();
+            result.state_->stream = target;
+            result.storage_meta_->backend = storage.backend;
+            result.storage_meta_->gpu_descriptor = descriptor;
+            if (!storage.meta)
+                result.storage_meta_->gpu_descriptor.byte_size = bytes;
+            result.storage_meta_->external_kind = allocation.external_kind;
+            result.storage_meta_->external_owner = std::move(allocation.owner);
+        };
         LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::GPU,
                        "tensor load received an invalid device");
         LFS_ASSERT_MSG(dtype_size(args.dtype) != 0,
@@ -477,7 +474,7 @@ namespace lfs::core {
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
                 auto allocation = backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t), .kind = args.exact_allocation ? internal::TensorAllocationKind::Exact : internal::TensorAllocationKind::Pooled, .allow_arena = !args.exact_allocation, .label = args.exact_allocation ? "tensor.exact" : "tensor.storage", .operation = args.exact_allocation ? "tensor.empty_exact" : "tensor.allocate"});
                 const bool borrowed_owner = bool(allocation.owner);
-                result.adopt_native_tensor_allocation(std::move(allocation), bytes, backend_ops);
+                adopt_native_tensor_allocation(result, std::move(allocation), bytes, backend_ops);
                 if (borrowed_owner)
                     return result;
 
@@ -687,7 +684,7 @@ namespace lfs::core {
 
             if (result.device_ == Device::GPU) {
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
-                result.adopt_native_tensor_allocation(backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t)}), bytes, backend_ops);
+                adopt_native_tensor_allocation(result, backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t)}), bytes, backend_ops);
                 const auto s = result.stream();
 
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {

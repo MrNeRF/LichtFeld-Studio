@@ -725,9 +725,6 @@ namespace lfs::core {
             storage_meta_ = std::make_shared<StorageMeta>();
         }
 
-        void adopt_native_tensor_allocation(internal::NativeTensorAllocation&& allocation, size_t bytes,
-                                            internal::GpuBackendOps& backend);
-
         template <typename Deleter>
         void adopt_storage(void* data, Deleter&& deleter) {
             using StoredDeleter = std::decay_t<Deleter>;
