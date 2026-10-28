@@ -6,103 +6,34 @@ jobs:
   probe:
     runs-on: windows-2022
     steps:
-      - name: Probe loopback share renames
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: MrNeRF/LichtFeld-Studio
+          ref: master
+          path: lfs
+          sparse-checkout: src/core/include
+      - name: Provision a network share for path tests
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class W {
-            [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-            static extern bool MoveFileExW(string a, string b, uint flags);
-            [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-            static extern IntPtr CreateFileW(string n, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr t);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern bool CloseHandle(IntPtr h);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern bool WriteFile(IntPtr h, byte[] b, uint n, out uint w, IntPtr o);
-            [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-            static extern bool CopyFileW(string a, string b, bool failIfExists);
-            public static int Move(string a, string b, uint flags) { return MoveFileExW(a, b, flags) ? 0 : Marshal.GetLastWin32Error(); }
-            public static int Copy(string a, string b) { return CopyFileW(a, b, false) ? 0 : Marshal.GetLastWin32Error(); }
-            public static int Open(string n, uint access, uint share) {
-              IntPtr h = CreateFileW(n, access, share, IntPtr.Zero, 3, 0x80, IntPtr.Zero);
-              if (h == new IntPtr(-1)) return Marshal.GetLastWin32Error();
-              CloseHandle(h); return 0;
-            }
-            // Same open as the MSVC ofstream: GENERIC_WRITE, share read|write, CREATE_ALWAYS.
-            public static int Write(string n) {
-              IntPtr h = CreateFileW(n, 0x40000000, 3, IntPtr.Zero, 2, 0x80, IntPtr.Zero);
-              if (h == new IntPtr(-1)) return Marshal.GetLastWin32Error();
-              byte[] d = System.Text.Encoding.ASCII.GetBytes("network");
-              uint w; WriteFile(h, d, (uint)d.Length, out w, IntPtr.Zero);
-              CloseHandle(h); return 0;
-            }
-          }
-          '@
-          "== environment"
-          Get-MpComputerStatus | Format-List AMEngineVersion, AMProductVersion, AMServiceVersion, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, RealTimeProtectionEnabled, IsTamperProtected
-          Get-SmbServerConfiguration | Format-List EnableLeasing, EnableOplocks, EncryptData, RequireSecuritySignature, EnableSMB1Protocol
-          Get-SmbClientConfiguration | Format-List EnableLargeMtu, DirectoryCacheLifetime, FileInfoCacheLifetime, FileNotFoundCacheLifetime, RequireSecuritySignature
-          whoami /groups | Select-String 'Mandatory Label|Administrators'
-          [System.Environment]::OSVersion.VersionString
-          Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5 | Format-Table HotFixID, InstalledOn
-
+          $ErrorActionPreference = 'Stop'
           $local = Join-Path $env:RUNNER_TEMP 'lfs-unc-share'
           New-Item -ItemType Directory -Force -Path $local | Out-Null
           Start-Service LanmanServer
           New-SmbShare -Name 'lfs-unc-tests' -Path $local -FullAccess "$env:USERDOMAIN\$env:USERNAME" | Out-Null
-          $share = '\\localhost\lfs-unc-tests'
-          $component = 'unicode_' + [char]0x6E2C + [char]0x8A66 + '_' + [char]0x00E0 + '_component_01234567890123456789'
-
-          function Probe($label, $writeDir, $renameDir, $depth, [switch]$copy) {
-            $rel = "$label"
-            for ($i = 0; $i -lt $depth; $i++) { $rel += "\$component" }
-            $w = "$writeDir\$rel"; $r = "$renameDir\$rel"
-            [System.IO.Directory]::CreateDirectory($w) | Out-Null
-            if ($copy) {
-              [System.IO.File]::WriteAllText("$local\seed-$label.bin", 'network')
-              $we = [W]::Copy("$local\seed-$label.bin", "$w\network.bin")
-            } else { $we = [W]::Write("$w\network.bin") }
-            $opens = (Get-SmbOpenFile | Where-Object Path -like "*$label*network.bin" | Measure-Object).Count
-            $del = [W]::Open("$r\network.bin", 0x00010000, 7)
-            $t0 = Get-Date; $mv = -1; $n = 0
-            for (; $n -lt 100; $n++) { $mv = [W]::Move("$r\network.bin", "$r\renamed.bin", 1); if ($mv -eq 0) { break }; Start-Sleep -Milliseconds 100 }
-            $ms = [int]((Get-Date) - $t0).TotalMilliseconds
-            "{0,-22} write={1} smbOpensAfterClose={2} openDelete={3} move={4} tries={5} ms={6} len={7}" -f $label, $we, $opens, $del, $mv, $n, $ms, "$r\network.bin".Length
-            if ($mv -ne 0) {
-              Get-SmbOpenFile | Where-Object Path -like "*$label*" | Format-Table ClientUserName, Permissions, ShareRelativePath -AutoSize | Out-String -Width 400
-              (Get-Acl -LiteralPath "$local\$rel\network.bin").Access | Format-Table IdentityReference, FileSystemRights, AccessControlType -AutoSize | Out-String -Width 200
-              "owner: " + (Get-Acl -LiteralPath "$local\$rel\network.bin").Owner
-            }
-          }
-
-          $unc = '\\?\UNC\localhost\lfs-unc-tests'
-          $loc = "\\?\$local"
-          "== baseline"
-          Probe 'short' $unc $unc 0
-          Probe 'deep12' $unc $unc 12
-          Probe 'deep6' $unc $unc 6
-          Probe 'plainunc' $share $share 0
-          Probe 'localwrite' $loc $unc 0
-          Probe 'uncwrite-localmv' $unc $loc 0
-          Probe 'copied' $unc $unc 0 -copy
-          Probe 'localonly' $loc $loc 12
-          "== flags 3 (copy allowed)"
-          $src = "$unc\flags3.bin"; [W]::Write($src) | Out-Null; "flags3 move=" + [W]::Move($src, "$unc\flags3-renamed.bin", 3)
-          "== defender exclusion"
-          Add-MpPreference -ExclusionPath $local
-          Probe 'excl-short' $unc $unc 0
-          Probe 'excl-deep12' $unc $unc 12
-          "== realtime off"
-          Remove-MpPreference -ExclusionPath $local
-          Set-MpPreference -DisableRealtimeMonitoring $true
-          Probe 'rtoff-short' $unc $unc 0
-          Probe 'rtoff-deep12' $unc $unc 12
-          "== leasing off"
-          Set-MpPreference -DisableRealtimeMonitoring $false
-          Set-SmbServerConfiguration -EnableLeasing $false -Force
-          Restart-Service LanmanServer -Force; Start-Service LanmanServer
-          Probe 'nolease-short' $unc $unc 0
-          Probe 'nolease-deep12' $unc $unc 12
+          "PROBE_UNC=\\localhost\lfs-unc-tests" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PROBE_LOCAL=$local" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build and run the rename probe
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include probe.cpp /Fe:probe.exe
+          if errorlevel 1 exit /b 1
+          set PROBE_ROOT=%PROBE_UNC%\release
+          probe.exe
+          set PROBE_ROOT=%PROBE_LOCAL%\local
+          probe.exe
+          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /Od /MDd /Ilfs\src\core\include probe.cpp /Fe:probe_debug.exe
+          set PROBE_ROOT=%PROBE_UNC%\debug
+          probe_debug.exe
+          cl /Bv 2>&1 | findstr /i "version"
