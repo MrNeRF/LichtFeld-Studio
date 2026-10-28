@@ -11,6 +11,7 @@
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
 #include "io/video/probed_stream_rewind.hpp"
+#include "jpeg_metadata.hpp"
 #include "linear_frame.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/frame_color_range.hpp"
@@ -1027,6 +1028,11 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
+            if (params.embed_source_metadata && (!params.preserve_source_metadata || params.format != ImageFormat::JPG)) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
+                error = std::string(failure_->detail());
+                return false;
+            }
             const bool float_output = params.output_format == media::FramePixelFormat::RGBFloat32;
             const size_t pixel_bytes = float_output ? 12 : 3;
             if ((params.output_format != media::FramePixelFormat::RGB8 && !float_output) ||
@@ -1046,15 +1052,21 @@ namespace lfs::io {
             }
             const bool external_sink = provided_sink != nullptr;
             const bool custom_sink = external_sink && !legacy_file_policy;
-            media::FileFrameSink file_sink({params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number});
+            media::FileFrameSinkOptions file_options{params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number};
+            file_options.embed_source_metadata = params.embed_source_metadata;
+            if (params.embed_source_metadata)
+                file_options.image_output = params.jpeg_metadata_output;
+            media::FileFrameSink file_sink(std::move(file_options));
             auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
             bool sink_started = false;
             size_t accepted_frames = 0;
-            const auto check_sink = [](const media::SinkResult& result) {
-                if (!result && result.error().code() == ErrorCode::Cancelled)
-                    throw ExtractionCancelled{};
-                if (!result)
+            const auto check_sink = [this](const media::SinkResult& result) {
+                if (!result) {
+                    failure_ = result.error();
+                    if (result.error().code() == ErrorCode::Cancelled)
+                        throw ExtractionCancelled{};
                     throw std::runtime_error("Frame sink failed: " + std::string(result.error().detail()));
+                }
             };
             const auto throw_if_cancelled = [&]() {
                 if (params.cancel_requested && params.cancel_requested())
@@ -1511,7 +1523,7 @@ namespace lfs::io {
                     try {
                         auto observed = session.source;
                         media::detail::collectContextMetadata(fmt_ctx, observed);
-                        const auto catalog = media::catalogContainerMetadata(std::move(observed), {}, media::detail::sourceMetadataLocator(params.video_path));
+                        auto catalog = media::catalogContainerMetadata(std::move(observed), {}, media::detail::sourceMetadataLocator(params.video_path));
                         if (!catalog) {
                             failure_ = catalog.error();
                             throw std::runtime_error(std::string(failure_->detail()));
@@ -1522,6 +1534,8 @@ namespace lfs::io {
                             throw std::runtime_error(std::string(failure_->detail()));
                         }
                         source_metadata = media::json_detail::sourceMetadataResult(*catalog, *summary);
+                        if (params.embed_source_metadata)
+                            session.source_metadata = std::make_shared<const media::SourceMetadataCatalog>(std::move(*catalog));
                     } catch (const std::bad_alloc&) {
                         failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata snapshot allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
                         throw;
@@ -1779,6 +1793,7 @@ namespace lfs::io {
                              frame_selection_reason, video_fps, target_fps, estimated_total, total_frames);
                 }
 
+                std::optional<media::detail::JpegMetadata> jpeg_metadata;
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
                         return;
@@ -1799,7 +1814,27 @@ namespace lfs::io {
                         throw_if_cancelled();
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
-                            write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            if (params.embed_source_metadata) {
+                                if (!jpeg_metadata) {
+                                    auto prepared = media::detail::prepareJpegMetadata(*session.source_metadata, session.applied_rotation);
+                                    if (!prepared)
+                                        check_sink(media::SinkResult::failure(prepared.error()));
+                                    jpeg_metadata = std::move(*prepared);
+                                }
+                                media::FrameInfo info;
+                                info.legacy_source_frame = batch_meta[i].source_frame;
+                                info.timestamp_origin = batch_meta[i].timestamp_origin;
+                                if (batch_meta[i].source_pts)
+                                    info.source_timestamp = media::Timestamp{*batch_meta[i].source_pts, {video_stream->time_base.num, video_stream->time_base.den}};
+                                auto options = params.jpeg_metadata_output;
+                                const auto cancelled = options.cancelled;
+                                options.cancelled = [&, cancelled] {
+                                    return (params.cancel_requested && params.cancel_requested()) || (cancelled && cancelled());
+                                };
+                                check_sink(core::writeFileAtomically(batch_filenames[i], [&](FILE* stream) { return media::detail::writeJpegMetadata(stream, encoded[i], *jpeg_metadata, batch_encode_w, batch_encode_h, info); }, options));
+                            } else {
+                                write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            }
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             ++accepted_frames;
@@ -2581,6 +2616,8 @@ namespace lfs::io {
                     try {
                         nlohmann::json root;
                         root["schema_version"] = 2;
+                        if (params.embed_source_metadata)
+                            root["embedded_metadata_policy"] = media::detail::jpeg_metadata_policy;
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);

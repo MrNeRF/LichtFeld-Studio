@@ -105,6 +105,8 @@ int main(int argc, char** argv) {
         media::FileExtraction files;
         files.files.output_directory = core::utf8_to_path(request.at("output").get<std::string>());
         files.files.format = request.value("jpeg", false) ? media::FrameFileFormat::JPEG : media::FrameFileFormat::PNG;
+        files.files.embed_source_metadata = request.value("embed_source_metadata", false);
+        files.files.image_output.overwrite = request.value("overwrite", true);
         files.write_metadata = true;
         files.resume = request.value("resume", false);
         const int exit_after = request.value("exit_after", 0);

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from hevc_contracts import assert_hvc1_samples
+from jpeg_metadata_fixture import read as read_jpeg_metadata
 
 FFMPEG = os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("LFS_MEDIA_TEST_FFPROBE", "ffprobe")
@@ -495,6 +496,45 @@ class StudioBackends(unittest.TestCase):
             self.assertAlmostEqual(float(frame["best_effort_timestamp_time"]), index / 10)
             luma = pixels[index * size:index * size + 320 * 240]
             self.assertLess(sum(abs(value - (32 + index * 16)) for value in luma) / len(luma), 3)
+
+    def test_gpu_jpeg_embedded_metadata_and_verified_replay(self):
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                _, plain = self.invoke(jpeg=True, resume=resume, rotation=90)
+                actual, output = self.invoke(jpeg=True, resume=resume, rotation=90, embed_source_metadata=True)
+                manifest = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(actual["accepted"], len(manifest["frames"]))
+                self.assertIn("nvimagecodec", json.dumps(manifest).lower())
+                self.assertTrue(list(output.glob("*.jpg")))
+                by_name = {frame["file"]: frame for frame in manifest["frames"]}
+                for image in output.glob("*.jpg"):
+                    original, orientation, size, facts, catalog, _ = read_jpeg_metadata(image.read_bytes())
+                    self.assertEqual(original, (plain / image.name).read_bytes())
+                    self.assertEqual((orientation, size), (1, (96, 128)))
+                    self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+                    self.assertEqual(catalog, manifest["source_metadata"])
+                    self.assertEqual(int(facts["SourceTimestampTicks"]), by_name[image.name]["source_pts"])
+                if resume:
+                    before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jpg")}
+                    request = output.parent / "request.json"
+                    repeated = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=60)
+                    self.assertEqual(repeated.returncode, 0, repeated.stderr.decode(errors="replace"))
+                    self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in output.glob("*.jpg")})
+                else:
+                    blocked = output.parent / "no-replace"
+                    blocked.mkdir()
+                    first = sorted(output.glob("*.jpg"))[0]
+                    target = blocked / first.name
+                    target.write_bytes(first.read_bytes())
+                    before = (target.read_bytes(), target.stat().st_mtime_ns)
+                    request = output.parent / "no-replace.json"
+                    request.write_text(json.dumps({"input": str(self.source), "output": str(blocked),
+                                                  "jpeg": True, "rotation": 90, "embed_source_metadata": True,
+                                                  "overwrite": False}), encoding="utf-8")
+                    rejected = subprocess.run([str(RUNNER), str(request)], capture_output=True, timeout=60)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertEqual(before, (target.read_bytes(), target.stat().st_mtime_ns))
+                    self.assertEqual(list(blocked.iterdir()), [target])
 
     def test_native_decode_jpeg_rotation_and_scoring(self):
         reference = json.loads(subprocess.check_output([

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/atomic_file.hpp"
 #include "core/export.hpp"
 #include <cstddef>
 #include <filesystem>
@@ -140,6 +141,8 @@ namespace lfs::io {
             int avif_speed = 8;
             int avif_bit_depth = 8;
             bool preserve_source_metadata = false;
+            bool embed_source_metadata = false;
+            core::AtomicFileOptions jpeg_metadata_output{.overwrite = true, .durable = false, .create_directories = false};
         };
 
         struct ValidatedLayout {

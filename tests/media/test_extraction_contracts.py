@@ -317,12 +317,26 @@ class ExtractionContracts(unittest.TestCase):
                         luma = pixels[index * 4608:index * 4608 + 3072]
                         self.assertLess(sum(abs(value - (32 + index * 32)) for value in luma) / len(luma), 3)
 
+    def test_compatibility_api_embeds_jpeg_source_metadata(self):
+        from jpeg_metadata_fixture import read as read_jpeg_metadata
+        result, output = self.extract(format="jpg", embed_source_metadata=True, rotation=90)
+        self.assertTrue(result["success"], result["error"])
+        manifest = json.loads((output / "extraction_metadata.json").read_text(encoding="utf-8"))
+        images = list(output.glob("*.jpg"))
+        self.assertTrue(images)
+        for image in images:
+            _, orientation, size, facts, catalog, _ = read_jpeg_metadata(image.read_bytes())
+            self.assertEqual((orientation, size), (1, (32, 64)))
+            self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+            self.assertEqual(catalog, manifest["source_metadata"])
+
     def test_optional_jpeg_backend_failures_and_cpu_fallback(self):
         reference, files = self.extract(format="jpg")
         self.assertTrue(reference["success"], reference["error"])
         encoded = next(files.glob("*.jpg"))
         for mode, hardware, expected, count, calls in (("short", True, False, 0, 1),
                 ("empty", True, False, 0, 1), ("throw-later", True, False, 2, 1),
+                ("metadata-bad-app0", True, False, 0, 1),
                 ("blocked", True, False, 1, 1), ("short", False, True, 4, 0),
                 ("unavailable", True, True, 4, 1), ("memory", True, True, 4, 0)):
             with self.subTest(mode=mode, hardware=hardware):

@@ -636,6 +636,25 @@ class IngestCLI(unittest.TestCase):
         self.assertFalse(value["md5_verified"])
         self.assertFalse(any(f["semantic"] == "camera.model" for f in result["summary"]["facts"]))
 
+    def test_jpeg_standard_export_does_not_require_md5(self):
+        source = self.root / "standard-export.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()),
+                        "-map", "0:v:0", "-c:v", "copy", "-metadata", "comment=" + "A" * 16000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        config = self.root / "no-md5-export.cnf"
+        config.write_text('openssl_conf = init\n[init]\nalg_section = algorithms\n[algorithms]\ndefault_properties = fips=yes\n', encoding="utf-8")
+        output = self.root / "standard-without-md5"
+        completed = subprocess.run([str(CLI), "extract", str(source), "--output", str(output),
+                                    "--format", "jpeg", "--interval", "1", "--end", "0.2",
+                                    "--embed-source-metadata"], capture_output=True, text=True,
+                                   env=dict(os.environ, OPENSSL_CONF=str(config)), timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertGreater(json.loads(completed.stdout)["frames_accepted"], 0)
+        for image in output.glob("*.jpg"):
+            data = image.read_bytes()
+            self.assertIn(b"http://ns.adobe.com/xap/1.0/\0", data)
+            self.assertNotIn(b"http://ns.adobe.com/xmp/extension/\0", data)
+
     def test_source_metadata_xmp_interpretation_secondary_and_invalid(self):
         packet = self._rdf_packet('<t:Make>primary</t:Make>').encode()
         child = self._rdf_packet('<t:Make>secondary</t:Make>').encode()
@@ -1628,6 +1647,16 @@ class IngestCLI(unittest.TestCase):
         expected_frames = {p.name: p.read_bytes() for p in expected.glob("*.png")}
         self.assertTrue(expected_frames)
         self.assertEqual({p.name: p.read_bytes() for p in actual.glob("*.png")}, expected_frames)
+        embedded = self.root / "native-byte-jpeg"
+        self.invoke("extract", path, "--output", embedded, "--format", "jpeg",
+                    "--interval", "1", "--end", "0.35", "--embed-source-metadata")
+        spec = importlib.util.spec_from_file_location("jpeg_metadata_fixture", ROOT / "tests/media/jpeg_metadata_fixture.py")
+        reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reader)
+        images = list(embedded.glob("*.jpg"))
+        self.assertTrue(images)
+        _, _, _, _, retained, _ = reader.read(images[0].read_bytes())
+        self.assertEqual(bytes.fromhex(retained["metadata"]["source_locator_bytes"]), native)
 
         request = self.root / "native-encode-request.json"
         request.write_text(json.dumps({"operation": "encode-session", "output": str(self.root / "unused.mp4"),
@@ -1914,6 +1943,19 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(manifest["source_metadata"]["metadata"]["scope"], "container_stream")
         self.assertEqual(manifest["source_metadata"]["metadata"]["source_metadata"]["provider"]["name"], "ffmpeg")
         self.assertEqual(manifest["source_metadata"]["summary"]["scope"], "static_stream_properties")
+    def test_embedded_jpeg_metadata_cli(self):
+        directory = self.root / "embedded-jpeg"
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--format", "jpg", "--interval", "1", "--end", "0.2", "--embed-source-metadata")
+        self.assertTrue(result["success"])
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "jpeg-static-source-xmp-v1")
+        self.assertTrue(list(directory.glob("*.jpg")))
+        self.assertIn(b"Exif\0\0", next(directory.glob("*.jpg")).read_bytes())
+        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-png-invalid",
+                                "--embed-source-metadata", code=2)
+        self.assertEqual(result["error"]["code"], "InvalidArgument")
+
     def test_capabilities_and_help(self):
         result,_=self.invoke("capabilities")
         self.assertTrue(result["software_decode"])

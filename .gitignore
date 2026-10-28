@@ -55,6 +55,7 @@ tests/data/nn/*
 !tests/python/**/*.py
 !tests/media/test_fixture_preparation.py
 !tests/media/source_exif_fixture.py
+!tests/media/jpeg_metadata_fixture.py
 !tests/media/test_extraction_contracts.py
 !tests/media/test_media_bindings.py
 !tests/media/test_studio_backends.py

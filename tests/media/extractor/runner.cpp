@@ -176,6 +176,8 @@ int main(int argc, char** argv) {
         params.rotation = request.value("rotation", 0);
         params.filename_pattern = request.value("naming", "frame_%03d");
         params.generate_metadata = request.value("metadata", true);
+        params.embed_source_metadata = request.value("embed_source_metadata", false);
+        params.preserve_source_metadata = params.embed_source_metadata;
         const auto format = request.value("format", "png");
         if (format != "png" && format != "jpg")
             throw std::runtime_error("SDR test runner supports PNG/JPG only");

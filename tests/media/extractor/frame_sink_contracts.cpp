@@ -3,6 +3,7 @@
 #include "core/image_codecs.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/frame_sink.hpp"
+#include "media/source_metadata.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <chrono>
 #include <fstream>
@@ -94,6 +95,74 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
+    {
+        FileFrameSinkOptions options;
+        options.output_directory = directory / "jpeg-metadata";
+        options.format = FrameFileFormat::JPEG;
+        options.embed_source_metadata = true;
+        FileFrameSink missing(options);
+        require(!missing.begin({}) && !std::filesystem::exists(options.output_directory),
+                "embedded JPEG rejects an absent source observation before output");
+        MediaDescription observed;
+        observed.source_metadata.emplace();
+        observed.source_metadata->tags.push_back({"comment", "owned source & <metadata>" + std::string(40 * 1024, '&')});
+        auto catalog = catalogContainerMetadata(std::move(observed));
+        require(catalog.has_value(), "construct explicit static source observation");
+        SinkSession session;
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*catalog));
+        FileFrameSink writer(options);
+        require(writer.begin(session).has_value(), "embedded JPEG session begins");
+        session = {};
+        require(writer.write(file_view).has_value(), "embedded JPEG owns source snapshot after begin");
+        require(writer.complete({SinkOutcome::Completed, 1, {}}).has_value(), "embedded JPEG session completes");
+        const auto path = options.output_directory / "frame_1.jpg";
+        require(lfs::core::image_codecs::decode(path, decoded, error) && decoded.width == 1 && decoded.height == 2,
+                "embedded metadata leaves the JPEG independently decodable");
+        const auto original_size = std::filesystem::file_size(path);
+        require(original_size > 65535, "owned provenance spans multiple Extended XMP segments");
+        options.image_output.overwrite = false;
+        FileFrameSink no_replace(options);
+        MediaDescription next;
+        next.source_metadata.emplace();
+        auto next_catalog = catalogContainerMetadata(std::move(next));
+        require(next_catalog.has_value(), "construct second static source observation");
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*next_catalog);
+        require(no_replace.begin(session).has_value() && !no_replace.write(file_view),
+                "embedded JPEG honors atomic no-replace");
+        no_replace.abort({SinkOutcome::Failed, 0, {}});
+        require(std::filesystem::file_size(path) == original_size, "failed embedded write preserves destination");
+        options.image_output.overwrite = true;
+        options.image_output.cancelled = [] { return true; };
+        FileFrameSink cancelled(options);
+        require(cancelled.begin(session).has_value() && !cancelled.write(file_view),
+                "embedded JPEG observes cancellation at atomic publication");
+        cancelled.abort({SinkOutcome::Cancelled, 0, {}});
+        require(std::filesystem::file_size(path) == original_size, "cancelled embedded write preserves destination");
+        for (const auto& item : std::filesystem::directory_iterator(options.output_directory))
+            require(item.path() == path, "embedded write failures clean temporary files");
+        MediaDescription oversized;
+        oversized.source_metadata.emplace();
+        oversized.source_metadata->tags.push_back({"comment", std::string(6 * 1024 * 1024, '&')});
+        auto oversized_catalog = catalogContainerMetadata(std::move(oversized));
+        require(oversized_catalog.has_value(), "construct bounded but XML-expanding source observation");
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*oversized_catalog));
+        options.output_directory = directory / "jpeg-metadata-over-budget";
+        options.image_output.cancelled = {};
+        FileFrameSink bounded(options);
+        require(bounded.begin(session).has_value(),
+                "CPU metadata preparation waits for a CPU frame");
+        const auto refused = bounded.write(file_view);
+        require(!refused && refused.error().code() == lfs::ErrorCode::ResourceExhausted &&
+                    std::filesystem::is_empty(options.output_directory),
+                "XML-expanded provenance is bounded before output publication");
+        bounded.abort({SinkOutcome::Failed, 0, {}});
+        session.source_metadata =
+            std::make_shared<const SourceMetadataCatalog>(*next_catalog);
+        require(bounded.begin(session).has_value() &&
+                    bounded.write(file_view).has_value() &&
+                    bounded.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                "aborted lazy preparation does not retain the previous catalog");
+    }
     // Isolate JXL from legacy assertions and stale-file fixtures below.
     {
         FileFrameSinkOptions jxl_options;
