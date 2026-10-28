@@ -445,12 +445,27 @@ namespace lfs::core::native_fs {
 
     template <typename... Args>
     inline auto rename(const std::filesystem::path& source, const std::filesystem::path& destination, Args&&... args) {
+#ifdef _WIN32
+        // Scanners and SMB servers can hold a just-closed file without delete sharing for a moment, and MoveFileExW
+        // then fails with access denied or a sharing violation. Retry those for up to a second before reporting.
+        const auto native_source = native_path(source), native_destination = native_path(destination);
+        std::error_code error;
+        for (int attempt = 1;; ++attempt) {
+            std::filesystem::rename(native_source, native_destination, error);
+            const bool held = error.category() == std::system_category() &&
+                              (error.value() == ERROR_ACCESS_DENIED || error.value() == ERROR_SHARING_VIOLATION ||
+                               error.value() == ERROR_LOCK_VIOLATION);
+            if (!held || attempt == 20)
+                break;
+            Sleep(50);
+        }
         if constexpr (reports_error_code<Args...>)
-            return std::filesystem::rename(native_path(source), native_path(destination), std::forward<Args>(args)...);
-        else
-            return rethrow_logical("rename", source, &destination, [&] {
-                return std::filesystem::rename(native_path(source), native_path(destination), std::forward<Args>(args)...);
-            });
+            ((args = error), ...);
+        else if (error)
+            throw std::filesystem::filesystem_error("rename", source, destination, error);
+#else
+        return std::filesystem::rename(source, destination, std::forward<Args>(args)...);
+#endif
     }
 
     template <typename... Args>
