@@ -4,6 +4,7 @@
 #include "core/image_codecs.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "jpeg_metadata.hpp"
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <algorithm>
@@ -19,7 +20,10 @@ namespace lfs::media {
     } // namespace
 
     FileFrameSink::FileFrameSink(FileFrameSinkOptions options) : options_(std::move(options)) {}
-    SinkResult FileFrameSink::begin(const SinkSession&) {
+    SinkResult FileFrameSink::begin(const SinkSession& session) {
+        return beginPrepared(session, {});
+    }
+    SinkResult FileFrameSink::beginPrepared(const SinkSession& session, std::shared_ptr<const detail::JpegMetadata> prepared_metadata) {
         if (active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink already active");
         if (options_.output_directory.empty() ||
@@ -45,6 +49,19 @@ namespace lfs::media {
         if (options_.format == FrameFileFormat::AVIF)
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
+        jpeg_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
+        if (options_.embed_source_metadata) {
+            if (options_.format != FrameFileFormat::JPEG)
+                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG output");
+            if (!session.source_metadata)
+                return sinkError(ErrorCode::InvalidArgument, "JPEG metadata requires an explicit source observation");
+            if (!jpeg_metadata_) {
+                auto prepared = detail::prepareJpegMetadata(*session.source_metadata, session.applied_rotation);
+                if (!prepared)
+                    return SinkResult::failure(prepared.error());
+                jpeg_metadata_ = std::make_shared<const detail::JpegMetadata>(std::move(*prepared));
+            }
+        }
         std::error_code directory_error;
         lfs::core::native_fs::create_directories(options_.output_directory, directory_error);
         if (directory_error) {
@@ -113,6 +130,15 @@ namespace lfs::media {
                             pixels + row * frame.layout.row_stride, row_bytes);
             pixels = packed.data();
         }
+        if (jpeg_metadata_) {
+            std::vector<std::uint8_t> encoded;
+            auto result = core::image_codecs::encode_jpeg_memory(
+                {pixels, row_bytes * height}, frame.layout.width, frame.layout.height, 3, row_bytes, encoded,
+                {.quality = options_.jpeg_quality, .full_chroma = options_.jpeg_quality > 90});
+            if (!result)
+                return result;
+            return core::writeFileAtomically(filename, [&](FILE* stream) { return detail::writeJpegMetadata(stream, encoded, *jpeg_metadata_, frame.layout.width, frame.layout.height, frame.info); }, options_.image_output);
+        }
         auto result = core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
                                                          options_.jpeg_quality, std::nullopt, options_.image_output,
                                                          options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
@@ -122,6 +148,7 @@ namespace lfs::media {
         if (!active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink is not active");
         active_ = false;
+        jpeg_metadata_.reset();
         for (const auto& old : existing_frames_) {
             if (filenames_.contains(old.path))
                 continue;
@@ -143,5 +170,8 @@ namespace lfs::media {
         existing_frames_.clear();
         return {};
     }
-    void FileFrameSink::abort(const SinkSummary&) noexcept { active_ = false; }
+    void FileFrameSink::abort(const SinkSummary&) noexcept {
+        active_ = false;
+        jpeg_metadata_.reset();
+    }
 } // namespace lfs::media

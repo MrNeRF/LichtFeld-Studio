@@ -152,6 +152,17 @@ namespace lfs::media::detail {
         }
         if (previous_provider == "nvimagecodec_cuda" && !gpu_jpeg_)
             return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG provider is unavailable; CPU reconstruction would change encoded bytes"));
+        source_metadata_ = session.source_metadata;
+        applied_rotation_ = session.applied_rotation;
+        jpeg_metadata_.reset();
+        if (output_.files.embed_source_metadata) {
+            if (!source_metadata_)
+                return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "JPEG metadata requires a source observation"));
+            auto prepared = prepareJpegMetadata(*source_metadata_, applied_rotation_);
+            if (!prepared)
+                return SinkResult::failure(prepared.error());
+            jpeg_metadata_ = std::make_shared<const JpegMetadata>(std::move(*prepared));
+        }
         identity_ = {{"checkpoint_version", 2}, {"pipeline_version", 1}, {"application_build", GIT_TAGGED_VERSION}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
         identity_["image_encoder"] = imageEncoderBackend();
         identity_["stream"] = session.source.selected_video_stream ? Json(*session.source.selected_video_stream) : Json(nullptr);
@@ -172,7 +183,14 @@ namespace lfs::media::detail {
         identity_["files"].push_back(f.first_source_frame_number);
         identity_["layout"] = {session.output.width, session.output.height, static_cast<int>(session.output.format), static_cast<int>(session.output.color.transfer), static_cast<int>(session.output.color.primaries)};
         identity_["metadata"] = output_.write_metadata;
-        if (output_.preserve_source_metadata)
+        if (f.embed_source_metadata) {
+            identity_["embedded_metadata_policy"] = jpeg_metadata_policy;
+            Sha256 source_digest;
+            source_digest.update({reinterpret_cast<const std::uint8_t*>(jpeg_metadata_->source_properties.data()), jpeg_metadata_->source_properties.size()});
+            source_digest.update(jpeg_metadata_->extended_markers);
+            identity_["embedded_source_sha256"] = source_digest.finish();
+        }
+        if (output_.preserve_source_metadata || f.embed_source_metadata)
             identity_["source_metadata_policy"] = source_metadata_preservation_policy;
         if (r.float_color_profile != FloatColorProfile::Sdr)
             identity_["float_color_profile"] = static_cast<int>(r.float_color_profile);
@@ -337,10 +355,14 @@ namespace lfs::media::detail {
             auto encoded = gpu_jpeg_->encode({gpu_jpeg_->queueHost(0, pixels)}, frame.layout.width, frame.layout.height, quality);
             if (encoded.size() != 1 || encoded[0].empty())
                 return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG encoder returned an incomplete frame"));
-            Sha256 digest;
-            digest.update(encoded[0]);
-            encoded_digest = digest.finish();
+            if (!jpeg_metadata_) {
+                Sha256 digest;
+                digest.update(encoded[0]);
+                encoded_digest = digest.finish();
+            }
             auto staged_result = core::writeFileAtomically(staged, [&](FILE* stream) -> SinkResult {
+                if (jpeg_metadata_)
+                    return writeJpegMetadata(stream, encoded[0], *jpeg_metadata_, frame.layout.width, frame.layout.height, frame.info);
                 if (std::fwrite(encoded[0].data(), 1, encoded[0].size(), stream) != encoded[0].size())
                     return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG staging write failed"));
                 return {};
@@ -348,9 +370,11 @@ namespace lfs::media::detail {
                                                            {.overwrite = true, .durable = false, .cancelled = cancelled_});
             if (!staged_result)
                 return staged_result;
+            if (jpeg_metadata_)
+                encoded_digest = fileDigest(staged, cancelled_);
         } else {
             FileFrameSink staging(std::move(staging_options));
-            if (auto begun = staging.begin({}); !begun)
+            if (auto begun = staging.beginPrepared({.applied_rotation = applied_rotation_, .source_metadata = source_metadata_}, jpeg_metadata_); !begun)
                 return begun;
             if (auto written = staging.write(frame); !written)
                 return written;
@@ -379,7 +403,13 @@ namespace lfs::media::detail {
     }
     SinkResult ResumableFileSink::complete(const SinkSummary&) {
         active_ = false;
+        jpeg_metadata_.reset();
+        source_metadata_.reset();
         return {};
     }
-    void ResumableFileSink::abort(const SinkSummary&) noexcept { active_ = false; }
+    void ResumableFileSink::abort(const SinkSummary&) noexcept {
+        active_ = false;
+        jpeg_metadata_.reset();
+        source_metadata_.reset();
+    }
 } // namespace lfs::media::detail

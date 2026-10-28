@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace lfs::media {
+    struct SourceMetadataCatalog;
     enum class FramePixelFormat { RGB8,
                                   RGBFloat32,
                                   RGBAFloat32 };
@@ -89,6 +90,9 @@ namespace lfs::media {
         MediaDescription source;
         FrameLayout output;
         int applied_rotation = 0;
+        // Optional owned static observation, collected once by the producer.
+        // A frame writer must not interpret static video GPS as a timed fix.
+        std::shared_ptr<const SourceMetadataCatalog> source_metadata;
     };
     struct SinkSummary {
         SinkOutcome outcome = SinkOutcome::Failed;

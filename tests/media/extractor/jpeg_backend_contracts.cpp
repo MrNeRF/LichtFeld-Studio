@@ -31,6 +31,8 @@ namespace {
                 result.pop_back();
             if (mode == "empty")
                 result.back().clear();
+            if (mode == "metadata-bad-app0")
+                result[0] = {0xff, 0xd8, 0xff, 0xe0, 0xff, 0xff, 0xff, 0xd9};
             return result;
         }
     };
@@ -61,6 +63,7 @@ nlohmann::json runJpegBackendContracts(const nlohmann::json& request) {
     files.files.output_directory = core::utf8_to_path(request.at("output").get<std::string>());
     files.files.filename_pattern = "frame_%03d";
     files.files.format = media::FrameFileFormat::JPEG;
+    files.files.embed_source_metadata = mode == "metadata-bad-app0";
     media::MemoryFrameSink memory;
     auto result = mode == "memory" ? media::MediaIngest::extract(input, memory) : media::MediaIngest::extractFiles(input, files);
     std::uint64_t accepted = result ? result->frames_accepted : 0;

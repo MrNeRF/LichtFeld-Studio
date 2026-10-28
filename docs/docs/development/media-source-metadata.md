@@ -507,3 +507,71 @@ behavior is unchanged.
 The CLI and Python bindings use this same file-extraction path. Rendered image
 sequences have no video input to observe; their metadata needs an explicitly
 identified source/consumer rather than an invented camera declaration.
+
+
+### Embedded JPEG extraction metadata
+
+JPEG video extraction accepts `FileFrameSinkOptions.embed_source_metadata` in C++ and
+Python, or `--embed-source-metadata` in the CLI. The default is false. Enabling it
+also preserves the static source catalog in `extraction_metadata.json`, using the
+same observation collected from the open demuxer. Other output formats reject
+this option before creating output. It is a required-write policy: preparation,
+encoding or publication failures fail extraction instead of quietly dropping
+metadata. Existing completed images can remain after a later extraction failure.
+Direct C++ `FileFrameSink` callers must supply an explicit owned container catalog in
+`SinkSession.source_metadata`; the writer does not open another source file.
+Rendered sequences do not acquire a source observation automatically.
+
+```python
+output = lichtfeld.media.FileExtraction()
+output.files.format = lichtfeld.media.FrameFileFormat.JPEG
+output.files.output_directory = destination
+output.files.embed_source_metadata = True
+lichtfeld.media.MediaIngest.extract_files(request, output)
+```
+
+Each JPEG contains EXIF Orientation=1 and PixelXDimension/PixelYDimension for the
+encoded, resized and physically rotated output. EXIF ColorSpace is uncalibrated;
+this writer does not infer an ICC profile from the source declarations. Original
+orientation, dimensions, calibration, timestamps and private payloads remain in
+the source observation, separately from those output properties. Source camera
+EXIF, thumbnails and opaque MakerNote offsets are not transplanted into the new
+image's EXIF directory.
+
+XMP uses the application namespace `https://lichtfeld.io/ns/media/1.0/`:
+
+- `MetadataPolicy`: `jpeg-static-source-xmp-v1`.
+- `PixelWidth`, `PixelHeight`, `Orientation`: output pixel geometry.
+- `AppliedClockwiseRotation`: the physical extraction rotation in degrees.
+- `SourceFrame`: the existing one-based selected source-frame number, when known.
+- `SourceTimestampTicks`, `SourceTimeBaseNumerator`, `SourceTimeBaseDenominator`
+  and `TimestampOrigin`: the original integer video clock and its provenance,
+  when available. These fields do not claim an absolute exposure date.
+- `SourceMetadata`: the version-1 catalog/summary JSON envelope also present in
+  the manifest. It retains raw byte fields and the catalog's completeness flags.
+
+The source observation is static. A container GPS tag does not establish a GPS
+measurement at every frame; it is kept inside the source envelope, without
+creating EXIF GPS fixes or replacing temporal telemetry. The opt-in includes
+retained GPS, identifiers, private payloads and source locator bytes together.
+It does not provide selective redaction.
+
+Small source envelopes share the Standard XMP tree with frame properties. Larger
+envelopes use Adobe Extended XMP: one RDF tree split into APP1 chunks, an uppercase
+MD5 identifier, and the Standard XMP `xmpNote:HasExtendedXMP` link. MD5 is used for
+that format identifier, not authentication. A provider without MD5 rejects that
+large-packet write. Serialized source XML is bounded to 32 MiB; existing input
+collector limits still apply separately. Metadata readers have their own scan,
+packet and interpretation budgets and can report partial observations for large
+exports. The CPU opt-in uses the existing bounded JPEG memory encoder; its encoded
+image limit is 64 MiB, separate from metadata and encoder working memory.
+
+CPU and GPU encoders retain their pixel/quality/chroma policy. Metadata insertion
+copies encoded bytes into the existing atomic file service without recompression.
+The metadata option and a SHA-256 of the prepared static source packet participate
+in checkpoint identity. Changing either rejects resume before adopting images.
+This includes a different source locator even when its file bytes are identical:
+retained JPEG provenance must agree with the final manifest. The manifest records
+`embedded_metadata_policy`.
+Image publication is atomic per file, while the sequence and its final manifest
+remain separate commits governed by the existing extraction/recovery contract.

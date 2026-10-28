@@ -624,33 +624,10 @@ namespace lfs::media {
                                  Mismatch,
                                  Unavailable };
         DigestState digestMatches(std::span<const uint8_t> bytes, std::string_view expected) {
-            // Preserve a caller's preexisting OpenSSL error queue.
-            struct Errors {
-                bool marked = ERR_set_mark() != 0;
-                ~Errors() {
-                    if (marked)
-                        ERR_pop_to_mark();
-                    else
-                        ERR_clear_error();
-                }
-            } errors;
-            std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-            unsigned int size = 0;
-            const auto* algorithm = EVP_get_digestbyname("MD5");
-            if (!algorithm)
+            const auto digest = xmpPacketDigest(bytes);
+            if (!digest)
                 return DigestState::Unavailable;
-            if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &size, algorithm, nullptr) != 1) {
-                if (ERR_GET_REASON(ERR_peek_last_error()) == ERR_R_MALLOC_FAILURE)
-                    throw std::bad_alloc();
-                return DigestState::Unavailable;
-            }
-            if (size != 16)
-                return DigestState::Unavailable;
-            constexpr char hex[] = "0123456789ABCDEF";
-            for (std::size_t i = 0; i < 16; ++i)
-                if (expected[i * 2] != hex[digest[i] >> 4] || expected[i * 2 + 1] != hex[digest[i] & 15])
-                    return DigestState::Mismatch;
-            return DigestState::Match;
+            return std::string_view(digest->data(), digest->size()) == expected ? DigestState::Match : DigestState::Mismatch;
         }
         struct PreparedPacket {
             Packet packet{.max_properties = 0, .max_text = 0};
@@ -907,5 +884,36 @@ namespace lfs::media {
         }
         // Retain all occurrences. Do not reconcile EXIF and XMP automatically.
         mark_ambiguous();
+    }
+    std::optional<std::array<char, 32>> xmpPacketDigest(std::span<const uint8_t> bytes) {
+        // Preserve a caller's preexisting OpenSSL error queue.
+        struct Errors {
+            bool marked = ERR_set_mark() != 0;
+            ~Errors() {
+                if (marked)
+                    ERR_pop_to_mark();
+                else
+                    ERR_clear_error();
+            }
+        } errors;
+        std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+        unsigned int size = 0;
+        const auto* algorithm = EVP_get_digestbyname("MD5");
+        if (!algorithm)
+            return std::nullopt;
+        if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &size, algorithm, nullptr) != 1) {
+            if (ERR_GET_REASON(ERR_peek_last_error()) == ERR_R_MALLOC_FAILURE)
+                throw std::bad_alloc();
+            return std::nullopt;
+        }
+        if (size != 16)
+            return std::nullopt;
+        constexpr char hex[] = "0123456789ABCDEF";
+        std::array<char, 32> result{};
+        for (std::size_t i = 0; i < 16; ++i) {
+            result[i * 2] = hex[digest[i] >> 4];
+            result[i * 2 + 1] = hex[digest[i] & 15];
+        }
+        return result;
     }
 } // namespace lfs::media

@@ -5,10 +5,15 @@
 #include "core/export.hpp"
 #include "media/image_output.hpp"
 #include <filesystem>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
 namespace lfs::media {
+    namespace detail {
+        struct JpegMetadata;
+        class ResumableFileSink;
+    } // namespace detail
     enum class FrameFileFormat { PNG,
                                  JPEG,
                                  EXR,
@@ -36,6 +41,8 @@ namespace lfs::media {
         // Extraction retains its source-frame numbering. Rendered output uses
         // the zero-based delivery ordinal without inventing a source frame.
         FrameFileNumbering numbering = FrameFileNumbering::SourceFrame;
+        // Required EXIF output geometry and XMP static source provenance; JPEG only.
+        bool embed_source_metadata = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:
@@ -46,8 +53,11 @@ namespace lfs::media {
         void abort(const SinkSummary&) noexcept override;
 
     private:
+        friend class detail::ResumableFileSink;
+        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::JpegMetadata>);
         FileFrameSinkOptions options_;
         bool active_ = false;
+        std::shared_ptr<const detail::JpegMetadata> jpeg_metadata_;
         std::unordered_set<std::filesystem::path> filenames_;
         struct ExistingFrame {
             std::filesystem::path path;
