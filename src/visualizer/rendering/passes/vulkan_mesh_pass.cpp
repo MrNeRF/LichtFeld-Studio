@@ -186,6 +186,7 @@ namespace lfs::vis {
         std::vector<std::vector<std::shared_ptr<CollisionFrame>>> collision_frames;
         using CollisionCache = detail::CollisionPreviewCache<core::CollisionVolume, CollisionFrame>;
         CollisionCache collision_cache;
+        std::optional<std::chrono::steady_clock::time_point> collision_frames_release_at;
         uint64_t collision_upload_attempts = 0;
         uint64_t collision_upload_successes = 0;
         uint64_t collision_upload_bytes = 0;
@@ -2606,6 +2607,8 @@ namespace lfs::vis {
             }
             // Replace only the retired slot; other in-flight frames retain their buffers.
             collision_frames[params.frame_slot] = std::move(resources);
+            if (!collision_frames[params.frame_slot].empty())
+                collision_frames_release_at = now + std::chrono::seconds(5);
             collision_cache.maintain(now, collisionUploadRetired);
             if (collision_cache.stats().attempts && frame_counter % 120 == 0) {
                 const auto& stats = collision_cache.stats();
@@ -3165,6 +3168,35 @@ namespace lfs::vis {
             throw std::runtime_error("Could not retire failed mesh import");
         impl_->destroyMesh(it->second);
         impl_->mesh_cache.erase(it);
+    }
+
+    std::optional<std::chrono::steady_clock::time_point> VulkanMeshPass::collisionPreviewDeadline() const {
+        if (!impl_)
+            return {};
+        auto due = impl_->collision_cache.nextDeadline(impl_->frame_counter, std::chrono::steady_clock::now());
+        if (impl_->collision_frames_release_at && (!due || *impl_->collision_frames_release_at < *due))
+            due = impl_->collision_frames_release_at;
+        return due;
+    }
+
+    bool VulkanMeshPass::maintainCollisionPreview() {
+        if (!impl_)
+            return false;
+        const auto now = std::chrono::steady_clock::now();
+        impl_->collision_cache.maintain(now, Impl::collisionUploadRetired);
+        if (impl_->collision_frames_release_at && now >= *impl_->collision_frames_release_at) {
+            // Idle maintenance does not acquire a frame slot or wait on a fence.
+            // Conservatively keep all frame owners until every submitted draw
+            // has retired and no frame is being recorded.
+            if (!impl_->context->hasActiveFrame() &&
+                impl_->context->retiredFrameSubmitSerial() >= impl_->context->lastSuccessfulFrameSubmitSerial()) {
+                impl_->collision_frames.clear();
+                impl_->collision_frames_release_at.reset();
+            } else {
+                impl_->collision_frames_release_at = now + std::chrono::milliseconds(250);
+            }
+        }
+        return impl_->collision_cache.retryDue(impl_->frame_counter, now);
     }
 
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,

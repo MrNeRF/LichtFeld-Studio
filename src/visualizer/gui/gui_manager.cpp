@@ -5168,6 +5168,14 @@ namespace lfs::vis::gui {
         vulkan_viewport_pass_.reset();
     }
 
+    std::optional<std::chrono::steady_clock::time_point> GuiManager::collisionPreviewDeadline() const {
+        return vulkan_viewport_pass_ ? vulkan_viewport_pass_->collisionPreviewDeadline() : std::nullopt;
+    }
+
+    bool GuiManager::maintainCollisionPreview() {
+        return vulkan_viewport_pass_ && vulkan_viewport_pass_->maintainCollisionPreview();
+    }
+
     void GuiManager::hideBottomDockPanel(const std::string& id) {
         if (id.empty())
             return;

@@ -120,6 +120,8 @@ namespace lfs::vis {
             // Drop viewport-pass GPU objects (descriptor sets that sample external
             // scene image views) while the Vulkan context is still alive.
             void shutdownVulkanViewportPass();
+            [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> collisionPreviewDeadline() const;
+            [[nodiscard]] bool maintainCollisionPreview();
             [[nodiscard]] bool render();
             void updateInteractiveTransitions();
             [[nodiscard]] bool isInteractiveTransitionSettling() const;

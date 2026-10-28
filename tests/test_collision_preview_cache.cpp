@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "rendering/frame_demand.hpp"
 #include "rendering/passes/collision_preview_cache.hpp"
 #include <gtest/gtest.h>
 #include <limits>
@@ -235,6 +236,81 @@ namespace {
         EXPECT_FALSE(request());
         EXPECT_EQ(cache.stats().attempts, 1u);
         EXPECT_EQ(cache.stats().failures, 1u);
+    }
+
+    TEST_F(CollisionPreviewCache, RetryDeadlineWakesAnIdleViewWithoutNewInput) {
+        outcome = Status::RetryableFailure;
+        EXPECT_FALSE(request());
+        EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::seconds(1));
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        // No request/frame advances while the viewer is asleep.
+        now += std::chrono::seconds(1);
+        maintain();
+        EXPECT_TRUE(cache.retryDue(frame, now));
+        outcome = Status::Ready;
+        EXPECT_TRUE(request());
+        EXPECT_FALSE(cache.retryDue(frame, now));
+    }
+
+    TEST_F(CollisionPreviewCache, IdleMaintenanceEvictsWithoutPreparingAnotherFrame) {
+        auto uploaded = request();
+        const std::weak_ptr<Resource> weak = uploaded;
+        uploaded.reset();
+        EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::seconds(5));
+        now += std::chrono::seconds(5);
+        maintain();
+        EXPECT_TRUE(weak.expired());
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+    }
+
+    TEST_F(CollisionPreviewCache, HiddenOrExhaustedFailuresDoNotScheduleViewRetries) {
+        outcome = Status::RetryableFailure;
+        EXPECT_FALSE(request());
+        ++frame; // prepare a frame without requesting the hidden volume
+        now += std::chrono::seconds(1);
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+        outcome = Status::PermanentFailure;
+        EXPECT_FALSE(request());
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+    }
+
+    TEST_F(CollisionPreviewCache, PendingFencePollSchedulesNoViewUntilRetirement) {
+        outcome = Status::PendingFailure;
+        EXPECT_FALSE(request());
+        EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::milliseconds(250));
+        now += std::chrono::seconds(10);
+        maintain();
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        last_upload.lock()->retired = true;
+        maintain();
+        EXPECT_TRUE(cache.retryDue(frame, now));
+        EXPECT_EQ(cache.nextDeadline(frame, now), Cache::Time{} + std::chrono::seconds(1));
+    }
+
+    TEST_F(CollisionPreviewCache, RetryProducesAViewDemandButIdleEvictionDoesNot) {
+        lfs::vis::FrameDemandLedger ledger;
+        outcome = Status::RetryableFailure;
+        EXPECT_FALSE(request());
+        ASSERT_TRUE(cache.nextDeadline(frame, now));
+        now = *cache.nextDeadline(frame, now);
+        maintain();
+        if (cache.retryDue(frame, now))
+            ledger.request({.reason = lfs::vis::FrameReason::AsyncCompletion,
+                            .scope = lfs::vis::FrameScope::View,
+                            .views = 1,
+                            .flags = lfs::vis::DirtyFlag::OVERLAY,
+                            .detail = "collision_preview_retry"});
+        const auto plan = ledger.plan(now);
+        EXPECT_TRUE(plan.present);
+        EXPECT_EQ(plan.render_views, 1u);
+        outcome = Status::Ready;
+        EXPECT_TRUE(request());
+        now += std::chrono::seconds(5);
+        maintain();
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
     }
 } // namespace
 

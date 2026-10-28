@@ -2979,6 +2979,14 @@ namespace lfs::vis {
 
     VulkanViewportPass::VulkanViewportPass() = default;
 
+    std::optional<std::chrono::steady_clock::time_point> VulkanViewportPass::collisionPreviewDeadline() const {
+        return impl_ ? impl_->mesh_pass.collisionPreviewDeadline() : std::nullopt;
+    }
+
+    bool VulkanViewportPass::maintainCollisionPreview() {
+        return impl_ && impl_->mesh_pass.maintainCollisionPreview();
+    }
+
     VulkanViewportPass::~VulkanViewportPass() {
         shutdown();
     }

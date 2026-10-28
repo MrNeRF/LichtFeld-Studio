@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -110,6 +111,9 @@ namespace lfs::vis {
                     const VulkanMeshPassParams& params);
 
         void discardImport(uint64_t mesh_id);
+        [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> collisionPreviewDeadline() const;
+        // Non-blocking idle maintenance; true requests a fresh view for a due retry.
+        [[nodiscard]] bool maintainCollisionPreview();
         void shutdown();
 
     private:

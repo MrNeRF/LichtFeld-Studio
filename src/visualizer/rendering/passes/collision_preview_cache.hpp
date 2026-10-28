@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -96,6 +97,35 @@ namespace lfs::vis::detail {
             return it != entries_.end() && it->second.status == CollisionUploadStatus::Ready
                        ? it->second.weak.lock()
                        : nullptr;
+        }
+
+        // Called by the viewer's idle loop too: retries must not depend on input
+        // producing another frame. Hidden entries retain their failure history
+        // but never schedule rendering. Pending uploads only schedule fence polls.
+        std::optional<Time> nextDeadline(uint64_t frame, Time now) const {
+            std::optional<Time> result;
+            const auto consider = [&](Time due) {
+                if (!result || due < *result)
+                    result = due;
+            };
+            for (const auto& [_, entry] : entries_) {
+                if (entry.status == CollisionUploadStatus::Ready && entry.resident)
+                    consider(entry.last_used + idle_);
+                else if (entry.status == CollisionUploadStatus::PendingFailure)
+                    consider(now + std::chrono::milliseconds(250));
+                else if (entry.status == CollisionUploadStatus::RetryableFailure &&
+                         entry.last_frame == frame && entry.failures < max_failures)
+                    consider(entry.next_retry);
+            }
+            return result;
+        }
+
+        bool retryDue(uint64_t frame, Time now) const {
+            for (const auto& [_, entry] : entries_)
+                if (entry.status == CollisionUploadStatus::RetryableFailure &&
+                    entry.last_frame == frame && entry.failures < max_failures && now >= entry.next_retry)
+                    return true;
+            return false;
         }
 
         template <typename Retired>
