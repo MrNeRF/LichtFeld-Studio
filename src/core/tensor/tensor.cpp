@@ -582,7 +582,7 @@ namespace lfs::core {
                         // Materializers launch on the current stream. Without one they would
                         // use the legacy stream, unordered with this tensor's declared home.
                         std::optional<internal::TensorTargetBinding> home_stream;
-                        if (device_ == Device::GPU)
+                        if (device_ == Device::GPU && stream())
                             home_stream.emplace(internal::backend_driver(internal::gpu_backend_tag(*this)), *this, true);
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
@@ -658,7 +658,8 @@ namespace lfs::core {
             const GpuBackend backend = internal::gpu_backend_tag(*this);
             LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
                            "deferred tensor materialized on a different GPU backend than its tag");
-            state_->stream = static_cast<cudaStream_t>(internal::backend_driver(backend).canonical_home_target(state_->stream));
+            if (state_->stream)
+                state_->stream = static_cast<cudaStream_t>(internal::backend_driver(backend).canonical_home_target(state_->stream));
         }
 
         // when TensorState is shared, keep lazy->result so sibling handles
@@ -854,7 +855,10 @@ namespace lfs::core {
     void Tensor::set_stream(cudaStream_t stream) {
         // Vulkan and Metal storage order on their own timelines; a CUDA stream identity
         // on it would make every cross-stream check bridge (a queue submit) for nothing.
-        stream = static_cast<cudaStream_t>(internal::backend_driver(internal::gpu_backend_tag(*this)).canonical_home_target(stream));
+        // Every driver preserves the null home. Avoid a registry lookup and a
+        // virtual call when clearing it or publishing a default-target result.
+        if (stream)
+            stream = static_cast<cudaStream_t>(internal::backend_driver(internal::gpu_backend_tag(*this)).canonical_home_target(stream));
         if (stream) {
             internal::observe_native_target(stream);
         }

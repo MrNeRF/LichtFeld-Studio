@@ -9,6 +9,7 @@
 #include "native_allocation.hpp"
 #include "native_export.hpp"
 #include "tensor_vulkan_interop.hpp"
+#include <atomic>
 #include <format>
 
 namespace lfs::core::internal {
@@ -18,6 +19,7 @@ namespace lfs::core::internal {
             const char* name_;
 
         public:
+            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
             void* canonical_home_target(void*) const noexcept override { return nullptr; }
             std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
             void synchronize_tensor_target(const Tensor&, void*) override {}
@@ -85,23 +87,49 @@ namespace lfs::core::internal {
             }();
             return registry;
         }
-        thread_local std::array<GpuBackendOps*, kGpuBackendCount> activated{};
+        // Only the thread-scoped miss path touches TLS. In particular, ELF PIC
+        // builds must not pay __tls_get_addr for every process-scoped lookup.
+        std::array<std::atomic<GpuBackendOps*>, kGpuBackendCount> process_activated{};
+        thread_local std::array<GpuBackendOps*, kGpuBackendCount> thread_activated{};
+
+        // Keep TLS and activation's register spills out of process-cache hits.
+        // This local call can be tail-called and does not cross an export boundary.
+#if defined(_MSC_VER)
+        __declspec(noinline)
+#else
+        __attribute__((noinline))
+#endif
+        GpuBackendOps&
+        thread_or_uncached_ops(GpuBackend backend) {
+            const auto index = static_cast<size_t>(backend);
+            auto* ops = thread_activated[index];
+            if (!ops) [[unlikely]] {
+                auto& driver = backend_driver(backend);
+                ops = &driver.activate();
+                if (driver.activation_scope() == BackendActivationScope::Process)
+                    process_activated[index].store(ops, std::memory_order_release);
+                else
+                    thread_activated[index] = ops;
+            }
+            return *ops;
+        }
     } // namespace
     BackendDriver& backend_driver(GpuBackend backend) {
         const auto index = static_cast<size_t>(backend);
         LFS_ASSERT_MSG(index < kGpuBackendCount, "Unknown GPU backend");
         return *drivers()[index];
     }
-    void clear_backend_activation_cache() noexcept { activated.fill(nullptr); }
+    void clear_backend_activation_cache() noexcept {
+        for (auto& ops : process_activated)
+            ops.store(nullptr, std::memory_order_release);
+        thread_activated.fill(nullptr);
+    }
     GpuBackendOps& backend_ops(GpuBackend backend) {
         const auto index = static_cast<size_t>(backend);
         LFS_DEBUG_ASSERT(index < kGpuBackendCount);
-        auto* ops = activated[index];
-        if (!ops) [[unlikely]] {
-            ops = &backend_driver(backend).activate();
-            activated[index] = ops;
-        }
-        return *ops;
+        if (auto* ops = process_activated[index].load(std::memory_order_acquire)) [[likely]]
+            return *ops;
+        return thread_or_uncached_ops(backend);
     }
     GpuBackendOps& backend_ops_for(const Tensor& tensor) {
         LFS_ASSERT_MSG(tensor.is_valid(), "backend_ops_for requires a valid tensor");

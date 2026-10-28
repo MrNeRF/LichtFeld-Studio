@@ -22,6 +22,7 @@ namespace lfs::core::internal {
     namespace {
         class VulkanDriver final : public BackendDriver {
         public:
+            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
             void* canonical_home_target(void*) const noexcept override { return nullptr; }
             std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
             void synchronize_tensor_target(const Tensor&, void*) override {}

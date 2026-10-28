@@ -15,13 +15,20 @@ backend is compiled or available.
 
 The registry has indexed driver slots. Inventory and selection do not construct
 Tensor execution contexts. Native activation performs checks such as CUDA worker
-device binding and Metal OS availability. Activated operation pointers are cached
-per thread. The steady operation path must not add a registered getter, lock,
+device binding and Metal OS availability. Drivers declare whether activation is
+process-scoped or thread-scoped. Process-scoped pointers are published with
+release/acquire ordering and reused without a TLS lookup; thread-scoped pointers
+retain native worker initialization. Cache invalidation clears the process slots
+and the calling thread's slots. Operation objects have process lifetime; their
+native implementations must still handle context shutdown and recreation.
+The steady operation path must not add a registered getter, lock,
 allocation or capability probe before its virtual operation.
 
 Native drivers own device and target policy, inventory, pressure services,
 protocol capabilities and context shutdown. Unsupported native features must be
 reported explicitly; a foreign SDK must never receive another backend's handles.
+Canonicalizing a null home target preserves null. Implicit target binding with
+no declared home is a no-op, so deferred aliases need no native call for this case.
 
 An unavailable driver has no native target, device selection or renderer-storage
 access. Legacy API defaults belong to their compatibility implementations.
@@ -71,6 +78,12 @@ The hot `StorageRef` layout does not grow to accommodate these allocation detail
 Native allocation flags carry accounting, labeling and teardown policy. Shared
 adoption and deleters consume that policy. They must not derive ownership from
 backend names or dereference allocator metadata after shutdown.
+
+Data and metadata share one storage owner. Either reference must keep the native
+allocation alive independently, and the final release runs its deleter exactly
+once. Adoption transfers temporary references rather than adding redundant
+reference-count updates. Fresh metadata starts with an empty external label and
+owner; native allocations populate these only when supplied.
 
 If host-side owner construction fails, adoption must release the unowned native
 allocation and balance its accounting before propagating the exception. Borrowed

@@ -419,8 +419,13 @@ namespace lfs::core {
             result.storage_meta_->gpu_descriptor = descriptor;
             if (!storage.meta)
                 result.storage_meta_->gpu_descriptor.byte_size = bytes;
-            result.storage_meta_->external_kind = allocation.external_kind;
-            result.storage_meta_->external_owner = std::move(allocation.owner);
+            // adopt_storage creates fresh metadata. Ordinary owned allocations
+            // already have an empty label and owner; only populate external data
+            // when the native allocator actually supplies it.
+            if (*allocation.external_kind)
+                result.storage_meta_->external_kind = allocation.external_kind;
+            if (allocation.owner)
+                result.storage_meta_->external_owner = std::move(allocation.owner);
         };
         LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::GPU,
                        "tensor load received an invalid device");

@@ -30,6 +30,7 @@ namespace lfs::core::internal {
             std::atomic<int> selection_{-1};
 
         public:
+            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Thread; }
             void* canonical_home_target(void* target) const noexcept override { return target; }
             std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor& tensor, bool implicit) override {
                 const auto target = implicit ? tensor.stream() : prepare_inputs_for_stream({&tensor});

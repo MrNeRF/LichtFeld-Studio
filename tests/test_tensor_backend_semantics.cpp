@@ -13,13 +13,16 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/native_allocation.hpp"
 #include "core/tensor/internal/expression_runtime.hpp"
+#include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_upload.hpp"
 #include "tensor_backend_contract.hpp"
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -44,6 +47,11 @@ namespace {
 
     constexpr float kInf = std::numeric_limits<float>::infinity();
     constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+    struct DeferredSizeGuard {
+        DeferredSizeGuard() { lfs::core::internal::lazy_executor_set_size_heuristic_override_for_testing(false); }
+        ~DeferredSizeGuard() { lfs::core::internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt); }
+    };
 
     TEST(TensorProcessConfigurationDeathTest, BackendAndExecutionOptionsSurviveReexec) {
         const auto configuration = [] {
@@ -98,6 +106,117 @@ namespace {
             else
                 EXPECT_FLOAT_EQ(got[i], want[i]) << i;
         }
+    }
+
+    TEST_P(TensorBackendSemantics, AllocatedViewRetainsStorageAfterOwnerDestruction) {
+        Tensor view;
+        const void* storage = nullptr;
+        {
+            auto owner = Tensor::full({4}, 7.f, device());
+            storage = owner.storage_ptr();
+            view = owner.slice(0, 1, 3);
+            EXPECT_EQ(view.storage_ptr(), storage);
+        }
+        // A fresh allocation must not reuse the still-live view's storage.
+        const auto other = Tensor::full({4}, 11.f, device());
+        expect_floats(host<float>(view), {7, 7});
+        EXPECT_EQ(view.storage_ptr(), storage);
+        view.fill_(9.f);
+        expect_floats(host<float>(view), {9, 9});
+        expect_floats(host<float>(other), {11, 11, 11, 11});
+    }
+
+    TEST_P(TensorBackendSemantics, MovedAllocationRetainsStorageAfterAliasesAreReleased) {
+        auto original = Tensor::full({3}, 5.f, device());
+        auto alias = original;
+        auto moved = std::move(original);
+        auto independent = moved.clone();
+        alias = Tensor{};
+        original = Tensor{};
+        moved.fill_(8.f);
+        expect_floats(host<float>(moved), {8, 8, 8});
+        moved = Tensor{};
+        expect_floats(host<float>(independent), {5, 5, 5});
+    }
+
+    TEST_P(TensorBackendSemantics, NullHomeNeedsNoCanonicalizationOrImplicitBinding) {
+        using namespace lfs::core;
+        const auto tensor = Tensor::full({1}, 1.f, Device::CPU);
+        for (const auto backend : kGpuBackends) {
+            auto& driver = internal::backend_driver(backend);
+            EXPECT_EQ(driver.canonical_home_target(nullptr), nullptr);
+            EXPECT_FALSE(driver.bind_tensor_target(tensor, true).has_value());
+        }
+    }
+
+    TEST_P(TensorBackendSemantics, ConcurrentActivationAndCacheResetPreserveUsableAdapters) {
+        using namespace lfs::core;
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native GPU activation";
+        const auto backend = *GetParam().backend;
+        auto* original = &internal::backend_ops(backend);
+        for (int round = 0; round < 2; ++round) {
+            internal::clear_backend_activation_cache();
+            // Destroy the promise before joining workers if launching one throws.
+            // wait() also releases on a broken promise, so no worker is stranded.
+            std::array<std::future<internal::GpuBackendOps*>, 4> workers;
+            std::promise<void> start;
+            const auto ready = start.get_future().share();
+            for (auto& worker : workers) {
+                worker = std::async(std::launch::async, [backend, ready] {
+                    ready.wait();
+                    auto& ops = internal::backend_ops(backend);
+                    ops.synchronize_device();
+                    return &ops;
+                });
+            }
+            start.set_value();
+            for (auto& worker : workers)
+                EXPECT_EQ(worker.get(), original);
+        }
+        expect_floats(host<float>(make<float>(DataType::Float32, {2}, {2, 3}).add(1.f)), {3, 4});
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredAliasesPublishOnceWithNoHomeTarget) {
+        const DeferredSizeGuard guard;
+        const auto source = make<float>(DataType::Float32, {3}, {2, 3, 4});
+        auto deferred = source.add(1.f).mul(2.f).sub(3.f);
+        ASSERT_TRUE(deferred.is_deferred());
+        std::array<Tensor, 4> aliases{deferred, deferred, deferred, deferred};
+        EXPECT_EQ(deferred.stream(), nullptr);
+        const auto* storage = deferred.data_ptr();
+        for (auto& alias : aliases) {
+            EXPECT_EQ(alias.data_ptr(), storage);
+            EXPECT_EQ(alias.stream(), nullptr);
+            expect_placement(alias);
+            expect_floats(host<float>(alias), {3, 5, 7});
+        }
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredAliasesRetainHomeOutsideTheProducerScope) {
+        using namespace lfs::core;
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native GPU execution target";
+        const DeferredSizeGuard guard;
+        TensorWorkQueue queue(*GetParam().backend);
+        Tensor source;
+        Tensor deferred;
+        {
+            const TensorWorkQueue::Scope scope(queue);
+            source = Tensor::full({3}, 2.f, Device::GPU);
+            deferred = source.add(1.f).mul(2.f).sub(3.f);
+        }
+        ASSERT_TRUE(deferred.is_deferred());
+        const auto home = source.execution_target();
+        std::array<Tensor, 4> aliases{deferred, deferred, deferred, deferred};
+        const auto* storage = deferred.data_ptr();
+        EXPECT_EQ(deferred.execution_target(), home);
+        for (auto& alias : aliases) {
+            EXPECT_EQ(alias.data_ptr(), storage);
+            EXPECT_EQ(alias.execution_target(), home);
+            expect_floats(host<float>(alias), {3, 3, 3});
+        }
+        queue.wait();
     }
 
     TEST_P(TensorBackendSemantics, UncompiledDriversDoNotAdvertiseNativeTargetsOrOwnership) {

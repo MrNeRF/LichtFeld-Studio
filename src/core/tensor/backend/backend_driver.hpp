@@ -28,12 +28,14 @@ namespace lfs::core::internal {
     struct BackendQueueCreateInfo;
     using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
-    // backend_ops caches the resulting pointer in the calling thread. Registered
-    // drivers have process lifetime, like the activated ops, so late exit hooks
+    // backend_ops caches the resulting pointer at the driver's requested scope.
+    // Registered drivers have process lifetime, like the activated ops, so late exit hooks
     // can still call them. Native resources are released explicitly by shutdown.
     struct BackendRendererAccess {
         bool shares_vulkan = false, needs_vulkan_interop = false, metal = false;
     };
+    enum class BackendActivationScope { Process,
+                                        Thread };
     class BackendDriver {
     public:
         virtual ~BackendDriver() = default;
@@ -55,6 +57,10 @@ namespace lfs::core::internal {
         virtual void unbind_target(std::array<uintptr_t, 2>) noexcept = 0;
         virtual void bridge_targets(void* consumer, void* producer) = 0;
         virtual GpuBackendOps& activate() = 0;
+        // This immutable policy is consulted only on an activation cache miss.
+        // Process-scoped activation must be safe to publish to other threads;
+        // thread-scoped activation may also establish native thread state.
+        virtual BackendActivationScope activation_scope() const noexcept = 0;
         virtual MemoryInfo memory_info(bool include_pool_stats) = 0;
         virtual MemoryInfo pressure_memory_info(bool free_query) = 0;
         virtual bool pressure_recovery_blocked() const noexcept = 0;
@@ -67,6 +73,7 @@ namespace lfs::core::internal {
         virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) = 0;
         virtual SplatPublication publication() const = 0;
         virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
+        // A null home remains null, and implicit binding with no home is a no-op.
         virtual void* canonical_home_target(void*) const noexcept = 0;
         virtual std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool implicit) = 0;
         virtual void synchronize_tensor_target(const Tensor&, void*) = 0;

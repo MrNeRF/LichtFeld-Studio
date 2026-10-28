@@ -59,9 +59,10 @@ CMake generates the compiled-backend inventory and its registration source from
 one set of build options. The shared indexed driver registry does not include
 backend SDK headers or construct concrete backend implementations. Hardware
 inventory, startup selection and activation belong to each backend driver.
-Activated operation pointers are cached per thread; steady Tensor dispatch uses
-that indexed pointer and the existing operation's virtual call. CUDA worker
-binding remains inside its driver.
+Activated operation pointers use the scope declared by their driver: HIP, Vulkan
+and Metal share a process cache; CUDA keeps a thread cache for worker binding.
+Steady Tensor dispatch uses the indexed pointer and the existing operation's
+virtual call. CUDA worker binding remains inside its driver.
 
 Upload buffers, fences, completion snapshots, timestamp pools and packed readback
 slots use SDK-free ownership contracts implemented by all four GPU backends.
