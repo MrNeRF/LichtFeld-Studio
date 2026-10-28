@@ -6,6 +6,7 @@
 #include "core/environment.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -51,10 +52,14 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
             OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
             OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
+            OptimizationCliBinding{"--cropbox-growth-inside", "cropbox_growth_inside", Float},
+            OptimizationCliBinding{"--crop", "crop_to_cropbox", Bool},
             OptimizationCliBinding{"--thin-structure-weight", "thin_structure_weight", Float},
             OptimizationCliBinding{"--late-lr-anneal", "late_lr_anneal", Float},
             OptimizationCliBinding{"--gradient-loss-weight", "gradient_loss_weight", Float},
             OptimizationCliBinding{"--densify-structure-weight", "densify_structure_weight", Float},
+            OptimizationCliBinding{"--color-variance-weight", "color_variance_weight", Float},
+            OptimizationCliBinding{"--color-variance-warmup-iters", "color_variance_warmup_iters", Integer},
             OptimizationCliBinding{"--opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool},
             OptimizationCliBinding{"--no-opacity-decay-rendered-only", "opacity_decay_rendered_only", Bool, true},
             OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float, false, "; cannot be combined with --iter"},
@@ -69,6 +74,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--random", "random", Bool},
             OptimizationCliBinding{"--init-num-pts", "init_num_pts", Integer},
             OptimizationCliBinding{"--init-extent", "init_extent", Float},
+            OptimizationCliBinding{"--init-mesh-resolution", "init_mesh_resolution", Integer},
             OptimizationCliBinding{"--mask-mode", "mask_mode", Enum, false,
                                    "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
             OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
@@ -87,9 +93,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-holdout-appearance", "ppisp_holdout_appearance", Enum},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
-            OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
-            OptimizationCliBinding{"--init-rho", "init_rho", Float},
-            OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
+            OptimizationCliBinding{"--popspa-target-count", "popspa_target_count", Integer},
             OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
             OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
             OptimizationCliBinding{"--exposure-correction", "use_exposure_correction", Bool},
@@ -288,7 +292,7 @@ namespace {
         if (const auto file = lfs::core::param::eval_mask_splat_file(spec)) {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_splat_file(normalized))), error))
                 return invalid(std::format("Evaluation splat file does not exist: {}", *file));
             return normalized;
@@ -296,7 +300,7 @@ namespace {
         if (const auto file = lfs::core::param::eval_mask_points_file(spec)) {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
-            if (!std::filesystem::is_regular_file(
+            if (!lfs::core::native_fs::is_regular_file(
                     lfs::core::utf8_to_path(std::string(*lfs::core::param::eval_mask_points_file(normalized))), error))
                 return invalid(std::format("Evaluation points file does not exist: {}", *file));
             return normalized;
@@ -318,7 +322,7 @@ namespace {
             const auto normalized = lfs::core::param::normalize_eval_mask(spec);
             std::error_code error;
             if (lfs::core::param::eval_mask_folder(spec).empty() ||
-                !std::filesystem::is_directory(
+                !lfs::core::native_fs::is_directory(
                     lfs::core::utf8_to_path(std::string(lfs::core::param::eval_mask_folder(normalized))), error))
                 return invalid(std::format("Evaluation mask folder does not exist: {}", spec.substr(6)));
             return normalized;
@@ -340,7 +344,7 @@ namespace {
             return invalid(std::format("Invalid --eval-mask. {}", expected));
         const auto path = lfs::core::param::normalize_eval_mask(spec.substr(separator + 1));
         std::error_code error;
-        if (!std::filesystem::is_regular_file(lfs::core::utf8_to_path(path), error))
+        if (!lfs::core::native_fs::is_regular_file(lfs::core::utf8_to_path(path), error))
             return invalid(std::format("Evaluation mesh file does not exist: {}", path));
         return path;
     }
@@ -542,7 +546,7 @@ namespace {
         lfs::core::param::TrainingParameters& params, const std::string& view_path_str) {
         const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
 
-        if (!std::filesystem::exists(view_path)) {
+        if (!lfs::core::native_fs::exists(view_path)) {
             return std::unexpected(
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
@@ -557,15 +561,15 @@ namespace {
             ".usd", ".usda", ".usdc", ".usdz",
             ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
         const auto is_supported = [&](const std::filesystem::path& p) {
-            auto ext = p.extension().string();
+            auto ext = lfs::core::path_to_utf8(p.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             return std::ranges::find(SUPPORTED_EXTENSIONS, ext) != SUPPORTED_EXTENSIONS.end();
         };
 
-        if (std::filesystem::is_directory(view_path)) {
-            for (const auto& entry : std::filesystem::directory_iterator(view_path)) {
-                if (entry.is_regular_file() && is_supported(entry.path())) {
-                    params.view_paths.push_back(entry.path());
+        if (lfs::core::native_fs::is_directory(view_path)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(view_path)) {
+                if (lfs::core::native_fs::entry_is_regular_file(view_path, entry) && is_supported(entry.path())) {
+                    params.view_paths.push_back(lfs::core::native_fs::entry_path(view_path, entry.path()));
                 }
             }
             std::ranges::sort(params.view_paths);
@@ -578,7 +582,7 @@ namespace {
             return {};
         }
 
-        auto extension = view_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(view_path.extension());
         std::ranges::transform(
             extension, extension.begin(),
             [](const unsigned char character) {
@@ -680,11 +684,11 @@ namespace {
     std::optional<std::string> validateOutputFormatSuffix(
         const std::filesystem::path& output_path,
         const lfs::core::param::OutputFormat format) {
-        if (output_path.empty() || std::filesystem::is_directory(output_path)) {
+        if (output_path.empty() || lfs::core::native_fs::is_directory(output_path)) {
             return std::nullopt;
         }
 
-        auto extension = output_path.extension().string();
+        auto extension = lfs::core::path_to_utf8(output_path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(),
                        [](const unsigned char c) {
                            return static_cast<char>(std::tolower(c));
@@ -701,7 +705,10 @@ namespace {
 
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
-        lfs::core::param::TrainingParameters& params) {
+        lfs::core::param::TrainingParameters& params,
+        const bool create_output_directory = true,
+        const bool validate_only = false,
+        const std::function<void(::args::ArgumentParser&)>& inspect = {}) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -709,10 +716,12 @@ namespace {
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
+                "voxelize -- Generate a .voxel.json/.voxel.bin collision pair\n"
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
+                "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -720,6 +729,8 @@ namespace {
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
+                "lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n"
+                "lichtfeld-studio batch-train --manifest batch.json\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -757,7 +768,7 @@ namespace {
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for the project file and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Name of the project file and --export files (default project.licht and splat_ITER)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
-            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
+            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from a splat, point cloud or mesh file; a mesh must be in the dataset's coordinates and is converted to splats when training starts", {"init"});
             ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
@@ -793,12 +804,18 @@ namespace {
             ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
+            ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
+            ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
+            ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
+            ::args::ValueFlag<float> cropbox_growth_inside(training_group, "share", lfs::core::args::optimization_cli_help("--cropbox-growth-inside"), {"cropbox-growth-inside"});
             ::args::ValueFlag<float> thin_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--thin-structure-weight"), {"thin-structure-weight"});
             ::args::ValueFlag<float> late_lr_anneal(training_group, "fraction", lfs::core::args::optimization_cli_help("--late-lr-anneal"), {"late-lr-anneal"});
             ::args::ValueFlag<float> gradient_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--gradient-loss-weight"), {"gradient-loss-weight"});
             ::args::ValueFlag<float> densify_structure_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--densify-structure-weight"), {"densify-structure-weight"});
+            ::args::ValueFlag<float> color_variance_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--color-variance-weight"), {"color-variance-weight"});
+            ::args::ValueFlag<int> color_variance_warmup_iters(training_group, "iterations", lfs::core::args::optimization_cli_help("--color-variance-warmup-iters"), {"color-variance-warmup-iters"});
             ::args::Flag opacity_decay_rendered_only(training_group, "enabled", lfs::core::args::optimization_cli_help("--opacity-decay-rendered-only"), {"opacity-decay-rendered-only"});
             ::args::Flag no_opacity_decay_rendered_only(training_group, "disabled", lfs::core::args::optimization_cli_help("--no-opacity-decay-rendered-only"), {"no-opacity-decay-rendered-only"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
@@ -825,6 +842,7 @@ namespace {
             ::args::Flag random(init_group, "random", lfs::core::args::optimization_cli_help("--random"), {"random"});
             ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::core::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
             ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::core::args::optimization_cli_help("--init-extent"), {"init-extent"});
+            ::args::ValueFlag<int> init_mesh_resolution(init_group, "init_mesh_resolution", lfs::core::args::optimization_cli_help("--init-mesh-resolution"), {"init-mesh-resolution"});
 
             // =============================================================================
             // DATASET OPTIONS
@@ -846,6 +864,16 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
+            ::args::ValueFlag<float> sharpen_amount(dataset_group, "amount", "Sharpen training images once as they are loaded and cached, 0 to 5: 0 = off, 0.25-0.5 = subtle, 1 = strong. Only brightness is sharpened; evaluation and the GT view keep the original photos (default: 0)", {"sharpen-amount"});
+            ::args::MapFlag<std::string, lfs::core::SharpenKernel> sharpen_kernel(dataset_group, "kernel",
+                                                                                  "Sharpening filter used when --sharpen-amount is above 0: usm = unsharp mask with --sharpen-radius; laplacian4 / laplacian8 = 3x3 kernel over the 4 or 8 neighbours, much stronger per amount (default: usm)",
+                                                                                  {"sharpen-kernel"},
+                                                                                  std::unordered_map<std::string, lfs::core::SharpenKernel>{
+                                                                                      {"usm", lfs::core::SharpenKernel::Usm},
+                                                                                      {"laplacian4", lfs::core::SharpenKernel::Laplacian4},
+                                                                                      {"laplacian8", lfs::core::SharpenKernel::Laplacian8}});
+            ::args::ValueFlag<float> sharpen_radius(dataset_group, "px", "Unsharp mask blur radius (Gaussian sigma) in pixels of the resized training image, 0.3 to 10: small values sharpen fine detail, large values broader edges; usm only (default: 1)", {"sharpen-radius"});
+            ::args::ValueFlag<float> sharpen_threshold(dataset_group, "threshold", "Leave brightness differences below this value (0 to 1) unsharpened so flat areas and noise stay untouched; 0.01-0.02 suits noisy photos (default: 0)", {"sharpen-threshold"});
             ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
@@ -889,10 +917,8 @@ namespace {
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
+            ::args::ValueFlag<int> popspa_target_count(sparsity_group, "popspa_target_count", lfs::core::args::optimization_cli_help("--popspa-target-count"), {"popspa-target-count"});
             ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
-            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
-            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::core::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
 
             // =============================================================================
             // RENDERING OPTIONS
@@ -996,17 +1022,29 @@ namespace {
             ::args::Group extensions_group(parser, "EXTENSIONS:");
             ::args::ValueFlagList<std::string> python_scripts(extensions_group, "path", "Python script(s) for custom training callbacks", {"python-script"});
 
+            if (inspect) {
+                inspect(parser);
+                return std::make_tuple(ParseResult::Help, std::function<void()>{});
+            }
+
             // Parse arguments
             try {
                 parser.Prog(args.front());
                 parser.ParseArgs(std::vector<std::string>(args.begin() + 1, args.end()));
             } catch (const ::args::Help&) {
-                std::print("{}", parser.Help());
+                if (!validate_only) {
+                    std::print("{}", parser.Help());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::Completion& e) {
-                std::print("{}", e.what());
+                if (!validate_only) {
+                    std::print("{}", e.what());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
+                if (validate_only) {
+                    return std::unexpected(std::format("Parse error: {}", e.what()));
+                }
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
             }
 
@@ -1039,7 +1077,7 @@ namespace {
             }
 
             // Initialize logger (CLI args override environment variable)
-            {
+            if (!validate_only) {
                 auto level = lfs::core::LogLevel::Info;
                 std::string log_file_path;
                 std::string filter_pattern;
@@ -1082,6 +1120,13 @@ namespace {
                 }
                 if (!log_file_path.empty()) {
                     LOG_DEBUG("Logging to file: {}", log_file_path);
+                }
+            } else {
+                if (log_level) {
+                    auto level = lfs::core::LogLevel::Info;
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
             }
 
@@ -1165,7 +1210,7 @@ namespace {
             if (render_camera_path) {
                 const auto& camera_path_str = ::args::get(render_camera_path);
                 const auto camera_path = lfs::core::utf8_to_path(camera_path_str);
-                if (!std::filesystem::exists(camera_path)) {
+                if (!lfs::core::native_fs::exists(camera_path)) {
                     return std::unexpected(std::format("Camera path file does not exist: {}", camera_path_str));
                 }
                 if (!render_load || ::args::get(render_load).empty()) {
@@ -1177,7 +1222,7 @@ namespace {
                         "ERROR: --render-camera-path requires --render-output\n\n{}", parser.Help()));
                 }
                 const auto load_path = lfs::core::utf8_to_path(::args::get(render_load));
-                if (!std::filesystem::exists(load_path)) {
+                if (!lfs::core::native_fs::exists(load_path)) {
                     return std::unexpected(std::format("Scene to render does not exist: {}", ::args::get(render_load)));
                 }
 
@@ -1208,10 +1253,10 @@ namespace {
                 const auto& import_path_str = ::args::get(import_cameras);
                 if (!import_path_str.empty()) {
                     const std::filesystem::path import_path = lfs::core::utf8_to_path(import_path_str);
-                    if (!std::filesystem::exists(import_path)) {
+                    if (!lfs::core::native_fs::exists(import_path)) {
                         return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(import_path)));
                     }
-                    if (!std::filesystem::is_directory(import_path)) {
+                    if (!lfs::core::native_fs::is_directory(import_path)) {
                         return std::unexpected(std::format("Expected directory for --import-cameras: {}", lfs::core::path_to_utf8(import_path)));
                     }
                     params.import_cameras_path = import_path;
@@ -1224,10 +1269,10 @@ namespace {
                 const auto ckpt_path_str = ::args::get(resume_checkpoint);
                 if (!ckpt_path_str.empty()) {
                     const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);
-                    if (!std::filesystem::exists(ckpt_path)) {
+                    if (!lfs::core::native_fs::exists(ckpt_path)) {
                         return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
-                    auto extension = ckpt_path.extension().string();
+                    auto extension = lfs::core::path_to_utf8(ckpt_path.extension());
                     std::ranges::transform(
                         extension, extension.begin(),
                         [](const unsigned char character) {
@@ -1260,10 +1305,33 @@ namespace {
                 const auto path_str = ::args::get(init_path);
                 params.init_path = lfs::core::path_to_utf8(absolute_input_path(path_str));
 
-                if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
+                if (!lfs::core::native_fs::exists(lfs::core::utf8_to_path(path_str))) {
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
                 }
             }
+
+            if (cropbox) {
+                const auto box = lfs::core::param::parse_eval_mask_box("bbox:" + ::args::get(cropbox));
+                if (!box)
+                    return std::unexpected(std::format(
+                        "Invalid --cropbox '{}'. A box needs six numbers x0,y0,z0,x1,y1,z1 with each minimum below its maximum",
+                        ::args::get(cropbox)));
+                params.cropbox = *box;
+            }
+            if (cropbox_rotation) {
+                if (!params.cropbox)
+                    return std::unexpected("--cropbox-rotation turns the --cropbox box about its centre: it needs --cropbox");
+                const auto rotation = lfs::core::param::parse_cropbox_rotation(::args::get(cropbox_rotation));
+                if (!rotation)
+                    return std::unexpected(std::format(
+                        "Invalid --cropbox-rotation '{}'. A rotation needs three finite numbers rx,ry,rz in degrees",
+                        ::args::get(cropbox_rotation)));
+                params.cropbox_rotation = *rotation;
+            }
+            if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project)
+                return std::unexpected(
+                    "--crop removes the splats outside the training crop box when training completes and when exporting: "
+                    "it needs --cropbox, or a resumed project that has a crop box");
 
             auto add_splat_freeze = parse_add_splat_freeze_modifiers(args);
             if (!add_splat_freeze) {
@@ -1277,7 +1345,7 @@ namespace {
                 for (size_t i = 0; i < add_splat_values.size(); ++i) {
                     const auto& path_str = add_splat_values[i];
                     const auto splat_path = absolute_input_path(path_str);
-                    if (!std::filesystem::exists(splat_path)) {
+                    if (!lfs::core::native_fs::exists(splat_path)) {
                         return std::unexpected(std::format("Added splat does not exist: {}", path_str));
                     }
                     params.add_splat_paths.push_back(splat_path);
@@ -1322,7 +1390,7 @@ namespace {
             const auto data_path_value = has_data_path
                                              ? lfs::core::utf8_to_path(::args::get(data_path))
                                              : std::filesystem::path{};
-            auto data_extension = data_path_value.extension().string();
+            auto data_extension = lfs::core::path_to_utf8(data_path_value.extension());
             std::ranges::transform(
                 data_extension, data_extension.begin(),
                 [](const unsigned char character) {
@@ -1347,13 +1415,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory
-                    std::error_code ec;
-                    std::filesystem::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
@@ -1369,13 +1439,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory if provided
-                    std::error_code ec;
-                    std::filesystem::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory if provided
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             }
@@ -1436,6 +1508,8 @@ namespace {
                     return std::unexpected("ERROR: --morton-reorder-interval must be >= 0 (0 disables)");
                 }
             }
+            if (color_variance_warmup_iters && ::args::get(color_variance_warmup_iters) < 0)
+                return std::unexpected("ERROR: --color-variance-warmup-iters must be >= 0");
 
             // Validate min_opacity (0.0-1.0)
             if (min_opacity) {
@@ -1450,14 +1524,6 @@ namespace {
                 int pts = ::args::get(init_num_pts);
                 if (pts <= 0) {
                     return std::unexpected("ERROR: --init-num-pts must be greater than 0");
-                }
-            }
-
-            // Validate prune_ratio (0.0-1.0)
-            if (prune_ratio) {
-                float ratio = ::args::get(prune_ratio);
-                if (ratio < 0.0f || ratio > 1.0f) {
-                    return std::unexpected("ERROR: --prune-ratio must be between 0.0 and 1.0");
                 }
             }
 
@@ -1527,6 +1593,10 @@ namespace {
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         use_16bit_flag = static_cast<bool>(use_16bit),
+                                        sharpen_kernel_val = cli_option_present({"--sharpen-kernel"}) ? std::optional<lfs::core::SharpenKernel>(::args::get(sharpen_kernel)) : std::optional<lfs::core::SharpenKernel>(),
+                                        sharpen_amount_val = cli_option_present({"--sharpen-amount"}) ? std::optional<float>(::args::get(sharpen_amount)) : std::optional<float>(),
+                                        sharpen_radius_val = cli_option_present({"--sharpen-radius"}) ? std::optional<float>(::args::get(sharpen_radius)) : std::optional<float>(),
+                                        sharpen_threshold_val = cli_option_present({"--sharpen-threshold"}) ? std::optional<float>(::args::get(sharpen_threshold)) : std::optional<float>(),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
                                         tcp_connection_flag = bool(tcp_connection),
@@ -1538,6 +1608,8 @@ namespace {
                                         late_lr_anneal_val = cli_option_present({"--late-lr-anneal"}) ? std::optional<float>(::args::get(late_lr_anneal)) : std::optional<float>(),
                                         gradient_loss_weight_val = cli_option_present({"--gradient-loss-weight"}) ? std::optional<float>(::args::get(gradient_loss_weight)) : std::optional<float>(),
                                         densify_structure_weight_val = cli_option_present({"--densify-structure-weight"}) ? std::optional<float>(::args::get(densify_structure_weight)) : std::optional<float>(),
+                                        color_variance_weight_val = cli_option_present({"--color-variance-weight"}) ? std::optional<float>(::args::get(color_variance_weight)) : std::optional<float>(),
+                                        color_variance_warmup_iters_val = cli_option_present({"--color-variance-warmup-iters"}) ? std::optional<int>(::args::get(color_variance_warmup_iters)) : std::optional<int>(),
                                         steps_scaler_val = cli_option_present({"--steps-scaler"}) ? std::optional<float>(::args::get(steps_scaler)) : std::optional<float>(),
                                         sh_degree_interval_val = cli_option_present({"--sh-degree-interval"}) ? std::optional<int>(::args::get(sh_degree_interval)) : std::optional<int>(),
                                         morton_reorder_interval_val = cli_option_present({"--morton-reorder-interval"}) ? std::optional<int>(::args::get(morton_reorder_interval)) : std::optional<int>(),
@@ -1546,15 +1618,15 @@ namespace {
                                         eval_mask_opacity_val = cli_option_present({"--eval-mask-opacity"}) ? std::optional<float>(::args::get(eval_mask_opacity)) : std::optional<float>(),
                                         cropbox_lr_scale_val = cli_option_present({"--cropbox-lr-scale"}) ? std::optional<float>(::args::get(cropbox_lr_scale)) : std::optional<float>(),
                                         cropbox_loss_weight_val = cli_option_present({"--cropbox-loss-weight"}) ? std::optional<float>(::args::get(cropbox_loss_weight)) : std::optional<float>(),
+                                        cropbox_growth_inside_val = cli_option_present({"--cropbox-growth-inside"}) ? std::optional<float>(::args::get(cropbox_growth_inside)) : std::optional<float>(),
                                         init_num_pts_val = cli_option_present({"--init-num-pts"}) ? std::optional<int>(::args::get(init_num_pts)) : std::optional<int>(),
                                         init_extent_val = cli_option_present({"--init-extent"}) ? std::optional<float>(::args::get(init_extent)) : std::optional<float>(),
+                                        init_mesh_resolution_val = cli_option_present({"--init-mesh-resolution"}) ? std::optional<int>(::args::get(init_mesh_resolution)) : std::optional<int>(),
                                         strategy_val = cli_option_present({"--strategy"}) ? std::optional<std::string>(::args::get(strategy)) : std::optional<std::string>(),
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
                                         // Sparsity parameters
-                                        sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
-                                        init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
-                                        prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
+                                        popspa_target_count_val = cli_option_present({"--popspa-target-count"}) ? std::optional<int>(::args::get(popspa_target_count)) : std::optional<int>(),
                                         // Perf / profiling
                                         perf_bench_flag = bool(perf_bench),
                                         perf_bench_warmup_val = cli_option_present({"--perf-bench-warmup"}) ? std::optional<int>(::args::get(perf_bench_warmup)) : std::optional<int>(),
@@ -1580,6 +1652,7 @@ namespace {
                                         use_exposure_correction_flag = bool(use_exposure_correction),
                                         no_exposure_correction_flag = bool(no_exposure_correction),
                                         opacity_decay_rendered_only_flag = bool(opacity_decay_rendered_only),
+                                        crop_flag = bool(crop),
                                         no_opacity_decay_rendered_only_flag = bool(no_opacity_decay_rendered_only),
                                         use_ppisp_flag = bool(use_ppisp),
                                         no_ppisp_exif_exposure_flag = bool(no_ppisp_exif_exposure),
@@ -1682,6 +1755,7 @@ namespace {
                 params.cli_step_values_set = iterations_val.has_value() ||
                                              sh_degree_interval_val.has_value() ||
                                              morton_reorder_interval_val.has_value() ||
+                                             color_variance_warmup_iters_val.has_value() ||
                                              (eval_steps_val && !eval_steps_val->empty());
                 note_opt("iterations", iterations_val.has_value());
                 setVal(resize_factor_val, ds.resize_factor);
@@ -1693,6 +1767,13 @@ namespace {
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
+                setVal(sharpen_kernel_val, ds.loading_params.sharpen.kernel);
+                setVal(sharpen_amount_val, ds.loading_params.sharpen.amount);
+                setVal(sharpen_radius_val, ds.loading_params.sharpen.radius);
+                setVal(sharpen_threshold_val, ds.loading_params.sharpen.threshold);
+                if (sharpen_radius_val && ds.loading_params.sharpen.kernel != lfs::core::SharpenKernel::Usm)
+                    LOG_WARN("--sharpen-radius only applies to the usm kernel; {} ignores it",
+                             lfs::core::sharpen_kernel_name(ds.loading_params.sharpen.kernel));
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
                 setVal(tcp_broadcast_connection_port_val, svs.tcp_broadcast_connection_port);
@@ -1703,8 +1784,13 @@ namespace {
                 setVal(late_lr_anneal_val, opt.late_lr_anneal);
                 setVal(gradient_loss_weight_val, opt.gradient_loss_weight);
                 setVal(densify_structure_weight_val, opt.densify_structure_weight);
+                setVal(color_variance_weight_val, opt.color_variance_weight);
+                if (color_variance_warmup_iters_val)
+                    opt.color_variance_warmup_iters = static_cast<size_t>(*color_variance_warmup_iters_val);
                 if (opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = true;
+                if (crop_flag)
+                    opt.crop_to_cropbox = true;
                 if (no_opacity_decay_rendered_only_flag)
                     opt.opacity_decay_rendered_only = false;
                 setVal(sh_degree_interval_val, opt.sh_degree_interval);
@@ -1715,8 +1801,10 @@ namespace {
                 setVal(min_opacity_val, opt.min_opacity);
                 setVal(cropbox_lr_scale_val, opt.cropbox_lr_scale);
                 setVal(cropbox_loss_weight_val, opt.cropbox_loss_weight);
+                setVal(cropbox_growth_inside_val, opt.cropbox_growth_inside);
                 setVal(init_num_pts_val, opt.init_num_pts);
                 setVal(init_extent_val, opt.init_extent);
+                setVal(init_mesh_resolution_val, opt.init_mesh_resolution);
                 setVal(strategy_val, opt.strategy);
                 setVal(timelapse_images_val, ds.timelapse_images);
                 setVal(timelapse_every_val, ds.timelapse_every);
@@ -1732,9 +1820,7 @@ namespace {
                 }
 
                 // Sparsity parameters
-                setVal(sparsify_steps_val, opt.sparsify_steps);
-                setVal(init_rho_val, opt.init_rho);
-                setVal(prune_ratio_val, opt.prune_ratio);
+                setVal(popspa_target_count_val, opt.popspa_target_count);
 
                 // Perf / profiling
                 setFlag(perf_bench_flag, opt.perf_bench);
@@ -1859,6 +1945,8 @@ namespace {
                 note_opt("late_lr_anneal", late_lr_anneal_val.has_value());
                 note_opt("gradient_loss_weight", gradient_loss_weight_val.has_value());
                 note_opt("densify_structure_weight", densify_structure_weight_val.has_value());
+                note_opt("color_variance_weight", color_variance_weight_val.has_value());
+                note_opt("color_variance_warmup_iters", color_variance_warmup_iters_val.has_value());
                 note_opt("opacity_decay_rendered_only", opacity_decay_rendered_only_flag || no_opacity_decay_rendered_only_flag);
                 note_opt("steps_scaler", steps_scaler_val.has_value());
                 note_opt("sh_degree_interval", sh_degree_interval_val.has_value());
@@ -1867,12 +1955,13 @@ namespace {
                 note_opt("min_opacity", min_opacity_val.has_value());
                 note_opt("cropbox_lr_scale", cropbox_lr_scale_val.has_value());
                 note_opt("cropbox_loss_weight", cropbox_loss_weight_val.has_value());
+                note_opt("cropbox_growth_inside", cropbox_growth_inside_val.has_value());
+                note_opt("crop_to_cropbox", crop_flag);
                 note_opt("init_num_pts", init_num_pts_val.has_value());
                 note_opt("init_extent", init_extent_val.has_value());
+                note_opt("init_mesh_resolution", init_mesh_resolution_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
-                note_opt("sparsify_steps", sparsify_steps_val.has_value());
-                note_opt("init_rho", init_rho_val.has_value());
-                note_opt("prune_ratio", prune_ratio_val.has_value());
+                note_opt("popspa_target_count", popspa_target_count_val.has_value());
                 note_opt("perf_bench", perf_bench_flag);
                 note_opt("perf_bench_warmup", perf_bench_warmup_val.has_value());
                 note_opt("profile_start_iter", profile_start_val.has_value());
@@ -1943,7 +2032,9 @@ namespace {
                             params.overrides.optimization_json, cli_opt.dump());
                     }
                 }
-                if (!ds_keys.empty()) {
+                const bool sharpen_given = sharpen_kernel_val || sharpen_amount_val || sharpen_radius_val ||
+                                           sharpen_threshold_val;
+                if (!ds_keys.empty() || sharpen_given) {
                     const auto serialized = ds.to_json();
                     nlohmann::json cli_ds;
                     for (const char* key : ds_keys) {
@@ -1956,6 +2047,15 @@ namespace {
                         cli_ds["loading_params"]["use_cpu_memory"] = false;
                     if (use_16bit_flag)
                         cli_ds["loading_params"]["use_16bit_color"] = true;
+                    const auto& loading = serialized["loading_params"];
+                    if (sharpen_kernel_val)
+                        cli_ds["loading_params"]["sharpen_kernel"] = loading["sharpen_kernel"];
+                    if (sharpen_amount_val)
+                        cli_ds["loading_params"]["sharpen_amount"] = loading["sharpen_amount"];
+                    if (sharpen_radius_val)
+                        cli_ds["loading_params"]["sharpen_radius"] = loading["sharpen_radius"];
+                    if (sharpen_threshold_val)
+                        cli_ds["loading_params"]["sharpen_threshold"] = loading["sharpen_threshold"];
                     if (!cli_ds.empty()) {
                         lfs::core::param::merge_explicit_json_overlay(
                             params.overrides.dataset_json, cli_ds.dump());
@@ -1987,8 +2087,35 @@ namespace {
 } // anonymous namespace
 
 // Public interface
+std::vector<lfs::core::args::TrainingFlag> lfs::core::args::training_flags() {
+    std::vector<TrainingFlag> flags;
+    lfs::core::param::TrainingParameters params;
+    (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
+        for (const auto* const flag : parser.Group::GetAllFlags()) {
+            const auto first = flags.size();
+            for (const auto& name : flag->GetMatcher().GetFlagStrings()) {
+                const auto spelling = name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag;
+                flags.push_back({spelling, flag->NumberOfArguments().max > 0,
+                                 flags.size() == first ? spelling : flags[first].canonical_name});
+            }
+        }
+    });
+    return flags;
+}
+
+const lfs::core::args::TrainingFlag* lfs::core::args::training_flag(const std::string_view argument) {
+    static const auto flags = training_flags();
+    const auto name = argument.substr(0, argument.find('='));
+    for (const auto& flag : flags) {
+        if (name == flag.name || (flag.takes_value && flag.name.size() == 2 &&
+                                  argument.starts_with(flag.name)))
+            return &flag;
+    }
+    return nullptr;
+}
+
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
+lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory, const bool validate_only) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
@@ -1999,11 +2126,11 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
         args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
-        if (std::filesystem::exists(p, ec))
+        if (lfs::core::native_fs::exists(p, ec))
             args.insert(args.begin() + 1, "-v");
     }
 
-    auto parse_result = parse_arguments(args, *params);
+    auto parse_result = parse_arguments(args, *params, create_output_directory, validate_only);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -2013,6 +2140,9 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     const auto [result, apply_overrides] = *parse_result;
     if (result == ParseResult::Help) {
+        if (validate_only) {
+            return std::unexpected("Help requested in training arguments");
+        }
         std::exit(0);
     }
 
@@ -2224,7 +2354,7 @@ namespace {
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
         params.include_provenance = !no_provenance;
 
-        if (!std::filesystem::exists(params.input_path)) {
+        if (!lfs::core::native_fs::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
         }
 
@@ -2253,10 +2383,10 @@ namespace {
                 return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, glb, html, usd, usda, usdc, rad", ::args::get(format)));
             }
         } else if (!params.output_path.empty()) {
-            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+            if (const auto fmt = parseFormat(lfs::core::path_to_utf8(params.output_path.extension()))) {
                 params.format = *fmt;
             } else {
-                return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+                return std::unexpected(std::format("Unknown extension '{}'. Use --format", lfs::core::path_to_utf8(params.output_path.extension())));
             }
         }
 
@@ -2350,7 +2480,7 @@ dataset options work as in training; see the Evaluation page of the docs.
             return std::nullopt;
         }
 
-        const std::string extension = lfs::core::utf8_to_path(model).extension().string();
+        const std::string extension = lfs::core::path_to_utf8(lfs::core::utf8_to_path(model).extension());
         const bool checkpoint = extension == ".licht" || extension == ".resume";
         if (!checkpoint && !given("-d") && !given("--data-path")) {
             error = "eval of a splat file needs -d <dataset>";
@@ -2424,7 +2554,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         params.spz_version = spz_version ? ::args::get(spz_version) : 4;
         params.include_provenance = !no_provenance;
 
-        if (!std::filesystem::exists(params.input_path)) {
+        if (!lfs::core::native_fs::exists(params.input_path)) {
             return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
         }
         if (params.spz_version != 3 && params.spz_version != 4) {
@@ -2459,10 +2589,10 @@ dataset options work as in training; see the Evaluation page of the docs.
             params.formats = std::move(*formats);
             params.format = params.formats.front();
         } else if (!params.output_path.empty()) {
-            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+            if (const auto fmt = parseFormat(lfs::core::path_to_utf8(params.output_path.extension()))) {
                 params.format = *fmt;
                 params.formats = {*fmt};
-            } else if (!params.output_path.extension().empty() && !std::filesystem::is_directory(params.output_path)) {
+            } else if (!params.output_path.extension().empty() && !lfs::core::native_fs::is_directory(params.output_path)) {
                 return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
             }
         }
@@ -2546,20 +2676,24 @@ dataset options work as in training; see the Evaluation page of the docs.
         params.reference_path = lfs::core::utf8_to_path(::args::get(reference));
         params.test_path = lfs::core::utf8_to_path(::args::get(test));
         for (const auto& path : {params.reference_path, params.test_path}) {
-            if (!std::filesystem::exists(path))
+            if (!lfs::core::native_fs::exists(path))
                 return invalid(std::format("Not found: {}", lfs::core::path_to_utf8(path)));
         }
-        if (std::filesystem::is_directory(params.reference_path) != std::filesystem::is_directory(params.test_path))
+        if (lfs::core::native_fs::is_directory(params.reference_path) != lfs::core::native_fs::is_directory(params.test_path))
             return invalid("compare needs two images or two folders");
         if (output) {
             params.output_path = lfs::core::utf8_to_path(::args::get(output));
         } else {
-            const auto test_path = std::filesystem::weakly_canonical(params.test_path);
+            std::error_code resolve_error;
+            const auto test_path = lfs::core::native_fs::weakly_canonical(params.test_path, resolve_error);
+            if (resolve_error)
+                return invalid(std::format("Cannot resolve {}: {}", lfs::core::path_to_utf8(params.test_path),
+                                           resolve_error.message()));
             params.output_path = test_path.parent_path() / (lfs::core::path_to_utf8(test_path.stem()) + "_compare");
         }
         if (colmap) {
             params.colmap_path = lfs::core::utf8_to_path(::args::get(colmap));
-            if (!std::filesystem::is_directory(params.colmap_path))
+            if (!lfs::core::native_fs::is_directory(params.colmap_path))
                 return invalid(std::format("COLMAP model not found: {}", ::args::get(colmap)));
         }
         if (eval_mask) {
@@ -2624,7 +2758,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
-        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
+        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 6; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
@@ -2682,10 +2816,10 @@ dataset options work as in training; see the Evaluation page of the docs.
             if (params.dataset_path.empty()) {
                 return std::unexpected(std::format("Missing dataset path\n\n{}", parser.Help()));
             }
-            if (!std::filesystem::exists(params.dataset_path)) {
+            if (!lfs::core::native_fs::exists(params.dataset_path)) {
                 return std::unexpected(std::format("Dataset not found: {}", lfs::core::path_to_utf8(params.dataset_path)));
             }
-            if (!std::filesystem::is_directory(params.dataset_path)) {
+            if (!lfs::core::native_fs::is_directory(params.dataset_path)) {
                 return std::unexpected(std::format("Expected dataset directory: {}", lfs::core::path_to_utf8(params.dataset_path)));
             }
         }
@@ -2704,7 +2838,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (params.bit_depth != 8 && params.bit_depth != 16) {
             return std::unexpected("--bit-depth must be 8 or 16");
         }
-        if (!params.model_path.empty() && !std::filesystem::exists(params.model_path)) {
+        if (!params.model_path.empty() && !lfs::core::native_fs::exists(params.model_path)) {
             return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));
         }
 
@@ -2739,7 +2873,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (project.extension() != ".licht") {
             return invalid("The project path must have a .licht extension.");
         }
-        if (!std::filesystem::is_regular_file(project)) {
+        if (!lfs::core::native_fs::is_regular_file(project)) {
             return invalid("The .licht project file could not be found.");
         }
         std::optional<std::filesystem::path> dataset;
@@ -2749,11 +2883,191 @@ dataset options work as in training; see the Evaluation page of the docs.
             }
             auto override_path = lfs::core::utf8_to_path(argv[4]);
             if (override_path.is_relative()) {
-                override_path = std::filesystem::current_path() / override_path;
+                override_path = lfs::core::native_fs::current_path() / override_path;
             }
             dataset = override_path.lexically_normal();
         }
         return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
+    }
+
+    std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
+        const int argc, const char* const argv[], std::string& error) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        constexpr const char* BATCH_TRAIN_HELP_HEADER =
+            "LichtFeld Studio - Batch Training\n"
+            "Sequentially train Gaussian Splatting models on multiple datasets with isolated CUDA\n"
+            "processes, live progress monitoring, failure resilience, and comprehensive reporting.\n";
+
+        constexpr const char* BATCH_TRAIN_HELP_FOOTER =
+            "\nEXAMPLES:\n"
+            "  # Train all dataset subdirectories found in ./datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n\n"
+            "  # Train specific datasets:\n"
+            "  lichtfeld-studio batch-train scene1/ scene2/ scene3/ -o ./outputs/\n\n"
+            "  # Train recursively scanning for datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --recursive\n\n"
+            "  # Train from a JSON batch manifest with per-scene overrides:\n"
+            "  lichtfeld-studio batch-train --manifest batch_manifest.json\n\n"
+            "  # Preview the resolved job queue without running (dry run):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --dry-run\n\n"
+            "  # Stop immediately if any dataset fails (default is to continue):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n\n"
+            "Every other option is a training option (see LichtFeld-Studio --help) and is passed to\n"
+            "each job. -d/--data-path adds a dataset and -o/--output-path sets the output root.\n";
+
+        ::args::ArgumentParser parser(BATCH_TRAIN_HELP_HEADER, BATCH_TRAIN_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch manifest");
+        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir", "output-path"});
+        ::args::ValueFlag<std::string> manifest(parser, "path", "Batch manifest JSON file", {"manifest"});
+        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {"recursive"});
+        ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
+        ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
+        ::args::ValueFlag<int> timeout(parser, "minutes", "Timeout per training job in minutes (default: 0 = disabled)", {"timeout"});
+        ::args::ValueFlag<std::string> summary_path(parser, "path", "Custom path for the batch JSON summary file", {"summary"});
+        ::args::ValueFlag<std::string> report_path(parser, "path", "Custom path for the batch text report file", {"report"});
+        LogLevelFlag log_level(parser);
+
+        std::vector<std::string> batch_args;
+        std::vector<std::string> shared_training_args;
+        batch_args.push_back(std::string(argv[0]) + " batch-train");
+
+        // Only batch-train's own options stay here, so every training option reaches the jobs.
+        static constexpr std::string_view batch_switches[] = {"-h", "--help", "--recursive", "--stop-on-failure", "--fail-fast", "--dry-run"};
+        static constexpr std::string_view batch_values[] = {"-o", "--output", "--output-dir", "--output-path", "--manifest",
+                                                            "--timeout", "--summary", "--report", "--log-level"};
+        const auto is_one_of = [](const auto& names, const std::string_view name) {
+            return std::ranges::find(names, name) != std::end(names);
+        };
+        bool after_double_dash = false;
+        int manifest_count = 0;
+        for (int i = 2; i < argc; ++i) {
+            const std::string_view arg = argv[i];
+            const auto* flag = core_args::training_flag(arg);
+            const std::string_view name = flag ? std::string_view(flag->name) : arg.substr(0, arg.find('='));
+            const bool joined = name != arg;
+            if (after_double_dash) {
+                shared_training_args.emplace_back(arg);
+            } else if (arg == "--") {
+                after_double_dash = true;
+            } else if (is_one_of(batch_switches, arg) || !arg.starts_with('-')) {
+                batch_args.emplace_back(arg);
+            } else if (name == "-d" || name == "--data-path") {
+                if (joined)
+                    batch_args.emplace_back(arg.substr(name.size() + (arg[name.size()] == '=' ? 1 : 0)));
+                else if (i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                else {
+                    error = "Missing value for batch input option";
+                    return std::nullopt;
+                }
+            } else if (is_one_of(batch_values, name)) {
+                if (name == "--manifest")
+                    ++manifest_count;
+                const auto first = batch_args.size();
+                batch_args.emplace_back(arg);
+                if (!joined && i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                if (name == "--log-level")
+                    shared_training_args.insert(shared_training_args.end(), batch_args.begin() + first, batch_args.end());
+            } else {
+                shared_training_args.emplace_back(arg);
+                // Known flags own their value even when it looks like another option.
+                if (!joined && i + 1 < argc &&
+                    (flag ? flag->takes_value : argv[i + 1][0] != '-'))
+                    shared_training_args.emplace_back(argv[++i]);
+            }
+        }
+
+        parser.Prog(batch_args[0]);
+        try {
+            parser.ParseArgs(std::vector<std::string>(batch_args.begin() + 1, batch_args.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            error = std::format("{}\n\n{}", e.what(), parser.Help());
+            return std::nullopt;
+        }
+
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error)) {
+            error = std::move(log_level_error);
+            return std::nullopt;
+        }
+
+        param::BatchTrainingParameters params;
+        std::filesystem::path manifest_path;
+        if (manifest)
+            manifest_path = lfs::core::utf8_to_path(::args::get(manifest));
+        std::vector<std::filesystem::path> input_paths;
+        for (const auto& in_str : ::args::get(inputs)) {
+            auto input = lfs::core::utf8_to_path(in_str);
+            if (input.extension() == ".json") {
+                ++manifest_count;
+                manifest_path = std::move(input);
+            } else {
+                input_paths.push_back(std::move(input));
+            }
+        }
+        if (manifest_count > 1) {
+            error = "Only one batch manifest is allowed (positional or --manifest)";
+            return std::nullopt;
+        }
+        if (manifest_count == 1) {
+            auto loaded = param::read_batch_training_parameters_from_json(manifest_path);
+            if (!loaded) {
+                error = std::format("Error reading batch manifest: {} {}", loaded.error().user_message(), loaded.error().detail());
+                return std::nullopt;
+            }
+            params = std::move(*loaded);
+        }
+        params.input_paths = std::move(input_paths);
+
+        if (output_dir) {
+            params.output_dir = lfs::core::utf8_to_path(::args::get(output_dir));
+        }
+
+        if (recursive) {
+            params.recursive = true;
+        }
+
+        if (stop_on_failure) {
+            params.continue_on_failure = false;
+        }
+
+        if (dry_run) {
+            params.dry_run = true;
+        }
+
+        if (timeout) {
+            params.timeout_minutes = ::args::get(timeout);
+            if (params.timeout_minutes < 0) {
+                error = "Batch timeout must be nonnegative";
+                return std::nullopt;
+            }
+        }
+
+        if (summary_path) {
+            params.summary_file = lfs::core::utf8_to_path(::args::get(summary_path));
+        }
+
+        if (report_path) {
+            params.report_file = lfs::core::utf8_to_path(::args::get(report_path));
+        }
+
+        for (auto&& a : shared_training_args) {
+            params.shared_args.push_back(std::move(a));
+        }
+
+        if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
+            error = std::format("Missing input datasets or batch config\n\n{}", parser.Help());
+            return std::nullopt;
+        }
+
+        return core_args::BatchTrainingMode{std::move(params)};
     }
 } // namespace
 
@@ -2770,8 +3084,61 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return WarmupMode{};
         }
 
-        if (arg1 == "convert") {
+        if (arg1 == "voxelize") {
+            ::args::ArgumentParser parser("Generate a .voxel.json/.voxel.bin collision pair.",
+                                          "Scene-unit distances, squared scene-unit areas. Connected filtering, fill/carve and surfaces are deferred.");
+            parser.Prog(std::string(argv[0]) + " voxelize");
+            ::args::HelpFlag help(parser, "help", "Display help", {'h', "help"});
+            ::args::Positional<std::string> input(parser, "input", "Gaussian splat file or SOG/SSOG folder");
+            ::args::Positional<std::string> output(parser, "output", "Output .voxel.json");
+            ::args::ValueFlag<std::string> out(parser, "path", "Output .voxel.json", {'o', "output"});
+            VoxelizeMode mode;
+            ::args::ValueFlag<float> size(parser, "size", "Cell edge (default 0.05)", {"voxel-size"}, mode.settings.voxel_size);
+            ::args::ValueFlag<float> opacity(parser, "opacity", "Accumulated opacity threshold [0,1)", {"voxel-opacity"}, mode.settings.opacity);
+            ::args::ValueFlag<float> area(parser, "area", "Maximum Gaussian area; 0 automatic", {"max-gaussian-area"}, mode.settings.max_gaussian_area);
+            ::args::ValueFlag<std::string> filter(parser, "filter", "cleanup (default) or none", {"filter"});
+            ::args::Flag automatic(parser, "auto", "Scale-relative automatic resolution", {"auto"});
+            ::args::Flag overwrite(parser, "overwrite", "Replace BOTH output files", {'y', "overwrite"});
+            LogLevelFlag log_level(parser);
+            try {
+                parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+                if (!input || (!output && !out) || (output && out))
+                    return std::unexpected("Provide input and one output path, positionally or with --output");
+                if (automatic && size)
+                    return std::unexpected("--auto and --voxel-size are mutually exclusive");
+                mode.input_path = absolute_input_path(::args::get(input));
+                mode.output_path = absolute_input_path(out ? ::args::get(out) : ::args::get(output));
+                if (!native_fs::exists(mode.input_path))
+                    return std::unexpected("Input not found: " + path_to_utf8(mode.input_path));
+                if (!path_to_utf8(mode.output_path.filename()).ends_with(".voxel.json"))
+                    return std::unexpected("Output must end in .voxel.json");
+                if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
+                    return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
+                mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
+                mode.settings.auto_resolution = automatic;
+                mode.settings.voxel_size = ::args::get(size);
+                mode.settings.opacity = ::args::get(opacity);
+                mode.settings.max_gaussian_area = ::args::get(area);
+                mode.settings.validate();
+                std::string error;
+                if (!log_level.apply(error))
+                    return std::unexpected(error);
+                mode.overwrite = overwrite;
+                return mode;
+            } catch (const ::args::Help&) {
+                std::print("{}", parser.Help());
+                return HelpMode{};
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("{}\n{}", e.what(), parser.Help()));
+            }
+        } else if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
+        } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
+            std::string err;
+            if (auto parsed = parseBatchTrainArgs(argc, argv, err)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(err));
         } else if (arg1 == "eval") {
             std::string error;
             if (auto parsed = parseEvalArgs(argc, argv, error)) {

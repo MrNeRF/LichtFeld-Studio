@@ -8,14 +8,17 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/executable_path.hpp"
 #include "core/guarded_task.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/main_loop.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/resource_messages.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/user_paths.hpp"
@@ -24,7 +27,11 @@
 #include "gui/import_error.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/scene_tree_session.hpp"
+// Python's Windows headers define PLATFORM, also used as a localization key.
+#pragma push_macro("PLATFORM")
+#undef PLATFORM
 #include "gui/string_keys.hpp"
+#pragma pop_macro("PLATFORM")
 #include "input/input_controller.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -38,6 +45,7 @@
 #include "io/splat_chapter.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -71,6 +79,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
@@ -80,6 +89,7 @@
 #include <format>
 #include <fstream>
 #include <future>
+#include <glm/ext/matrix_relational.hpp>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <iterator>
@@ -87,9 +97,12 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <ranges>
+#include <semaphore>
 #include <set>
 #include <span>
 #include <sstream>
+#include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -435,7 +448,6 @@ protected:
     void SetUp() override {
         isolated_home_.emplace(temporary_.path / "home");
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
         static_cast<void>(lfs::vis::setProjectLocationPreference(
@@ -445,7 +457,6 @@ protected:
     void TearDown() override {
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
         lfs::vis::clearProjectLocationPreference();
         isolated_home_.reset();
@@ -973,7 +984,7 @@ namespace {
         (void)lfs::test::licht::require_result(
             lfs::training::serialize_checkpoint(
                 stream, 11, strategy, parameters,
-                nullptr, appearance, nullptr, nullptr));
+                nullptr, appearance, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
         std::memcpy(
@@ -1192,7 +1203,8 @@ namespace {
                 for (auto* params : {&snapshot.mrnf_session, &snapshot.mrnf_current,
                                      &snapshot.mcmc_session, &snapshot.mcmc_current}) {
                     params->enable_sparsity = enable_sparsity;
-                    params->sparsify_steps = sparsify_steps;
+                    params->popspa_sparsify_steps = sparsify_steps;
+                    params->popspa_refine_steps = 0;
                 }
             }
             if (gut || max_cap >= 0) {
@@ -1612,6 +1624,14 @@ namespace {
 
 namespace lfs::vis {
 
+    // Without a loaded dataset there is nothing to write a training project from.
+    TEST_F(VisualizerImplResetTest, ProjectTrainingSourceNeedsALoadedDataset) {
+        VisualizerImpl viewer(projectOptions());
+        const auto source = viewer.projectTrainingSource();
+        ASSERT_FALSE(source);
+        EXPECT_EQ(source.error().code(), lfs::ErrorCode::FailedPrecondition);
+    }
+
     class SceneGenerationRenderPublicationTest : public VisualizerImplResetTest {};
 
     TEST_F(SceneGenerationRenderPublicationTest, ContentMutationsScheduleSplatsButMatrixEditsStayResident) {
@@ -1756,6 +1776,17 @@ namespace lfs::vis {
             VisualizerImplResetTest::TearDown();
         }
     };
+
+    using SequencerPanelClockTest = SequencerFrameDemandTest;
+
+    TEST_F(SequencerPanelClockTest, PreservesIdleTimeForGestures) {
+        VisualizerImpl viewer(projectOptions());
+        auto& manager = viewer.getGuiManager()->sequencerUI();
+        const float before = manager.panel_elapsed_time_;
+        manager.last_panel_frame_time_ = std::chrono::steady_clock::now() - std::chrono::seconds(2);
+        EXPECT_FLOAT_EQ(manager.advancePanelClock(), .1f);
+        EXPECT_GE(manager.panel_elapsed_time_ - before, 2.f);
+    }
 
     TEST_F(SequencerFrameDemandTest, ApplyCurrentViewRecordsHistory) {
         VisualizerImpl viewer(projectOptions());
@@ -2549,30 +2580,36 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest, CropApplyPreservesLockedTargetsAndHelpers) {
-        for (const bool ellipsoid : {false, true}) {
+        for (const std::string shape : {"box", "ellipsoid", "polygon"}) {
             for (const bool active_tool : {false, true}) {
                 for (const std::string locked_name : {"", "target", "inner", "outer"}) {
-                    SCOPED_TRACE(std::to_string(ellipsoid) + ":" + std::to_string(active_tool) + ":" + locked_name);
+                    SCOPED_TRACE(shape + ":" + std::to_string(active_tool) + ":" + locked_name);
                     VisualizerImpl viewer(projectOptions());
                     auto& scene = viewer.getScene();
                     auto* manager = viewer.getSceneManager();
                     const auto outer = scene.addGroup("outer");
                     const auto inner = scene.addGroup("inner", outer);
                     const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4), inner);
-                    const auto helper = ellipsoid ? scene.addEllipsoid("helper", target) : scene.addCropBox("helper", target);
+                    lfs::core::CropPolygonData polygon;
+                    polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+                    polygon.half_depth = 0.5f;
+                    polygon.enabled = false;
+                    const auto helper = shape == "ellipsoid" ? scene.addEllipsoid("helper", target)
+                                        : shape == "polygon" ? scene.addCropPolygon("helper", target, polygon)
+                                                             : scene.addCropBox("helper", target);
                     scene.setNodeTransform(helper, glm::mat4(1.0f));
                     auto* volume = scene.getMutableNode("helper");
-                    if (ellipsoid) {
+                    if (shape == "ellipsoid") {
                         volume->ellipsoid->radii = glm::vec3(0.5f);
                         volume->ellipsoid->enabled = false;
-                    } else {
+                    } else if (shape == "box") {
                         volume->cropbox->min = glm::vec3(-0.5f);
                         volume->cropbox->max = glm::vec3(0.5f);
                         volume->cropbox->enabled = false;
                     }
                     manager->selectNode(target);
                     auto& gizmo = viewer.getGuiManager()->gizmo();
-                    gizmo.setCropToolShape(ellipsoid ? "ellipsoid" : "box");
+                    gizmo.setCropToolShape(shape);
                     ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
                     UnifiedToolRegistry::instance().setActiveTool(active_tool ? "builtin.cropbox" : "");
                     if (!locked_name.empty())
@@ -2581,8 +2618,10 @@ contract["check_selection_submode_follows_native_mode"](lf)
                     const auto before = scene.getNodeById(target)->model->means_raw().cpu().to_vector();
                     if (active_tool)
                         gizmo.applyActiveCropTool();
-                    else if (ellipsoid)
+                    else if (shape == "ellipsoid")
                         lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    else if (shape == "polygon")
+                        lfs::core::events::cmd::ApplyCropPolygon{}.emit();
                     else
                         lfs::core::events::cmd::ApplyCropBox{}.emit();
                     const auto* node = scene.getNodeById(target);
@@ -2596,7 +2635,9 @@ contract["check_selection_submode_follows_native_mode"](lf)
                         EXPECT_NE(retained, nullptr);
                         if (retained) {
                             EXPECT_EQ(retained->local_transform.get(), glm::mat4(1.0f));
-                            EXPECT_FALSE(ellipsoid ? retained->ellipsoid->enabled : retained->cropbox->enabled);
+                            EXPECT_FALSE(shape == "ellipsoid" ? retained->ellipsoid->enabled
+                                         : shape == "polygon" ? retained->crop_polygon->enabled
+                                                              : retained->cropbox->enabled);
                         }
                     } else {
                         EXPECT_EQ(node->model->visible_count(), 1u);
@@ -2616,6 +2657,139 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 }
             }
         }
+    }
+
+    // Drawing hides the splat's crop box so its gizmo cannot take the clicks;
+    // cancelling must hand the box, the selection and the tool back unchanged.
+    TEST_F(VisualizerImplResetTest, CancelledCropPolygonDrawRestoresTheVolumeSelectionAndTool) {
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("target_cropbox", target);
+        manager->selectNode(box);
+        ASSERT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+        ASSERT_EQ(gizmo.cropToolShape(), "box");
+        ASSERT_TRUE(scene.getNodeById(box)->visible.get());
+
+        for (const auto action : {input::Action::CANCEL_POLYGON, input::Action::UNDO_POLYGON_VERTEX}) {
+            SCOPED_TRACE(static_cast<int>(action));
+            // The toolbar picks the shape before it starts the drawing.
+            gizmo.setCropToolShape("polygon");
+            gizmo.activateCropPolygonTool();
+            ASSERT_EQ(op::operators().activeModalId(), op::to_string(op::BuiltinOp::CropPolygonDraw));
+            EXPECT_FALSE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{target});
+
+            op::ModalEvent event{};
+            event.type = op::ModalEvent::Type::ACTION;
+            event.data = op::ActionEvent{action, 0, {0.0, 0.0}};
+            EXPECT_EQ(op::operators().dispatchModalEvent(event), op::OperatorResult::CANCELLED);
+            EXPECT_FALSE(op::operators().hasModalOperator());
+            EXPECT_TRUE(scene.getNodeById(box)->visible.get());
+            EXPECT_EQ(manager->getSelectedNodeIds(), std::vector<lfs::core::NodeId>{box});
+            EXPECT_EQ(UnifiedToolRegistry::instance().getActiveTool(), "builtin.cropbox");
+            EXPECT_EQ(gizmo.cropToolShape(), "box");
+        }
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
+    }
+
+    // The pie menu offers the crop actions for every crop shape, and Invert flips
+    // the selected polygon or ellipsoid in one undo step, as it does for a box.
+    TEST_F(VisualizerImplResetTest, CropPieInvertTogglesPolygonAndEllipsoidWithUndo) {
+        for (const std::string shape : {"polygon", "ellipsoid"}) {
+            SCOPED_TRACE(shape);
+            VisualizerImpl viewer(projectOptions());
+            auto& scene = viewer.getScene();
+            auto* manager = viewer.getSceneManager();
+            const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+            lfs::core::CropPolygonData polygon;
+            polygon.vertices = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+            polygon.half_depth = 0.5f;
+            const auto volume = shape == "polygon" ? scene.addCropPolygon("volume", target, polygon)
+                                                   : scene.addEllipsoid("volume", target);
+            ASSERT_NE(volume, lfs::core::NULL_NODE);
+            const auto inverse = [&] {
+                const auto* node = scene.getNodeById(volume);
+                return shape == "polygon" ? node->crop_polygon->inverse : node->ellipsoid->inverse;
+            };
+            manager->selectNode(volume);
+            viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+            op::undoHistory().clear();
+
+            // Nine crop items; sector i is centred at -90 + 40 i degrees, and Invert is the seventh.
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            const glm::vec2 centre(400.0f, 300.0f);
+            const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+            gizmo.openPieMenu(centre);
+            gizmo.onPieMenuClick(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+            EXPECT_FALSE(gizmo.isPieMenuOpen());
+            EXPECT_TRUE(inverse());
+            EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+            ASSERT_TRUE(op::undoHistory().undo().success);
+            EXPECT_FALSE(inverse());
+            UnifiedToolRegistry::instance().setActiveTool("");
+            op::undoHistory().clear();
+        }
+    }
+
+    // The crop toolbar's Invert calls lf.ui.toggle_crop_tool_inverse(), which flips the selected crop box like the
+    // pie menu's Invert, in one undo step; get_crop_tool_inverse() gives the toggle its state.
+    TEST_F(VisualizerImplResetTest, PythonCropToolInverseTogglesTheSelectedCropBoxWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto box = scene.addCropBox("box", target);
+        ASSERT_NE(box, lfs::core::NULL_NODE);
+        manager->selectNode(box);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+        {
+            const lfs::python::GilAcquire gil;
+            EXPECT_EQ(PyRun_SimpleString(R"PY(
+import lichtfeld as lf
+assert lf.ui.get_crop_tool_inverse() is False
+lf.ui.toggle_crop_tool_inverse()
+assert lf.ui.get_crop_tool_inverse() is True
+)PY"),
+                      0);
+        }
+        EXPECT_TRUE(scene.getNodeById(box)->cropbox->inverse);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_FALSE(scene.getNodeById(box)->cropbox->inverse);
+        op::undoHistory().clear();
+    }
+
+    // On layouts where the pie menu's default key prints another character (a backslash on Italian), the press
+    // reaches the pie menu by physical key. The release must match it too, or releasing over Invert does nothing.
+    TEST_F(VisualizerImplResetTest, PieMenuReleaseMatchesThePhysicalKey) {
+        VisualizerImpl viewer(projectOptions());
+        installSessionTestInputController(viewer);
+        auto& scene = viewer.getScene();
+        auto* manager = viewer.getSceneManager();
+        const auto target = scene.addSplat("target", lfs::test::licht::make_splat(4));
+        const auto volume = scene.addEllipsoid("volume", target);
+        ASSERT_NE(volume, lfs::core::NULL_NODE);
+        manager->selectNode(volume);
+        viewer.getEditorContext().update(manager, viewer.getTrainerManager());
+        op::undoHistory().clear();
+
+        auto& gizmo = viewer.getGuiManager()->gizmo();
+        const glm::vec2 centre(400.0f, 300.0f);
+        const float angle = glm::radians(-90.0f + 6.0f * 40.0f);
+        gizmo.openPieMenu(centre);
+        gizmo.onPieMenuMouseMove(centre + 60.0f * glm::vec2(std::cos(angle), std::sin(angle)));
+        viewer.getInputController()->handleKey(input::KEY_GRAVE_ACCENT, input::KEY_BACKSLASH, SDL_SCANCODE_GRAVE,
+                                               input::ACTION_RELEASE, input::KEYMOD_NONE);
+        EXPECT_FALSE(gizmo.isPieMenuOpen());
+        EXPECT_TRUE(scene.getNodeById(volume)->ellipsoid->inverse);
+        UnifiedToolRegistry::instance().setActiveTool("");
+        op::undoHistory().clear();
     }
 
     TEST_F(VisualizerImplResetTest, CropToolRejectsUnrepresentableParentTransformWithoutMutation) {
@@ -2689,6 +2863,338 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_EQ(live_splats(), splats_before);
         EXPECT_NE(scene.getNode("target_cropbox"), nullptr);
         lfs::vis::UnifiedToolRegistry::instance().setActiveTool("");
+    }
+
+    // Crop volumes are scene-graph state. Every edit must mark the project modified
+    // without marking the splat payload dirty: that replaced the PLY's embedded source
+    // bytes by a capture of the whole model on the next save.
+    class CropVolumeSourceTest : public VisualizerImplResetTest {
+    protected:
+        struct SavedSplatPayload {
+            std::string binding;
+            std::uint64_t offset = 0;
+        };
+
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            std::filesystem::copy_file(
+                std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" / "portable-ply.licht", path_);
+            ASSERT_EQ(savedSplatPayload().binding, "DSRC/ply");
+        }
+
+        [[nodiscard]] SavedSplatPayload savedSplatPayload() const {
+            namespace pj = lfs::io::project;
+            const auto document = lfs::test::licht::require_result_ptr(pj::ProjectDocument::open(path_));
+            const auto reader = lfs::test::licht::require_result(pj::ProjectReader::open(path_));
+            for (const auto& record : lfs::test::licht::require_result(document->scene_graph().nodes())) {
+                if (record.type != "splat" || !record.payload)
+                    continue;
+                const auto* row = reader.find(record.payload->fourcc == "DSRC" ? pj::FOURCC_DSRC : pj::FOURCC_SPLT,
+                                              record.payload->instance_uuid);
+                return {record.payload->fourcc + "/" + record.payload->source_kind, row ? row->payload_offset : 0};
+            }
+            return {};
+        }
+
+        [[nodiscard]] lfs::core::NodeId open(VisualizerImpl& viewer) {
+            if (!viewer.getParameterManager()->ensureLoaded() ||
+                !viewer.projectOpen(path_, ProjectSwitchDisposition::DiscardChanges) ||
+                !waitUntil([&] {
+                    viewer.pumpPostedWorkForProjectWrite();
+                    const auto info = viewer.projectGetInfo();
+                    return info && info->hydration_state == "complete";
+                })) {
+                return lfs::core::NULL_NODE;
+            }
+            for (const auto* node : viewer.getScene().getNodes()) {
+                if (node->type == lfs::core::NodeType::SPLAT)
+                    return node->id;
+            }
+            return lfs::core::NULL_NODE;
+        }
+
+        void save(VisualizerImpl& viewer) {
+            lfs::test::licht::require_status(viewer.projectSave(false));
+            ASSERT_TRUE(waitUntil([&] {
+                viewer.pumpPostedWorkForProjectWrite();
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
+            ASSERT_FALSE(viewer.projectGetInfo()->dirty);
+        }
+
+        // The edit marked the project modified, and saving it kept the PLY source
+        // binding without rewriting the splat payload.
+        void expectSavedAsSceneState(VisualizerImpl& viewer) {
+            EXPECT_TRUE(viewer.projectGetInfo()->dirty);
+            const auto before = savedSplatPayload();
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+            const auto after = savedSplatPayload();
+            EXPECT_EQ(after.binding, "DSRC/ply");
+            EXPECT_EQ(after.offset, before.offset) << "the save rewrote the splat payload";
+        }
+
+        // A raw scene volume, sized like the capabilities do: the fixture's splats are
+        // flat, and a zero radius cannot be saved.
+        [[nodiscard]] static lfs::core::NodeId addEllipsoid(lfs::core::Scene& scene, const lfs::core::NodeId parent,
+                                                            const std::string& name) {
+            const auto id = scene.addEllipsoid(name, parent);
+            if (id != lfs::core::NULL_NODE) {
+                auto data = *scene.getEllipsoidData(id);
+                data.radii = glm::vec3(1.0f);
+                scene.setEllipsoidData(id, data);
+            }
+            return id;
+        }
+
+        std::filesystem::path path_ = temporary_.path / "crop-volume-ply-source.licht";
+    };
+
+    TEST_F(CropVolumeSourceTest, GizmoEditsAreSavedAsSceneState) {
+        std::string cropbox_name;
+        lfs::core::CropBoxData edited;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            manager->selectNode(splat_id);
+            auto& gizmo = viewer.getGuiManager()->gizmo();
+            gizmo.setCropToolShape("box");
+            struct ActiveToolReset {
+                ~ActiveToolReset() { UnifiedToolRegistry::instance().setActiveTool(""); }
+            } active_tool_reset;
+            UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            // Resize the box, then move it, committing each edit the way a gizmo drag does.
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_box_min_ = glm::vec3(-0.25f, -0.5f, -0.75f);
+            gizmo.crop_tool_box_max_ = glm::vec3(0.5f, 0.25f, 0.125f);
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            ASSERT_TRUE(gizmo.ensureCropToolStateForRestore());
+            gizmo.crop_tool_visualizer_transform_ =
+                glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, -0.25f, 1.0f)) *
+                gizmo.crop_tool_visualizer_transform_;
+            ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+            const auto* const cropbox = viewer.getScene().getNode(cropbox_name);
+            ASSERT_NE(cropbox, nullptr);
+            EXPECT_EQ(cropbox->cropbox->min, glm::vec3(-0.25f, -0.5f, -0.75f));
+            EXPECT_EQ(cropbox->cropbox->max, glm::vec3(0.5f, 0.25f, 0.125f));
+            EXPECT_NE(cropbox->local_transform.get(), glm::mat4(1.0f));
+            edited = *cropbox->cropbox;
+            edited_transform = cropbox->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, edited.min);
+        EXPECT_EQ(restored->cropbox->max, edited.max);
+        EXPECT_EQ(restored->cropbox->enabled, edited.enabled);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    // Panel, Python, MCP and the inverse toggle edit crop box data through updateCropBox.
+    TEST_F(CropVolumeSourceTest, CropBoxDataEditsMarkProjectModifiedAndRoundTrip) {
+        std::string cropbox_name;
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+            ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+            cropbox_name = viewer.getScene().getNodeById(*cropbox_id)->name;
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& min, const glm::vec3& max, const bool inverse) {
+                cap::CropBoxUpdate update;
+                update.min_bounds = min;
+                update.max_bounds = max;
+                update.has_inverse = true;
+                update.inverse = inverse;
+                ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, update));
+                ASSERT_EQ(viewer.getScene().getNodeById(*cropbox_id)->local_transform.get(), glm::mat4(1.0f));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.5f), glm::vec3(0.25f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            // The transform is already identity, so Reset changes only the box data.
+            ASSERT_TRUE(cap::resetCropBox(*manager, rendering, *cropbox_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(-0.75f, -0.5f, -0.25f), glm::vec3(0.125f, 0.25f, 0.5f), true));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(cropbox_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->cropbox, nullptr);
+        EXPECT_EQ(restored->cropbox->min, glm::vec3(-0.75f, -0.5f, -0.25f));
+        EXPECT_EQ(restored->cropbox->max, glm::vec3(0.125f, 0.25f, 0.5f));
+        EXPECT_TRUE(restored->cropbox->inverse);
+    }
+
+    TEST_F(CropVolumeSourceTest, EllipsoidEditsKeepSourceAndRoundTrip) {
+        std::string ellipsoid_name;
+        glm::mat4 edited_transform{1.0f};
+        {
+            VisualizerImpl viewer(projectOptions());
+            const auto splat_id = open(viewer);
+            ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+            auto* const manager = viewer.getSceneManager();
+            auto* const rendering = viewer.getRenderingManager();
+            const auto ellipsoid_id = addEllipsoid(viewer.getScene(), splat_id, "volume");
+            ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+            ellipsoid_name = viewer.getScene().getNodeById(ellipsoid_id)->name;
+            ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+            const auto edit = [&](const glm::vec3& radii) {
+                cap::EllipsoidUpdate update;
+                update.radii = radii;
+                update.has_inverse = true;
+                update.inverse = true;
+                ASSERT_TRUE(cap::updateEllipsoid(*manager, rendering, ellipsoid_id, update));
+            };
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.5f, 0.25f, 0.125f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::fitEllipsoidToParent(*manager, rendering, ellipsoid_id, false));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_TRUE(cap::resetEllipsoid(*manager, rendering, ellipsoid_id));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            ASSERT_NO_FATAL_FAILURE(edit(glm::vec3(0.75f, 0.5f, 0.25f)));
+            ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+            edited_transform = viewer.getScene().getNodeById(ellipsoid_id)->local_transform.get();
+        }
+
+        VisualizerImpl reopened(projectOptions());
+        ASSERT_NE(open(reopened), lfs::core::NULL_NODE);
+        const auto* const restored = reopened.getScene().getNode(ellipsoid_name);
+        ASSERT_NE(restored, nullptr);
+        ASSERT_NE(restored->ellipsoid, nullptr);
+        EXPECT_EQ(restored->ellipsoid->radii, glm::vec3(0.75f, 0.5f, 0.25f));
+        EXPECT_TRUE(restored->ellipsoid->inverse);
+        EXPECT_EQ(restored->local_transform.get(), edited_transform);
+    }
+
+    // Catches the toolbar's crop box enable toggle doing nothing: lf.ui.ops.invoke must hand its keyword arguments
+    // to the C++ crop_box.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropBoxEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto cropbox_id = cap::ensureCropBox(*viewer.getSceneManager(), viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto* const node = viewer.getScene().getNodeById(*cropbox_id);
+        ASSERT_TRUE(node->cropbox->enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_box.set", node="{}", enabled=False).finished
+)PY",
+                                            node->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*cropbox_id)->cropbox->enabled);
+    }
+
+    // Catches the toolbar's enable toggle for a crop polygon doing nothing: lf.ui.ops.invoke must hand its keyword
+    // arguments to the C++ crop_polygon.set operator, which flips the flag in one undo step.
+    TEST_F(CropVolumeSourceTest, PythonOpsInvokeTogglesCropPolygonEnabledWithUndo) {
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto polygon_id = cap::createCropPolygon(
+            *viewer.getSceneManager(), viewer.getRenderingManager(), splat_id,
+            lfs::core::CropPolygonData{.vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {0.0f, 1.0f}}, .half_depth = 1.0f},
+            glm::mat4(1.0f));
+        ASSERT_TRUE(polygon_id);
+        const auto& polygon = *viewer.getScene().getNodeById(*polygon_id)->crop_polygon;
+        ASSERT_TRUE(polygon.enabled);
+        {
+            const lfs::python::GilAcquire gil;
+            const auto script = std::format(R"PY(
+import lichtfeld as lf
+assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
+)PY",
+                                            viewer.getScene().getNodeById(*polygon_id)->name);
+            EXPECT_EQ(PyRun_SimpleString(script.c_str()), 0);
+        }
+        EXPECT_FALSE(polygon.enabled);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_TRUE(viewer.getScene().getNodeById(*polygon_id)->crop_polygon->enabled);
+    }
+
+    TEST_F(CropVolumeSourceTest, CropBoxUndoRedoMarksProjectModified) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        const auto original = *viewer.getScene().getNodeById(*cropbox_id)->cropbox;
+        cap::CropBoxUpdate update;
+        update.min_bounds = glm::vec3(-0.5f);
+        update.max_bounds = glm::vec3(0.25f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, update));
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, original.min);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(viewer.getScene().getNodeById(*cropbox_id)->cropbox->min, glm::vec3(-0.5f));
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+    }
+
+    // Adding an ellipsoid, converting it to a box, undoing and redoing the conversion,
+    // and removing the duplicate volume of the other shape all change scene state only.
+    TEST_F(CropVolumeSourceTest, CropVolumeAddConvertUndoAndRemoveKeepSource) {
+        VisualizerImpl viewer(projectOptions());
+        const auto splat_id = open(viewer);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        auto& scene = viewer.getScene();
+
+        const auto volume_id = cap::ensureEllipsoid(*manager, rendering, splat_id);
+        ASSERT_TRUE(volume_id) << volume_id.error();
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::ELLIPSOID);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        ASSERT_EQ(scene.getNodeById(*volume_id)->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
+
+        ASSERT_NE(addEllipsoid(scene, splat_id, "duplicate"), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(save(viewer));
+        ASSERT_TRUE(cap::ensureCropBox(*manager, rendering, splat_id));
+        ASSERT_EQ(scene.getEllipsoidForSplat(splat_id), lfs::core::NULL_NODE);
+        ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
     }
 
     // Catches tool switches that leave crop mode only while the crop tool is active: undo
@@ -4238,6 +4744,32 @@ contract["check_selection_submode_follows_native_mode"](lf)
                 EXPECT_FALSE(viewer.jobs().anyRunning(JobType::ProjectWrite));
             }
         }
+    }
+
+    TEST_F(VisualizerImplResetTest, ProjectSaveLeavesTransientNodesOut) {
+        const auto project_path = temporary_.path / "transient.licht";
+        write_empty_project(project_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            const auto info = viewer.projectGetInfo();
+            return info && info->hydration_state == "complete";
+        }));
+        auto& scene = viewer.getScene();
+        ASSERT_NE(scene.addGroup("kept"), lfs::core::NULL_NODE);
+        ASSERT_NE(scene.addSplat("preview", lfs::test::licht::make_splat(2)), lfs::core::NULL_NODE);
+        scene.getMutableNode("preview")->transient = true;
+
+        ASSERT_TRUE(viewer.projectSave(false));
+        viewer.projectWaitWrite();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+        }));
+        auto saved = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(project_path));
+        const auto nodes = lfs::test::licht::require_result(saved.scene_graph().nodes());
+        EXPECT_TRUE(std::ranges::any_of(nodes, [](const auto& node) { return node.name == "kept"; }));
+        EXPECT_TRUE(std::ranges::none_of(nodes, [](const auto& node) { return node.name == "preview"; }));
+        EXPECT_NE(scene.getNode("preview"), nullptr);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -6628,6 +7160,38 @@ contract["check_selection_submode_follows_native_mode"](lf)
         ASSERT_NE(node, nullptr);
         EXPECT_TRUE(manager->getScene().isNodeEffectivelyVisible(node->id));
         EXPECT_EQ(manager->getSelectedNodeName(), "async-single");
+    }
+
+    // Catches the import overlay counting the whole scene: importing a file next to a cropped
+    // model reported the rows of every node, soft-deleted ones included.
+    TEST_F(VisualizerImplResetTest, AsyncSplatImportReportsImportedPointCount) {
+        const auto path = temporary_.path / "async-added.ply";
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(3), {
+                                                                            .output_path = path,
+                                                                            .binary = true,
+                                                                            .async = false,
+                                                                        }));
+
+        lfs::vis::VisualizerImpl viewer(projectOptions());
+        auto cropped = lfs::test::licht::make_splat(5);
+        auto deleted = core::Tensor::zeros_bool({5}, core::Device::CPU);
+        deleted.slice(0, 0, 4).copy_from(core::Tensor::ones_bool({4}, core::Device::CPU));
+        cropped->soft_delete(deleted);
+        ASSERT_NE(viewer.getScene().addSplat("cropped", std::move(cropped)), core::NULL_NODE);
+
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        ASSERT_TRUE(tasks.startSplatLoad({path}, false));
+        ASSERT_TRUE(waitUntil(
+            [&] {
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() && !tasks.hasPendingMainThreadCompletions();
+            }));
+
+        ASSERT_NE(viewer.getScene().getNode("async-added"), nullptr);
+        EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), 8u);
+        EXPECT_TRUE(tasks.getImportSuccess());
+        EXPECT_EQ(tasks.getImportNumPoints(), 3u);
+        EXPECT_EQ(app_store().import_overlay_state.get().num_points, 3u);
     }
 
     class SplatSimplifyCompletionTest : public VisualizerImplResetTest {
@@ -13841,24 +14405,336 @@ contract["check_selection_submode_follows_native_mode"](lf)
     }
 
     TEST_F(VisualizerImplResetTest,
-           ScratchDirectoryIsFixedUnderRootRegardlessOfPreferences) {
-        const auto home = temporary_.path / "fixed-scratch-home";
+           ScratchDirectoryFollowsProjectLocationPreference) {
+        const auto home = temporary_.path / "located-scratch-home";
         std::filesystem::create_directories(home);
         const ScopedLfsHome lfs_home(home);
-        const auto working = temporary_.path / "legacy-working";
-        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(working));
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
         const auto paths = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(paths);
+        const auto located = (location / ".lichtfeld-tmp").lexically_normal();
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(nullptr, viewer.getViewport());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), located);
+            ASSERT_NE(viewer.getScene().addGroup("Untitled on second drive"),
+                      lfs::core::NULL_NODE);
+            lifecycle->settings_.autosave_dirty_epoch_threshold = 1;
+            lifecycle->last_autosaved_dirty_epoch_ = 0;
+            lifecycle->last_autosaved_scene_serial_ = 0;
+            lifecycle->last_autosave_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->last_mutation_at_ =
+                std::chrono::steady_clock::now() - std::chrono::hours(1);
+            lifecycle->updateMaintenance();
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); }));
+            const auto uuid = lifecycle->document_->project_uuid();
+            const auto scratch = lfs::io::project::scratch_autosave_path(located, uuid);
+            EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
+#ifdef _WIN32
+            const auto attributes = GetFileAttributesW(
+                lfs::core::native_fs::native_path(located).c_str());
+            ASSERT_NE(attributes, INVALID_FILE_ATTRIBUTES);
+            EXPECT_NE(attributes & FILE_ATTRIBUTE_HIDDEN, 0u);
+#endif
+            EXPECT_TRUE(lifecycle->isScratchPath(scratch));
+            EXPECT_FALSE(lifecycle->hasSourcePath());
+            EXPECT_FALSE(std::filesystem::exists(
+                lfs::io::project::scratch_autosave_path(paths->rootDir() / "tmp", uuid)));
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchDirectoryFallsBackToRootWhenProjectLocationUnusable) {
+        const auto home = temporary_.path / "fallback-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        lfs::vis::clearProjectLocationPreference();
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        const auto root_tmp = (paths->rootDir() / "tmp").lexically_normal();
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
-        EXPECT_EQ(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (paths->rootDir() / "tmp").lexically_normal());
-        EXPECT_NE(
-            viewer.project_lifecycle_->scratchAutosaveDirectory(),
-            (working / "tmp").lexically_normal());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+
+        const auto removed_drive = temporary_.path / "removed-drive";
+        const auto location = removed_drive / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                  (location / ".lichtfeld-tmp").lexically_normal());
+
+        // The configured folder can no longer be created: its parent is a file.
+        std::filesystem::remove_all(removed_drive);
+        std::ofstream(removed_drive) << "not a directory";
+        std::mutex warnings_mutex;
+        std::vector<std::string> warnings;
+        const auto handler_token = lfs::core::Logger::get().add_log_handler(
+            [&](const lfs::core::LogLevel level, const lfs::core::SourceSite&,
+                const std::string_view message) {
+                if (level == lfs::core::LogLevel::Warn &&
+                    message.find("untitled scratch") != std::string_view::npos) {
+                    const std::lock_guard lock(warnings_mutex);
+                    warnings.emplace_back(message);
+                }
+            });
+        lifecycle->freezeTempProjectDirectory();
+        ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+            lifecycle->settleScratchLocationCheck();
+            return !lifecycle->scratch_location_check_;
+        }));
+        lfs::core::Logger::get().remove_log_handler(handler_token);
+        EXPECT_EQ(lifecycle->scratchAutosaveDirectory(), root_tmp);
+        EXPECT_EQ(warnings.size(), 1u);
+        EXPECT_FALSE(std::filesystem::is_directory(location));
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StartupRecoveryScansRootAndProjectLocationScratch) {
+        const auto home = temporary_.path / "two-scratch-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "second-drive" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        // A crash file from a session started before the preference was set,
+        // and one from a session under the configured location.
+        const auto root_scratch = lfs::io::project::scratch_autosave_path(
+            paths->rootDir() / "tmp", lfs::core::generate_uuid_v4());
+        const auto located_scratch = lfs::io::project::scratch_autosave_path(
+            location / ".lichtfeld-tmp", lfs::core::generate_uuid_v4());
+        for (const auto& scratch : {root_scratch, located_scratch}) {
+            std::filesystem::create_directories(scratch.parent_path());
+            write_project_with_specified_checkpoint(
+                scratch, lfs::core::generate_uuid_v4(),
+                lfs::core::generate_uuid_v4());
+        }
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            EXPECT_TRUE(lifecycle->isScratchPath(root_scratch));
+            EXPECT_TRUE(lifecycle->isScratchPath(located_scratch));
+            std::set<std::filesystem::path> offered;
+            for (const auto& candidate :
+                 lifecycle->inspectStartupRecoveryCandidates()) {
+                EXPECT_TRUE(candidate.untitled_scratch);
+                offered.insert(candidate.master_path.lexically_normal());
+            }
+            EXPECT_TRUE(offered.contains(root_scratch.lexically_normal()));
+            EXPECT_TRUE(offered.contains(located_scratch.lexically_normal()));
+            std::mutex prune_mutex;
+            std::vector<std::thread::id> prune_threads;
+            const auto handler_token = lfs::core::Logger::get().add_log_handler(
+                [&](const lfs::core::LogLevel, const lfs::core::SourceSite&,
+                    const std::string_view message) {
+                    if (message.find("Pruned leftover untitled scratch") != std::string_view::npos) {
+                        const std::lock_guard lock(prune_mutex);
+                        prune_threads.push_back(std::this_thread::get_id());
+                    }
+                });
+            // The GUI startup path: scan on the worker, then offer and prune.
+            lifecycle->openStartupProject(std::nullopt, true);
+            lifecycle->runStartupRecoveryScan();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return lifecycle->startup_recovery_scan_ready_.load(std::memory_order_acquire);
+            }));
+            lifecycle->applyStartupRecoveryScan();
+            lifecycle->joinScratchPrune();
+            lfs::core::Logger::get().remove_log_handler(handler_token);
+            EXPECT_TRUE(lifecycle->recovery_prompt_pending_);
+            const bool root_exists = std::filesystem::exists(root_scratch);
+            const bool located_exists = std::filesystem::exists(located_scratch);
+            EXPECT_TRUE(root_exists || located_exists);
+            EXPECT_FALSE(root_exists && located_exists);
+            ASSERT_EQ(prune_threads.size(), 1u);
+            EXPECT_NE(prune_threads.front(), std::this_thread::get_id());
+        }
+        lfs::vis::clearProjectLocationPreference();
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           UntitledAutosaveDiskFullToastNamesFolder) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(),
+            lifecycle->document_->project_uuid());
+        const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Full disk autosave");
+        ASSERT_TRUE(handle);
+        lifecycle->project_write_job_ = *handle;
+        lifecycle->project_write_purpose_ =
+            project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+        lifecycle->project_write_destination_ = scratch;
+        std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        std::async(std::launch::async, [&] {
+            viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                     lfs::ErrorCode::ResourceExhausted, full);
+        }).get();
+        lifecycle->settleProjectWrite();
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        EXPECT_TRUE(std::ranges::any_of(
+            consumer.user_messages,
+            [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            }))
+            << (consumer.user_messages.empty() ? std::string{} : consumer.user_messages.back());
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AutosaveDiskFullToastShowsOncePerFailureStreak) {
+        ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
+            (std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/resources/locales").string()));
+        struct LocaleReset {
+            ~LocaleReset() { lfs::event::LocalizationManager::getInstance().reset(); }
+        } const locale_reset;
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        const auto full = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::IO,
+            .operation_id = {},
+            .user_message = lfs::core::DISK_SPACE_SAVE_ERROR_MESSAGE,
+            .detail = "simulated full volume",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = {},
+            .native = std::nullopt,
+        });
+        const auto settle_autosave = [&](const std::filesystem::path& destination,
+                                         const bool disk_full) {
+            const auto handle = viewer.jobs().init(JobType::ProjectWrite, "Autosave");
+            ASSERT_TRUE(handle);
+            lifecycle->project_write_job_ = *handle;
+            lifecycle->project_write_purpose_ =
+                project::ProjectLifecycle::ProjectWritePurpose::Autosave;
+            lifecycle->project_write_destination_ = destination;
+            std::async(std::launch::async, [&] { viewer.jobs().work(*handle); }).get();
+            std::async(std::launch::async, [&] {
+                if (disk_full) {
+                    viewer.jobs().finishWork(*handle, false, lfs::format_for_developer(full),
+                                             lfs::ErrorCode::ResourceExhausted, full);
+                } else {
+                    viewer.jobs().finishWork(*handle, false);
+                }
+            }).get();
+            lifecycle->settleProjectWrite();
+        };
+        const auto scratch = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lifecycle->document_->project_uuid());
+        const auto other = lfs::io::project::scratch_autosave_path(
+            lifecycle->scratchAutosaveDirectory(), lfs::core::generate_uuid_v4());
+        const auto folder = lfs::core::path_to_utf8(scratch.parent_path());
+        const auto toasts = [&] {
+            return std::ranges::count_if(consumer.user_messages, [&](const std::string& message) {
+                return message.find(folder) != std::string::npos;
+            });
+        };
+        // Backoff retries of the same failing autosave stay quiet.
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 1);
+        // A successful autosave ends the streak.
+        settle_autosave(scratch, false);
+        settle_autosave(scratch, true);
+        settle_autosave(scratch, true);
+        EXPECT_EQ(toasts(), 2);
+        // So does a new destination.
+        settle_autosave(other, true);
+        EXPECT_EQ(toasts(), 3);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ScratchLocationProbeRunsOffCallingThread) {
+        const auto home = temporary_.path / "probe-thread-home";
+        std::filesystem::create_directories(home);
+        const ScopedLfsHome lfs_home(home);
+        const auto location = temporary_.path / "network-share" / "projects";
+        ASSERT_TRUE(lfs::vis::setProjectLocationPreference(location));
+        const auto paths = lfs::core::UserPaths::resolve();
+        ASSERT_TRUE(paths);
+        {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            auto* const lifecycle = viewer.project_lifecycle_.get();
+            ASSERT_NE(lifecycle, nullptr);
+            // A share that does not answer: the probe blocks until the test releases it.
+            std::promise<void> release;
+            const auto released = release.get_future().share();
+            const auto caller = std::this_thread::get_id();
+            auto probe_thread = std::make_shared<std::atomic<bool>>(false);
+            lifecycle->scratch_location_probe_ =
+                [released, caller, probe_thread](const std::filesystem::path& probed) {
+                    probe_thread->store(std::this_thread::get_id() != caller);
+                    released.wait_for(std::chrono::seconds(5));
+                    return lfs::vis::probeProjectLocation(probed);
+                };
+            lifecycle->freezeTempProjectDirectory();
+            ASSERT_TRUE(lifecycle->scratch_location_check_);
+            EXPECT_FALSE(lifecycle->scratch_location_check_->done.load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (paths->rootDir() / "tmp").lexically_normal());
+            release.set_value();
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                lifecycle->settleScratchLocationCheck();
+                return !lifecycle->scratch_location_check_;
+            }));
+            EXPECT_TRUE(probe_thread->load());
+            EXPECT_EQ(lifecycle->scratchAutosaveDirectory(),
+                      (location / ".lichtfeld-tmp").lexically_normal());
+        }
         lfs::vis::clearProjectLocationPreference();
     }
 
@@ -13885,6 +14761,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
             installModalOverlay(
                 gui->rml_modal_overlay_, gui->rmlui_manager_);
             viewer.project_lifecycle_->openStartupProject(std::nullopt);
+            viewer.project_lifecycle_->joinScratchPrune();
             EXPECT_TRUE(
                 viewer.project_lifecycle_->recovery_prompt_pending_);
             const bool older_exists =
@@ -16328,6 +17205,7 @@ contract["check_selection_submode_follows_native_mode"](lf)
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.project_lifecycle_->pruneUnlockedScratchFilesExcept(std::nullopt);
+        viewer.project_lifecycle_->joinScratchPrune();
         EXPECT_TRUE(std::filesystem::is_regular_file(scratch));
         lfs::vis::clearProjectLocationPreference();
     }
@@ -17250,6 +18128,231 @@ contract["check_selection_submode_follows_native_mode"](lf)
         ASSERT_NE(model, nullptr);
         EXPECT_EQ(model->size(), 3u);
         EXPECT_EQ(viewer.getSceneManager()->buildRenderState().combined_model, model);
+    }
+
+    void check_init_reference_reopen(const std::filesystem::path& root, const ViewerOptions& options,
+                                     const bool centralize, const bool missing) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto dataset = root / "init-dataset";
+        const auto init = root / "init splat.ply";
+        const auto project = root / "untrained-init.licht";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        auto splat = lfs::test::licht::make_splat(8);
+        splat->scaling_raw() = lfs::core::Tensor::from_vector(std::vector<float>(24, -1.25f), {8, 3}, lfs::core::Device::CPU);
+        splat->opacity_raw() = lfs::core::Tensor::from_vector(std::vector<float>(8, -0.75f), {8, 1}, lfs::core::Device::CPU);
+        ASSERT_TRUE(lfs::io::save_ply(*splat, {.output_path = init, .binary = true, .async = false}));
+
+        VisualizerImpl viewer(options);
+        installSessionTestInputController(viewer);
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        const auto* context = viewer.getWindowManager()->getVulkanContext();
+        if (!context || !context->externalMemoryInteropEnabled())
+            GTEST_SKIP() << "Vulkan external memory interop unavailable";
+        const auto wait = [&](auto condition) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!condition() && std::chrono::steady_clock::now() < deadline) {
+                viewer.pumpPostedWorkForProjectWrite();
+                viewer.getGuiManager()->asyncTasks().pollImportCompletion();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return condition();
+        };
+        viewer.getParameterManager()->modifyActiveParams([](auto& params) {
+            params.iterations = 1;
+            params.max_cap = 64;
+            params.enable_eval = false;
+            params.init_opacity = 0.1f;
+            params.save_steps.clear();
+            params.eval_steps.clear();
+        });
+        lfs::core::events::cmd::LoadFile{
+            .path = dataset,
+            .is_dataset = true,
+            .init_path = init,
+            .centralize_dataset = centralize ? "by_cameras" : "off",
+            .discard_changes = true}
+            .emit();
+        ASSERT_TRUE(wait([&] { return !viewer.getGuiManager()->asyncTasks().isImporting(); }));
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto origin = viewer.getScene().getTrainingDataOrigin();
+        if (centralize)
+            ASSERT_NE(origin, glm::vec3{0.0f});
+        const auto center = viewer.getScene().getSceneCenter().cpu();
+        ASSERT_EQ(center.numel(), 3u);
+        auto prepared = lfs::training::prepareTrainingModel(viewer.getTrainer()->getParams(), viewer.getScene());
+        ASSERT_TRUE(prepared) << prepared.error();
+        ASSERT_TRUE(prepared->has_value());
+        const auto expected_means = (**prepared).model->means_raw().cpu();
+        const float expected_scale = (**prepared).model->get_scene_scale();
+        prepared->reset();
+        const auto save = viewer.projectSaveAs(project, false);
+        ASSERT_TRUE(save) << lfs::format_for_developer(save.error());
+        ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+        ASSERT_TRUE(viewer.projectPollWrite()->error.empty()) << viewer.projectPollWrite()->error;
+        auto saved = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+        EXPECT_TRUE(saved->checkpoint_uuids().empty());
+        const auto initialization = saved->project().dom().get_json("training_initialization");
+        EXPECT_TRUE(initialization.has_value());
+        if (missing)
+            ASSERT_TRUE(std::filesystem::remove(init));
+
+        CapturingErrorConsumer consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        localization.setOverride("runtime.training_init_unavailable", "init unavailable: {}");
+        ASSERT_TRUE(viewer.projectOpen(project, ProjectSwitchDisposition::DiscardChanges));
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(wait([&] {
+            const auto session = viewer.projectTrainingSessionState();
+            return session.hydrated && !session.restoring;
+        }));
+        localization.clearOverride("runtime.training_init_unavailable");
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        const auto expected_path = missing ? std::optional<std::string>{} : std::optional{lfs::core::path_to_utf8(init)};
+        EXPECT_EQ(viewer.getTrainer()->getParams().init_path, expected_path);
+        EXPECT_EQ(viewer.getDataLoader()->getParameters().init_path, expected_path);
+        EXPECT_EQ(viewer.getScene().getTrainingDataOrigin(), origin);
+        EXPECT_TRUE(viewer.getScene().getSceneCenter().is_valid());
+        if (viewer.getScene().getSceneCenter().is_valid()) {
+            const auto restored_center = viewer.getScene().getSceneCenter().cpu();
+            EXPECT_EQ(restored_center.numel(), center.numel());
+            if (restored_center.numel() == 3)
+                for (size_t i = 0; i < 3; ++i)
+                    EXPECT_FLOAT_EQ(restored_center.ptr<float>()[i], center.ptr<float>()[i]);
+        }
+        EXPECT_FALSE(viewer.projectGetInfo()->dirty);
+        if (missing) {
+            EXPECT_TRUE(std::ranges::any_of(consumer.user_messages, [](const auto& message) {
+                return message.find("init unavailable") != std::string::npos &&
+                       message.find("init splat.ply") != std::string::npos;
+            }));
+            ASSERT_TRUE(viewer.projectSave(false));
+            ASSERT_TRUE(wait([&] { return !viewer.projectPollWrite()->running; }));
+            EXPECT_TRUE(viewer.projectPollWrite()->error.empty());
+            auto resaved = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+            EXPECT_EQ(resaved->project().dom().get_json("training_initialization"), initialization);
+            if (initialization && initialization->contains("init_reference_uuid")) {
+                const auto uuid = lfs::core::Uuid::from_string((*initialization)["init_reference_uuid"].get<std::string>());
+                ASSERT_TRUE(uuid);
+                EXPECT_EQ(lfs::test::licht::require_result(resaved->references().find(*uuid)),
+                          lfs::test::licht::require_result(saved->references().find(*uuid)));
+            }
+        }
+        saved.reset();
+
+        int starts = 0;
+        lfs::core::events::state::TrainingStarted::when([&](const auto&) {
+            ++starts;
+            const auto* model = viewer.getScene().getTrainingModel();
+            EXPECT_NE(model, nullptr);
+            if (model) {
+                EXPECT_EQ(model->size(), 8u);
+                const auto means = model->means_raw().cpu();
+                EXPECT_EQ(means.numel(), expected_means.numel());
+                if (means.numel() == expected_means.numel())
+                    for (size_t i = 0; i < means.numel(); ++i)
+                        EXPECT_NEAR(means.ptr<float>()[i], expected_means.ptr<float>()[i], 1e-6f);
+                const auto opacity = model->opacity_raw().cpu();
+                for (size_t i = 0; i < opacity.numel(); ++i)
+                    EXPECT_NEAR(opacity.ptr<float>()[i], missing ? std::log(0.1f / 0.9f) : -0.75f, 1e-5f);
+                if (!missing) {
+                    const auto scales = model->scaling_raw().cpu();
+                    for (size_t i = 0; i < scales.numel(); ++i)
+                        EXPECT_NEAR(scales.ptr<float>()[i], -1.25f, 1e-5f);
+                    EXPECT_FLOAT_EQ(model->get_scene_scale(), expected_scale);
+                }
+            }
+            viewer.getTrainerManager()->stopTraining();
+        });
+        const auto start_and_stop = [&] {
+            viewer.getTrainer()->set_trainer_project_save_policy({.on_completion = false, .on_stop_or_error = false, .at_step_boundaries = false});
+            EXPECT_TRUE(viewer.getTrainerManager()->startTraining());
+            EXPECT_TRUE(wait([&] {
+                return viewer.getTrainerManager()->isFinished() && !viewer.getTrainerManager()->isCompletionPending();
+            }));
+        };
+        start_and_stop();
+        EXPECT_EQ(starts, 1);
+        if (!missing) {
+            lfs::core::events::cmd::ResetTraining{}.emit();
+            ASSERT_TRUE(wait([&] { return viewer.getTrainerManager()->getState() == TrainingState::Ready; }));
+            EXPECT_EQ(viewer.getDataLoader()->getParameters().init_path, expected_path);
+            ASSERT_NE(viewer.getTrainer(), nullptr);
+            EXPECT_EQ(viewer.getTrainer()->getParams().init_path, expected_path);
+            start_and_stop();
+            EXPECT_EQ(starts, 2);
+        }
+    }
+
+    // Catches untrained reopen dropping init_path and initializing splat attributes from PCLD.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceReopenStartAndReset) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), false, false);
+    }
+
+    // Catches untrained reopen losing the centralization origin and loader scene center.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceCentralizedReopen) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), true, false);
+    }
+
+    // Catches untrained reopen silently forgetting a missing init instead of warning and preserving its reference.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceMissingFile) {
+        check_init_reference_reopen(temporary_.path, projectOptions(), false, true);
+    }
+
+    // Catches headless adoption ignoring the stored init while preserving explicit --init precedence.
+    TEST_F(VisualizerImplResetTest, TrainingInitReferenceHeadlessAdoption) {
+#ifdef _WIN32
+        GTEST_SKIP() << "Headless executable smoke test uses POSIX shell quoting";
+#else
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const auto executable = lfs::core::getExecutablePath().parent_path().parent_path() / "LichtFeld-Studio";
+        ASSERT_TRUE(std::filesystem::is_regular_file(executable));
+        const auto dataset = temporary_.path / "headless-dataset";
+        const auto project = temporary_.path / "headless-init.licht";
+        const auto init = temporary_.path / "stored-init.ply";
+        const auto override_init = temporary_.path / "override-init.ply";
+        write_transforms_dataset_with_cameras(dataset, 2);
+        const std::array<uint8_t, 3> pixel{128, 128, 128};
+        for (int i = 1; i <= 2; ++i)
+            ASSERT_TRUE(lfs::core::save_png(dataset / std::format("frame_{:04}.png", i), pixel.data(), 1, 1, 3, 8, 1));
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(8), {.output_path = init, .binary = true, .async = false}));
+        ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(11), {.output_path = override_init, .binary = true, .async = false}));
+        write_dataset_project_without_checkpoint(project, dataset);
+        {
+            auto document = lfs::test::licht::require_result_ptr(lfs::io::project::ProjectDocument::open(project));
+            const auto uuid = lfs::test::licht::require_result(lfs::io::project::upsert_path_reference(
+                document->edit_references(), temporary_.path, init, "training_init", "training_init"));
+            ASSERT_TRUE(document->edit_project().dom().set_json("training_initialization", {{"init_reference_uuid", uuid.to_string()},
+                                                                                            {"data_origin", {0, 0, 0}}}));
+            ASSERT_TRUE(document->save(project));
+        }
+        const auto quote = [](const std::filesystem::path& path) {
+            std::string result = "'";
+            for (const char c : lfs::core::path_to_utf8(path))
+                result += c == '\'' ? "'\\''" : std::string(1, c);
+            return result + "'";
+        };
+        for (const bool override : {false, true}) {
+            const auto output = temporary_.path / (override ? "override-out" : "stored-out");
+            const auto log = temporary_.path / (override ? "override.log" : "stored.log");
+            auto command = quote(executable) + " --headless --data-path " + quote(project) +
+                           " --output-path " + quote(output) +
+                           " --iter 1 --max-cap 64 --no-splash --no-download --log-level info";
+            if (override)
+                command += " --init " + quote(override_init);
+            command += " > " + quote(log) + " 2>&1";
+            const int status = std::system(command.c_str());
+            std::ifstream stream(log, std::ios::binary);
+            const std::string output_log{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+            EXPECT_EQ(status, 0) << output_log;
+            EXPECT_NE(output_log.find(override ? "Loaded 11 gaussians from override-init.ply" : "Loaded 8 gaussians from stored-init.ply"),
+                      std::string::npos)
+                << output_log;
+        }
+#endif
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -19750,6 +20853,221 @@ contract["check_selection_submode_follows_native_mode"](lf)
         EXPECT_TRUE(lifecycle->hasDirtyProject());
     }
 
+    // Autosave recaptures a splat payload only after its Gaussians changed. Scene-graph
+    // edits are saved in their own chapters and must not copy the whole model again.
+    class PayloadRecaptureTest : public VisualizerImplResetTest {
+    protected:
+        void SetUp() override {
+            VisualizerImplResetTest::SetUp();
+            if (!cuda_device_available()) {
+                GTEST_SKIP() << "CUDA device unavailable";
+            }
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false);
+        }
+
+        void TearDown() override {
+            lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt);
+            VisualizerImplResetTest::TearDown();
+        }
+
+        [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> cudaSplat(const std::size_t count) {
+            const auto cpu = lfs::test::licht::make_splat(count);
+            return std::make_unique<lfs::core::SplatData>(
+                0, cpu->means().to(lfs::core::Device::CUDA), cpu->sh0().to(lfs::core::Device::CUDA),
+                lfs::core::Tensor{}, cpu->scaling_raw().to(lfs::core::Device::CUDA),
+                cpu->rotation_raw().to(lfs::core::Device::CUDA), cpu->opacity_raw().to(lfs::core::Device::CUDA),
+                1.0f);
+        }
+
+        void prepare(VisualizerImpl& viewer) {
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        }
+
+        [[nodiscard]] bool open(VisualizerImpl& viewer, const std::filesystem::path& path) {
+            return viewer.projectOpen(path, ProjectSwitchDisposition::DiscardChanges) &&
+                   waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_);
+        }
+
+        // Runs autosave passes until they settle and counts how often the node's SPLT
+        // bytes in the project document were replaced by a new capture.
+        [[nodiscard]] int autosaveCaptures(VisualizerImpl& viewer, const lfs::core::Uuid& uuid,
+                                           const std::function<void()>& after_first_pass = {}) {
+            auto& lifecycle = *viewer.project_lifecycle_;
+            const auto splat_bytes = [&]() -> const std::byte* {
+                const auto* payload = lifecycle.document_->find_splat(uuid);
+                return payload ? payload->bytes().data() : nullptr;
+            };
+            int captures = 0;
+            const auto* last = splat_bytes();
+            for (int pass = 0; pass < 4; ++pass) {
+                const auto started = lifecycle.startAutosave();
+                EXPECT_TRUE(started) << lfs::format_for_developer(started.error());
+                EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                    return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+                }));
+                const auto* current = splat_bytes();
+                if (current && current != last)
+                    ++captures;
+                last = current;
+                if (pass == 0 && after_first_pass)
+                    after_first_pass();
+            }
+            return captures;
+        }
+
+        // The untitled crash-recovery file, hydrated into a fresh scene.
+        [[nodiscard]] std::unique_ptr<lfs::core::Scene> autosavedScene(VisualizerImpl& viewer) {
+            const auto& path = viewer.project_lifecycle_->scratch_autosave_path_;
+            EXPECT_TRUE(path && std::filesystem::is_regular_file(*path));
+            auto scene = std::make_unique<lfs::core::Scene>();
+            if (!path)
+                return scene;
+            const auto document = lfs::test::licht::require_result_ptr(
+                lfs::io::project::ProjectDocument::open(*path));
+            const auto hydrated = document->hydrate(*scene);
+            EXPECT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+            return scene;
+        }
+
+        void expectAutosavedGaussians(VisualizerImpl& viewer, const lfs::core::Uuid& uuid) {
+            const auto saved_scene = autosavedScene(viewer);
+            const auto* saved = saved_scene->getNodeByUuid(uuid);
+            const auto* live = viewer.getScene().getNodeByUuid(uuid);
+            ASSERT_TRUE(saved && saved->model && live && live->model);
+            EXPECT_EQ(saved->model->size(), live->model->size());
+            EXPECT_EQ(saved->model->visible_count(), live->model->visible_count());
+            EXPECT_EQ(saved->model->means().cpu().to_vector(), live->model->means().cpu().to_vector());
+            EXPECT_EQ(saved->model->opacity_raw().cpu().to_vector(), live->model->opacity_raw().cpu().to_vector());
+        }
+    };
+
+    TEST_F(PayloadRecaptureTest, UntitledSceneEditsDoNotRecapture) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto splat_id = scene.addSplat("Scene only", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture of a new model";
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate move;
+        move.translation = glm::vec3(0.5f, 0.25f, 0.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, viewer.getRenderingManager(), *cropbox_id, move));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box add and move";
+        ASSERT_TRUE(manager->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        scene.setSelection({1, 2, 3});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "Gaussian selection";
+        scene.setNodeLocked("Renamed", true);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "lock";
+
+        const auto saved_scene = autosavedScene(viewer);
+        const auto* saved = saved_scene->getNodeByUuid(uuid);
+        ASSERT_NE(saved, nullptr);
+        EXPECT_EQ(saved->name, "Renamed");
+        EXPECT_TRUE(static_cast<bool>(saved->locked));
+        const auto* saved_cropbox = saved_scene->getNodeById(saved_scene->getCropBoxForSplat(saved->id));
+        ASSERT_NE(saved_cropbox, nullptr);
+        EXPECT_EQ(glm::vec3(saved_cropbox->local_transform.get()[3]), glm::vec3(0.5f, 0.25f, 0.0f));
+        ASSERT_NE(saved->model, nullptr);
+        EXPECT_EQ(saved->model->size(), 64u);
+    }
+
+    TEST_F(PayloadRecaptureTest, UntitledGaussianEditsRecaptureOnce) {
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        auto* const rendering = viewer.getRenderingManager();
+        const auto splat_id = scene.addSplat("Edited", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        manager->selectNode(splat_id);
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+
+        const auto expect_recaptured_once = [&](const char* operation) {
+            SCOPED_TRACE(operation);
+            EXPECT_EQ(autosaveCaptures(viewer, uuid), 1);
+            expectAutosavedGaussians(viewer, uuid);
+        };
+        ASSERT_TRUE(cap::writeGaussianField(*manager, rendering, "Edited", "opacity", {0, 5}, {0.25f, -0.75f}));
+        expect_recaptured_once("Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        expect_recaptured_once("undo Gaussian field write");
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        expect_recaptured_once("redo Gaussian field write");
+        scene.setSelection({1, 2, 3});
+        ASSERT_TRUE(manager->deleteSelectedGaussiansWithHistory());
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 61u);
+        expect_recaptured_once("delete selected");
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        ASSERT_EQ(scene.getNodeById(splat_id)->model->visible_count(), 64u);
+        expect_recaptured_once("undo delete");
+        scene.clearSelection();
+        manager->selectNode(splat_id);
+        ASSERT_TRUE(manager->executeMirror(lfs::core::MirrorAxis::X));
+        expect_recaptured_once("mirror");
+
+        const auto cropbox_id = cap::ensureCropBox(*manager, rendering, splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        cap::CropBoxUpdate half;
+        half.min_bounds = glm::vec3(-100.0f, -1.0f, -1.0f);
+        half.max_bounds = glm::vec3(0.0f, 1.0f, 1.0f);
+        ASSERT_TRUE(cap::updateCropBox(*manager, rendering, *cropbox_id, half));
+        manager->selectNode(splat_id);
+        lfs::core::events::cmd::ApplyCropBox{}.emit();
+        const auto cropped = scene.getNodeById(splat_id)->model->visible_count();
+        ASSERT_GT(cropped, 0u);
+        ASSERT_LT(cropped, 64u);
+        expect_recaptured_once("crop apply");
+    }
+
+    // Without VRAM headroom the capture runs synchronously on the viewer thread, so a
+    // repeated capture freezes the application on every autosave.
+    TEST_F(PayloadRecaptureTest, SynchronousCaptureRunsOncePerPayloadChange) {
+        lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(true);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        auto& scene = viewer.getScene();
+        const auto splat_id = scene.addSplat("Synchronous", cudaSplat(64));
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const auto uuid = scene.getNodeById(splat_id)->uuid;
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "first capture";
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "idle autosaves";
+        ASSERT_TRUE(viewer.getSceneManager()->renameNode(splat_id, "Renamed"));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "rename";
+        ASSERT_TRUE(cap::writeGaussianField(*viewer.getSceneManager(), viewer.getRenderingManager(), "Renamed",
+                                            "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 1) << "Gaussian field write";
+        expectAutosavedGaussians(viewer, uuid);
+    }
+
+    TEST_F(PayloadRecaptureTest, SavedProjectSceneEditsDoNotRecapture) {
+        const auto path = temporary_.path / "payload-recapture.licht";
+        write_splt_project(path, lfs::test::licht::make_splat(64), "Saved");
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_NO_FATAL_FAILURE(prepare(viewer));
+        ASSERT_TRUE(open(viewer, path));
+        auto& scene = viewer.getScene();
+        auto* const manager = viewer.getSceneManager();
+        const auto* const node = scene.getNode("Saved");
+        ASSERT_NE(node, nullptr);
+        const auto splat_id = node->id;
+        const auto uuid = node->uuid;
+
+        // A rename while the capture of a Gaussian edit is in flight must not repeat it.
+        ASSERT_TRUE(cap::writeGaussianField(*manager, viewer.getRenderingManager(), "Saved", "opacity", {0}, {0.5f}));
+        EXPECT_EQ(autosaveCaptures(viewer, uuid, [&] { ASSERT_TRUE(manager->renameNode(splat_id, "Renamed")); }), 1);
+        const auto cropbox_id = cap::ensureCropBox(*manager, viewer.getRenderingManager(), splat_id);
+        ASSERT_TRUE(cropbox_id) << cropbox_id.error();
+        scene.setSelection({1, 2});
+        EXPECT_EQ(autosaveCaptures(viewer, uuid), 0) << "crop box and selection";
+    }
+
     TEST_F(VisualizerImplResetTest,
            PreTrainingProjectSaveRestoresCameraEnabledAndHidden) {
         if (!cuda_device_available()) {
@@ -20371,4 +21689,434 @@ namespace lfs::vis {
         EXPECT_FALSE(viewer.hasPendingRenderWork());
         EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
     }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobRequestOwnsCompletionAcrossRestart) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        scene.addCamera("camera", dataset, std::make_shared<core::Camera>());
+        const auto first = tasks.startAprilTagScan({});
+        ASSERT_TRUE(first);
+        EXPECT_EQ(tasks.aprilTagScanStatus()->handle, first->job);
+        EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
+        EXPECT_EQ(first->completion.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+        const auto second = tasks.startAprilTagScan({});
+        ASSERT_FALSE(second);
+        EXPECT_EQ(second.error(), LOC("runtime.apriltag_busy"));
+        EXPECT_EQ(tasks.aprilTagScanStatus()->handle, first->job);
+        EXPECT_FALSE(tasks.aprilTagScanStatus()->cancel_requested);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(first->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        scene.clear();
+        const auto restarted = tasks.startAprilTagScan({});
+        ASSERT_TRUE(restarted);
+        EXPECT_NE(restarted->job, first->job);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(restarted->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_TRUE(restarted->completion.get().scale_report.views.empty());
+        EXPECT_TRUE(first->completion.get().scale_report.success);
+        EXPECT_EQ(first->completion.get().scale_report.views.size(), 1u);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobShutdownSettlesPendingRequestWaiter) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        EXPECT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+        std::promise<bool> settled;
+        auto done = settled.get_future();
+        std::jthread waiter([completion = request->completion, &settled](std::stop_token stop) {
+            while (completion.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready) {
+                if (stop.stop_requested())
+                    return;
+            }
+            settled.set_value(!completion.get().scale_report.success && !completion.get().applied);
+        });
+        viewer.setShutdownRequestedCallback([&] {
+            EXPECT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        });
+        viewer.beginShutdown();
+        ASSERT_EQ(done.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+        EXPECT_TRUE(done.get());
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobCompletesOnViewerAndCanRestart) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        auto& scene = viewer.getSceneManager()->getScene();
+        const auto dataset = scene.addDataset("dataset");
+        scene.addCamera("camera", dataset, std::make_shared<core::Camera>());
+        for (int run = 0; run < 2; ++run) {
+            ASSERT_TRUE(tasks.startAprilTagScan({}));
+            EXPECT_FALSE(tasks.startAprilTagScan({}));
+            ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+            // The worker publishes a report, but cannot complete or apply it itself.
+            EXPECT_TRUE(tasks.aprilTagScanStatus()->running());
+            EXPECT_TRUE(tasks.hasPendingMainThreadCompletions());
+            tasks.pollAprilTagScanCompletion();
+            EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Completed);
+            EXPECT_FLOAT_EQ(tasks.aprilTagScanStatus()->progress, 1.0f);
+            EXPECT_EQ(tasks.aprilTagScanResult().scale_report.views.size(), 1u);
+        }
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobLateCancelPreventsCompletion) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.cancelAprilTagScan();
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobRejectsChangedSceneAndShutdownJoinsWorker) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({});
+        ASSERT_TRUE(request);
+        viewer.getSceneManager()->getScene().addDataset("replacement");
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+        ASSERT_TRUE(tasks.startAprilTagScan({}));
+        tasks.shutdown();
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Canceled);
+    }
+
+    TEST_F(VisualizerImplResetTest, AprilTagJobFailedSolveRetainsDiagnostics) {
+        VisualizerImpl viewer(projectOptions());
+        auto& tasks = viewer.getGuiManager()->asyncTasks();
+        const auto request = tasks.startAprilTagScan({}, {}, {}, true, false);
+        ASSERT_TRUE(request);
+        ASSERT_TRUE(waitUntil([&] { return tasks.aprilTagScanStatus()->status == JobStatus::CompletionPending; }));
+        tasks.pollAprilTagScanCompletion();
+        ASSERT_EQ(request->completion.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+        EXPECT_FALSE(request->completion.get().scale_report.success);
+        EXPECT_FALSE(request->completion.get().error_message.empty());
+        EXPECT_EQ(tasks.aprilTagScanStatus()->status, JobStatus::Failed);
+        EXPECT_FALSE(tasks.aprilTagScanResult().scale_report.error_message.empty());
+        EXPECT_FALSE(tasks.aprilTagScanResult().applied);
+    }
+
+    void installSessionTestInputController(VisualizerImpl& viewer) {
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+    }
 } // namespace lfs::vis
+
+namespace lfs::vis::gui {
+    using namespace core;
+    class CollisionJobsTest : public VisualizerImplResetTest {
+    protected:
+        std::unique_ptr<VisualizerImpl> viewer_;
+        std::binary_semaphore release_{0}, dispatched_{0};
+        int batches_ = 0;
+        int exit_prompts_ = 0;
+        void SetUp() override {
+            if (!cuda_device_available())
+                GTEST_SKIP() << "Project replacement resets the CUDA arena; a device is required";
+            VisualizerImplResetTest::SetUp();
+            viewer_ = std::make_unique<VisualizerImpl>(projectOptions());
+            events::cmd::ShowExitConfirmation::when([this](const auto&) { ++exit_prompts_; });
+        }
+        void TearDown() override {
+            if (!viewer_)
+                return;
+            if (tasks().collision_worker_.valid()) {
+                tasks().cancelCollision();
+                finish();
+            }
+            viewer_.reset();
+            VisualizerImplResetTest::TearDown();
+        }
+        AsyncTaskManager& tasks() { return viewer_->getGuiManager()->asyncTasks(); }
+        project::ProjectLifecycle& lifecycle() { return *viewer_->project_lifecycle_; }
+        void queueOpen(const std::filesystem::path& path) {
+            EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectOpen(path, ProjectSwitchDisposition::DiscardChanges)), ProjectOpenOutcome::Deferred);
+        }
+        Scene& scene() { return viewer_->getScene(); }
+        std::vector<const SceneNode*> colliders() {
+            return scene().getNodes() | std::views::filter([](const auto* node) { return node->type == NodeType::COLLISION; }) | std::ranges::to<std::vector>();
+        }
+        void finish() {
+            release_.release();
+            if (tasks().collision_worker_.valid())
+                tasks().collision_worker_.wait();
+            tasks().pollCollision();
+            ASSERT_TRUE(tasks().collisionJob());
+            EXPECT_FALSE(tasks().collisionJob()->running());
+            finishOpen();
+        }
+        void finishOpen() {
+            const auto open = viewer_->jobs().active(JobType::ProjectOpen);
+            EXPECT_TRUE(pumpUntil(viewer_->work_queue_mutex_, viewer_->work_queue_, [&] { return !viewer_->jobs().anyRunning(JobType::ProjectOpen); }));
+            EXPECT_FALSE(viewer_->jobs().active(JobType::ProjectOpen));
+            if (open)
+                EXPECT_FALSE(viewer_->jobs().peek(open->handle));
+        }
+        void EligibilityAndAllOutcomesSettle() {
+            for (int edit = 0; edit < 10; ++edit) {
+                SCOPED_TRACE(edit);
+                const auto parent = scene().addGroup("Parent");
+                scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2, 3, 4)));
+                const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat(), parent);
+                scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(5, 6, 7)));
+                const auto local = glm::inverse(scene().getWorldTransform(source));
+                scene().setNodeVisibility(source, false);
+                viewer_->getSceneManager()->selectNode(source);
+                tasks().collision_source_ = scene().collisionSourceIdentity(source);
+                tasks().collision_resolved_size_ = .25f;
+                tasks().launchCollision([this, edit](std::stop_token, const ProgressCallback&) {
+                    release_.acquire();
+                    if (edit == 8)
+                        throw std::runtime_error("fixture generation failure");
+                    if (edit == 9)
+                        return true;
+                    tasks().collision_result_ = collision_test::box({0, 0, 0}, {4, 1, 4});
+                    return false;
+                });
+                if (edit == 0) {
+                    scene().setNodeVisibility(source, true);
+                    scene().renameNode(source, "Renamed");
+                    scene().invalidateCache();
+                    scene().invalidateTransformCache();
+                } else if (edit == 1)
+                    scene().removeNodeById(source);
+                else if (edit == 2)
+                    scene().setNodeTransform(source, glm::translate(glm::mat4(1), glm::vec3(1)));
+                else if (edit == 3)
+                    scene().setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(2)));
+                else if (edit == 4)
+                    scene().replaceNodeModel(scene().getNodeById(source)->name, lfs::test::licht::make_matrix_splat());
+                else if (edit == 5)
+                    scene().invalidateBounds(); // Trainer's step-boundary content revision.
+                else if (edit == 6) {
+                    auto& model = *scene().getNodeById(source)->model;
+                    model.deleted() = Tensor::ones_bool({static_cast<size_t>(model.size())}, Device::CPU);
+                    model.notify_deleted_mask_changed();
+                } else if (edit == 7 || edit == 9)
+                    tasks().cancelCollision();
+                if (edit == 9)
+                    ASSERT_TRUE(viewer_->clearScene());
+                finish();
+                EXPECT_EQ(tasks().collisionJob()->status, edit == 0 || edit == 9 ? JobStatus::Completed : edit == 7 ? JobStatus::Canceled
+                                                                                                                    : JobStatus::Failed);
+                ASSERT_EQ(colliders().size(), edit == 0 ? 1 : 0);
+                if (edit > 0 && edit < 7)
+                    EXPECT_EQ(tasks().collisionJob()->error, LOC("collision.source_unavailable"));
+                if (edit == 0) {
+                    EXPECT_FLOAT_EQ(tasks().collisionResolvedSize(), .25f);
+                    const auto uuid = colliders().front()->uuid;
+                    const auto volume = colliders().front()->collision;
+                    EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(colliders().front()->id), glm::mat4(1), 1e-5f)));
+                    const auto unrelated = scene().addGroup("Unrelated later edit");
+                    (void)op::undoHistory().undo();
+                    EXPECT_TRUE(colliders().empty());
+                    EXPECT_NE(scene().getNodeById(unrelated), nullptr);
+                    (void)op::undoHistory().redo();
+                    const auto* restored = scene().getNodeByUuid(uuid);
+                    ASSERT_NE(restored, nullptr);
+                    EXPECT_EQ(restored->parent_id, source);
+                    EXPECT_EQ(restored->collision, volume);
+                    EXPECT_TRUE(glm::all(glm::equal(restored->transform(), local, 1e-5f)));
+                    scene().setNodeTransform(parent, glm::translate(glm::mat4(1), glm::vec3(8, 9, 10)));
+                    EXPECT_TRUE(glm::all(glm::equal(scene().getWorldTransform(restored->id), scene().getWorldTransform(source) * local, 1e-5f)));
+                }
+                scene().removeNodeById(parent);
+            }
+        }
+
+        void ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity() {
+            const auto path = temporary_.path / "other.licht";
+            const auto second_path = temporary_.path / "second.licht";
+            const auto first = generate_uuid_v4(), second = generate_uuid_v4();
+            for (const auto& [destination, uuid] : {std::pair{path, first}, std::pair{second_path, second}}) {
+                auto document = lfs::test::licht::make_empty_document(uuid);
+                ASSERT_TRUE(document->edit_scene_graph().upsert_node({.uuid = uuid, .type = "group", .name = "Prepared shell"}));
+                ASSERT_TRUE(document->save(destination));
+            }
+            const auto original = lfs::test::licht::read_file_bytes(path);
+            for (const std::string_view replacement : {"Open", "Reopen", "Clear", "New", "Prepared", "Deleted", "Replaced", "SameCommitCopy", "Truncated", "NewGeneration", "Supersede", "InvalidSecond", "StaleEpoch", "CancelClose", "DiscardClose"}) {
+                SCOPED_TRACE(replacement);
+                const bool reject_prepared = replacement == "Prepared" || replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy" || replacement == "Truncated" || replacement == "NewGeneration";
+                const bool retain_source = reject_prepared || replacement == "StaleEpoch" || replacement == "CancelClose" || replacement == "DiscardClose";
+                const auto current_path = temporary_.path / (std::string(replacement) + "-current.licht");
+                if (reject_prepared) {
+                    auto current = lfs::test::licht::make_empty_document(generate_uuid_v4());
+                    (void)lfs::test::licht::require_result(current->save(current_path));
+                    ASSERT_EQ(lfs::test::licht::require_result(viewer_->projectOpen(current_path, ProjectSwitchDisposition::DiscardChanges)), ProjectOpenOutcome::Opened);
+                    ASSERT_NO_FATAL_FAILURE(finishOpen());
+                }
+                const auto source = scene().addSplat("Source", lfs::test::licht::make_matrix_splat());
+                const auto source_uuid = scene().getNodeUuid(source);
+                const auto document = lifecycle().boundDocument();
+                const auto epoch = lifecycle().documentEpoch();
+                const auto sidecar = lfs::io::project::autosave_sidecar_path(current_path);
+                std::vector<std::byte> recovery;
+                if (reject_prepared) {
+                    ASSERT_TRUE(document && document->source_commit_uuid());
+                    scene().setNodeVisibility(source, false);
+                    op::undoHistory().push(std::make_unique<op::PropertyChangeUndoEntry>("node.visible", true, false, [this, source](const std::any& value) { scene().setNodeVisibility(source, std::any_cast<bool>(value)); }, viewer_->getSceneManager()));
+                    ASSERT_TRUE(document->edit_view().dom().set("retained_recovery", true));
+                    ASSERT_TRUE(document->save_autosave(sidecar, {.file_uuid = generate_uuid_v4(), .base_explicit_commit_uuid = *document->source_commit_uuid(), .autosave_sequence = 1, .snapshot_uuid = generate_uuid_v4(), .disk_reserve_bytes = 0}));
+                    ASSERT_EQ(lfs::test::licht::require_result(lfs::io::project::inspect_autosave_recovery(current_path)).disposition, lfs::io::project::RecoveryDisposition::Offer);
+                    recovery = lfs::test::licht::read_file_bytes(sidecar);
+                }
+                const auto undo_generation = op::undoHistory().generation();
+                const auto old_scene = std::tuple{scene().getNodes(), scene().collisionSourceIdentity(source), bool(scene().getNodeById(source)->visible)};
+                if (replacement == "Open") {
+                    scene().addSplat("Large unselected source", lfs::test::licht::make_splat(100000));
+                    scene().consolidateNodeModels();
+                }
+                auto owned = scene().captureCollisionSource(source);
+                EXPECT_EQ(owned.means.size(0), 4);
+                EXPECT_EQ(owned.means.cpu().ptr<float>()[0], 1.f);
+                batches_ = 0;
+                tasks().launchCollision([this, owned = std::move(owned)](std::stop_token stop, const ProgressCallback& progress) {
+                    (void)generateCollision(owned, {.01f, .1f, 0, false, false}, stop, [&](float value, const std::string& stage) {
+                        if (stage == collisionStage("new_project.create", "Voxelizing collision") && ++batches_ == 2) {
+                            dispatched_.release();
+                            if (!release_.try_acquire_for(std::chrono::seconds(10)))
+                                throw std::runtime_error("Collision stage release timed out");
+                        }
+                        return progress(value, stage);
+                    });
+                    return false;
+                });
+                const auto token = tasks().collision_stop_.get_token();
+                ASSERT_TRUE(dispatched_.try_acquire_for(std::chrono::seconds(10))) << tasks().collisionJob()->error;
+                if (replacement == "Open" || replacement == "InvalidSecond") {
+                    if (replacement == "InvalidSecond")
+                        ASSERT_NO_FATAL_FAILURE(queueOpen(path));
+                    for (const auto* name : {"missing.licht", "corrupt.licht"}) {
+                        const auto invalid = temporary_.path / name;
+                        if (*name == 'c')
+                            std::ofstream(invalid) << "not a project";
+                        EXPECT_FALSE(viewer_->projectOpen(invalid, ProjectSwitchDisposition::DiscardChanges));
+                        EXPECT_EQ(token.stop_requested(), replacement == "InvalidSecond");
+                    }
+                }
+                const auto started = std::chrono::steady_clock::now();
+                if (replacement != "Clear" && replacement != "New" && replacement != "InvalidSecond")
+                    ASSERT_NO_FATAL_FAILURE(queueOpen(path));
+                else if (replacement == "Clear")
+                    ASSERT_TRUE(viewer_->clearScene());
+                else if (replacement == "New")
+                    events::cmd::NewProject{.discard_changes = true}.emit();
+                if (replacement == "Supersede")
+                    ASSERT_NO_FATAL_FAILURE(queueOpen(second_path));
+                EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(250));
+                if (replacement == "Prepared")
+                    std::filesystem::rename(path, temporary_.path / "prepared.licht");
+                if (replacement == "Deleted" || replacement == "Replaced" || replacement == "SameCommitCopy")
+                    ASSERT_TRUE(std::filesystem::remove(path));
+                if (replacement == "Replaced")
+                    ASSERT_TRUE(std::filesystem::copy_file(second_path, path));
+                if (replacement == "SameCommitCopy")
+                    lfs::test::licht::write_file_bytes(path, original);
+                if (replacement == "Truncated") {
+                    ASSERT_GT(original.size(), lfs::io::project::APPEND_REGION_OFFSET);
+                    std::filesystem::resize_file(path, lfs::io::project::APPEND_REGION_OFFSET);
+                    EXPECT_EQ(lfs::test::licht::read_file_bytes(path), (std::vector<std::byte>(original.begin(), original.begin() + lfs::io::project::APPEND_REGION_OFFSET)));
+                }
+                if (replacement == "NewGeneration") {
+                    auto newer = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
+                    const auto generation = newer.generation();
+                    const auto commit = newer.source_commit_uuid();
+                    ASSERT_TRUE(newer.edit_view().dom().set("new_generation", true));
+                    ASSERT_TRUE(newer.save(path));
+                    EXPECT_EQ(newer.project_uuid(), first);
+                    EXPECT_GT(newer.generation(), generation);
+                    EXPECT_NE(newer.source_commit_uuid(), commit);
+                }
+                if (replacement == "StaleEpoch")
+                    ++tasks().splat_simplify_scene_epoch_;
+                if (replacement == "CancelClose" || replacement == "DiscardClose") {
+                    ASSERT_TRUE(lifecycle().setAutoSaveOnClose(false));
+                    const auto prompts = exit_prompts_;
+                    events::cmd::RequestExit{}.emit();
+                    EXPECT_FALSE(viewer_->allowclose());
+                    EXPECT_EQ(exit_prompts_, prompts + 1);
+                    EXPECT_TRUE(lifecycle().isApplicationClosePending());
+                    EXPECT_FALSE(tasks().sceneReplacementPending());
+                    if (replacement == "DiscardClose")
+                        events::cmd::ForceExit{.discard_autosave = true}.emit();
+                }
+                int callbacks = 0;
+                for (int frame = 0; frame < 3; ++frame) {
+                    ASSERT_TRUE(viewer_->postWork({.run = [&] { ++callbacks; }, .cancel = [] {}}));
+                    viewer_->pumpPostedWorkForProjectWrite();
+                    tasks().pollImportCompletion();
+                    EXPECT_NE(scene().getNodeById(source), nullptr);
+                    EXPECT_FALSE(viewer_->jobs().active(JobType::ProjectOpen));
+                }
+                EXPECT_EQ(callbacks, 3);
+                finish();
+                EXPECT_FALSE(tasks().sceneReplacementPending());
+                if (!retain_source) {
+                    EXPECT_EQ(scene().getNodeByUuid(source_uuid), nullptr);
+                    if (replacement != "Clear" && replacement != "New") {
+                        const auto expected = replacement == "Supersede" ? second : first;
+                        ASSERT_TRUE(lifecycle().boundDocument());
+                        EXPECT_EQ(lifecycle().boundDocument()->project_uuid(), expected);
+                        EXPECT_NE(scene().getNodeByUuid(expected), nullptr);
+                        EXPECT_EQ(lfs::test::licht::require_result(viewer_->projectGetInfo()).hydration_state, "complete");
+                    }
+                    ASSERT_NE(scene().restoreNodeWithUuid({.uuid = source_uuid, .preferred_id = source, .type = NodeType::SPLAT, .name = "Reused source identity", .model = lfs::test::licht::make_matrix_splat()}), NULL_NODE);
+                } else {
+                    if (reject_prepared) {
+                        EXPECT_EQ(lifecycle().boundDocument(), document);
+                        EXPECT_EQ(lifecycle().documentEpoch(), epoch);
+                        ASSERT_NE(scene().getNodeById(source), nullptr);
+                        EXPECT_EQ((std::tuple{scene().getNodes(), scene().collisionSourceIdentity(source), bool(scene().getNodeById(source)->visible)}), old_scene);
+                        EXPECT_EQ(op::undoHistory().generation(), undo_generation);
+                        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+                        EXPECT_EQ(lfs::test::licht::read_file_bytes(sidecar), recovery);
+                        ASSERT_TRUE(op::undoHistory().undo().success);
+                        EXPECT_TRUE(scene().getNodeById(source)->visible);
+                        ASSERT_TRUE(op::undoHistory().redo().success);
+                        EXPECT_FALSE(scene().getNodeById(source)->visible);
+                    }
+                    if (replacement == "CancelClose") {
+                        events::cmd::CancelExit{}.emit();
+                        EXPECT_FALSE(lifecycle().isApplicationClosePending());
+                        EXPECT_FALSE(viewer_->getGuiManager()->isExitConfirmationPending());
+                    }
+                    tasks().pollImportCompletion();
+                    EXPECT_NE(scene().getNodeById(source), nullptr);
+                    scene().removeNodeById(source);
+                }
+                if (reject_prepared)
+                    lfs::test::licht::write_file_bytes(path, original);
+                EXPECT_TRUE(token.stop_requested());
+                EXPECT_EQ(batches_, 2);
+                EXPECT_EQ(tasks().collisionJob()->status, JobStatus::Canceled);
+                EXPECT_TRUE(colliders().empty());
+            }
+        }
+    };
+
+    TEST_F(CollisionJobsTest, EligibilityAndAllOutcomesSettle) {
+        EligibilityAndAllOutcomesSettle();
+    }
+
+    TEST_F(CollisionJobsTest, ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity) {
+        ActualOpenReopenClearAndNewRejectEvenReusedSourceIdentity();
+    }
+
+} // namespace lfs::vis::gui

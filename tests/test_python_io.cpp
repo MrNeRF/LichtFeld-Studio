@@ -43,6 +43,7 @@
 #include "python/gil.hpp"
 #include "python/runner.hpp"
 #include "tinyply.hpp"
+#include "visualizer/gui/html_viewer_export.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -2109,6 +2110,105 @@ TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
     expect_existing_target_and_no_temp_files(output_path, existing_contents);
 }
 
+TEST_F(PythonIOTest, HtmlExportEmbedsBackgroundColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "custom_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(0.2f, 0.4f, 0.6f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.200000,0.400000,0.600000]}") != std::string::npos)
+        << "Should embed the specified background color";
+}
+
+TEST_F(PythonIOTest, HtmlExportSanitizesNonFiniteColor) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "non_finite_bg.html";
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.background_color = glm::vec3(std::numeric_limits<float>::quiet_NaN(),
+                                         std::numeric_limits<float>::infinity(),
+                                         0.5f);
+
+    auto result = export_html(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+
+    std::ifstream file(output_path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    EXPECT_TRUE(content.find("\"background\":{\"color\":[0.000000,0.000000,0.500000]}") != std::string::npos)
+        << "Should treat non-finite color channels as 0.0";
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportNonBlackTakesPrecedence) {
+    const glm::vec3 viewport_bg{0.2f, 0.4f, 0.6f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, viewport_bg);
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackFallsBackToSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(1.0f, 1.0f, 1.0f));
+}
+
+TEST(HtmlExportBackgroundColorTest, ViewportBlackSkipsNonSolidColorTraining) {
+    const glm::vec3 viewport_bg{0.0f, 0.0f, 0.0f};
+
+    for (auto mode : {lfs::core::param::BackgroundMode::Random,
+                      lfs::core::param::BackgroundMode::Image,
+                      lfs::core::param::BackgroundMode::Modulation}) {
+        lfs::core::param::OptimizationParameters opt_params;
+        opt_params.bg_mode = mode;
+        opt_params.bg_color = {1.0f, 1.0f, 1.0f};
+
+        const auto resolved = lfs::vis::gui::resolve_html_export_background_color(viewport_bg, opt_params);
+        ASSERT_TRUE(resolved.has_value());
+        EXPECT_EQ(*resolved, glm::vec3(0.0f, 0.0f, 0.0f));
+    }
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportUsesSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, glm::vec3(0.8f, 0.8f, 0.8f));
+}
+
+TEST(HtmlExportBackgroundColorTest, NoViewportSkipsNonSolidColorTraining) {
+    lfs::core::param::OptimizationParameters opt_params;
+    opt_params.bg_mode = lfs::core::param::BackgroundMode::Random;
+    opt_params.bg_color = {0.8f, 0.8f, 0.8f};
+
+    const auto resolved = lfs::vis::gui::resolve_html_export_background_color(std::nullopt, opt_params);
+    EXPECT_FALSE(resolved.has_value());
+}
+
 TEST_F(PythonIOTest, RadSaveCancellationKeepsExistingTarget) {
     auto splat = create_test_splat(200, 0);
     const fs::path output_path = temp_dir / "keep_existing_on_cancel.rad";
@@ -2650,7 +2750,7 @@ namespace {
         if (!fs::exists(dir, ec)) {
             return false;
         }
-        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(dir), ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code file_ec;
             if (!it->is_regular_file(file_ec) || file_ec) {
                 continue;

@@ -77,7 +77,7 @@ PANEL_SPECS = {
     ),
     "histogram": _PanelSpec(
         "lfs_plugins.histogram_panel", "HistogramPanel", "lfs.histogram", "Histogram",
-        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (860, 660),
+        "BOTTOM_DOCK", 97, "rmlui/histogram_panel.rml", "FILL", (1000, 300),
         update_policy="dirty", has_poll=True,
     ),
     "scripts": _PanelSpec(
@@ -89,6 +89,10 @@ PANEL_SPECS = {
         "lfs_plugins.preferences_panel", "PreferencesPanel", "lfs.preferences",
         "Preferences", "FLOATING", 100, "rmlui/preferences.rml", "FILL", (780, 440),
         update_policy="interval", update_interval_ms=100,
+    ),
+    "collision": _PanelSpec(
+        "lfs_plugins.collision_panel", "CollisionPanel", "lfs.collision", "collision.title",
+        "FLOATING", 14, "rmlui/collision.rml", "CONTENT", (420, 0),
     ),
     "splat_simplify": _PanelSpec(
         "lfs_plugins.splat_simplify_panel", "SplatSimplifyPanel", "lfs.splat_simplify",
@@ -184,7 +188,7 @@ def _register_lazy_panel(lf, name):
 
         _delegated_instance_methods = frozenset({
             "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
-            "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+            "on_update", "on_scene_changed", "on_visibility_changed", "capture_chrome", "apply_chrome",
             "on_host_geometry_changed",
         })
 
@@ -267,6 +271,7 @@ def _build_builtin_panel_steps(lf):
 
         tools_mod.register()
         _register_lazy_panel(lf, "splat_simplify")
+        _register_lazy_panel(lf, "collision")
 
     def menus():
         from . import file_menu, edit_menu, tools_menu, view_menu, help_menu

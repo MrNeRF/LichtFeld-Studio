@@ -9,6 +9,7 @@ import time
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .default_reset import LabelDefaultReset, values_match
 from . import property_view
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
@@ -141,6 +142,8 @@ STRATEGY_LABEL_KEYS = {
 }
 
 DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
+DATASET_SLIDER_PROPS = ["sharpen_amount", "sharpen_radius", "sharpen_threshold"]
+SHARPEN_KERNELS = ("usm", "laplacian4", "laplacian8")
 
 def _resolved_ppisp_activation_step(
     params,
@@ -160,12 +163,14 @@ def _display_ppisp_activation_step(params):
     return step if step >= 0 else _resolved_ppisp_activation_step(params)
 
 
-SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
+SLIDER_PROPS = ["lambda_dssim", "init_opacity"]
 
 SCRUB_FIELD_DEFS = {
     "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
     "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
-    "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
+    "sharpen_amount": ScrubFieldSpec(0.0, 5.0, 0.05, "%.2f"),
+    "sharpen_radius": ScrubFieldSpec(0.3, 10.0, 0.1, "%.1f"),
+    "sharpen_threshold": ScrubFieldSpec(0.0, 1.0, 0.005, "%.3f"),
 }
 
 RENDER_SYNC = {
@@ -178,11 +183,12 @@ SECTIONS = [
     "basic_params",
     "advanced_params",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
     "advanced_registry",
 ]
@@ -191,11 +197,12 @@ INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
     "dataset",
-    "optimization",
-    "bilateral",
+    "appearance",
+    "refinement",
+    "learning_rates",
     "losses",
     "init",
-    "sparsity",
+    "evaluation",
     "save_steps",
 }
 
@@ -238,6 +245,8 @@ class TrainingPanel(Panel):
         self._last_save_steps = None
         self._color_edit_prop = None
         self._picker_click_handled = False
+        self._init_mesh_checked_path = ""
+        self._init_is_mesh = False
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._last_iteration = -1
         self._last_num_gaussians = -1
@@ -274,6 +283,7 @@ class TrainingPanel(Panel):
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
         self._escape_revert = w.EscapeRevertController()
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -282,7 +292,7 @@ class TrainingPanel(Panel):
 
     def capture_chrome(self):
         return {
-            "collapsed": sorted(self._collapsed),
+            "expanded": sorted(set(SECTIONS) - self._collapsed),
             "property_search": self._pv_search_query,
             "steps_scaling_lock": bool(self._auto_scale_steps_locked),
         }
@@ -295,9 +305,9 @@ class TrainingPanel(Panel):
             if self._handle:
                 self._handle.dirty_all()
             return
-        collapsed = payload.get("collapsed")
-        if isinstance(collapsed, (list, tuple)):
-            self._collapsed = {str(name) for name in collapsed}
+        expanded = payload.get("expanded")
+        if isinstance(expanded, (list, tuple)):
+            self._collapsed = set(INITIALLY_COLLAPSED) - {str(name) for name in expanded}
         search = payload.get("property_search")
         if isinstance(search, str):
             self._pv_search_query = search
@@ -322,7 +332,7 @@ class TrainingPanel(Panel):
         self._bind_select_props(model, p, d)
         self._bind_text_props(model, p)
         self._bind_bespoke_num_props(model, p, d)
-        self._bind_slider_props(model, p)
+        self._bind_slider_props(model, p, d)
         self._bind_color(model, p)
         self._bind_status(model, p)
         self._bind_display(model, p, d)
@@ -450,6 +460,17 @@ class TrainingPanel(Panel):
         model.bind_func(
             "label_use_16bit_color", lambda: tr("training.dataset.use_16bit_color")
         )
+        model.bind_func("label_sharpen", lambda: tr("training.dataset.sharpen"))
+        for setting in ("amount", "radius", "threshold"):
+            model.bind_func(
+                f"label_sharpen_{setting}",
+                lambda setting=setting: tr(f"training.dataset.sharpen_{setting}"),
+            )
+        for kernel in SHARPEN_KERNELS:
+            model.bind_func(
+                f"label_sharpen_{kernel}",
+                lambda kernel=kernel: tr(f"training.options.sharpen_kernel.{kernel}"),
+            )
         model.bind_func(
             "label_dataset_output", lambda: tr("training.dataset.output")
         )
@@ -467,9 +488,6 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "label_init_opacity", lambda: tr("training.init.init_opacity")
-        )
-        model.bind_func(
-            "label_prune_ratio", lambda: tr("training_params.prune_ratio")
         )
         model.bind_func(
             "label_no_save_steps", lambda: tr("training_panel.no_save_steps")
@@ -518,10 +536,20 @@ class TrainingPanel(Panel):
         for binding in self._pv_bindings:
             self._queue_pv_publish(binding)
 
+    def _init_file_is_mesh(self):
+        dataset = lf.dataset_params()
+        path = dataset.init_path if dataset and dataset.has_params() else ""
+        if path != self._init_mesh_checked_path:
+            self._init_mesh_checked_path = path
+            self._init_is_mesh = bool(path) and lf.io.is_mesh_file(path)
+        return self._init_is_mesh
+
     def _property_view_condition_visible(self, condition_id):
         if str(condition_id) == "has_dataset":
             dataset = lf.dataset_params()
             return bool(dataset and dataset.has_params())
+        if str(condition_id) == "dep_init_mesh":
+            return self._init_file_is_mesh()
 
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -784,6 +812,11 @@ class TrainingPanel(Panel):
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
         model.bind_func(
+            "sharpen_uses_radius",
+            lambda: d() is not None and d().has_params() and d().sharpen_kernel == "usm",
+        )
+        model.bind_func("dep_init_mesh", self._init_file_is_mesh)
+        model.bind_func(
             "show_dataset_no_data", lambda: d() is None or not d().has_params()
         )
 
@@ -815,12 +848,7 @@ class TrainingPanel(Panel):
 
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
-            if _trainer_run_is_finished():
-                return False
-            return not (
-                RuntimeState.trainer_state.value == "ready"
-                and RuntimeState.iteration.value == 0
-            )
+            return not self._can_edit_configuration()
 
         model.bind_func("struct_disabled", _params_edit_locked)
         model.bind_func("live_disabled", _params_edit_locked)
@@ -886,6 +914,11 @@ class TrainingPanel(Panel):
             "resize_factor_str",
             lambda: str(d().resize_factor) if d() and d().has_params() else "-1",
             lambda v: self._set_resize_factor(v),
+        )
+        model.bind(
+            "sharpen_kernel",
+            lambda: d().sharpen_kernel if d() and d().has_params() else "usm",
+            lambda v: self._set_sharpen_kernel(v),
         )
 
     def _bind_text_props(self, model, p):
@@ -1154,15 +1187,16 @@ class TrainingPanel(Panel):
         for key in BG_COLOR_TEXT_KEYS:
             self._handle.dirty(key)
 
-    def _bind_slider_props(self, model, p):
-        for prop in SLIDER_PROPS:
-            model.bind(
-                prop,
-                lambda pr=prop: (
-                    float(getattr(p(), pr, 0.0)) if p() and p().has_params() else 0.0
-                ),
-                lambda v, pr=prop: self._set_slider_prop(pr, v),
-            )
+    def _bind_slider_props(self, model, p, d):
+        for source, props in ((p, SLIDER_PROPS), (d, DATASET_SLIDER_PROPS)):
+            for prop in props:
+                model.bind(
+                    prop,
+                    lambda pr=prop, src=source: (
+                        float(getattr(src(), pr, 0.0)) if src() and src().has_params() else 0.0
+                    ),
+                    lambda v, pr=prop: self._set_slider_prop(pr, v),
+                )
 
     def _bind_color(self, model, p):
         def _bg():
@@ -1457,6 +1491,7 @@ class TrainingPanel(Panel):
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
         self._psnr_graph_el = doc.get_element_by_id("psnr-graph-el")
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
         self._request_reactive_update()
@@ -1739,6 +1774,7 @@ class TrainingPanel(Panel):
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
 
     def _update_loss_graph(self):
         if not self._loss_graph_el:
@@ -1893,7 +1929,11 @@ class TrainingPanel(Panel):
             and not self._clamp_current_test_every_for_eval()
         ):
             return False
-        setattr(params, prop, val)
+        try:
+            setattr(params, prop, val)
+        except (ValueError, TypeError, RuntimeError) as e:
+            lf.logger.warning(str(e))
+            return False
         if prop == "enable_eval" and val:
             self._add_save_steps_to_eval_steps(params)
         if prop in RENDER_SYNC:
@@ -2019,6 +2059,69 @@ class TrainingPanel(Panel):
             d.resize_factor = int(val_str)
         except (ValueError, TypeError, RuntimeError):
             pass
+
+    def _set_sharpen_kernel(self, val_str):
+        d = lf.dataset_params()
+        value = str(val_str or "")
+        if not d or not d.has_params() or value not in SHARPEN_KERNELS or value == d.sharpen_kernel:
+            return
+        try:
+            d.sharpen_kernel = value
+        except (ValueError, RuntimeError):
+            return
+        if self._handle:
+            self._handle.dirty_all()
+
+    @staticmethod
+    def _can_edit_configuration():
+        return (
+            RuntimeState.trainer_state.value == "ready"
+            and RuntimeState.iteration.value == 0
+        ) or _trainer_run_is_finished()
+
+    def _reset_default(self, prop):
+        params = lf.optimization_params()
+        if params is None or not params.has_params():
+            return None
+        if not self._can_edit_configuration():
+            return None
+        # Preserve the coupled-step lock, even if an event is dispatched directly.
+        if self._auto_scale_steps_locked and any(
+                run.disabled_condition_id == "step_scaling_params_locked" and prop in run.prop_ids
+                for run in property_view.RUNS):
+            return None
+        if prop == "bg_color":
+            return params.builtin_default(prop)
+        if prop == "gut" and params.strategy == "igs+":
+            return None
+        info = params.prop_info(prop)
+        if info.get("readonly") or prop in ("strategy", "raster_backend", "steps_scaler"):
+            return None
+        return params.builtin_default(prop)
+
+    def _apply_reset(self, prop, value):
+        # Recheck runtime locks at commit time rather than trusting DOM state.
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        params = lf.optimization_params()
+        committed = (-1.0 if property_view.canonical_strategy_name(params.strategy) == "mrnf"
+                     and prop in ("grow_fraction", "shs_lr") else value)
+        accepted = (self._set_training_bg_color(value) if prop == "bg_color"
+                    else self._set_property_view_value(prop, committed))
+        if not accepted:
+            return False
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is not None:
+            binding.finish_edit(prop)
+        self._sync_text_bufs()
+        if self._handle:
+            self._handle.dirty_all()
+        params = lf.optimization_params()
+        if prop == "bg_color":
+            self._escape_revert.rebase([BG_COLOR_HEX_KEY] + [key for key, _ in BG_COLOR_CHANNELS])
+            return values_match(params.bg_color, value)
+        return values_match(params.get(prop), value)
 
     def _set_property_view_value(self, prop, value):
         params = lf.optimization_params()
@@ -2178,9 +2281,16 @@ class TrainingPanel(Panel):
             return False
         return True
 
+    @staticmethod
+    def _slider_params(prop):
+        return lf.dataset_params() if prop in DATASET_SLIDER_PROPS else lf.optimization_params()
+
     def _set_slider_prop(self, prop, val):
-        params = lf.optimization_params()
+        params = self._slider_params(prop)
         if not params or not params.has_params():
+            return
+        # Dataset settings are locked while training runs.
+        if prop in DATASET_SLIDER_PROPS and not params.can_edit():
             return
         try:
             value = float(val)
@@ -2195,7 +2305,7 @@ class TrainingPanel(Panel):
             pass
 
     def _get_scrub_value(self, prop):
-        params = lf.optimization_params()
+        params = self._slider_params(prop)
         if not params or not params.has_params():
             spec = SCRUB_FIELD_DEFS[prop]
             return spec.min_value
@@ -2694,29 +2804,100 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            btn_mcmc = tr("training.conflict.btn_use_mcmc")
-            btn_gut = tr("training.conflict.btn_disable_gut")
-            btn_cancel = tr("training.conflict.btn_cancel")
+            self._show_strategy_gut_conflict_dialog()
+        else:
+            self._proceed_to_start()
 
-            def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
-                p = lf.optimization_params()
-                if button == _mcmc:
-                    p.set_strategy("mcmc")
-                    lf.start_training()
-                elif button == _gut:
-                    p.gut = False
-                    lf.start_training()
+    def _show_strategy_gut_conflict_dialog(self):
+        btn_mcmc = tr("training.conflict.btn_use_mcmc")
+        btn_gut = tr("training.conflict.btn_disable_gut")
+        btn_cancel = tr("training.conflict.btn_cancel")
 
-            lf.ui.confirm_dialog(
-                tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_start_message"),
-                [btn_mcmc, btn_gut, btn_cancel],
-                _on_conflict,
-            )
-        elif self._should_offer_pc_save():
+        def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+            p = lf.optimization_params()
+            if button == _mcmc:
+                p.set_strategy("mcmc")
+                self._proceed_to_start()
+            elif button == _gut:
+                p.gut = False
+                self._proceed_to_start()
+
+        lf.ui.confirm_dialog(
+            tr("training.error.strategy_gut_title"),
+            tr("training.conflict.strategy_gut_start_message"),
+            [btn_mcmc, btn_gut, btn_cancel],
+            _on_conflict,
+        )
+
+    def _proceed_to_start(self):
+        if self._should_offer_pc_save():
             self._show_save_pc_dialog()
         else:
-            lf.start_training()
+            self._check_distortion_and_start()
+
+    def _scene_has_active_distorted_cameras(self):
+        scene = lf.get_scene()
+        if scene is None:
+            return False
+        return scene.has_active_distorted_cameras()
+
+    def _scene_can_undistort_active_cameras(self):
+        scene = lf.get_scene()
+        if scene is None:
+            return False
+        return scene.can_undistort_active_cameras()
+
+    def _check_distortion_and_start(self):
+        params = lf.optimization_params()
+        if (
+            params is not None
+            and params.has_params()
+            and not (params.undistort or params.gut)
+            and self._scene_has_active_distorted_cameras()
+        ):
+            can_undistort = self._scene_can_undistort_active_cameras()
+            can_gut = params.strategy != "igs+"
+            btn_undistort = tr("training.distorted_warning.btn_undistort")
+            btn_gut = tr("training.distorted_warning.btn_gut")
+            btn_cancel = tr("training.conflict.btn_cancel")
+
+            buttons = []
+            if can_undistort:
+                buttons.append(btn_undistort)
+            if can_gut:
+                buttons.append(btn_gut)
+            buttons.append(btn_cancel)
+
+            def _on_result(button, _u=btn_undistort, _g=btn_gut):
+                if button == _u:
+                    p = lf.optimization_params()
+                    if p and p.has_params():
+                        p.undistort = True
+                    if self._handle:
+                        self._handle.dirty_all()
+                    lf.start_training()
+                elif button == _g:
+                    p = lf.optimization_params()
+                    if p and p.has_params():
+                        p.gut = True
+                    if self._handle:
+                        self._handle.dirty_all()
+                    error = p.validate() if p and p.has_params() else ""
+                    if error:
+                        self._show_strategy_gut_conflict_dialog()
+                    else:
+                        lf.start_training()
+
+            lf.ui.confirm_dialog(
+                tr("training.distorted_warning.title"),
+                tr("training.distorted_warning.message"),
+                buttons,
+                _on_result,
+                style="warning",
+            )
+            return
+
+        lf.start_training()
 
     def _show_overwrite_dialog(self, conflict):
         btn_overwrite = tr("training.overwrite.btn_overwrite_start")
@@ -2772,9 +2953,9 @@ class TrainingPanel(Panel):
                     self._save_modified_pc()
                 except Exception as e:
                     lf.log.error(f"Failed to save point cloud: {e}")
-                lf.start_training()
+                self._check_distortion_and_start()
             elif button == _k:
-                lf.start_training()
+                self._check_distortion_and_start()
 
         message = (
             tr("training.save_pc.message_project")

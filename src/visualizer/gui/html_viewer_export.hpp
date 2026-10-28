@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include <expected>
@@ -18,7 +19,14 @@ namespace lfs::vis::gui {
         std::filesystem::path output_path;
         lfs::io::ExportProgressCallback progress_callback;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        std::optional<glm::vec3> background_color{};
     };
+
+    LFS_VIS_API std::optional<glm::vec3> resolve_html_export_background_color(
+        const std::optional<glm::vec3>& viewport_bg,
+        const std::optional<lfs::core::param::OptimizationParameters>& opt_params);
+
+    LFS_VIS_API std::optional<glm::vec3> resolve_html_export_background_color();
 
     LFS_VIS_API std::expected<void, std::string> export_html_viewer(
         const lfs::core::SplatData& splat_data,

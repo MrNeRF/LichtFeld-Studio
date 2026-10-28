@@ -9,6 +9,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
@@ -2005,7 +2006,8 @@ apply_registered_chrome:
 
         if (!cursor)
             return false;
-        SDL_SetCursor(cursor);
+        if (!NativeDragScheduler::ownsNativeCursor())
+            SDL_SetCursor(cursor);
         return true;
     }
 

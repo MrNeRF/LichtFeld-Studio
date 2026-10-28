@@ -5,10 +5,11 @@
 import hashlib
 import importlib
 import logging
+import os
 import sys
 import threading
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Callable, Dict, Set, TYPE_CHECKING
 
 from .plugin import PluginState
@@ -68,38 +69,61 @@ class PluginWatcher:
     def _check_for_changes(self):
         """Check all loaded plugins for file changes."""
         for name, plugin in self.manager.get_active_plugins_snapshot():
-            if not plugin.info.hot_reload:
+            if plugin.needs_restart:
                 continue
             if self._has_changes(plugin):
-                with self._lock:
-                    self._pending_reloads.add(name)
+                if plugin.info.hot_reload:
+                    with self._lock:
+                        self._pending_reloads.add(name)
+                else:
+                    plugin.needs_restart = True
+                    self._notify_restart_required(name)
+
+    def _notify_restart_required(self, plugin_name: str):
+        """Log and request UI refresh to notify that a restart is required."""
+        try:
+            import lichtfeld as lf
+            if hasattr(lf, "log") and hasattr(lf.log, "warn"):
+                lf.log.warn(f"Plugin '{plugin_name}' changed: restart required")
+            else:
+                _log.warning("Plugin '%s' changed: restart required", plugin_name)
+            self._request_redraw()
+        except Exception:
+            pass
 
     def _has_changes(self, plugin) -> bool:
         """Check if any plugin files were modified."""
         plugin_name = plugin.info.name
+        plugin_path = plugin.info.path
 
-        for py_file in plugin.info.path.rglob("*.py"):
-            if ".venv" in py_file.parts:
-                continue
+        for root, dirs, files in os.walk(plugin_path):
+            if ".venv" in dirs:
+                dirs.remove(".venv")
+            if "__pycache__" in dirs:
+                dirs.remove("__pycache__")
 
-            try:
-                current_mtime = py_file.stat().st_mtime
-                prev_mtime = plugin.file_mtimes.get(py_file, 0)
+            for filename in files:
+                if not filename.endswith(".py"):
+                    continue
+                py_file = Path(root) / filename
+                try:
+                    current_mtime = py_file.stat().st_mtime
+                    prev_mtime = plugin.file_mtimes.get(py_file, 0)
 
-                if current_mtime > prev_mtime:
-                    return True
-
-                if current_mtime == prev_mtime and prev_mtime > 0:
-                    if self._content_changed(plugin_name, py_file):
+                    if current_mtime > prev_mtime:
                         return True
 
-            except FileNotFoundError:
-                if py_file in plugin.file_mtimes:
-                    return True
-            except PermissionError:
-                _log.warning("Permission denied: %s", py_file)
-            except OSError as e:
-                _log.debug("OSError checking %s: %s", py_file, e)
+                    if current_mtime == prev_mtime and prev_mtime > 0:
+                        if self._content_changed(plugin_name, py_file):
+                            return True
+
+                except FileNotFoundError:
+                    if py_file in plugin.file_mtimes:
+                        return True
+                except PermissionError:
+                    _log.warning("Permission denied: %s", py_file)
+                except OSError as e:
+                    _log.debug("OSError checking %s: %s", py_file, e)
 
         return False
 

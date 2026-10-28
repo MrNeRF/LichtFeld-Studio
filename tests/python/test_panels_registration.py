@@ -60,10 +60,12 @@ def _install_recording_lf(monkeypatch):
         "SCALE",
         "ALIGN",
         "CROP_BOX",
+        "WALK",
     )
     action_names = (
         "NONE",
         "CAMERA_ORBIT",
+        "EXIT_WALK",
         "CAMERA_PAN",
         "CAMERA_ZOOM",
         "CAMERA_ROLL",
@@ -129,6 +131,7 @@ def _install_recording_lf(monkeypatch):
         "TOOL_SCALE",
         "TOOL_MIRROR",
         "TOOL_ALIGN",
+        "TOOL_SCALE_DISTANCE",
         "PIE_MENU",
         "DEPTH_ADJUST_NEAR",
         "HISTOGRAM_ZOOM_MARKED",
@@ -413,6 +416,24 @@ def test_lazy_panel_metadata_matches_real_classes(panels_module):
         assert [getattr(lazy, field) for field in fields] == [
             getattr(real, field) for field in fields
         ], spec_name
+
+
+def test_lazy_panel_delegates_visibility_changes_to_the_retained_implementation(panels_module, monkeypatch):
+    module, state = panels_module
+    events = []
+    monkeypatch.setattr(state.lf.ui.Panel, "on_visibility_changed", lambda _self, visible: events.append("base"), raising=False)
+    implementation = ModuleType("lfs_plugins.preferences_panel")
+    class PreferencesPanel:
+        def on_visibility_changed(self, visible):
+            events.append(visible)
+    implementation.PreferencesPanel = PreferencesPanel
+    monkeypatch.setitem(sys.modules, implementation.__name__, implementation)
+    module._register_lazy_panel(state.lf, "preferences")
+    proxy = state.registered_classes[-1]()
+    assert proxy._implementation is None
+    proxy.on_visibility_changed(False)
+    proxy.on_visibility_changed(True)
+    assert events == [False, True]
 
 
 def test_preferences_refreshes_external_keymap_changes(panels_module):

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "localization_manager.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -10,7 +11,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-namespace fs = std::filesystem;
+namespace fs = lfs::core::native_fs;
 using json = nlohmann::json;
 
 namespace lfs::event {

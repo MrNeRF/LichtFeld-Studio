@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/batch_trainer.hpp"
 #include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/licht_command.hpp"
@@ -152,6 +153,10 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VoxelizeMode>) {
+                applyCudaContextTuning();
+                preflightGpuOrExit(false);
+                return lfs::app::run_voxelizer(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
@@ -165,6 +170,11 @@ namespace {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::LichtMode>) {
                 return lfs::app::run_licht_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::BatchTrainingMode>) {
+                if (!mode.params.dry_run) {
+                    preflightGpuOrExit(false);
+                }
+                return lfs::app::run_batch_training(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
 #ifdef __GLIBC__
                 // Training workers create many short-lived glibc arenas. Limit their

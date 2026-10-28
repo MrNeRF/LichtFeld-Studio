@@ -3,7 +3,8 @@
 """File menu implementation using Blender-style operators."""
 
 from collections.abc import Callable
-from pathlib import Path, PureWindowsPath
+from _lfs_path_io import Path
+from pathlib import PureWindowsPath
 import threading
 import uuid
 
@@ -380,6 +381,14 @@ class ImportConfigOperator(Operator):
         path = lf.ui.open_json_file_dialog()
         if path and not _run_import(path, lambda: lf.load_config_file(path)):
             return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class CollisionOperator(Operator):
+    label = "collision.title"
+
+    def execute(self, context) -> set:
+        lf.ui.get_panel_object("lfs.collision").show(True)
         return {"FINISHED"}
 
 
@@ -943,6 +952,7 @@ class FileMenu:
                 ],
             ),
             menu_submenu(lf.ui.tr("menu.file.export_menu"), [
+                menu_operator(CollisionOperator),
                 menu_operator(ExportOperator, label=lf.ui.tr("menu.file.export_scene")),
                 menu_operator(ExportConfigOperator, label=lf.ui.tr("menu.file.configuration")),
             ]),
@@ -995,6 +1005,7 @@ _operator_classes = [
     ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,
+    CollisionOperator,
     ExportOperator,
     ExportConfigOperator,
     Mesh2SplatOperator,

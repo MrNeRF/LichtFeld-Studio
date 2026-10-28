@@ -19,7 +19,8 @@ namespace lfs::core {
             if (!node)
                 return;
             const auto* parent = scene.getNodeById(node->parent_id);
-            const bool splat_helper = (node->type == NodeType::CROPBOX || node->type == NodeType::ELLIPSOID) &&
+            const bool splat_helper = (node->type == NodeType::CROPBOX || node->type == NodeType::ELLIPSOID ||
+                                       node->type == NodeType::CROP_POLYGON) &&
                                       parent && parent->type == NodeType::SPLAT && parent->model;
             if (node->type == NodeType::GROUP || (node->type == NodeType::SPLAT && node->model) || splat_helper)
                 plan.removed.push_back(id);

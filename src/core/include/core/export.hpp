@@ -10,6 +10,7 @@
 #ifdef LFS_STATIC_BUILD
 #define LFS_LOGGER_API
 #define LFS_CORE_API
+#define LFS_IO_API
 #define LFS_VIS_API
 #define LFS_MCP_API
 #else

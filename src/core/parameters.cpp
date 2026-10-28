@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/file_extensions.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
@@ -264,9 +265,17 @@ namespace lfs::core {
                         if (loading.contains(key) && !loading.at(key).is_boolean())
                             return std::format("Invalid type for dataset.loading_params.{}; expected boolean", key);
                     }
-                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB"}) {
+                    for (const auto key : {"min_cpu_free_memory_ratio", "min_cpu_free_GB", "sharpen_amount",
+                                           "sharpen_radius", "sharpen_threshold"}) {
                         if (loading.contains(key) && !loading.at(key).is_number())
                             return std::format("Invalid type for dataset.loading_params.{}; expected number", key);
+                    }
+                    if (loading.contains("sharpen_kernel")) {
+                        const auto& kernel = loading.at("sharpen_kernel");
+                        if (!kernel.is_string() || !sharpen_kernel_from_string(kernel.get<std::string>()))
+                            return std::format("Invalid value {} for dataset.loading_params.sharpen_kernel; expected "
+                                               "usm, laplacian4 or laplacian8",
+                                               kernel.dump());
                     }
                     if (loading.contains("print_status_freq_num") && !is_json_int32(loading.at("print_status_freq_num")))
                         return "Invalid type for dataset.loading_params.print_status_freq_num; expected integer";
@@ -535,7 +544,7 @@ namespace lfs::core {
             }
 
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
-                if (!std::filesystem::exists(path)) {
+                if (!lfs::core::native_fs::exists(path)) {
                     return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
@@ -558,14 +567,17 @@ namespace lfs::core {
             const auto apply = [ratio](const size_t v) {
                 return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
             };
+            // Intervals must stay at least one step, or a short --iter run fails validation.
+            const auto apply_interval = [&apply](const size_t v) { return std::max<size_t>(1, apply(v)); };
             iterations = apply(iterations);
             start_refine = apply(start_refine);
             stop_refine = apply(stop_refine);
-            reset_every = apply(reset_every);
-            refine_every = apply(refine_every);
+            reset_every = apply_interval(reset_every);
+            refine_every = apply_interval(refine_every);
             morton_reorder_interval = apply(morton_reorder_interval);
-            sh_degree_interval = apply(sh_degree_interval);
+            sh_degree_interval = apply_interval(sh_degree_interval);
             grow_until_iter = apply(grow_until_iter);
+            color_variance_warmup_iters = apply(color_variance_warmup_iters);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
                 std::set<size_t> unique;
@@ -575,6 +587,12 @@ namespace lfs::core {
                 }
                 steps->assign(unique.begin(), unique.end());
             }
+        }
+
+        float OptimizationParameters::color_variance_weight_at(const int iteration) const {
+            return iteration > 0 && static_cast<size_t>(iteration) > color_variance_warmup_iters
+                       ? color_variance_weight
+                       : 0.0f;
         }
 
         void OptimizationParameters::apply_step_scaling() {
@@ -591,9 +609,10 @@ namespace lfs::core {
         }
 
         int OptimizationParameters::resolved_total_iterations() const {
-            const int base_iters = static_cast<int>(iterations);
-            const int sparse_tail = enable_sparsity ? std::max(0, sparsify_steps) : 0;
-            return base_iters + sparse_tail;
+            uint64_t total = std::min(uint64_t(iterations), uint64_t(std::numeric_limits<int>::max()));
+            if (enable_sparsity)
+                total += uint64_t(std::max(0, popspa_sparsify_steps)) + uint64_t(std::max(0, popspa_refine_steps));
+            return static_cast<int>(std::min(total, uint64_t(std::numeric_limits<int>::max())));
         }
 
         bool OptimizationParameters::normal_supervision_active(const int iter) const {
@@ -690,6 +709,10 @@ namespace lfs::core {
             return box;
         }
 
+        std::optional<std::array<float, 3>> parse_cropbox_rotation(const std::string_view spec) {
+            return parse_float_list<3>(spec);
+        }
+
         bool is_eval_mask_depth(const std::string_view spec) {
             return spec.starts_with("depth:");
         }
@@ -750,7 +773,7 @@ namespace lfs::core {
                 auto absolute = std::filesystem::absolute(utf8_to_path(std::string(path)), error);
                 if (error)
                     return std::string(path);
-                auto canonical = std::filesystem::weakly_canonical(absolute, error);
+                auto canonical = lfs::core::native_fs::weakly_canonical(absolute, error);
                 return path_to_utf8((error ? absolute : canonical).lexically_normal());
             };
             if (const auto file = eval_mask_splat_file(spec))
@@ -887,16 +910,47 @@ namespace lfs::core {
                 return std::format("max_cap must be nonnegative (got {})", max_cap);
             if (sh_degree < 0 || sh_degree > 3)
                 return std::format("sh_degree must be within [0, 3] (got {})", sh_degree);
-            if (sparsify_steps < 0)
-                return std::format("sparsify_steps must be nonnegative (got {})", sparsify_steps);
-            if (enable_sparsity &&
-                static_cast<uint64_t>(iterations) + static_cast<uint64_t>(sparsify_steps) >
-                    static_cast<uint64_t>(std::numeric_limits<int>::max()))
-                return "iterations plus sparsify_steps must fit in a signed int";
+            {
+                if (popspa_target_count <= 0 || popspa_first_prune_count < 0 ||
+                    (popspa_first_prune_count != 0 && popspa_first_prune_count < popspa_target_count))
+                    return "POPSpa first prune count must be zero (auto) or at least the positive target count";
+                if (popspa_sparsify_steps < 0 || popspa_refine_steps < 0 || popspa_projection_interval <= 0 || popspa_seed < 0)
+                    return "POPSpa steps and seed must be nonnegative and projection interval positive";
+                if (enable_sparsity && uint64_t(iterations) + uint64_t(popspa_sparsify_steps) + uint64_t(popspa_refine_steps) > MAX_ITERATION_VALUE)
+                    return "iterations plus POPSpa steps must fit in a signed int";
+                if (const auto error = invalid_nonnegative(popspa_rho, "popspa_rho"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_erank_weight, "popspa_erank_weight"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_thin_scale_weight, "popspa_thin_scale_weight"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_erank_epsilon, "popspa_erank_epsilon"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_means_lr, "popspa_means_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_scales_lr, "popspa_scales_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_opacities_lr, "popspa_opacities_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_quaternions_lr, "popspa_quaternions_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_sh0_lr, "popspa_sh0_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_nonnegative(popspa_shn_lr, "popspa_shn_lr"); !error.empty())
+                    return error;
+                if (const auto error = invalid_probability(popspa_ssim_weight, "popspa_ssim_weight"); !error.empty())
+                    return error;
+                if (popspa_rho == 0.0f || popspa_erank_epsilon == 0.0f)
+                    return "POPSpa rho and effective-rank epsilon must be positive";
+            }
             if (init_num_pts <= 0)
                 return std::format("init_num_pts must be positive (got {})", init_num_pts);
             if (!std::isfinite(init_extent) || init_extent <= 0.0f)
                 return std::format("init_extent must be finite and positive (got {})", init_extent);
+            if (init_mesh_resolution < Mesh2SplatOptions::kMinResolution ||
+                init_mesh_resolution > kMaxInitMeshResolution)
+                return std::format("init_mesh_resolution must be within [{}, {}] (got {})",
+                                   Mesh2SplatOptions::kMinResolution, kMaxInitMeshResolution, init_mesh_resolution);
             if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
                 return std::format("init_scaling must be finite and positive (got {})", init_scaling);
             if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
@@ -915,6 +969,22 @@ namespace lfs::core {
                 return std::format("densify_structure_weight must be finite and within [0, 4] (got {})", densify_structure_weight);
             if (!std::isfinite(gradient_loss_weight) || gradient_loss_weight < 0.0f || gradient_loss_weight > 8.0f)
                 return std::format("gradient_loss_weight must be finite and within [0, 8] (got {})", gradient_loss_weight);
+            if (!std::isfinite(color_variance_weight) || color_variance_weight < 0.0f || color_variance_weight > 8.0f)
+                return "color_variance_weight must be finite and within [0, 8]";
+            if (color_variance_warmup_iters > MAX_ITERATION_VALUE)
+                return "color_variance_warmup_iters must fit in a signed int";
+            if (color_variance_weight > 0.0f) {
+                if (color_variance_warmup_iters >= iterations)
+                    return "color_variance_warmup_iters must be less than iterations when color variance is enabled";
+                if (gut)
+                    return "Color variance requires the FastGS training renderer (GUT is not supported)";
+                if (mip_filter)
+                    return "Color variance does not yet support mip filtering";
+                if (mask_mode != MaskMode::None)
+                    return "Color variance does not yet support masked training";
+                if (enable_sparsity)
+                    return "Color variance does not yet support POPSpa";
+            }
             if (!std::isfinite(thin_structure_weight) || thin_structure_weight < 0.0f || thin_structure_weight > 4.0f)
                 return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
             if (!std::isfinite(late_lr_anneal) || late_lr_anneal <= 0.0f || late_lr_anneal > 1.0f)
@@ -950,7 +1020,6 @@ namespace lfs::core {
                 std::pair{"ppisp_controller_lr", ppisp_controller_lr},
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
-                std::pair{"init_rho", init_rho},
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
@@ -966,13 +1035,13 @@ namespace lfs::core {
                 std::pair{"min_opacity", min_opacity},
                 std::pair{"cropbox_lr_scale", cropbox_lr_scale},
                 std::pair{"cropbox_loss_weight", cropbox_loss_weight},
+                std::pair{"cropbox_growth_inside", cropbox_growth_inside},
                 std::pair{"mask_threshold", mask_threshold},
                 std::pair{"prune_opacity", prune_opacity},
                 std::pair{"grow_fraction", grow_fraction},
                 std::pair{"opacity_decay", opacity_decay},
                 std::pair{"scale_decay", scale_decay},
                 std::pair{"bounds_percentile", bounds_percentile},
-                std::pair{"prune_ratio", prune_ratio},
                 std::pair{"normal_start_fraction", normal_start_fraction},
                 std::pair{"normal_end_fraction", normal_end_fraction},
             };
@@ -1071,7 +1140,7 @@ namespace lfs::core {
                     if (path.empty()) {
                         return "--add-splat path cannot be empty";
                     }
-                    if (!add_splats_applied && !std::filesystem::exists(path)) {
+                    if (!add_splats_applied && !lfs::core::native_fs::exists(path)) {
                         return std::format("Added splat does not exist: '{}'",
                                            lfs::core::path_to_utf8(path));
                     }
@@ -1089,7 +1158,7 @@ namespace lfs::core {
                 return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
-                auto extension = project_path->extension().string();
+                auto extension = lfs::core::path_to_utf8(project_path->extension());
                 std::ranges::transform(
                     extension, extension.begin(),
                     [](const unsigned char character) {
@@ -1105,7 +1174,7 @@ namespace lfs::core {
                 }
             }
             if (resume_project) {
-                auto resume_extension = resume_project->extension().string();
+                auto resume_extension = lfs::core::path_to_utf8(resume_project->extension());
                 std::ranges::transform(
                     resume_extension, resume_extension.begin(),
                     [](const unsigned char character) {
@@ -1123,9 +1192,10 @@ namespace lfs::core {
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";
             }
-            if (save_project_at_iteration &&
-                *save_project_at_iteration >
-                    optimization.iterations) {
+            const auto project_snapshot_limit = optimization.enable_sparsity
+                                                    ? static_cast<size_t>(optimization.resolved_total_iterations())
+                                                    : optimization.iterations;
+            if (save_project_at_iteration && *save_project_at_iteration > project_snapshot_limit) {
                 return "--save-project-at-iter cannot exceed the training iteration limit";
             }
             if (!save_project_at_iteration &&
@@ -1141,7 +1211,7 @@ namespace lfs::core {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
-                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                if (!lfs::core::native_fs::exists(optimization.ppisp_sidecar_path)) {
                     return std::format("PPISP sidecar does not exist: '{}'",
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }
@@ -1179,6 +1249,15 @@ namespace lfs::core {
             if (loading_params.print_status_freq_num <= 0)
                 return std::format("print_status_freq_num must be positive (got {})",
                                    loading_params.print_status_freq_num);
+            const auto& sharpen = loading_params.sharpen;
+            if (!std::isfinite(sharpen.amount) || sharpen.amount < 0.0f || sharpen.amount > kMaxSharpenAmount)
+                return std::format("sharpen_amount must be finite and within [0, {}] (got {})", kMaxSharpenAmount,
+                                   sharpen.amount);
+            if (!std::isfinite(sharpen.radius) || sharpen.radius < kMinSharpenRadius || sharpen.radius > kMaxSharpenRadius)
+                return std::format("sharpen_radius must be finite and within [{}, {}] (got {})", kMinSharpenRadius,
+                                   kMaxSharpenRadius, sharpen.radius);
+            if (!std::isfinite(sharpen.threshold) || sharpen.threshold < 0.0f || sharpen.threshold > 1.0f)
+                return std::format("sharpen_threshold must be finite and within [0, 1] (got {})", sharpen.threshold);
             return {};
         }
 
@@ -1476,6 +1555,10 @@ namespace lfs::core {
                 json["dataset"] = params.dataset.to_json();
                 json["server"] = params.server.to_json();
                 json["optimization"] = opt_copy.to_json();
+                if (params.cropbox)
+                    json["cropbox"] = *params.cropbox;
+                if (params.cropbox_rotation)
+                    json["cropbox_rotation"] = *params.cropbox_rotation;
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);
@@ -1528,6 +1611,19 @@ namespace lfs::core {
             } else if (j.contains("use_8bit_color")) {
                 params.use_16bit_color = !j["use_8bit_color"].get<bool>();
             }
+            if (j.contains("sharpen_kernel")) {
+                const auto name = j["sharpen_kernel"].get<std::string>();
+                if (const auto kernel = sharpen_kernel_from_string(name))
+                    params.sharpen.kernel = *kernel;
+                else
+                    LOG_WARN("Unknown sharpen kernel '{}' in loading parameters; using usm", name);
+            }
+            if (j.contains("sharpen_amount"))
+                params.sharpen.amount = j["sharpen_amount"].get<float>();
+            if (j.contains("sharpen_radius"))
+                params.sharpen.radius = j["sharpen_radius"].get<float>();
+            if (j.contains("sharpen_threshold"))
+                params.sharpen.threshold = j["sharpen_threshold"].get<float>();
 
             return params;
         }
@@ -1540,6 +1636,10 @@ namespace lfs::core {
             loading_json["print_cache_status"] = print_cache_status;
             loading_json["print_status_freq_num"] = print_status_freq_num;
             loading_json["use_16bit_color"] = use_16bit_color;
+            loading_json["sharpen_kernel"] = std::string(sharpen_kernel_name(sharpen.kernel));
+            loading_json["sharpen_amount"] = sharpen.amount;
+            loading_json["sharpen_radius"] = sharpen.radius;
+            loading_json["sharpen_threshold"] = sharpen.threshold;
 
             return loading_json;
         }
@@ -1631,6 +1731,116 @@ namespace lfs::core {
             }
 
             return dataset;
+        }
+
+        std::expected<BatchTrainingParameters, lfs::Error> read_batch_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const BatchTrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
+            }
+
+            const auto& j = *json_result;
+            BatchTrainingParameters params = defaults;
+            params.config_file = path;
+
+            const auto fail = [&](std::string detail) {
+                return std::unexpected(config_import_error(std::move(detail), path));
+            };
+            // Training options only come through "args", parsed like the command line.
+            const auto read_args = [](const nlohmann::json& value, std::vector<std::string>& out) {
+                if (!value.is_array())
+                    return false;
+                for (const auto& arg : value) {
+                    if (!arg.is_string())
+                        return false;
+                    out.push_back(arg.get<std::string>());
+                }
+                return true;
+            };
+            const auto near_manifest = [&](const nlohmann::json& value) {
+                auto resolved = utf8_to_path(value.get<std::string>());
+                if (resolved.is_relative())
+                    return (lfs::core::native_fs::current_path() / path.parent_path() / resolved).lexically_normal();
+                return resolved;
+            };
+
+            const auto parse_job_item = [&](const nlohmann::json& job_json) -> std::expected<BatchJobItem, lfs::Error> {
+                if (!job_json.is_object())
+                    return fail("Batch job entry must be a JSON object");
+                static constexpr std::string_view job_keys[] = {"dataset", "name", "output", "config", "args"};
+                BatchJobItem item;
+                for (const auto& [key, value] : job_json.items()) {
+                    if (std::ranges::find(job_keys, key) == std::end(job_keys))
+                        return fail(std::format("Unknown batch job key \"{}\". Pass training options in \"args\"", key));
+                    if (key == "args" ? !read_args(value, item.extra_args) : !value.is_string())
+                        return fail(std::format("Batch job \"{}\" has the wrong type", key));
+                }
+                if (!job_json.contains("dataset"))
+                    return fail("Batch job is missing \"dataset\"");
+                if (job_json["dataset"].get<std::string>().empty())
+                    return fail("Batch job dataset must not be empty");
+                item.dataset_path = near_manifest(job_json["dataset"]);
+                if (job_json.contains("name"))
+                    item.name = job_json["name"].get<std::string>();
+                if (job_json.contains("output"))
+                    item.output_path = near_manifest(job_json["output"]);
+                if (job_json.contains("config"))
+                    item.config_file = near_manifest(job_json["config"]);
+                return item;
+            };
+            const auto read_jobs = [&](const nlohmann::json& jobs) -> std::expected<void, lfs::Error> {
+                for (const auto& item_json : jobs) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+                return {};
+            };
+
+            if (j.is_array()) {
+                if (auto read = read_jobs(j); !read)
+                    return std::unexpected(read.error());
+                return params;
+            }
+            if (!j.is_object())
+                return fail("Batch configuration must be a JSON object or array");
+
+            static constexpr std::string_view keys[] = {"args", "jobs", "output_dir", "summary_file", "report_file",
+                                                        "continue_on_failure", "recursive", "dry_run", "timeout_minutes"};
+            for (const auto& [key, value] : j.items()) {
+                if (std::ranges::find(keys, key) == std::end(keys))
+                    return fail(std::format("Unknown batch configuration key \"{}\". Pass training options in \"args\"", key));
+                const bool valid = key == "args"              ? read_args(value, params.shared_args)
+                                   : key == "jobs"            ? value.is_array()
+                                   : key == "timeout_minutes" ? value.is_number_integer() && value.get<int64_t>() >= 0 &&
+                                                                    value.get<int64_t>() <= std::numeric_limits<int>::max()
+                                   : key.ends_with("_dir") || key.ends_with("_file") ? value.is_string()
+                                                                                     : value.is_boolean();
+                if (!valid)
+                    return fail(std::format("Batch configuration \"{}\" has the wrong type", key));
+            }
+            if (j.contains("output_dir"))
+                params.output_dir = near_manifest(j["output_dir"]);
+            if (j.contains("continue_on_failure"))
+                params.continue_on_failure = j["continue_on_failure"].get<bool>();
+            if (j.contains("recursive"))
+                params.recursive = j["recursive"].get<bool>();
+            if (j.contains("dry_run"))
+                params.dry_run = j["dry_run"].get<bool>();
+            if (j.contains("timeout_minutes"))
+                params.timeout_minutes = static_cast<int>(j["timeout_minutes"].get<int64_t>());
+            if (j.contains("summary_file"))
+                params.summary_file = near_manifest(j["summary_file"]);
+            if (j.contains("report_file"))
+                params.report_file = near_manifest(j["report_file"]);
+            if (j.contains("jobs")) {
+                if (auto read = read_jobs(j["jobs"]); !read)
+                    return std::unexpected(read.error());
+            }
+            return params;
         }
 
     } // namespace param

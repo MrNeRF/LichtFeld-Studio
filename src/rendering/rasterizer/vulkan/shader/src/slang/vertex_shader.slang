@@ -1,5 +1,9 @@
 #include "config.slang"
 
+#ifndef LFS_REVEAL
+#define LFS_REVEAL 0
+#endif
+
 import utils;
 import spherical_harmonics;
 
@@ -276,6 +280,55 @@ void apply_ellipsoid_filter(
     }
 }
 
+// polygon_flags must already be loaded. Inside means |z| <= half_depth and the
+// even-odd rule over the outline, the same test as soft_crop_by_polygon.
+[ForceInline]
+void apply_crop_polygon_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    float4 polygon_flags,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    if (!overlay_enabled(polygon_flags.x)) return;
+
+    int parent_node_idx = overlay_int(polygon_flags.w);
+    bool applies = parent_node_idx < 0 || node_idx == parent_node_idx;
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + OVERLAY_PARAM_CROP_POLYGON_TRANSFORM, mean_ws);
+    float4 params = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_PARAMS];
+    uint count = min(uint(max(overlay_int(params.y), 0)), OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES);
+    bool inside = abs(local.z) <= params.x && count >= 3u;
+    if (inside) {
+        bool crossing = false;
+        float4 last_pair = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_VERTICES + (count - 1u) / 2u];
+        float2 b = ((count - 1u) & 1u) == 0u ? last_pair.xy : last_pair.zw;
+        for (uint i = 0u; i < count; ++i) {
+            float4 pair = overlay_params[flags_idx + OVERLAY_PARAM_CROP_POLYGON_VERTICES + i / 2u];
+            float2 a = (i & 1u) == 0u ? pair.xy : pair.zw;
+            if ((a.y > local.y) != (b.y > local.y) &&
+                local.x < (b.x - a.x) * (local.y - a.y) / (b.y - a.y) + a.x) {
+                crossing = !crossing;
+            }
+            b = a;
+        }
+        inside = crossing;
+    }
+    bool outside = inside == overlay_enabled(polygon_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(polygon_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
+
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
     float3 xyz_ws_in,
@@ -340,6 +393,17 @@ SplatActiveState compute_splat_active_state(
         }
     }
 
+    // Densely packed like the boxes and ellipsoids: stop at the first disabled slot.
+    for (uint polygon_i = 0u; polygon_i < OVERLAY_PARAM_CROP_POLYGON_COUNT; ++polygon_i) {
+        const uint flags_idx = OVERLAY_PARAM_CROP_POLYGON_BASE + polygon_i * OVERLAY_PARAM_CROP_POLYGON_STRIDE;
+        float4 polygon_flags = overlay_params[flags_idx];
+        if (!overlay_enabled(polygon_flags.x))
+            break;
+        apply_crop_polygon_filter(overlay_params, flags_idx, polygon_flags,
+                                  node_idx, mean_ws,
+                                  active, overlay_flags);
+    }
+
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
     if (active && overlay_enabled(view_flags.x)) {
         float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_VIEW_TRANSFORM, mean_ws);
@@ -369,6 +433,12 @@ SplatActiveState compute_splat_active_state(
         }
     }
 
+    if (active && overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].z) &&
+        node_idx >= 0 && node_idx < node_count &&
+        (overlay_flags & OVERLAY_FLAG_NONSELECTABLE) == 0u &&
+        (read_byte(node_mask, uint(node_idx)) & 1u) != 0u) {
+        overlay_flags |= OVERLAY_FLAG_OUTLINE_SELECTED;
+    }
     SplatActiveState state;
     state.active = active;
     state.overlay_flags = overlay_flags;
@@ -515,6 +585,11 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
     // 3DGUT uses the unscented transform for screen-space binning; final alpha
     // is evaluated against the pixel ray in the raster shader.
     float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g.rotations));
+#if LFS_REVEAL
+    float3 original_mean = model_transform_enabled
+        ? transform_point_rows(model_transform_rows, model_transform_base, g.xyz_ws) : g.xyz_ws;
+    float3 reveal_offset = mean_ws - original_mean;
+#endif
     float3 sigma_points[NUM_SIGMA_POINTS];
     sigma_points[0] = mean_ws;
     for (uint i = 0u; i < D; ++i) {
@@ -525,9 +600,15 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         sigma_points[1u + i] = model_transform_enabled
                                     ? transform_point_rows(model_transform_rows, model_transform_base, source_plus)
                                     : source_plus;
+#if LFS_REVEAL
+        sigma_points[1u + i] += reveal_offset;
+#endif
         sigma_points[1u + D + i] = model_transform_enabled
                                         ? transform_point_rows(model_transform_rows, model_transform_base, source_minus)
                                         : source_minus;
+#if LFS_REVEAL
+        sigma_points[1u + D + i] += reveal_offset;
+#endif
     }
 
     float2 image_points[NUM_SIGMA_POINTS];
@@ -937,9 +1018,11 @@ void main(
         uniforms.shN_layout_slots
       );
     #endif
+#if !LFS_REVEAL
     if (lod_active && (uniforms.lod_enabled & 16u) != 0u) {
         gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
     }
+#endif
   #else
     #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD && !EARLY_RETURN_ON_ZERO_GRAD
     Gaussian_3D gauss = load_zero_gaussian();
@@ -988,6 +1071,47 @@ void main(
         gauss.scales = lfsPortalCompactScales(gauss.scales);
         gauss.opacities = lfsPortalCompactOpacity(gauss.opacities);
     }
+#if LFS_REVEAL
+    float4 reveal = overlay_params[OVERLAY_PARAM_REVEAL];
+    float reveal_color = 1.0f;
+    float reveal_color_add = 0.0f;
+    float reveal_color_multiplier = 1.0f;
+    float3 reveal_edge_rgb = float3(0.0f);
+    float reveal_grayscale = 0.0f;
+    if (overlay_enabled(reveal.x)) {
+        float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS];
+        LfsRevealEffect effect = lfs_reveal_effect(mean_ws, gauss.scales, reveal, bounds);
+        if (effect.scale_mix <= 0.0001f && effect.seed_scale <= 0.0001f) {
+          #if LFS_PROJECTION_SURVIVORS
+            return;
+          #else
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
+            return;
+          #endif
+        }
+        gauss.opacities = lerp(0.3f, gauss.opacities, effect.color_mix) * effect.opacity_multiplier + effect.color_add;
+        gauss.scales = gauss.scales * effect.scale_mix + effect.seed_scale;
+        float4 q = gauss.rotations;
+        float c = cos(effect.spin*0.5f), s = sin(effect.spin*0.5f);
+        gauss.rotations = float4(c*q.x-s*q.z, c*q.y+s*q.w, c*q.z+s*q.x, c*q.w-s*q.y);
+        reveal_color = effect.color_mix;
+        reveal_color_multiplier = effect.opacity_multiplier;
+        reveal_color_add = effect.color_add;
+        reveal_edge_rgb = effect.edge_rgb;
+        reveal_grayscale = effect.grayscale;
+        if (int(round(bounds.x)) == 11 && reveal.w < 1.0f) {
+            // The light follows the viewing position.
+            float4x3 view = transpose(cam.world_view_transform);
+            float3 eye = -mul(float3x3(view), view[3]);
+            float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);
+            float fade = saturate((length(mean_ws - eye) - range * 0.1f) / (range * 0.02f));
+            reveal_grayscale = fade * (1.0f - smoothstep(0.9f, 1.0f, reveal.w));
+        }
+        mean_ws = effect.position;
+    }
+    if (lod_active && (uniforms.lod_enabled & 16u) != 0u)
+        gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
+#endif // LFS_REVEAL
 #endif
 
     // projection (differentiable)
@@ -1098,7 +1222,13 @@ void main(
   #if TILE_CULLING_MODE == 0
     float2 radii = float2(radius);
   #else
+  #if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    float extend = spark_rad_opacity_path
+        ? sqrt(2.0f * power_threshold_for_spark_rad_opacity(gauss.opacities))
+        : extend_from_opacity(gauss.opacities);
+  #else
     float extend = no_diff extend_from_opacity(gauss.opacities);
+  #endif
     float2 radii = sqrt(max(splat_dist.cov_vs.xz, float2(0.0f))) * extend;
   #endif
     if (equirectangular_camera) {
@@ -1199,6 +1329,11 @@ void main(
 
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
+#if LFS_REVEAL
+    splat.rgb = lerp(float3(0.3f), splat.rgb, reveal_color) * reveal_color_multiplier + reveal_color_add;
+    float luminance = dot(splat.rgb, float3(0.299f, 0.587f, 0.114f));
+    splat.rgb = lerp(splat.rgb, float3(0.3f * luminance), reveal_grayscale) + reveal_edge_rgb;
+#endif
     if ((uniforms.lod_enabled & 2u) != 0u) {
         const float3 debug_rgb = lod_debug_color(lod_levels[render_idx]);
         splat.rgb *= debug_rgb;

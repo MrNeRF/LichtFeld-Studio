@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/exif.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 
 #include <cmath>

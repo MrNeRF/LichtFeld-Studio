@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "usdz.hpp"
+#include "core/native_fs.hpp"
 #include "crate.hpp"
+#include "formats/archive_member_names.hpp"
 #include "usda_read.hpp"
 #include <algorithm>
 #include <archive.h>
@@ -34,7 +36,7 @@ namespace lfs::io::usd_flat {
         };
         int open_result = ARCHIVE_FAILED;
 #ifdef _WIN32
-        open_result = archive_read_open_filename_w(archive, path.wstring().c_str(), 1024 * 1024);
+        open_result = archive_read_open_filename_w(archive, lfs::core::native_fs::native_path(path.wstring().c_str()).c_str(), 1024 * 1024);
 #else
         open_result = archive_read_open_filename(archive, path.c_str(), 1024 * 1024);
 #endif
@@ -47,7 +49,7 @@ namespace lfs::io::usd_flat {
         std::vector<std::uint8_t> bytes;
         archive_entry* entry = nullptr;
         while (archive_read_next_header(archive, &entry) == ARCHIVE_OK) {
-            const char* name = archive_entry_pathname(entry);
+            const char* name = archive_member_name(entry);
             if (!name) {
                 archive_read_data_skip(archive);
                 continue;

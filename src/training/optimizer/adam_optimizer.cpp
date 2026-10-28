@@ -58,6 +58,51 @@ namespace lfs::training {
             return (tensor.capacity() > 0 ? tensor.capacity() : tensor.shape()[0]) * row_size;
         }
 
+        // SH-rest moment capacity is counted in float-layout cells; the joint
+        // codec stores each cell in bytes_per_cell(bits) bytes.
+        size_t sh_moment_cells(const size_t packed_bytes, const int bits) {
+            const auto bpc = static_cast<size_t>(joint_adam::bytes_per_cell(bits));
+            LFS_DEBUG_ASSERT_MSG(bpc > 0 && packed_bytes % bpc == 0,
+                                 "SH moment capacity must contain whole packed cells");
+            return packed_bytes / bpc;
+        }
+
+        // Primitives that fit in `cells` float-layout cells. Only complete
+        // swizzle blocks can hold additional primitives.
+        size_t sh_cell_primitives(const size_t cells, const uint32_t rest) {
+            const size_t block = lfs::core::sh_swizzled_float_count(lfs::core::kShReorderSize, rest);
+            return block > 0 ? cells / block * lfs::core::kShReorderSize : 0;
+        }
+
+        // Grow a 1D/2D tensor to `cap_rows` along dim0 (or total elems for 1D packed),
+        // preserving the live prefix. zeros_direct tensors reject Tensor::reserve, so
+        // rebuild via zeros_direct + D2D copy when capacity is insufficient.
+        void reserve_tensor_rows(lfs::core::Tensor& t, const size_t cap_rows) {
+            if (!t.is_valid() || cap_rows == 0)
+                return;
+            const auto shape = t.shape();
+            const size_t target_rows = std::max(cap_rows, shape[0]);
+            if (t.capacity() >= target_rows)
+                return;
+            auto grown = lfs::core::Tensor::zeros_direct(shape, target_rows, t.device(), t.dtype());
+            if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
+                const size_t elem_bytes = lfs::core::dtype_size(t.dtype());
+                if (elem_bytes > 0) {
+                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+                    lfs::core::waitForCUDAStream(stream, t.stream());
+                    lfs::core::waitForCUDAStream(stream, grown.stream());
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(
+                        grown.data_ptr(), t.data_ptr(),
+                        t.numel() * elem_bytes, cudaMemcpyDeviceToDevice, stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                    grown.set_stream(stream);
+                }
+            }
+            if (!t.name().empty())
+                grown.set_name(t.name());
+            t = std::move(grown);
+        }
+
         void grow_grad_rows(lfs::core::Tensor& grad, const std::string& name,
                             const size_t old_rows, const size_t new_rows,
                             const size_t capacity_rows) {
@@ -73,7 +118,7 @@ namespace lfs::training {
                 return;
             }
             if (grad.capacity() < new_rows) {
-                grad.reserve(std::max(capacity_rows, new_rows));
+                reserve_tensor_rows(grad, std::max(capacity_rows, new_rows));
             }
             grad.append_zeros(new_rows - rows);
         }
@@ -193,6 +238,39 @@ namespace lfs::training {
         crop_damping_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_crop_roi_rows(lfs::core::Tensor rows, const float growth_inside) {
+        LFS_ASSERT_MSG(
+            std::isfinite(growth_inside) && growth_inside >= 0.0f && growth_inside <= 1.0f,
+            "AdamOptimizer crop growth share must be finite and within [0, 1]");
+        if (rows.is_valid()) {
+            LFS_ASSERT_MSG(
+                rows.dtype() == lfs::core::DataType::Bool && rows.ndim() == 1,
+                "AdamOptimizer crop ROI rows must be a 1D bool tensor");
+            if (rows.device() != lfs::core::Device::CUDA)
+                rows = rows.cuda();
+            if (!rows.is_contiguous())
+                rows = rows.contiguous();
+        }
+        crop_roi_rows_ = std::move(rows);
+        cropbox_growth_inside_ = growth_inside;
+    }
+
+    void AdamOptimizer::set_crop_score_mask(lfs::core::Tensor mask) {
+        if (mask.is_valid()) {
+            LFS_ASSERT_MSG(
+                mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                "AdamOptimizer crop score mask must be a 1D bool tensor");
+            LFS_ASSERT_MSG(
+                mask.numel() == static_cast<size_t>(splat_data_.size()),
+                "AdamOptimizer crop score mask must match the model row count");
+            if (mask.device() != lfs::core::Device::CUDA)
+                mask = mask.cuda();
+            if (!mask.is_contiguous())
+                mask = mask.contiguous();
+        }
+        crop_score_mask_ = std::move(mask);
+    }
+
     void AdamOptimizer::set_cropbox_lr_scale(const float scale) {
         LFS_ASSERT_MSG(
             std::isfinite(scale) && scale >= 0.0f && scale <= 1.0f,
@@ -265,7 +343,7 @@ namespace lfs::training {
         screen_share_n_ = static_cast<int>(splat_data_._max_screen_share.numel());
     }
 
-    void AdamOptimizer::step(const int iteration) {
+    void AdamOptimizer::step(const int iteration, const bool apply_sh_warmup) {
         LFS_TRACE("kernel.adam.step");
         validate_mean_step_far_mask();
         refresh_screen_share_buffer();
@@ -378,7 +456,7 @@ namespace lfs::training {
                 mean_step_median_extent_, mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
-        step_param(ParamType::ShN, iteration);
+        step_param(ParamType::ShN, iteration, apply_sh_warmup);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -565,8 +643,8 @@ namespace lfs::training {
         if (type == ParamType::ShN) {
             // 1D: one packed cell per swizzled float element (float layout, not q16).
             packed_shape = lfs::core::TensorShape(
-                {shN_float_rows * static_cast<size_t>(bpc)});
-            packed_cap_rows = moment_capacity * static_cast<size_t>(bpc);
+                {joint_adam::packed_bytes(shN_float_rows, bits)});
+            packed_cap_rows = joint_adam::packed_bytes(moment_capacity, bits);
         } else {
             // Contiguous [N, C] → [N, C * bpc]
             size_t row_elems = 1;
@@ -694,13 +772,13 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_param(ParamType type, const int iteration) {
+    void AdamOptimizer::step_param(ParamType type, const int iteration, const bool apply_sh_warmup) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
         if (type == ParamType::ShN &&
-            (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0)) {
+            ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0)) {
             return;
         }
 
@@ -926,16 +1004,9 @@ namespace lfs::training {
                 // q16 param numel ≠ float_layout; only compare state.size to float_layout.
                 // state.capacity is float cells; joint exp_avg.capacity is packed bytes
                 // (float_cells * bpc) — never compare those units directly.
-                const size_t moment_cap_floats =
-                    state.capacity > 0
-                        ? state.capacity
-                        : (state.exp_avg.is_valid()
-                               ? (state.is_joint()
-                                      ? state.exp_avg.capacity() /
-                                            static_cast<size_t>(
-                                                joint_adam::bytes_per_cell(state.joint_bits))
-                                      : state.exp_avg.capacity())
-                               : 0);
+                const size_t moment_cap_floats = sh_moment_cells(
+                    std::max(state.exp_avg.capacity(), state.exp_avg.numel()), state.joint_bits);
+                state.capacity = moment_cap_floats;
                 if (state.size != float_layout) {
                     if (moment_cap_floats >= float_layout && state.size < float_layout) {
                         // Capacity reserved at max_cap: advance logical size (new slots
@@ -960,17 +1031,7 @@ namespace lfs::training {
                         }
                         if (state.size != float_layout) {
                             // Last resort: force size when capacity allows after extend.
-                            const size_t cap2 =
-                                state.capacity > 0
-                                    ? state.capacity
-                                    : (state.exp_avg.is_valid()
-                                           ? (state.is_joint()
-                                                  ? state.exp_avg.capacity() /
-                                                        static_cast<size_t>(
-                                                            joint_adam::bytes_per_cell(
-                                                                state.joint_bits))
-                                                  : state.exp_avg.capacity())
-                                           : 0);
+                            const size_t cap2 = state.capacity;
                             if (cap2 >= float_layout && state.size < float_layout) {
                                 grow_grad_rows(state.grad, name, state.size, float_layout, cap2);
                                 state.size = float_layout;
@@ -993,7 +1054,7 @@ namespace lfs::training {
                     const size_t nb = joint_adam::n_bounds_for_prims(n_live);
                     const size_t prim_cap = std::max(
                         n_live,
-                        config_.initial_capacity > 0 ? config_.initial_capacity : n_live);
+                        sh_cell_primitives(state.capacity, layout_rest));
                     const size_t nb_cap = std::max(nb, joint_adam::n_bounds_for_prims(prim_cap));
                     const size_t cur_nb =
                         state.joint_bounds.is_valid() && state.joint_bounds.ndim() >= 1
@@ -1370,7 +1431,7 @@ namespace lfs::training {
         // for append along the 1D dim when shape is [floats*bpc].
         size_t packed_growth = growth;
         if (state.is_joint() && type == ParamType::ShN) {
-            packed_growth = growth * static_cast<size_t>(joint_adam::bytes_per_cell(state.joint_bits));
+            packed_growth = joint_adam::packed_bytes(growth, state.joint_bits);
         }
         const size_t new_size = state.size + growth;
 
@@ -1412,8 +1473,11 @@ namespace lfs::training {
                                               : prim_cap;
                 alloc_quantized_state(type, state, param, moment_cap, prim_cap);
                 // Ensure tensor capacity is recorded (zeros_direct path).
-                if (state.exp_avg.is_valid() && state.exp_avg.capacity() < moment_cap) {
-                    state.exp_avg.reserve(moment_cap);
+                const size_t packed_cap = type == ParamType::ShN
+                                              ? joint_adam::packed_bytes(moment_cap, state.joint_bits)
+                                              : moment_cap;
+                if (state.exp_avg.is_valid() && state.exp_avg.capacity() < packed_cap) {
+                    state.exp_avg.reserve(packed_cap);
                 }
                 grow_grad_rows(state.grad, name, state.size, new_size, moment_cap);
                 if (old_packed.is_valid() && old_packed.numel() > 0 &&
@@ -1429,12 +1493,16 @@ namespace lfs::training {
                 }
             }
             const size_t prim_n = static_cast<size_t>(splat_data_.size());
-            const size_t prim_cap =
-                std::max(prim_n, state.capacity > 0 ? state.capacity : new_size);
+            const size_t packed_cap = std::max(state.exp_avg.capacity(), state.exp_avg.shape()[0]);
+            state.capacity = type == ParamType::ShN ? sh_moment_cells(packed_cap, state.joint_bits) : packed_cap;
+            const size_t prim_cap = std::max(
+                prim_n, type == ParamType::ShN
+                            ? sh_cell_primitives(state.capacity,
+                                                 static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
+                            : state.capacity);
             ensure_joint_bounds_capacity(state.joint_bounds, prim_n, prim_cap,
                                          param.device(), /*zero_all=*/false);
             state.size = new_size;
-            state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_size;
             LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
                                  "extend_state_for_new_params(joint): capacity < size");
 
@@ -1718,13 +1786,9 @@ namespace lfs::training {
             if (states_.contains(name)) {
                 auto& state = states_[name];
 
-                grow_grad_rows(state.grad, name, state.size, new_floats,
-                               std::max(state.capacity, new_floats));
-
                 // Joint states grow packed exp_avg directly.
                 if (state.is_joint() && state.exp_avg.is_valid()) {
-                    const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
-                    const size_t packed_growth = growth * static_cast<size_t>(bpc);
+                    const size_t packed_growth = joint_adam::packed_bytes(growth, state.joint_bits);
                     const size_t packed_new = state.exp_avg.shape()[0] + packed_growth;
                     const bool fits = state.exp_avg.capacity() > 0 &&
                                       packed_new <= state.exp_avg.capacity();
@@ -1750,11 +1814,13 @@ namespace lfs::training {
                             LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                         }
                     }
+                    state.capacity = sh_moment_cells(
+                        std::max(state.exp_avg.capacity(), state.exp_avg.numel()), state.joint_bits);
+                    grow_grad_rows(state.grad, name, state.size, new_floats, state.capacity);
                     ensure_joint_bounds_capacity(state.joint_bounds, new_N,
-                                                 std::max(new_N, state.capacity),
+                                                 std::max(new_N, sh_cell_primitives(state.capacity, layout_rest)),
                                                  param_now.device(), /*zero_all=*/false);
                     state.size = new_floats;
-                    state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_floats;
                     // Zero-encode new prim rows under (possibly non-zero) block bounds.
                     if (n_new > 0 && state.joint_bounds.is_valid()) {
                         std::vector<int64_t> new_idx(n_new);
@@ -2086,8 +2152,8 @@ namespace lfs::training {
                 if (is_shN) {
                     // Packed 1D: one cell per float4-swizzle float, bpc bytes each.
                     const size_t expected_bytes =
-                        lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest) *
-                        static_cast<size_t>(bpc);
+                        joint_adam::packed_bytes(
+                            lfs::core::sh_swizzled_float_count(primitive_rows, layout_rest), state.joint_bits);
                     if (state.exp_avg.ndim() != 1 || state.exp_avg.numel() != expected_bytes ||
                         state.joint_bits != 8) {
                         throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint shN packed shape mismatch");
@@ -2109,7 +2175,7 @@ namespace lfs::training {
             // Serialized capacity is advisory and may be attacker-controlled.
             // The validated checkpoint max_cap is reserved by load_checkpoint
             // after all state has parsed successfully.
-            // Joint packed buffers are not row-major param-shaped — keep size as capacity base.
+            // SH size/capacity are float cells; serialized packed tensor sizes are bytes.
             state.capacity = state.size;
             loaded_states.emplace(std::move(name), std::move(state));
         }
@@ -2166,29 +2232,6 @@ namespace lfs::training {
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
         using namespace joint_adam;
 
-        // Grow a 1D/2D tensor to `cap_rows` along dim0 (or total elems for 1D packed),
-        // preserving the live prefix. zeros_direct tensors reject Tensor::reserve, so
-        // rebuild via zeros_direct + D2D copy when capacity is insufficient.
-        const auto grow_tensor = [](lfs::core::Tensor& t, const size_t cap_rows) {
-            if (!t.is_valid() || cap_rows == 0)
-                return;
-            if (t.capacity() >= cap_rows)
-                return;
-            const auto shape = t.shape();
-            auto grown = lfs::core::Tensor::zeros_direct(shape, cap_rows, t.device(), t.dtype());
-            if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
-                const size_t elem_bytes = lfs::core::dtype_size(t.dtype());
-                if (elem_bytes > 0) {
-                    LFS_CUDA_CHECK(cudaMemcpy(
-                        grown.data_ptr(), t.data_ptr(),
-                        t.numel() * elem_bytes, cudaMemcpyDeviceToDevice));
-                }
-            }
-            if (!t.name().empty())
-                grown.set_name(t.name());
-            t = std::move(grown);
-        };
-
         for (auto& [name, state] : states_) {
             const bool is_shN = (name == "shN");
             // Moments use float-count capacity for swizzled shN, primitive rows otherwise.
@@ -2199,35 +2242,31 @@ namespace lfs::training {
                              static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
                        : capacity;
 
-            if (target_capacity > state.capacity) {
+            if (target_capacity > 0) {
                 if (state.is_joint()) {
                     const int bpc = bytes_per_cell(state.joint_bits);
                     if (state.exp_avg.is_valid() && bpc > 0) {
                         if (is_shN) {
                             // Packed 1D: capacity is in packed bytes (floats * bpc).
-                            grow_tensor(state.exp_avg, target_capacity * static_cast<size_t>(bpc));
+                            reserve_tensor_rows(state.exp_avg, joint_adam::packed_bytes(target_capacity, state.joint_bits));
                         } else {
                             // Contiguous [N, C*bpc]: capacity is in rows.
-                            grow_tensor(state.exp_avg, target_capacity);
+                            reserve_tensor_rows(state.exp_avg, target_capacity);
                         }
                     }
-                    if (state.joint_bounds.is_valid()) {
-                        const size_t bounds_cap = n_bounds_for_prims(capacity);
-                        grow_tensor(state.joint_bounds, bounds_cap);
-                    }
                 } else {
-                    if (state.grad.is_valid())
-                        grow_tensor(state.grad, target_capacity);
                     if (state.exp_avg.is_valid())
-                        grow_tensor(state.exp_avg, target_capacity);
+                        reserve_tensor_rows(state.exp_avg, target_capacity);
                 }
-                state.capacity = target_capacity;
+                if (state.grad.is_valid())
+                    reserve_tensor_rows(state.grad, target_capacity);
+                state.capacity = std::max(state.capacity, target_capacity);
             }
 
             if (state.is_joint() && state.joint_bounds.is_valid()) {
                 const size_t bounds_cap = n_bounds_for_prims(capacity);
                 if (bounds_cap > state.joint_bounds.capacity())
-                    grow_tensor(state.joint_bounds, bounds_cap);
+                    reserve_tensor_rows(state.joint_bounds, bounds_cap);
             }
         }
     }

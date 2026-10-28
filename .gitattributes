@@ -1,4 +1,5 @@
 src/python/stubs/**/*.pyi text eol=lf
+tests/data/param_json_golden/*.json text eol=lf
 tools/ci_format_push.sh text eol=lf
 
 # vcpkg applies these patches to sources extracted with LF line endings.

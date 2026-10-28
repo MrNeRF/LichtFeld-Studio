@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Image preview panel using RmlUI floating window."""
+from _lfs_path_io import native_path
 
 import os
 import time
 from math import gcd
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -339,7 +340,7 @@ class ImagePreviewPanel(Panel):
         self._path_revision_cache = {}
         for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
             try:
-                stat = os.stat(path)
+                stat = os.stat(native_path(path))
                 revision = (int(stat.st_mtime_ns), int(stat.st_size),
                             int(stat.st_dev), int(stat.st_ino), int(stat.st_ctime_ns))
                 self._path_stat_cache[str(path)] = (True, *revision)

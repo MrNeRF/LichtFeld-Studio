@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/native_fs.hpp"
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
@@ -90,7 +91,7 @@ namespace {
         std::ifstream file;
         lfs::core::open_file_for_read(path, std::ios::binary, file);
         if (!file) {
-            std::cerr << "Failed to open shader source: " << path << '\n';
+            std::cerr << "Failed to open shader source: " << lfs::core::path_to_utf8(path) << '\n';
             return std::nullopt;
         }
         return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
@@ -101,7 +102,7 @@ namespace {
         IncludeResult* includeLocal(const char* header, const char* includer, size_t depth) override {
             if (depth > 32)
                 return nullptr;
-            const auto path = std::filesystem::path(includer).parent_path() / header;
+            const auto path = lfs::core::utf8_to_path(includer).parent_path() / lfs::core::utf8_to_path(header);
             auto text = readTextFile(path);
             if (!text)
                 return nullptr;
@@ -134,7 +135,7 @@ namespace {
         constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
         LocalShaderIncluder includer;
         if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
-            std::cerr << "Failed to compile " << input << ":\n"
+            std::cerr << "Failed to compile " << lfs::core::path_to_utf8(input) << ":\n"
                       << shader.getInfoLog() << '\n'
                       << shader.getInfoDebugLog() << '\n';
             return std::nullopt;
@@ -143,7 +144,7 @@ namespace {
         glslang::TProgram program;
         program.addShader(&shader);
         if (!program.link(messages)) {
-            std::cerr << "Failed to link " << input << ":\n"
+            std::cerr << "Failed to link " << lfs::core::path_to_utf8(input) << ":\n"
                       << program.getInfoLog() << '\n'
                       << program.getInfoDebugLog() << '\n';
             return std::nullopt;
@@ -159,13 +160,13 @@ namespace {
         const std::string_view symbol,
         const std::vector<std::uint32_t>& spirv) {
         if (const auto parent = output.parent_path(); !parent.empty()) {
-            std::filesystem::create_directories(parent);
+            lfs::core::native_fs::create_directories(parent);
         }
 
         std::ofstream file;
         lfs::core::open_file_for_write(output, std::ios::binary | std::ios::trunc, file);
         if (!file) {
-            std::cerr << "Failed to open generated header: " << output << '\n';
+            std::cerr << "Failed to open generated header: " << lfs::core::path_to_utf8(output) << '\n';
             return false;
         }
 

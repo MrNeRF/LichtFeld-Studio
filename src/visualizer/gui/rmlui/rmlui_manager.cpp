@@ -6,6 +6,7 @@
 #include "config.h"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
@@ -20,6 +21,7 @@
 #include "gui/rmlui/elements/viewport_select.hpp"
 #include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_file_interface.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
@@ -650,6 +652,8 @@ namespace lfs::vis::gui {
         vulkan_render_interface_ = vulkan_render_interface;
         text_input_handler_ = std::make_unique<RmlTextInputHandler>([this] { return accepts_text_activation_; });
 
+        file_interface_ = std::make_unique<RmlFileInterface>();
+        Rml::SetFileInterface(file_interface_.get());
         Rml::SetSystemInterface(system_interface_.get());
         Rml::SetRenderInterface(owned_render_interface_.get());
         Rml::SetTextInputHandler(text_input_handler_.get());
@@ -713,7 +717,7 @@ namespace lfs::vis::gui {
                 futures[i] = std::async(std::launch::async, [asset]() {
                     LoadedFont out;
                     out.path = lfs::vis::getAssetPath(asset);
-                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    std::ifstream f(lfs::core::native_fs::native_path(out.path), std::ios::binary | std::ios::ate);
                     if (!f)
                         return out;
                     const auto sz = f.tellg();
@@ -738,7 +742,7 @@ namespace lfs::vis::gui {
                 Rml::Span<const Rml::byte> data{
                     reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
                 if (!Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
-                    LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                    LOG_WARN("RmlUI: failed to register {}", lfs::core::path_to_utf8(loaded.path));
                 }
             }
         } catch (const std::exception& e) {
@@ -774,7 +778,7 @@ namespace lfs::vis::gui {
                 LoadedFont out;
                 try {
                     out.path = lfs::vis::getAssetPath(asset);
-                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    std::ifstream f(lfs::core::native_fs::native_path(out.path), std::ios::binary | std::ios::ate);
                     if (!f)
                         return out;
                     const auto sz = f.tellg();
@@ -805,7 +809,7 @@ namespace lfs::vis::gui {
                                   Rml::Style::FontWeight::Normal, true)) {
                 any_loaded = true;
             } else {
-                LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                LOG_WARN("RmlUI: failed to register {}", lfs::core::path_to_utf8(loaded.path));
                 font_blobs_.pop_back();
             }
         }
@@ -821,7 +825,7 @@ namespace lfs::vis::gui {
             const std::filesystem::path candidate =
                 std::filesystem::path(windir ? windir : "C:\\Windows") / "Fonts" / "seguiemj.ttf";
             std::error_code ec;
-            return std::filesystem::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
+            return lfs::core::native_fs::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
 #elif defined(__APPLE__)
             // Apple Color Emoji is a collection of roughly 180 MB; holding it in memory is not worth a fallback.
             return {};
@@ -837,7 +841,7 @@ namespace lfs::vis::gui {
             };
             for (const char* const candidate : candidates) {
                 std::error_code ec;
-                if (std::filesystem::is_regular_file(candidate, ec))
+                if (lfs::core::native_fs::is_regular_file(candidate, ec))
                     return candidate;
             }
             return {};
@@ -846,7 +850,7 @@ namespace lfs::vis::gui {
 
         std::vector<std::byte> readFontFile(const std::string& path) {
             std::vector<std::byte> bytes;
-            std::ifstream f(lfs::core::utf8_to_path(path), std::ios::binary | std::ios::ate);
+            std::ifstream f(lfs::core::native_fs::native_path(lfs::core::utf8_to_path(path)), std::ios::binary | std::ios::ate);
             if (!f)
                 return bytes;
             const auto size = f.tellg();
@@ -924,6 +928,8 @@ namespace lfs::vis::gui {
         if (Rml::GetTextInputHandler() == text_input_handler_.get())
             Rml::SetTextInputHandler(nullptr);
         Rml::Shutdown();
+        Rml::SetFileInterface(nullptr);
+        file_interface_.reset();
         if (vulkan_render_interface_)
             vulkan_render_interface_->ShutdownExternal();
         owned_render_interface_.reset();
@@ -1405,7 +1411,7 @@ namespace lfs::vis::gui {
 
     bool RmlUIManager::registerInput(Rml::Context* context, const PanelInputState& input,
                                      std::function<void(const PanelInputState&)> handler, const bool exclusive,
-                                     std::function<bool(float, float)> pointer_blocker) {
+                                     std::function<bool(float, float)> pointer_blocker, InputInterceptor interceptor) {
         if (dispatching_input_)
             return false;
         if (!context_ids_.contains(context))
@@ -1418,6 +1424,7 @@ namespace lfs::vis::gui {
         if (!contextById(context_id))
             return true;
         registered.pointer_blocker = std::move(pointer_blocker);
+        registered.interceptor = std::move(interceptor);
         auto& passive = registered.input;
         const bool pointer_owned = std::ranges::contains(registered.pointer_presses, PointerPressState::Accepted);
         if (!pointer_owned) {
@@ -1627,6 +1634,50 @@ namespace lfs::vis::gui {
                 for (auto& button : single.mouse_button_events) {
                     input_mouse_down_[button.button] = button.down;
                 }
+            }
+        }
+        // Compound controls can reserve a native wheel/key gesture before a
+        // focused child or another context consumes it. Use current coordinates
+        // for wheel input and the context's last pointer position for keys.
+        if (event.type == SDL_EVENT_MOUSE_WHEEL || event.type == SDL_EVENT_KEY_DOWN) {
+            std::vector<uint64_t> interceptors;
+            for (const auto& [context, handler] : input_handlers_) {
+                if (contextWindow(context) == dispatch_window && handler.enabled && handler.interceptor &&
+                    (handler.persistent || handler.frame == input_frame_))
+                    interceptors.push_back(context_ids_.at(context));
+            }
+            std::ranges::sort(interceptors, [&](auto a, auto b) {
+                return tracked_context_frames_[contextById(a)].order > tracked_context_frames_[contextById(b)].order;
+            });
+            for (const auto id : interceptors) {
+                auto* context = contextById(id);
+                const auto it = input_handlers_.find(context);
+                if (it == input_handlers_.end())
+                    continue;
+                const auto owner = input_handlers_.find(keyboard_context_);
+                if (owner != input_handlers_.end() && owner->second.enabled && owner->second.exclusive && keyboard_context_ != context)
+                    continue;
+                PanelInputState reserved = single;
+                if (!pointer) {
+                    reserved.mouse_x = it->second.input.mouse_x;
+                    reserved.mouse_y = it->second.input.mouse_y;
+                }
+                const auto mods = key ? event.key.mod : SDL_GetModState();
+                reserved.key_ctrl = mods & SDL_KMOD_CTRL;
+                reserved.key_shift = mods & SDL_KMOD_SHIFT;
+                reserved.key_alt = mods & SDL_KMOD_ALT;
+                reserved.key_super = mods & SDL_KMOD_GUI;
+                const auto intercept = it->second.interceptor;
+                dispatching_input_ = true;
+                const bool consumed = intercept(reserved);
+                dispatching_input_ = false;
+                if (!consumed)
+                    continue;
+                if (key && !event.key.repeat)
+                    key_owners_[event.key.scancode] = {contextById(id), {}, true};
+                result.consumed = true;
+                syncTextInput();
+                return result;
             }
         }
         auto invoke = [&](const uint64_t id) {

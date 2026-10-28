@@ -133,6 +133,52 @@ design when it does.
 | Context menu | A command list attached to an item or viewport location | Global context-menu resource or `begin_context_menu()` | Asset actions and viewport commands |
 | Viewport overlay | Contextual, low-chrome information or manipulation directly over the 3D view | `VIEWPORT_OVERLAY`; do not use it as a substitute for a settings window | Selection/gizmo overlays |
 
+### Right sidebar category tabs
+
+Rendering, Training, and plugins registered in `MAIN_PANEL_TAB` share the vertical
+category strip at the left of the lower sidebar. Scene remains above it.
+The strip shares the content's 6 dp top inset.
+Inactive tabs are recessed. The active tab fills the rail width and opens the
+rail edge beside its content. The rail edge continues above and below it.
+Scene rendering and input are clipped to the scene rectangle; the resize grip
+and a small gap separate it from the category content.
+The active panel fills the space to the right of the strip, including its former
+horizontal tab row. The bottom dock retains its horizontal tabs.
+
+Labels read bottom to top and use the translated panel label. Tab height follows
+the measured text length, including glyph clearance and compact padding. Labels
+are centered along the tab. Rotated labels use pixel-aligned origins and line
+boxes at fractional scales. The Rendering label aligns with its first panel
+heading. Plugin authors do not need special dimensions or markup. Top-level
+plugin tabs have a close button below the label; built-in tabs cannot be closed.
+Closing a plugin tab unloads its plugin, the same as Unload in the Plugin
+Marketplace, so all of the plugin's panels go away. Loading the plugin again
+from the Marketplace brings its tabs back.
+
+- Click a tab to select its panel.
+- Scroll the wheel over the strip, or drag it with the middle mouse button, to
+  reach overflowing tabs. Visible up/down buttons appear when tabs overflow.
+- Next/Previous Sidebar Category are keymap actions under Preferences > Input.
+  Their defaults are Ctrl+Tab and Ctrl+Shift+Tab; both wrap. They apply while the
+  pointer is over the lower sidebar, including when its content has focus. While
+  a text field has focus, only bindings with Ctrl or Cmd and no Alt switch
+  categories; other keys type into the field.
+- Ctrl+wheel no longer changes categories. Over the strip it scrolls the tabs;
+  over content it remains available to the panel's controls and keymap bindings.
+- Up/Down navigate tab focus and reveal overflowing tabs; Enter/Space activate
+  a focused tab.
+- A category selected through another UI action is scrolled into view.
+
+The right sidebar owns `right_panel.{rml,rcss,theme.rcss}`. Do not apply the
+horizontal `panel_tabs.rcss` geometry to it. Content bounds, preload bounds, and
+pointer routing must reserve `PanelLayoutManager::RIGHT_TAB_BAR_W` at the current
+UI scale. Tests in `test_right_panel_tabs.cpp` exercise real RmlUi geometry and
+input at 1x, 1.25x, 1.5x, 1.75x, and 2x scales, including rendered glyph bounds.
+Category gestures reserve native input before child content receives it. Floating
+panels and popups block gestures behind them. An accepted drag keeps its motion
+and release across overlapping panels. The focused native checks are available
+through `lichtfeld_sidebar_input_tests` and the `lichtfeld.sidebar_input` CTest.
+
 ### Docked panels
 
 A docked panel is part of the application's continuous workspace. It should not
@@ -281,6 +327,25 @@ The Asset Manager is a useful management-toolbar composition: search, import,
 view mode, sort, refresh, and scan status are separate affordances, followed by
 the content region. Preserve that hierarchy even if the toolbar is simplified
 for a narrower panel.
+
+The Histogram is a horizontal bottom panel with a compact wrapping toolbar,
+the shared Rendering scrub control for bin counts, and a labeled log-scale
+checkbox. Keep a Dock/Undock toggle in the toolbar and preserve the selected
+panel location. Range and statistic values use compact scientific notation; numeric
+range inputs and bin scrub text are centered. Shared scrubs accept Tab focus;
+Enter or Space opens numeric editing, Enter commits, Escape cancels, and Tab
+commits before moving to the next control. Use the bottom-dock title bar
+close button without adding a second close control to the toolbar. Keep field
+descriptions in tooltips,
+editable bounds beside the chart, and summary statistics in a flat strip below
+it. Keep a readable minimum chart height and scroll the content area when
+the panel is too short. Controls and statistics remain outside that scroll area.
+Comparison axes need only a compact numeric gutter; the field selectors already
+identify both axes. Size closed selectors to the active label,
+while their popup menus retain enough width for the longer localized options.
+Bar fills use a constant semantic color and opacity; only 2D cell intensity
+encodes density. Cache heatmap geometry, density, and tooltip records separately
+from selection flags so dragging does not rebuild the entire heatmap.
 
 #### Sections and settings
 

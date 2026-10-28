@@ -30,6 +30,27 @@ namespace lfs::training::mrnf_strategy {
         size_t N,
         void* stream = nullptr);
 
+    void launch_fused_exchange_ranks(
+        const int64_t* primary_order,
+        const int64_t* secondary_order,
+        const bool* eligible,
+        int32_t* ranks,
+        int64_t* row_indices,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_sort_exchange_ranks(
+        int32_t* ranks,
+        int64_t* row_indices,
+        size_t N,
+        void* stream = nullptr);
+
+    void launch_fill_index_mask(
+        const int64_t* indices,
+        size_t count,
+        bool* mask,
+        void* stream = nullptr);
+
     /**
      * Per-iteration exploration noise for low-opacity splats.
      *

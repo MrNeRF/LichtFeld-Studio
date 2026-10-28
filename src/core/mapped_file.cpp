@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mapped_file.hpp"
+#include "core/native_fs.hpp"
 
 #include <utility>
 
@@ -53,7 +54,7 @@ namespace lfs::core {
         const DWORD hint = advice == Advice::Random
                                ? FILE_FLAG_RANDOM_ACCESS
                                : FILE_FLAG_SEQUENTIAL_SCAN;
-        file_ = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ,
+        file_ = CreateFileW(native_fs::native_path(path).c_str(), GENERIC_READ, FILE_SHARE_READ,
                             nullptr, OPEN_EXISTING, hint, nullptr);
         if (asHandle(file_) == INVALID_HANDLE_VALUE) {
             return false;

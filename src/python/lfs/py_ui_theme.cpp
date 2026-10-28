@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/utils/splat_export_request.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
@@ -11,6 +12,8 @@
 #include "visualizer/visualizer.hpp"
 
 #include <functional>
+#include <nanobind/stl/vector.h>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -149,16 +152,42 @@ namespace lfs::python {
               "Return whether camera view snap is persisted between launches");
         m.def("set_remember_camera_view_snap", &lfs::vis::setRememberCameraViewSnapPreference,
               nb::arg("enabled"), "Enable or disable camera view snap persistence");
+        m.def("take_splat_export_request", &lfs::vis::gui::takeSplatExportRequest);
+        m.def("get_splat_drag_preferences", []() {
+            const auto s = lfs::vis::UserPreferences::instance().splatDrag();
+            nb::dict result;
+            result["format"] = s.format;
+            result["sh_degree"] = s.sh_degree;
+            result["up_axis"] = s.axes.up;
+            // Compatibility for scripts written against the original checkbox.
+            result["blender_axes"] = s.axes.up == 3;
+            return result;
+        });
+        m.def("set_splat_drag_preferences", [](nb::dict values) {
+            auto s = lfs::vis::UserPreferences::instance().splatDrag();
+            if (values.contains("format"))
+                s.format = nb::cast<std::string>(values["format"]);
+            if (values.contains("sh_degree"))
+                s.sh_degree = nb::cast<int>(values["sh_degree"]);
+            if (values.contains("up_axis")) {
+                s.axes.up = nb::cast<int>(values["up_axis"]);
+            } else if (values.contains("blender_axes")) {
+                s.axes = nb::cast<bool>(values["blender_axes"]) ? lfs::vis::SplatDragAxes::blender() : lfs::vis::SplatDragAxes{};
+            }
+            if (!s.axes.valid())
+                throw std::invalid_argument("Splat drag up axis must be -Y, +Y, -Z or +Z");
+            lfs::vis::UserPreferences::instance().setSplatDrag(s);
+        });
         m.def("scene_graph_selection_markers", &lfs::vis::loadSceneGraphSelectionMarkersPreference,
               "Return whether Scene Graph selection markers are visible");
         m.def("set_scene_graph_selection_markers", &lfs::vis::saveSceneGraphSelectionMarkersPreference,
               nb::arg("enabled"), "Show or hide Scene Graph selection markers");
         m.def("get_progress_bar_style", &lfs::vis::loadProgressBarStylePreference,
-              "Return the status bar progress style (classic or miner)");
+              "Return the status bar progress style (classic, miner, or tessle)");
         m.def(
             "set_progress_bar_style",
             [](const std::string& style) { lfs::vis::saveProgressBarStylePreference(style); },
-            nb::arg("style"), "Set the status bar progress style (classic or miner)");
+            nb::arg("style"), "Set the status bar progress style (classic, miner, or tessle)");
         m.def("get_viewport_chrome_style", &lfs::vis::loadViewportChromeStylePreference,
               "Return the viewport controls style (solid, translucent, or frosted)");
         m.def(

@@ -7,6 +7,8 @@
 
 #include "sequencer/sequencer_controller.hpp"
 
+class Viewport;
+
 namespace lfs::core {
     class Scene;
 }
@@ -24,6 +26,7 @@ namespace lfs::vis::gui {
 
         void setupEvents();
         void syncToSceneGraph();
+        bool goToKeyframe(size_t index, Viewport* target = nullptr);
 
     private:
         void emitNodeSelectedForKeyframe(size_t index);

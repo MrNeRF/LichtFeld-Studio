@@ -172,6 +172,15 @@ namespace lfs::rendering {
         const Tensor& transform_indices,
         const std::vector<bool>& valid_nodes);
 
+    // Extruded polygon crop: inside means |local z| <= half_depth and the
+    // even-odd rule over the outline, the same test as soft_crop_by_polygon.
+    struct SelectionCropPolygon {
+        const Tensor* transform = nullptr; // world -> polygon local, laid out like the crop box transform
+        const Tensor* vertices = nullptr;  // [N, 2] float32 outline, 3 to 64 vertices
+        float half_depth = 0.0f;
+        bool inverse = false;
+    };
+
     void filter_selection_by_crop(
         Tensor& selection,
         const Tensor& means,
@@ -184,7 +193,8 @@ namespace lfs::rendering {
         bool ellipsoid_inverse,
         const Tensor* model_transforms = nullptr,
         const Tensor* transform_indices = nullptr,
-        int parent_node_index = -1);
+        int parent_node_index = -1,
+        const SelectionCropPolygon* crop_polygon = nullptr);
 
     namespace config {
         void setSelectionGroupColor(int group_id, float3 color);

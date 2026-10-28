@@ -1,43 +1,38 @@
 <rml>
 <head>
-    <link type="text/rcss" href="panel_tabs.rcss"/>
     <link type="text/rcss" href="right_panel.rcss"/>
 </head>
 <body id="rp-body" data-model="right_panel_tabs">
     <div id="resize-handle"></div>
     <div id="left-border"></div>
-    <div id="splitter"></div>
+    <div id="splitter"><div id="splitter-grip"></div></div>
     <div id="tab-bar" data-class-with-scroll="tabs_overflow">
-        <button id="tab-scroll-left"
-                class="tab-nav"
+        <button id="tab-scroll-up" class="tab-nav"
+                data-tooltip="ui.scroll_panel_tabs_up"
                 data-class-hidden="!tabs_overflow"
-                data-class-disabled="!can_scroll_tabs_left"
-                data-event-click="scroll_tabs_left()">&lt;</button>
+                data-attrif-disabled="!can_scroll_tabs_up"
+                data-event-click="scroll_tabs_up()">&#9650;</button>
+        <div id="tab-edge-before" class="tab-edge"></div>
+        <div id="tab-edge-after" class="tab-edge"></div>
         <div id="tab-strip-viewport">
             <div data-for="tab : tabs"
-                class="tab"
-                data-attr-id="tab.dom_id"
-                data-class-active="tab.id == active_tab"
-                data-class-closeable="tab.closeable"
-                data-event-click="tab_click(tab.id)">
+                 class="tab"
+                 data-attr-id="tab.dom_id"
+                 data-class-active="tab.id == active_tab"
+                 data-class-closeable="tab.closeable"
+                 data-event-click="tab_click(tab.id)"
+                 data-event-keydown="tab_keydown(tab.id)">
                 <span class="tab-label">{{ tab.label }}</span>
-                <button class="tab-close"
-                        data-if="tab.closeable"
+                <button class="tab-close" data-if="tab.closeable"
                         data-tooltip="common.close"
                         data-event-click="tab_close(tab.id)">&#215;</button>
             </div>
         </div>
-        <button id="tab-scroll-right"
-                class="tab-nav"
+        <button id="tab-scroll-down" class="tab-nav"
+                data-tooltip="ui.scroll_panel_tabs_down"
                 data-class-hidden="!tabs_overflow"
-                data-class-disabled="!can_scroll_tabs_right"
-                data-event-click="scroll_tabs_right()">&gt;</button>
-        <select id="tab-picker" data-class-hidden="!tabs_overflow"
-                data-value="active_tab" data-event-change="pick_tab()"
-                data-tooltip="ui.all_panel_tabs">
-            <option data-for="tab : tabs" data-attr-value="tab.id">{{ tab.label }}</option>
-        </select>
+                data-attrif-disabled="!can_scroll_tabs_down"
+                data-event-click="scroll_tabs_down()">&#9660;</button>
     </div>
-    <div id="tab-separator"></div>
 </body>
 </rml>

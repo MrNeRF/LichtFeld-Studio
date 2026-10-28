@@ -24,6 +24,10 @@ def _all_file_items(file_menu):
 
 def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     module = _load_file_menu(monkeypatch)
+    calls = []
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _: SimpleNamespace(show=calls.append), raising=False)
+    assert module.CollisionOperator().execute(None) == {"FINISHED"}
+    assert calls == [True]
     items = module.FileMenu().menu_items()
     submenus = {item["label"]: item["items"] for item in items if item["type"] == "submenu"}
     assert list(submenus) == [
@@ -32,7 +36,7 @@ def test_file_menu_groups_preserve_existing_operators(monkeypatch):
     ]
     exports = submenus["tr:menu.file.export_menu"]
     assert [item["operator_id"].split(".")[-1] for item in exports] == [
-        "ExportOperator", "ExportConfigOperator",
+        "CollisionOperator", "ExportOperator", "ExportConfigOperator",
     ]
     maintenance = submenus["tr:menu.file.project_maintenance"]
     assert [item["operator_id"].split(".")[-1] for item in maintenance if "operator_id" in item] == [

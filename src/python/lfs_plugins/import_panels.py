@@ -4,7 +4,7 @@
 
 import threading
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 
@@ -184,6 +184,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
+        self._images_path = ""
         self._init_path = ""
         self._ppisp_sidecar_path = ""
         self._centralize_dataset = "off"
@@ -222,7 +223,6 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_func("location_preview", self._location_preview)
         model.bind_func("create_hint", self._create_hint)
 
-        model.bind_func("images_path", lambda: self._string_attr("images_path"))
         model.bind_func("sparse_path", lambda: self._string_attr("sparse_path"))
         model.bind_func("masks_path", lambda: self._string_attr("masks_path"))
         model.bind_func("images_count_text", self._images_count_text)
@@ -232,6 +232,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_func("show_min_track_length_warning", self._show_min_track_length_warning)
         model.bind("name", lambda: self._name, self._set_name)
         model.bind("source_path", lambda: self._source_path, self._set_source_path)
+        model.bind("images_path", self._shown_images_path, self._set_images_path)
 
         model.bind("init_path", lambda: self._init_path, self._set_init_path)
         model.bind("ppisp_sidecar_path", lambda: self._ppisp_sidecar_path, self._set_ppisp_sidecar_path)
@@ -245,6 +246,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind_event("browse_destination", self._on_browse_destination)
         model.bind_event("browse_folder", self._on_browse_folder)
         model.bind_event("browse_file", self._on_browse_file)
+        model.bind_event("browse_images", self._on_browse_images)
         model.bind_event("browse_init", self._on_browse_init)
         model.bind_event("browse_ppisp_sidecar", self._on_browse_ppisp_sidecar)
         model.bind_event("min_track_length_step", self._on_min_track_length_step)
@@ -281,6 +283,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_path = ""
         self._source_kind = "blank"
         self._dataset_info = None
+        self._images_path = ""
         self._init_path = ""
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
@@ -378,8 +381,34 @@ class NewProjectPanel(_ImportDialogPanel):
             self._source_generation += 1
             self._source_probe_cancel.set()
             self._source_probe_cancel = threading.Event()
+            self._images_path = ""
             self._init_path = ""
             self._ppisp_sidecar_path = ""
+
+    def _shown_images_path(self) -> str:
+        return self._images_path or self._string_attr("images_path")
+
+    def _set_images_path(self, value) -> None:
+        chosen = str(value).strip()
+        if chosen == self._images_path:
+            return
+        self._images_path = chosen
+        if self._source_kind in {"dataset", "checking"}:
+            self._source_kind = "checking"
+            self._dataset_info = None
+            self._source_generation += 1
+            self._source_probe_cancel.set()
+            self._source_probe_cancel = threading.Event()
+            self._source_probe_active = False
+            self._source_probe_due = time.monotonic() + _SOURCE_PROBE_DEBOUNCE_SECONDS
+            self._schedule_source_probe_update()
+        self._dirty_model("images_path", "images_count_text", "can_create", "create_hint")
+
+    def _on_browse_images(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_folder_dialog(lf.ui.tr("new_project.choose_images"),
+                                        self._shown_images_path() or self._source_path)
+        if path:
+            self._set_images_path(path)
 
     def _start_source_probe(self) -> None:
         if self._source_probe_active:
@@ -387,6 +416,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._source_probe_due = 0.0
         self._source_probe_active = True
         path = self._source_path
+        images = self._images_path
         name = self._name
         location = self._destination_folder()
         generation = self._source_generation
@@ -403,7 +433,8 @@ class NewProjectPanel(_ImportDialogPanel):
                     return
                 if path and lf.is_dataset_path(path):
                     kind = "dataset"
-                    info = lf.detect_dataset_info(str(self._preview_base_path(path)))
+                    base = str(self._preview_base_path(path))
+                    info = lf.detect_dataset_info(base, images_path=images) if images else lf.detect_dataset_info(base)
                     colmap = bool(info and getattr(info, "sparse_path", "") and
                                   _directory_has_colmap_file(str(info.sparse_path)))
                 elif path and Path(path).is_file() and self._is_splat_path(path):
@@ -438,6 +469,8 @@ class NewProjectPanel(_ImportDialogPanel):
                 ) = result
                 # A name edit can race the source probe; never publish the
                 # old name's filesystem result over the current name.
+                if self._images_missing():
+                    self._advanced_expanded = True
                 if self._name == name:
                     self._target_exists_cached = target_exists
                     self._dedupe_name_cache[base] = deduped
@@ -550,6 +583,15 @@ class NewProjectPanel(_ImportDialogPanel):
         return (
             self._name_is_valid()
             and self._source_kind in {"blank", "dataset", "splat"}
+            and not self._images_missing()
+        )
+
+    def _images_missing(self) -> bool:
+        """A COLMAP model whose images folder holds no images, as a reconstruction kept beside its photos."""
+        return (
+            self._source_kind == "dataset"
+            and self._colmap_available
+            and int(getattr(self._dataset_info, "image_count", 0)) == 0
         )
 
     def _confirm_overwrite(self, on_overwrite) -> None:
@@ -581,6 +623,8 @@ class NewProjectPanel(_ImportDialogPanel):
             return lf.ui.tr("new_project.invalid_name")
         if self._source_kind == "invalid":
             return lf.ui.tr("new_project.source_invalid")
+        if self._images_missing():
+            return lf.ui.tr("new_project.no_images")
         return ""
 
     def _dedupe_name(self, name: str) -> str:
@@ -720,7 +764,7 @@ class NewProjectPanel(_ImportDialogPanel):
     def _on_browse_init(self, _handle=None, _ev=None, _args=None):
         if self._source_kind != "dataset":
             return
-        path = lf.ui.open_ply_file_dialog(str(self._preview_base_path(self._source_path)))
+        path = lf.ui.open_init_file_dialog(str(self._preview_base_path(self._source_path)))
         if path:
             self._set_init_path(path)
 
@@ -766,8 +810,9 @@ class NewProjectPanel(_ImportDialogPanel):
         embed_dataset = self._embed_dataset
         images_folder = ""
         if source_kind == "dataset" and self._dataset_info is not None:
-            images_folder = str(Path(self._dataset_info.images_path).relative_to(
-                Path(self._dataset_info.base_path)))
+            images = Path(self._dataset_info.images_path)
+            base = Path(self._dataset_info.base_path)
+            images_folder = str(images.relative_to(base)) if images.is_relative_to(base) else str(images)
 
         def _commit(stop_training: bool, overwrite: bool) -> None:
             if (

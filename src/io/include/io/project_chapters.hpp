@@ -196,6 +196,22 @@ namespace lfs::io::project {
         friend bool operator==(const ProvenanceRecord&, const ProvenanceRecord&) = default;
     };
 
+    struct ProjectTrainingInitialization {
+        std::optional<lfs::core::Uuid> init_reference_uuid;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+
+        friend bool operator==(const ProjectTrainingInitialization&, const ProjectTrainingInitialization&) = default;
+    };
+
+    // What a new project's ProjectTrainingInitialization is made from: the
+    // init file, and the training origin and scene center the scene had.
+    struct TrainingProjectInitialization {
+        std::filesystem::path init_path;
+        std::array<float, 3> data_origin{};
+        std::optional<std::array<float, 3>> scene_center;
+    };
+
     class LFS_IO_API ProjectChapter {
     public:
         ProjectChapter();
@@ -220,6 +236,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>> dataset_reference() const;
         [[nodiscard]] lfs::Result<void>
         set_dataset_reference(std::optional<lfs::core::Uuid> value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectTrainingInitialization>> training_initialization() const;
+        [[nodiscard]] lfs::Result<void>
+        set_training_initialization(const std::optional<ProjectTrainingInitialization>& value);
         [[nodiscard]] lfs::Result<std::vector<lfs::core::Uuid>> project_lineage() const;
         [[nodiscard]] lfs::Result<void>
         set_project_lineage(std::span<const lfs::core::Uuid> value);
@@ -363,6 +382,18 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
+    struct CropPolygonRecord {
+        // Outline in the node's local XY plane; 3 to 64 finite vertices.
+        std::vector<std::array<float, 2>> vertices;
+        float half_depth = 1.0f;
+        bool inverse = false;
+        bool enabled = true;
+        std::array<float, 3> color{1.0f, 1.0f, 0.0f};
+        float line_width = 2.0f;
+
+        friend bool operator==(const CropPolygonRecord&, const CropPolygonRecord&) = default;
+    };
+
     // Camera calibration in SCNG is always the source (pre-rectification) calibration
     // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
@@ -414,11 +445,15 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
+        bool point_cloud_source = false;
         std::optional<GeorefPose> georef_pose = std::nullopt;
         std::optional<PayloadBinding> payload;
         std::optional<CropBoxRecord> cropbox = std::nullopt;
         std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
         std::optional<CameraRecord> camera = std::nullopt;
+        std::optional<CropPolygonRecord> crop_polygon = std::nullopt;
+        // Shared immutable occupancy in the COLV instance with this UUID.
+        std::optional<lfs::core::Uuid> collision = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };
@@ -489,6 +524,18 @@ namespace lfs::io::project {
         ReferenceBindings igs_current_references;
         lfs::core::param::DatasetConfig dataset;
 
+        // Calls fn(role, parameters, bindings) for every strategy role, so
+        // code that walks the reference bindings cannot miss one.
+        template <typename Fn>
+        void for_each_role(Fn&& fn) {
+            fn(std::string_view{"mcmc.session"}, mcmc_session, mcmc_session_references);
+            fn(std::string_view{"mrnf.session"}, mrnf_session, mrnf_session_references);
+            fn(std::string_view{"igs+.session"}, igs_session, igs_session_references);
+            fn(std::string_view{"mcmc.current"}, mcmc_current, mcmc_current_references);
+            fn(std::string_view{"mrnf.current"}, mrnf_current, mrnf_current_references);
+            fn(std::string_view{"igs+.current"}, igs_current, igs_current_references);
+        }
+
         // The pending parameters of the strategy selected in the project.
         [[nodiscard]] const lfs::core::param::OptimizationParameters&
         active_optimization() const noexcept {
@@ -502,6 +549,11 @@ namespace lfs::io::project {
         }
     };
 
+    LFS_IO_API void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot);
+
     // Merge an untrained project's PRMS snapshot into the launch parameters
     // of a headless run. Stored dataset and active-strategy optimization
     // values replace the CLI defaults, the headless/auto_train/no_splash
@@ -512,7 +564,9 @@ namespace lfs::io::project {
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder);
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root);
 
     class LFS_IO_API ParametersChapter {
     public:

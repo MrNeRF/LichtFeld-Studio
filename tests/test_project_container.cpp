@@ -13,6 +13,7 @@
 #include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
+#include "long_path_test_support.hpp"
 
 #include <zstd.h>
 
@@ -73,6 +74,7 @@ namespace {
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
+    using namespace lfs::test::long_paths;
     using namespace std::string_view_literals;
 
     constexpr std::uint64_t FIXED_CREATION_TIME_NS =
@@ -258,7 +260,7 @@ namespace {
                                    ? fs::path{"."}
                                    : original.parent_path();
         std::error_code error;
-        for (fs::directory_iterator iterator(directory, error), end;
+        for (std::filesystem::directory_iterator iterator(lfs::core::native_fs::traversal_path(directory), error), end;
              !error && iterator != end; iterator.increment(error)) {
             const auto name = iterator->path().filename().string();
             if (name.starts_with(prefix)) {
@@ -288,6 +290,18 @@ namespace {
         EXPECT_TRUE(detail::disk_full(std::make_error_code(std::errc::no_space_on_device)));
         EXPECT_TRUE(detail::disk_full(std::error_code(static_cast<int>(disk_full), std::system_category())));
         EXPECT_FALSE(detail::disk_full(std::make_error_code(std::errc::file_too_large)));
+    }
+
+    TEST(ProjectContainerFormat, SupportedCapabilitiesReserveTilesetsAndIncludeCollision) {
+        EXPECT_EQ(TILESET_REFERENCES, 10);
+        EXPECT_EQ(COLLISION_VOLUMES_V1, 11);
+        const auto reader = supported_reader_capabilities();
+        const auto writer = supported_writer_capabilities();
+        for (std::uint8_t bit = 0; bit < 128; ++bit) {
+            const bool supported = bit < 10 || bit == 11;
+            EXPECT_EQ(reader.contains(bit), supported) << "reader bit " << int(bit);
+            EXPECT_EQ(writer.contains(bit), supported) << "writer bit " << int(bit);
+        }
     }
 
     TEST(ProjectContainerFormat, Crc32cKnownVector) {
@@ -3847,6 +3861,144 @@ namespace {
         }
     };
 
+    TEST(ProjectContainerWriter, LegacyAutosaveAtComponentLimitIsStillRecoverable) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(240, 'x') + ".licht");
+        create_single_chunk_fixture(master, 8001, 8002, 8003, fixed_key("SCNG", 8004), recoverable_scene_graph_payload());
+        auto legacy = master;
+        legacy += ".autosave";
+        ASSERT_EQ(legacy.filename().native().size(), 255u);
+        publish_complete_sidecar(master, legacy, 1, 8005, 8006, 8007);
+        EXPECT_EQ(autosave_sidecar_path(master), legacy);
+        auto recovery = require_result(inspect_autosave_recovery(master));
+        EXPECT_EQ(recovery.disposition, RecoveryDisposition::Offer);
+        ASSERT_TRUE(recovery.selected_path);
+        EXPECT_EQ(*recovery.selected_path, legacy);
+        auto lease = require_result(WriterLockLease::acquire(legacy));
+        EXPECT_TRUE(lease.valid());
+        EXPECT_LE(detail::project_lock_path(legacy).filename().native().size(), 255u);
+    }
+
+    TEST(ProjectContainerWriter, QuarantineCollisionStaysWithinComponentLimit) {
+        LongPathTemporaryDirectory temporary;
+        const std::string suffix = ".corrupt-1700000000";
+        const auto source = temporary.path / std::string(255 - suffix.size(), 'q');
+        write_file_bytes(detail::project_fs::native_path(source), byte_vector("quarantine source"));
+        auto existing = source;
+        existing += suffix;
+        write_file_bytes(detail::project_fs::native_path(existing), byte_vector("existing aside"));
+        const auto aside = require_result(detail::quarantine_project_artifact_with_suffix(source, suffix));
+        EXPECT_LE(aside.filename().native().size(), 255u);
+        EXPECT_TRUE(lfs::core::path_to_utf8(aside.filename()).ends_with("-1"));
+        EXPECT_EQ(read_file_bytes(detail::project_fs::native_path(aside)), byte_vector("quarantine source"));
+    }
+
+#ifdef _WIN32
+    TEST(ProjectContainerWriter, CaseSensitiveDirectoryKeepsDistinctBoundedSiblingKeys) {
+        LongPathTemporaryDirectory temporary;
+        const auto directory = detail::project_fs::native_path(temporary.path);
+        const HANDLE handle = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+        FILE_CASE_SENSITIVE_INFO info{FILE_CS_FLAG_CASE_SENSITIVE_DIR};
+        const bool enabled = SetFileInformationByHandle(handle, FileCaseSensitiveInfo, &info, sizeof(info)) != FALSE;
+        const auto error = GetLastError();
+        CloseHandle(handle);
+        if (!enabled)
+            GTEST_SKIP() << "Directory case-sensitive mode unavailable: " << error;
+        const auto lower = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto upper = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_NE(detail::project_lock_path(lower), detail::project_lock_path(upper));
+        EXPECT_NE(autosave_sidecar_path(lower), autosave_sidecar_path(upper));
+        create_single_chunk_fixture(lower, 7931, 7932, 7933, fixed_key("PROJ", 7934), R"({"master":"lower"})");
+        create_single_chunk_fixture(upper, 7941, 7942, 7943, fixed_key("PROJ", 7944), R"({"master":"upper"})");
+        EXPECT_FALSE(detail::project_fs::equivalent(lower, upper));
+        auto first = require_result(WriterLockLease::acquire(lower));
+        auto second = require_result(WriterLockLease::acquire(upper));
+        require_status(require_result(ProjectReader::open(lower)).verify_all());
+        require_status(require_result(ProjectReader::open(upper)).verify_all());
+    }
+    TEST(ProjectContainerWriter, ValidUnicodeArtifactNamesKeepTheirExistingSpelling) {
+        LongPathTemporaryDirectory temporary;
+        auto master = temporary.path / fs::path(std::wstring(100, L'\u6e2c') + L".licht");
+        auto expected_lock = master;
+        expected_lock += ".lock";
+        auto expected_sidecar = master;
+        expected_sidecar += ".autosave";
+        EXPECT_EQ(detail::project_lock_path(master), expected_lock);
+        EXPECT_EQ(autosave_sidecar_path(master), expected_sidecar);
+        create_single_chunk_fixture(master, 7921, 7922, 7923, fixed_key("PROJ", 7924), R"({"master":"unicode"})");
+        require_status(require_result(ProjectReader::open(master)).verify_all());
+        const auto lowercase = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto uppercase = temporary.path / (std::string(249, 'X') + ".LICHT");
+        EXPECT_EQ(detail::project_lock_path(lowercase), detail::project_lock_path(uppercase));
+        EXPECT_EQ(autosave_sidecar_path(lowercase), autosave_sidecar_path(uppercase));
+    }
+#endif
+
+#ifndef _WIN32
+    TEST(ProjectContainerWriter, ArtifactPathsPreserveDistinctNonUtf8NativeNames) {
+        TemporaryDirectory temporary;
+        for (const size_t padding : {0u, 245u}) {
+            const auto first = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe9.licht");
+            const auto second = temporary.path / fs::path(std::string(padding, 'x') + "caf\xe8.licht");
+            const auto first_lock = detail::project_lock_path(first);
+            const auto second_lock = detail::project_lock_path(second);
+            EXPECT_NE(first_lock, second_lock);
+            EXPECT_NE(autosave_sidecar_path(first), autosave_sidecar_path(second));
+            if (!padding) {
+                auto expected_lock = first;
+                expected_lock += ".lock";
+                auto expected_sidecar = first;
+                expected_sidecar += ".autosave";
+                EXPECT_EQ(first_lock, expected_lock);
+                EXPECT_EQ(autosave_sidecar_path(first), expected_sidecar);
+                auto first_lease = require_result(WriterLockLease::acquire(first));
+                auto second_lease = require_result(WriterLockLease::acquire(second));
+                EXPECT_FALSE(WriterLockLease::acquire(first));
+                EXPECT_FALSE(WriterLockLease::acquire(second));
+            }
+            EXPECT_LE(first_lock.filename().native().size(), 255u);
+            EXPECT_LE(autosave_sidecar_path(first).filename().native().size(), 255u);
+        }
+    }
+#endif
+
+    TEST(ProjectContainerWriter, MaximumLengthNameSupportsLocksAutosaveAndQuarantine) {
+        LongPathTemporaryDirectory temporary;
+        const auto master = temporary.path / (std::string(249, 'x') + ".licht");
+        const auto other = temporary.path / (std::string(249, 'y') + ".licht");
+        ASSERT_EQ(master.filename().native().size(), 255u);
+        create_single_chunk_fixture(master, 7901, 7902, 7903, fixed_key("PROJ", 7904), R"({"master":"bounded"})");
+        const auto lock_path = detail::project_lock_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(lock_path.filename()).size(), 255u);
+        EXPECT_NE(lock_path, detail::project_lock_path(other));
+        {
+            auto lease = require_result(WriterLockLease::acquire(master));
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+            EXPECT_FALSE(WriterLockLease::acquire(master));
+            sweep_stale_licht_artifacts_for_known_masters({master});
+            EXPECT_TRUE(detail::project_fs::exists(lock_path));
+        }
+        const auto sidecar = autosave_sidecar_path(master);
+        EXPECT_LE(lfs::core::path_to_utf8(sidecar.filename()).size(), 250u);
+        EXPECT_NE(sidecar, autosave_sidecar_path(other));
+        create_single_chunk_fixture(sidecar, 7911, 7912, 7913, fixed_key("PROJ", 7914), R"({"autosave":"bounded"})");
+        require_status(require_result(ProjectReader::open(sidecar)).verify_all());
+        const auto aside = require_result(quarantine_project_artifact(master));
+        EXPECT_LE(lfs::core::path_to_utf8(aside.filename()).size(), 255u);
+        EXPECT_FALSE(detail::project_fs::exists(master));
+        EXPECT_TRUE(detail::project_fs::exists(aside));
+        require_status(require_result(ProjectReader::open(aside)).verify_all());
+        // Preserve the names used by existing projects and their locks.
+        const auto short_master = temporary.path / "ordinary.licht";
+        EXPECT_EQ(detail::project_lock_path(short_master).filename().string(), "ordinary.licht.lock");
+        EXPECT_EQ(autosave_sidecar_path(short_master).filename().string(), "ordinary.licht.autosave");
+        const auto formerly_supported = temporary.path / (std::string(244, 'z') + ".licht");
+        EXPECT_EQ(detail::project_lock_path(formerly_supported), fs::path(formerly_supported.string() + ".lock"));
+    }
+
     TEST(ProjectContainerWriter, LongFilenameAtomicReplacementCanRollbackAndFinish) {
         LongPathTemporaryDirectory temporary;
         const auto destination = temporary.path / (std::string(234, 'x') + ".licht");
@@ -3989,30 +4141,6 @@ namespace {
     }
 #endif
 
-    // Destination lengths whose ".project-write.<ticks>.<pid>.<n>.tmp" siblings land on both sides
-    // of the 248-unit switch to extended-length paths.
-    constexpr std::array kLengthsAroundExtendedPathSwitch{
-        std::size_t{160}, std::size_t{196}, std::size_t{200}, std::size_t{202}, std::size_t{204},
-        std::size_t{206}, std::size_t{208}, std::size_t{212}, std::size_t{247}, std::size_t{248},
-        std::size_t{259}, std::size_t{260}, std::size_t{261}, std::size_t{320}};
-
-    fs::path with_native_length(const fs::path& directory, const std::size_t length, const fs::path& leaf) {
-        const std::size_t fixed = directory.native().size() + 1 + leaf.native().size();
-        if (length < fixed || length == fixed + 1) {
-            throw std::runtime_error("requested path length does not fit its fixed components");
-        }
-        const std::size_t remaining = length - fixed;
-        const std::size_t components = (remaining + 100) / 101;
-        std::size_t characters = remaining - components;
-        auto path = directory;
-        for (std::size_t i = 0; i < components; ++i) {
-            const std::size_t size = characters / (components - i);
-            path /= std::string(size, static_cast<char>('a' + i % 26));
-            characters -= size;
-        }
-        return path / leaf;
-    }
-
     void save_and_verify(const fs::path& destination, const std::uint64_t tag) {
         std::error_code error;
         detail::project_fs::create_directories(destination.parent_path(), error);
@@ -4079,51 +4207,17 @@ namespace {
     }
 
 #ifdef _WIN32
-    // A share created for the test run (the Windows CI job provisions one): LFS_TEST_UNC_ROOT is its network
-    // path and LFS_TEST_UNC_LOCAL the folder it exposes. LFS_TEST_REQUIRE_UNC turns a missing share into a failure.
-    struct NetworkShare {
-        fs::path network;
-        fs::path local;
-    };
-
-    std::optional<std::wstring> environment(const wchar_t* const name) {
-        const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
-        if (size == 0) {
-            return std::nullopt;
-        }
-        std::wstring value(size, L'\0');
-        value.resize(GetEnvironmentVariableW(name, value.data(), size));
-        return value;
-    }
-
-    std::optional<NetworkShare> network_share() {
-        const auto network = environment(L"LFS_TEST_UNC_ROOT");
-        const auto local = environment(L"LFS_TEST_UNC_LOCAL");
-        std::error_code error;
-        if (!network || !local || !fs::is_directory(fs::path(*network), error)) {
-            return std::nullopt;
-        }
-        return NetworkShare{fs::path(*network), fs::path(*local)};
-    }
-
     TEST(ProjectPathResolution, NetworkProjectsSaveOnBothSidesOfTheExtendedPathSwitch) {
         const auto share = network_share();
         if (!share) {
-            if (environment(L"LFS_TEST_REQUIRE_UNC")) {
+            if (network_share_required()) {
                 FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
             }
             GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
         }
-        const auto run = std::format("lfs-path-test-{}", std::chrono::steady_clock::now().time_since_epoch().count());
-        const fs::path network_root = share->network / run;
-        const fs::path local_root = share->local / run;
-        struct Cleanup {
-            fs::path path;
-            ~Cleanup() {
-                std::error_code ignored;
-                fs::remove_all(fs::path(L"\\\\?\\" + fs::absolute(path).native()), ignored);
-            }
-        } cleanup{local_root};
+        LongPathDirectory run(share->local);
+        const fs::path local_root = run.path;
+        const fs::path network_root = share->network / run.path.filename();
         std::error_code error;
         const auto leaf = lfs::core::utf8_to_path("scène 🙂.licht");
         std::uint64_t tag = 7300;

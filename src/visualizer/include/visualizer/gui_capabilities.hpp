@@ -79,6 +79,14 @@ namespace lfs::vis::cap {
         bool use = false;
     };
 
+    struct LFS_VIS_API CropPolygonUpdate {
+        std::optional<float> half_depth;
+        bool has_inverse = false;
+        bool inverse = false;
+        bool has_enabled = false;
+        bool enabled = false;
+    };
+
     [[nodiscard]] LFS_VIS_API bool isTransformableNodeType(core::NodeType type);
     // Node types the 3-point align operator can transform (not the broader transformable set).
     [[nodiscard]] LFS_VIS_API bool isAlignTransformTargetType(core::NodeType type);
@@ -130,6 +138,13 @@ namespace lfs::vis::cap {
         const std::vector<std::string>& targets,
         const glm::vec3& value,
         std::string_view undo_label = "transform.scale");
+
+    [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
+        SceneManager& scene_manager,
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
+        std::string_view undo_label);
+
     [[nodiscard]] LFS_VIS_API std::expected<size_t, std::string> bakeNodeTransforms(
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,
@@ -194,5 +209,48 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId ellipsoid_id);
+
+    // The named crop polygon or the one under the named node; without a name, the selected one.
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> resolveCropPolygonId(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node);
+    // Sets the polygon's depth, inverse or enabled flag in one history entry; the outline is unchanged.
+    [[nodiscard]] LFS_VIS_API lfs::Status updateCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        const CropPolygonUpdate& update);
+
+    // Keeps the outline and the node's rotation; scales each local axis and moves
+    // the prism so its local box is the parent's bounds (the trimmed bounds with
+    // use_percentile) seen from the unscaled polygon frame. One history entry.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> fitCropPolygonToParent(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        bool use_percentile);
+    // Back to the drawn size, scale 1 on every axis, keeping position and rotation.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> resetCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id);
+
+    // Replaces a polygon's outline (node-local XY) in one history entry. The outline's
+    // box is re-centred on the origin and the node moves to compensate, so the prism
+    // stays in place. Rejects fewer than 3 distinct vertices, no area or over 64 vertices.
+    [[nodiscard]] LFS_VIS_API lfs::Result<void> setCropPolygonOutline(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId polygon_id,
+        std::vector<glm::vec2> vertices);
+
+    // Adds an enabled polygon under a splat in one history entry, replacing the
+    // splat's existing crop box, ellipsoid or polygon.
+    [[nodiscard]] LFS_VIS_API lfs::Result<core::NodeId> createCropPolygon(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId parent_id,
+        core::CropPolygonData data,
+        const glm::mat4& local_transform);
 
 } // namespace lfs::vis::cap

@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
@@ -78,7 +77,6 @@ class SelectionCommandDispatchTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -113,7 +111,6 @@ protected:
 
     void TearDown() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         scene_manager_.reset();
         rendering_manager_.reset();

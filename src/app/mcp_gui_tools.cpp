@@ -21,6 +21,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -39,6 +40,7 @@
 #include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui/string_keys.hpp"
@@ -534,6 +536,8 @@ namespace lfs::app {
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
                 return "ellipsoid";
+            case core::NodeType::CROP_POLYGON:
+                return "crop_polygon";
             case core::NodeType::DATASET:
                 return "dataset";
             case core::NodeType::CAMERA_GROUP:
@@ -546,6 +550,8 @@ namespace lfs::app {
                 return "image";
             case core::NodeType::MESH:
                 return "mesh";
+            case core::NodeType::COLLISION:
+                return "collision";
             case core::NodeType::KEYFRAME_GROUP:
                 return "keyframe_group";
             case core::NodeType::KEYFRAME:
@@ -1082,6 +1088,12 @@ namespace lfs::app {
                                  {"use_crop_box", settings.use_crop_box},
                                  {"show_ellipsoid", settings.show_ellipsoid},
                                  {"use_ellipsoid", settings.use_ellipsoid},
+                                 {"selection_outline", settings.selection_outline},
+                                 {"selection_outline_opacity", settings.selection_outline_opacity},
+                                 {"selection_outline_width", settings.selection_outline_width},
+                                 {"selection_outline_threshold", settings.selection_outline_threshold},
+                                 {"selection_outline_holes", settings.selection_outline_holes},
+                                 {"selection_outline_color", settings.selection_outline_color},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
                                  {"hide_outside_depth_box", settings.hide_outside_depth_box},
@@ -1132,6 +1144,8 @@ namespace lfs::app {
                                  {"split_position", settings.split_position},
                                  {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
+                                 {"transparency_mode", std::string(lfs::rendering::gaussianTransparencyModeId(static_cast<lfs::rendering::GaussianTransparencyMode>(settings.transparency_mode)))},
+                                 {"stochastic_max_frames", settings.stochastic_max_frames},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
@@ -1281,6 +1295,53 @@ namespace lfs::app {
             set_bool("use_crop_box", settings.use_crop_box);
             set_bool("show_ellipsoid", settings.show_ellipsoid);
             set_bool("use_ellipsoid", settings.use_ellipsoid);
+            set_bool("selection_outline", settings.selection_outline);
+            set_bool("selection_outline_holes", settings.selection_outline_holes);
+            if (args.contains("selection_outline_opacity")) {
+                const auto& value = args["selection_outline_opacity"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_opacity");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0 || number > 1)
+                    return std::unexpected("Invalid selection_outline_opacity");
+                settings.selection_outline_opacity = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_width")) {
+                const auto& value = args["selection_outline_width"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_width");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 1 || number > 12)
+                    return std::unexpected("Invalid selection_outline_width");
+                settings.selection_outline_width = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_threshold")) {
+                const auto& value = args["selection_outline_threshold"];
+                if (!value.is_number())
+                    return std::unexpected("Invalid selection_outline_threshold");
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < 0.05 || number > 0.95)
+                    return std::unexpected("Invalid selection_outline_threshold");
+                settings.selection_outline_threshold = static_cast<float>(number);
+                touched = true;
+            }
+            if (args.contains("selection_outline_color")) {
+                const auto& value = args["selection_outline_color"];
+                if (!value.is_array() || value.size() != 3)
+                    return std::unexpected("Invalid selection_outline_color");
+                for (int i = 0; i < 3; ++i) {
+                    if (!value[i].is_number())
+                        return std::unexpected("Invalid selection_outline_color");
+                    const double channel = value[i].get<double>();
+                    if (!std::isfinite(channel) || channel < 0.0 || channel > 1.0)
+                        return std::unexpected("Invalid selection_outline_color");
+                    settings.selection_outline_color[i] = static_cast<float>(channel);
+                }
+                touched = true;
+            }
+
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
             set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
@@ -1312,6 +1373,21 @@ namespace lfs::app {
             }
             if (auto result = set_raster_backend(settings); !result)
                 return std::unexpected(result.error());
+            if (args.contains("transparency_mode")) {
+                const auto& value = args["transparency_mode"];
+                if (!value.is_string() || !lfs::rendering::isGaussianTransparencyModeId(value.get<std::string>()))
+                    return std::unexpected("Field 'transparency_mode' must be 'alpha_blend', 'stochastic', or 'steady_splats'");
+                settings.transparency_mode = static_cast<int>(
+                    lfs::rendering::gaussianTransparencyModeFromId(value.get<std::string>()));
+                touched = true;
+            }
+            if (args.contains("stochastic_max_frames")) {
+                const auto& value = args["stochastic_max_frames"];
+                if (!value.is_number_integer() || value < 1 || value > 1024)
+                    return std::unexpected("Field 'stochastic_max_frames' must be an integer in [1, 1024]");
+                settings.stochastic_max_frames = value.get<int>();
+                touched = true;
+            }
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
@@ -1916,6 +1992,11 @@ namespace lfs::app {
                                             core::required_scene_export_extension(format)));
 
             const auto& scene = scene_manager.getScene();
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
+            const auto* const trainer_manager = scene_manager.getTrainerManager();
+            const auto export_crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt;
+            // A cropped copy of the training model; the scene model stays whole so a stopped run can resume.
+            std::optional<core::SplatData> cropped;
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
             for (const auto& name : node_names) {
@@ -1926,7 +2007,14 @@ namespace lfs::app {
                         return std::unexpected(std::format(
                             "Cannot export '{}': the model is too large to fit in memory and streams from disk", name));
                     }
-                    splats.emplace_back(node->model.get(), vis::scene_coords::nodeDataWorldTransform(scene, node->id));
+                    const core::SplatData* data = node->model.get();
+                    if (export_crop && node->uuid == scene.getTrainingModelNodeUuid() &&
+                        (cropped = training::crop_copy_to_training_cropbox(*data, *export_crop))) {
+                        if (cropped->size() == 0)
+                            continue;
+                        data = &*cropped;
+                    }
+                    splats.emplace_back(data, vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
             }
 
@@ -1942,7 +2030,6 @@ namespace lfs::app {
             const int effective_sh_degree = std::clamp(sh_degree.value_or(max_sh_degree), 0, max_sh_degree);
             const bool sh_degree_was_clamped = sh_degree && effective_sh_degree != *sh_degree;
 
-            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names, format);
             auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
                 return std::unexpected("Failed to merge scene nodes for export");
@@ -1987,7 +2074,12 @@ namespace lfs::app {
                 break;
             }
             case core::ExportFormat::HTML_VIEWER: {
-                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path, .provenance = stamp}); !result)
+                const auto bg_color = vis::gui::resolve_html_export_background_color();
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{
+                                                                            .output_path = path,
+                                                                            .provenance = stamp,
+                                                                            .background_color = bg_color});
+                    !result)
                     return std::unexpected(result.error());
                 break;
             }
@@ -2053,14 +2145,10 @@ namespace lfs::app {
 
             const core::PointCloud* point_cloud = nullptr;
             glm::mat4 point_cloud_transform{1.0f};
-            for (const auto* node : scene.getNodes()) {
-                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
-                    !scene.isNodeEffectivelyVisible(node->id)) {
-                    continue;
-                }
+            if (const auto* node = scene.getDatasetPointCloudNode();
+                node && scene.isNodeEffectivelyVisible(node->id)) {
                 point_cloud = node->point_cloud.get();
                 point_cloud_transform = scene.getWorldTransform(node->id);
-                break;
             }
             if (!point_cloud) {
                 for (const auto* node : scene.getNodes()) {
@@ -2431,6 +2519,33 @@ namespace lfs::app {
         }
 
         // --- Scene operations (posted to GUI thread) ---
+        registry.register_tool(
+            McpTool{.name = "scene.generate_collision",
+                    .description = "Voxelize exactly one selected loaded splat into a new undoable collision node; observe collision.main",
+                    .input_schema = {.type = "object", .properties = json{{"voxel_size", {{"type", "number"}}}, {"opacity", {{"type", "number"}}}, {"auto_resolution", {{"type", "boolean"}}}, {"cleanup", {{"type", "boolean"}}}, {"max_gaussian_area", {{"type", "number"}}}}, .required = {}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    if (!viewer_impl->getGuiManager())
+                        throw std::runtime_error("GUI manager is not initialized");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollision({.voxel_size = args.value("voxel_size", .05f), .opacity = args.value("opacity", .1f), .max_gaussian_area = args.value("max_gaussian_area", 0.f), .auto_resolution = args.value("auto_resolution", false), .cleanup = args.value("cleanup", true)});
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
+        registry.register_tool(
+            McpTool{.name = "scene.export_collision",
+                    .description = "Export a collision node UUID to a voxel JSON/binary pair; caller approves replacing both files",
+                    .input_schema = {.type = "object", .properties = json{{"uuid", {{"type", "string"}}}, {"path", {{"type", "string"}}}}, .required = {"uuid", "path"}},
+                    .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer, viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer, [viewer_impl, args]() -> json {
+                    const auto uuid = core::Uuid::from_string(args.at("uuid").get<std::string>());
+                    if (!uuid || !viewer_impl->getGuiManager())
+                        throw std::invalid_argument("Invalid collision UUID or unavailable GUI");
+                    viewer_impl->getGuiManager()->asyncTasks().startCollisionExport(*uuid, core::utf8_to_path(args.at("path").get<std::string>()));
+                    return json{{"job_id", "collision.main"}};
+                });
+            });
 
         registry.register_tool(
             McpTool{
@@ -2442,7 +2557,7 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Path to a splat file or SSOG directory"}}}},
                     .required = {"path"}}},
             [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+                std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
 
                 auto result = post_and_wait(viewer, [viewer, path]() {
                     return viewer->loadPLY(path);
@@ -2634,6 +2749,8 @@ namespace lfs::app {
                          true},
                     };
                 }
+                if (*result == vis::ProjectOpenOutcome::Deferred)
+                    return json{{"status", "switch_pending"}};
                 auto info = post_and_wait(
                     viewer, [viewer] {
                         return viewer->projectGetInfo();
@@ -2743,8 +2860,17 @@ namespace lfs::app {
                                                       : core::make_provenance_stamp())
                                                : core::make_minimal_provenance_stamp();
 
+                        // A cropped copy with "Crop to ROI at end" on; the model stays whole so a stopped run can resume.
+                        std::optional<core::SplatData> cropped;
+                        const auto* const trainer_manager =
+                            viewer->getSceneManager() ? viewer->getSceneManager()->getTrainerManager() : nullptr;
+                        if (const auto crop = trainer_manager ? trainer_manager->exportCropBox() : std::nullopt)
+                            cropped = training::crop_copy_to_training_cropbox(*model, *crop);
+                        if (cropped && cropped->size() == 0)
+                            return std::unexpected("No splat lies inside the crop box or polygon");
+
                         io::PlySaveOptions options{.output_path = path, .binary = true, .provenance = stamp};
-                        auto result = io::save_ply(*model, options);
+                        auto result = io::save_ply(cropped ? *cropped : *model, options);
                         if (!result)
                             return std::unexpected(result.error().message);
                         return {};
@@ -2898,15 +3024,12 @@ namespace lfs::app {
                 auto result = [&]() -> lfs::Result<std::string> {
                     if (panel_id.empty())
                         return lfs::from_legacy_expected(
-                            capture_after_gui_render(viewer, [viewer, width, height]() {
-                                return capture_full_window_to_base64(viewer, width, height);
-                            }),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Unavailable,
-                                .domain = lfs::ErrorDomain::MCP,
-                                .operation = "Capture composited app window",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                            capture_after_gui_render(viewer, [viewer, width, height]() { return capture_full_window_to_base64(viewer, width, height); }, true), lfs::LegacyErrorContext{
+                                                                                                                                                                    .code = lfs::ErrorCode::Unavailable,
+                                                                                                                                                                    .domain = lfs::ErrorDomain::MCP,
+                                                                                                                                                                    .operation = "Capture composited app window",
+                                                                                                                                                                    .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                                                                                                                });
                     auto promise = std::make_shared<std::promise<lfs::Result<vis::VulkanContext::WindowCapture>>>();
                     auto future = promise->get_future();
                     const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
@@ -3329,10 +3452,18 @@ namespace lfs::app {
                         {"environment_exposure", json{{"type", "number"}}},
                         {"environment_rotation_degrees", json{{"type", "number"}}},
                         {"raster_backend", json{{"type", "string"}, {"enum", json::array({"3dgs", "3dgut"})}}},
+                        {"transparency_mode", json{{"type", "string"}, {"enum", json::array({"alpha_blend", "stochastic", "steady_splats"})}}},
+                        {"stochastic_max_frames", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 1024}}},
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
                         {"point_cloud_mode", json{{"type", "boolean"}}},
+                        {"selection_outline", json{{"type", "boolean"}}},
+                        {"selection_outline_holes", json{{"type", "boolean"}}},
+                        {"selection_outline_color", json{{"type", "array"}, {"items", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}}, {"minItems", 3}, {"maxItems", 3}}},
+                        {"selection_outline_opacity", json{{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                        {"selection_outline_width", json{{"type", "number"}, {"minimum", 1}, {"maximum", 12}}},
+                        {"selection_outline_threshold", json{{"type", "number"}, {"minimum", 0.05}, {"maximum", 0.95}}},
                         {"show_crop_box", json{{"type", "boolean"}}},
                         {"use_crop_box", json{{"type", "boolean"}}},
                         {"show_ellipsoid", json{{"type", "boolean"}}},
@@ -3466,10 +3597,17 @@ namespace lfs::app {
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
                     if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&params->getActiveParams());
                         for (const auto& change : changes) {
                             if (change.meta.id == "iterations" &&
                                 trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
                                 return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                            if (change.meta.needs_restart()) {
+                                auto current_val = change.meta.getter(ref);
+                                if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
+                                }
                             }
                         }
                     }
@@ -3817,7 +3955,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3862,7 +4000,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3914,7 +4052,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -3969,7 +4107,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4014,7 +4152,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4059,7 +4197,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4104,7 +4242,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4149,7 +4287,7 @@ namespace lfs::app {
                         {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto sh_degree = requested_export_sh_degree(args);
                 const bool include_provenance = args.value("include_provenance", true);
 
@@ -4190,7 +4328,7 @@ namespace lfs::app {
                         {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
-                const std::filesystem::path path = args["path"].get<std::string>();
+                const std::filesystem::path path = lfs::core::utf8_to_path(args["path"].get<std::string>());
                 const auto source_arg = optional_string_arg(args, "source_path");
                 const auto format = parse_colmap_write_format(args.value("format", "auto"));
 
@@ -4689,6 +4827,85 @@ namespace lfs::app {
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
             });
+
+        for (const bool solve_scale : {false, true}) {
+            json properties{
+                {"family", {{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
+                {"min_views", {{"type", "integer"}, {"description", "Minimum number of camera views per tag (default: 2)"}}},
+                {"min_parallax_deg", {{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
+                {"max_reprojection_error_px", {{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
+                {"max_hamming", {{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
+                {"min_decision_margin", {{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
+                {"active_cameras_only", {{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
+                {"max_image_width", {{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
+            };
+            if (solve_scale) {
+                properties.update(json{
+                    {"constraints", {{"type", "array"}, {"description", "Array of {tag_a, tag_b, distance} constraints in real-world units"}}},
+                    {"inlier_relative_threshold", {{"type", "number"}, {"description", "RANSAC relative error threshold (default: 0.02)"}}},
+                    {"inlier_absolute_threshold", {{"type", "number"}, {"description", "Optional RANSAC absolute error floor (default: 0.0)"}}},
+                    {"min_inliers", {{"type", "integer"}, {"description", "Minimum required inlier constraints (default: 1)"}}},
+                    {"min_inlier_ratio", {{"type", "number"}, {"description", "Minimum required inlier ratio (default: 0.5)"}}},
+                    {"manifest_path", {{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
+                    {"apply_to_scene", {{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
+                    {"targets", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Explicit partial targets; omitted targets scale the complete scene"}}},
+                });
+            }
+            registry.register_tool(
+                McpTool{
+                    .name = solve_scale ? "transform.scale_by_apriltags" : "transform.detect_apriltags",
+                    .description = solve_scale
+                                       ? "Start an AprilTag scene calibration job; read results with runtime.job_describe for apriltag.scan"
+                                       : "Start an AprilTag detection job; read results with runtime.job_describe for apriltag.scan",
+                    .input_schema = {
+                        .type = "object",
+                        .properties = std::move(properties),
+                        .required = solve_scale ? std::vector<std::string>{"constraints"} : std::vector<std::string>{}},
+                    .metadata = {
+                        .category = "transform",
+                        .kind = "mutation",
+                        .runtime = "gui",
+                        .thread_affinity = "gui_thread",
+                        .long_running = true,
+                        .user_visible = true,
+                    }},
+                [viewer_impl, solve_scale](const json& args) -> json {
+                    return post_and_wait(viewer_impl, [viewer_impl, solve_scale, args]() -> json {
+                        if (!viewer_impl->getSceneManager())
+                            return {{"error", "Scene manager not initialized"}};
+                        auto* gui = viewer_impl->getGuiManager();
+                        if (!gui)
+                            return {{"error", "GUI manager not initialized"}};
+                        std::vector<geometry::apriltag::TagDistanceConstraint> constraints;
+                        if (solve_scale) {
+                            if (!args.contains("constraints") || !args["constraints"].is_array())
+                                return {{"error", "'constraints' must be an array of {tag_a, tag_b, distance} objects"}};
+                            for (const auto& item : args["constraints"]) {
+                                if (!item.is_object() || !item.contains("tag_a") || !item.contains("tag_b"))
+                                    return {{"error", "Each constraint must contain 'tag_a', 'tag_b', and 'distance'"}};
+                                constraints.push_back({item["tag_a"].get<int>(), item["tag_b"].get<int>(),
+                                                       item.contains("distance") ? item["distance"].get<double>() : item.value("target_distance", 0.0)});
+                            }
+                        }
+                        std::vector<std::string> targets;
+                        if (solve_scale && args.contains("targets") && args["targets"].is_array()) {
+                            for (const auto& target : args["targets"]) {
+                                if (target.is_string())
+                                    targets.push_back(target.get<std::string>());
+                            }
+                        }
+                        try {
+                            const auto request = gui->asyncTasks().startAprilTagScan(vis::aprilTagSceneScaleOptions(args),
+                                                                                     std::move(constraints), std::move(targets), solve_scale, solve_scale && args.value("apply_to_scene", true));
+                            if (!request)
+                                return {{"error", request.error()}};
+                        } catch (const std::invalid_argument& e) {
+                            return {{"error", e.what()}};
+                        }
+                        return {{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
+                    });
+                });
+        }
 
         registry.register_tool(
             McpTool{
@@ -5977,9 +6194,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_full_window_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -5993,9 +6208,7 @@ namespace lfs::app {
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_full_window_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 }
                 if (!result)
                     return std::unexpected(result.error());

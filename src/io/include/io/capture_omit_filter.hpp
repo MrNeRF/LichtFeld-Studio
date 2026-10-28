@@ -14,7 +14,9 @@
 namespace lfs::io::project {
 
     // Closes omit roots over scene descendants once. Unresolvable roots stay
-    // in the set. KEYFRAME exclusion is orthogonal and lives in each capture.
+    // in the set. Transient nodes are omit roots too: they are never saved,
+    // whichever capture runs. KEYFRAME exclusion is orthogonal and lives in
+    // each capture.
     class CaptureOmitFilter {
     public:
         CaptureOmitFilter(
@@ -27,6 +29,12 @@ namespace lfs::io::project {
                     continue;
                 }
                 collect_descendants(scene, *node);
+            }
+            for (const lfs::core::SceneNode* node : scene.getNodes()) {
+                if (node != nullptr && node->transient) {
+                    omitted_.insert(node->uuid);
+                    collect_descendants(scene, *node);
+                }
             }
         }
 

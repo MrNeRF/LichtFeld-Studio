@@ -9,7 +9,16 @@
       <button class="btn preferences-nav-item" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
       <button class="btn preferences-nav-item" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
       <button class="btn preferences-nav-item" data-class-active="show_viewport" data-event-click="show_viewport">@tr:preferences.viewport</button>
-      <button class="btn preferences-nav-item" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
+      <button class="btn preferences-nav-item preferences-nav-group" data-class-active="show_input" data-event-click="show_input">
+        <span class="preferences-nav-group-label">@tr:preferences.input</span>
+        <span class="preferences-nav-disclosure" data-if="!input_expanded">&#x25C0;</span>
+        <span class="preferences-nav-disclosure" data-if="input_expanded">&#x25BC;</span>
+      </button>
+      <div class="preferences-nav-children" data-if="input_expanded">
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_navigation" data-event-click="input_page('navigation')">@tr:preferences.input_navigation</button>
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_shortcuts" data-event-click="input_page('shortcuts')">@tr:preferences.input_shortcuts</button>
+        <button class="preferences-nav-item preferences-nav-child" data-class-active="show_input_gamepad" data-event-click="input_page('gamepad')">@tr:preferences.input_gamepad</button>
+      </div>
       <button class="btn preferences-nav-item" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
       <button class="btn preferences-nav-item" data-class-active="show_file_associations" data-event-click="show_file_associations" data-if="has_file_associations">@tr:preferences.file_associations</button>
       <button class="btn preferences-nav-item" data-class-active="show_marketplace" data-event-click="show_marketplace">@tr:preferences.marketplace</button>
@@ -17,6 +26,12 @@
       <button class="btn preferences-nav-item" data-class-active="show_portal" data-event-click="show_portal">@tr:preferences.portal</button>
     </div>
 
+    <div class="preferences-main">
+      <div class="preferences-page-header" data-if="show_input">
+        <span class="preferences-page-title">{{ input_page_title }}</span>
+        <button class="btn btn--secondary" data-if="show_gamepad_controls" data-event-click="gamepad_page('test')">@tr:preferences.open_gamepad_test</button>
+        <button class="btn btn--secondary" data-if="show_gamepad_test" data-event-click="gamepad_page('controls')">@tr:preferences.back_to_gamepad</button>
+      </div>
     <div class="preferences-content">
       <div class="preferences-section" data-if="show_general">
         <div class="section-header text-accent" data-class-is-expanded="language_expanded" data-event-click="toggle_section('language')">
@@ -181,6 +196,38 @@
           <span class="preferences-label">@tr:main_panel.camera_frustums</span>
           <input type="checkbox" class="" data-checked="default_show_camera_frustums" />
         </div>
+        <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline">
+          <span class="preferences-label">@tr:main_panel.selection_outline</span>
+          <input type="checkbox" data-checked="default_selection_outline" />
+        </div>
+        <div data-if="default_selection_outline">
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_color">
+            <span class="preferences-label">@tr:main_panel.selection_outline_color</span>
+            <div class="preferences-color">
+              <div class="color-swatch" data-style-background-color="default_selection_outline_color_swatch" data-event-click="default_color_click('selection_outline_color')"></div>
+              <input type="text" class="preferences-select" data-value="default_selection_outline_color" />
+            </div>
+          </div>
+          <div id="picker-selection_outline_color" class="preferences-color-picker" data-if="default_color_editing == 'selection_outline_color'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+            <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_opacity">
+            <span class="preferences-label">@tr:main_panel.selection_outline_opacity</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_opacity" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_width">
+            <span class="preferences-label">@tr:main_panel.selection_outline_width</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_width" />
+          </div>
+          <div class="preferences-row" data-tooltip="tooltip.selection_outline_threshold">
+            <span class="preferences-label">@tr:main_panel.selection_outline_threshold</span>
+            <input type="text" class="preferences-select" data-value="default_selection_outline_threshold" />
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.selection_outline_holes">
+            <span class="preferences-label">@tr:main_panel.selection_outline_holes</span>
+            <input type="checkbox" data-checked="default_selection_outline_holes" />
+          </div>
+        </div>
         <div class="preferences-row preferences-checkbox-row" data-tooltip="tooltip.desaturate_unselected">
           <span class="preferences-label">@tr:main_panel.desaturate_unselected</span>
           <input type="checkbox" class="" data-checked="default_desaturate_unselected" />
@@ -194,32 +241,44 @@
           <input type="checkbox" class="" data-checked="default_hide_outside_depth_box" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.axes_size">
-          <span class="preferences-label">@tr:main_panel.axes_size</span>
+          <span class="preferences-label" data-reset-prop="axes_size">@tr:main_panel.axes_size</span>
           <input type="text" class="preferences-select" data-value="default_axes_size" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.grid_opacity">
-          <span class="preferences-label">@tr:main_panel.grid_opacity</span>
+          <span class="preferences-label" data-reset-prop="grid_opacity">@tr:main_panel.grid_opacity</span>
           <input type="text" class="preferences-select" data-value="default_grid_opacity" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.camera_frustum_scale">
-          <span class="preferences-label">@tr:main_panel.camera_frustum_scale</span>
+          <span class="preferences-label" data-reset-prop="camera_frustum_scale">@tr:main_panel.camera_frustum_scale</span>
           <input type="text" class="preferences-select" data-value="default_camera_frustum_scale" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_preview">
-          <span class="preferences-label">@tr:main_panel.preview</span>
-          <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+          <span class="preferences-label" data-reset-prop="selection_color_preview">@tr:main_panel.preview</span>
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_preview_swatch" data-event-click="default_color_click('selection_color_preview')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_preview" />
+          </div>
+        </div>
+        <div id="picker-selection_color_preview" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_preview'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.selection_color_center_marker">
-          <span class="preferences-label">@tr:main_panel.center_marker</span>
-          <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+          <span class="preferences-label" data-reset-prop="selection_color_center_marker">@tr:main_panel.center_marker</span>
+          <div class="preferences-color">
+            <div class="color-swatch" data-style-background-color="default_selection_color_center_marker_swatch" data-event-click="default_color_click('selection_color_center_marker')"></div>
+            <input type="text" class="preferences-select" data-value="default_selection_color_center_marker" />
+          </div>
+        </div>
+        <div id="picker-selection_color_center_marker" class="preferences-color-picker" data-if="default_color_editing == 'selection_color_center_marker'" data-event-mouseup="default_color_commit" data-event-dragend="default_color_commit">
+          <color-picker data-attr-red="default_picker_r" data-attr-green="default_picker_g" data-attr-blue="default_picker_b" data-event-change="default_picker_change" />
         </div>
         <div class="section-header text-accent">@tr:preferences.viewport_performance_defaults</div>
         <div class="preferences-row" data-tooltip="tooltip.lod_page_pool_splats">
-          <span class="preferences-label">@tr:rendering_panel.lod_page_pool_splats</span>
+          <span class="preferences-label" data-reset-prop="lod_page_pool_splats">@tr:rendering_panel.lod_page_pool_splats</span>
           <input type="text" class="preferences-select" data-value="default_lod_page_pool_splats" />
         </div>
         <div class="preferences-row" data-tooltip="tooltip.lod_pool_vram_fraction">
-          <span class="preferences-label">@tr:rendering_panel.lod_pool_vram_fraction</span>
+          <span class="preferences-label" data-reset-prop="lod_pool_vram_fraction">@tr:rendering_panel.lod_pool_vram_fraction</span>
           <input type="text" class="preferences-select" data-value="default_lod_pool_vram_fraction" />
         </div>
         <span class="preferences-description status-error">{{rendering_defaults_error}}</span>
@@ -329,7 +388,133 @@
         </div>
       </div>
 
-      <div class="preferences-section" data-if="show_input">
+      <div class="preferences-section" data-if="show_gamepad_controls">
+        <div class="section-header text-accent">@tr:gamepad.navigation_title</div>
+        <div class="section-content">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="gamepad.navigation_help">
+            <span class="preferences-label">@tr:gamepad.navigation_enabled</span>
+            <input type="checkbox" data-checked="gamepad_navigation_enabled" />
+          </div>
+          <div class="preferences-row">
+            <span class="preferences-label">@tr:gamepad.navigation_device</span>
+            <select id="gamepad-navigation-device" class="preferences-select" data-value="gamepad_navigation_id" data-attr-title="gamepad_navigation_preset">
+              <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
+            </select>
+          </div>
+          <span class="preferences-description" data-if="gamepad_navigation_show_status">{{ gamepad_navigation_status }}</span>
+          <div class="preferences-row" data-tooltip="gamepad.profile.help">
+            <span class="preferences-label">@tr:gamepad.profile.active</span>
+            <div class="preferences-field-actions">
+              <select id="gamepad-profile-select" class="preferences-select" data-value="gamepad_profile_id">
+                <option data-for="profile : gamepad_profiles" data-attr-value="profile.id">{{ profile.label }}</option>
+              </select>
+              <button class="btn btn--secondary" data-event-click="gamepad_profile_toggle" data-attr-title="gamepad_profile_manage_title">&#x2026;</button>
+            </div>
+          </div>
+          <div class="preferences-inline-actions" data-if="gamepad_profile_manage">
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_new">@tr:gamepad.profile.new</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_duplicate">@tr:gamepad.profile.duplicate</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_rename">@tr:gamepad.profile.rename</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_delete" data-attrif-disabled="!gamepad_profile_can_delete">@tr:gamepad.profile.delete</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_import">@tr:gamepad.profile.import</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_profile_export">@tr:gamepad.profile.export</button>
+          </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="gamepad.profile.remember_help">
+            <span class="preferences-label">@tr:gamepad.profile.remember</span>
+            <input type="checkbox" data-checked="gamepad_profile_remember" data-attrif-disabled="!gamepad_profile_has_device" />
+          </div>
+          <span class="preferences-description" data-if="gamepad_profile_message != ''">{{ gamepad_profile_message }}</span>
+          <div class="preferences-settings-group">
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.dead_zone</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_dead_zone" min="0.05" max="0.5" step="0.01" />
+                <span class="slider-value">{{ gamepad_dead_zone }}</span>
+              </div>
+            </div>
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.look_speed</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_look_speed" min="0.1" max="5" step="0.1" />
+                <span class="slider-value">{{ gamepad_look_speed }}</span>
+              </div>
+            </div>
+            <div class="setting-row setting-row--aligned">
+              <span class="setting-row__label-col">@tr:gamepad.move_speed</span>
+              <div class="setting-row__control-col setting-row__control-col--slider">
+                <input type="range" class="setting-slider" data-value="gamepad_move_speed" min="0.1" max="5" step="0.1" />
+                <span class="slider-value">{{ gamepad_move_speed }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="preferences-section" data-if="show_gamepad_controls">
+        <div class="section-header text-accent" data-class-is-expanded="gamepad_bindings_expanded" data-event-click="toggle_section('gamepad_bindings')">
+          <span class="section-arrow text-accent" data-class-is-expanded="gamepad_bindings_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:gamepad.binding.title</span>
+        </div>
+        <div class="section-content" data-if="gamepad_bindings_expanded">
+          <div class="preferences-row">
+            <span class="preferences-label" data-tooltip="gamepad.binding.context_help">@tr:gamepad.binding.context</span>
+            <select class="preferences-select" data-value="gamepad_binding_scope">
+              <option data-for="scope : gamepad_binding_scopes" data-attr-value="scope.id">{{ scope.label }}</option>
+            </select>
+          </div>
+          <span class="preferences-description">{{ gamepad_binding_message }}</span>
+          <div class="preferences-inline-actions" data-if="gamepad_binding_capturing">
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_cancel()">@tr:common.cancel</button>
+            <button class="btn btn--secondary" data-if="gamepad_binding_can_skip" data-event-click="gamepad_binding_skip()">@tr:gamepad.binding.skip</button>
+          </div>
+          <div class="preferences-bindings-table">
+            <div data-for="binding : gamepad_binding_rows">
+              <div class="preferences-binding-row preferences-control-assignment">
+                <span class="preferences-action-name">{{ binding.label }}</span>
+                <span class="preferences-binding-desc">
+                  <span data-if="binding.inherited" data-tooltip="gamepad.binding.inherited">&#x21B3; </span>
+                  {{ binding.value }}
+                  <span data-if="binding.inverted" data-tooltip="gamepad.binding.inverted"> (−)</span>
+                </span>
+                <button class="btn btn--secondary preferences-rebind-btn" data-event-click="gamepad_binding_edit(binding.id, 'assign')">@tr:gamepad.binding.assign</button>
+                <button class="btn btn--secondary preferences-assignment-menu" data-tooltip="gamepad.binding.options" data-event-click="gamepad_binding_edit(binding.id, 'options')">&#x22EF;</button>
+              </div>
+              <div class="preferences-inline-actions preferences-assignment-options" data-if="binding.expanded">
+                <button class="btn btn--secondary" data-if="binding.continuous" data-class-active="binding.inverted" data-event-click="gamepad_binding_edit(binding.id, 'invert')">@tr:gamepad.binding.invert</button>
+                <button class="btn btn--secondary" data-if="binding.assigned" data-event-click="gamepad_binding_edit(binding.id, 'clear')">@tr:gamepad.binding.clear</button>
+                <button class="btn btn--secondary" data-if="binding.overridden" data-event-click="gamepad_binding_edit(binding.id, 'inherit')">{{ binding.inherit_label }}</button>
+              </div>
+            </div>
+          </div>
+          <div class="preferences-inline-actions">
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_shoulder_preset()" data-if="gamepad_binding_scope != 'sequencer'">@tr:gamepad.binding.shoulder_preset</button>
+            <button class="btn btn--secondary" data-event-click="gamepad_binding_reset()">@tr:gamepad.binding.reset</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="preferences-section" data-if="show_gamepad_test">
+        <div class="section-header text-accent">@tr:gamepad.title</div>
+        <div class="section-content">
+          <select id="gamepad-test-device" class="preferences-select" data-value="gamepad_test_id" data-tooltip="gamepad.help">
+            <option data-for="device : gamepad_test_devices" data-attr-value="device.id">{{ device.label }}</option>
+          </select>
+          <span class="preferences-description">{{ gamepad_test_status }}</span>
+          <div data-for="axis : gamepad_test_axis_rows">
+            <span class="preferences-metric-heading text-accent" data-if="axis.group_start">{{ axis.group }}</span>
+            <div class="preferences-metric-row" data-class-unavailable="!axis.available">
+              <span class="preferences-metric-label">{{ axis.label }}</span>
+              <progress max="1" data-attr-value="axis.magnitude" />
+              <span class="preferences-metric-value">{{ axis.value }}</span>
+            </div>
+          </div>
+          <span class="preferences-metric-heading text-accent">@tr:gamepad.buttons</span>
+          <div class="preferences-metric-tokens">
+            <span class="preferences-description" data-if="gamepad_test_buttons_empty">—</span>
+            <span class="preferences-metric-token" data-for="button : gamepad_test_button_rows">{{ button.label }}</span>
+          </div>
+        </div>
+      </div>
+      <div class="preferences-section" data-if="show_input_navigation">
         <div class="section-header text-accent" data-class-is-expanded="navigation_expanded" data-event-click="toggle_section('navigation')">
           <span class="section-arrow text-accent" data-class-is-expanded="navigation_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.camera_navigation</span>
@@ -367,6 +552,20 @@
               <span class="slider-value">{{ navigation_speed | format_int }}</span>
             </div>
           </div>
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.camera_browse_repeat_tooltip">
+            <span class="preferences-label">@tr:preferences.camera_browse_repeat</span>
+            <input type="checkbox" data-checked="camera_browse_repeat" />
+          </div>
+          <div class="setting-row setting-row--aligned" data-if="camera_browse_repeat">
+            <span class="setting-row__label-col">@tr:preferences.camera_browse_repeat_rate</span>
+            <div class="setting-row__control-col preferences-repeat-rate">
+              <input type="text" class="number-input" data-value="camera_browse_repeat_rate" maxlength="2"
+                     data-event-change="camera_repeat_rate_change(ev.value)"
+                     data-event-blur="commit_camera_repeat_rate" data-event-escapecancel="cancel_camera_repeat_rate" />
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(-1)">-</button>
+              <button class="num-step-btn" data-event-click="step_camera_repeat_rate(1)">+</button>
+            </div>
+          </div>
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />
@@ -388,12 +587,13 @@
           </div>
         </div>
 
+      </div>
+      <div class="preferences-section" data-if="show_input_shortcuts">
         <div class="section-header text-accent" data-class-is-expanded="key_bindings_expanded" data-event-click="toggle_section('key_bindings')">
           <span class="section-arrow text-accent" data-class-is-expanded="key_bindings_expanded">&#x25B6;</span>
           <span class="text-accent">@tr:preferences.key_bindings</span>
         </div>
         <div class="section-content" data-if="key_bindings_expanded">
-          <span class="preferences-description">@tr:preferences.gallery.shortcuts_hint</span>
           <div class="preferences-row">
             <span class="preferences-label">@tr:input_settings.active_profile</span>
             <select id="profile-select" class="preferences-select" data-value="profile_idx"
@@ -409,7 +609,12 @@
             </select>
           </div>
           <span class="preferences-description">@tr:input_settings.select_tool_mode</span>
+          <div class="preferences-row preferences-binding-search">
+            <input type="text" data-value="binding_search" placeholder="@tr:input_settings.search_commands" data-attrif-disabled="is_capturing" />
+            <button class="btn btn--secondary" data-event-click="clear_binding_search" data-attrif-disabled="is_capturing">@tr:input_settings.clear_search</button>
+          </div>
           <span class="preferences-description" id="bindings-hint">{{bindings_hint}}</span>
+          <span class="preferences-description" data-if="binding_search_empty">@tr:input_settings.no_matches</span>
           <div id="bindings-table" class="preferences-bindings-table">
             <div data-for="row : binding_rows">
               <span class="preferences-binding-section" data-if="row.is_section">{{ row.section_title }}</span>
@@ -438,6 +643,7 @@
           </div>
           <span class="preferences-description">@tr:input_settings.save_hint</span>
           <span class="preferences-description">@tr:input_settings.double_click_hint</span>
+          <span class="preferences-description">@tr:preferences.gallery.shortcuts_hint</span>
         </div>
       </div>
 
@@ -467,11 +673,22 @@
           <span class="text-accent">@tr:preferences.scene_graph</span>
         </div>
         <div class="section-content" data-if="scene_graph_expanded">
-          <div class="preferences-row preferences-checkbox-row preferences-interface-option">
+          <div class="preferences-row preferences-checkbox-row preferences-interface-option" data-tooltip="preferences.scene_graph_selection_markers_description">
             <span class="preferences-label">@tr:preferences.scene_graph_selection_markers</span>
             <input type="checkbox" data-checked="scene_graph_selection_markers" data-attrif-disabled="mcp_safe_mode" />
           </div>
-          <span class="preferences-description">@tr:preferences.scene_graph_selection_markers_description</span>
+          <div class="preferences-row" data-tooltip="preferences.drag_format_hint">
+            <span class="preferences-label">@tr:preferences.drag_default</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_format"><option value="ply">@tr:preferences.drag_ply</option><option value="spz">@tr:preferences.drag_spz</option></select>
+          </div>
+          <div class="preferences-row" data-tooltip="preferences.drag_sh_hint">
+            <span class="preferences-label">@tr:preferences.drag_sh_limit</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_sh_degree"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select>
+          </div>
+          <div class="preferences-row" data-if="splat_drag_format == 'ply'" data-tooltip="preferences.drag_axes_hint">
+            <span class="preferences-label">@tr:preferences.drag_up_axis</span>
+            <select class="preferences-select" data-attrif-disabled="mcp_safe_mode" data-value="splat_drag_up_axis"><option value="-2">@tr:preferences.drag_axis_default</option><option value="2">@tr:preferences.drag_axis_positive_y</option><option value="-3">@tr:preferences.drag_axis_negative_z</option><option value="3">@tr:preferences.drag_axis_positive_z</option></select>
+          </div>
         </div>
       </div>
 
@@ -553,6 +770,7 @@
     </div>
   </div>
 
+  </div>
   <div class="preferences-actions">
     <div class="preferences-footer-sidebar"></div>
     <div class="preferences-footer-gutter"></div>

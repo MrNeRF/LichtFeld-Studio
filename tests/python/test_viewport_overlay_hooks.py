@@ -147,6 +147,7 @@ def _install_stub_modules(monkeypatch):
     )
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.get_collision_state = lambda: {"has_collision": False}
     lf_stub.ui = ui_stub
     lf_stub.can_transform_selection = lambda: True
     lf_stub.get_selected_node_names = lambda: []

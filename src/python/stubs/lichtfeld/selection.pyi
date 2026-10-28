@@ -86,10 +86,10 @@ def get_depth_filter_range() -> tuple[bool, float, float, float]:
     """
 
 def set_crop_filter(enabled: bool) -> None:
-    """Enable/disable crop box filtering for selection"""
+    """Enable/disable crop volume filtering for selection"""
 
 def apply_crop_filter() -> None:
-    """Apply crop box filter to current stroke selection"""
+    """Apply the crop volume filter to the current stroke selection"""
 
 def get_viewport_bounds() -> tuple[float, float, float, float]:
     """Get viewport bounds (x, y, width, height)"""

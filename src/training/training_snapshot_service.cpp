@@ -4,6 +4,7 @@
  */
 
 #include "training_snapshot_service.hpp"
+#include "core/native_fs.hpp"
 
 #include "checkpoint.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -142,7 +143,7 @@ namespace lfs::training {
 
         std::uint64_t read_rss_bytes() {
 #if defined(__linux__)
-            std::ifstream input("/proc/self/status");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/self/status"));
             std::string line;
             while (std::getline(input, line)) {
                 if (!line.starts_with("VmRSS:")) {
@@ -179,7 +180,7 @@ namespace lfs::training {
                 };
             }
 #elif defined(__linux__)
-            std::ifstream input("/proc/meminfo");
+            std::ifstream input(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(input, line)) {
                 unsigned long long kib = 0;
@@ -1366,7 +1367,12 @@ namespace lfs::training {
 
         void shutdown() {
             if (drain_thread.joinable()) {
-                drain_thread.request_stop();
+                {
+                    // Under the mutex, so the drain thread between its predicate check and
+                    // its wait cannot miss the stop and sleep through the notify.
+                    std::scoped_lock lock(ring_mutex);
+                    drain_thread.request_stop();
+                }
                 ring_condition.notify_all();
                 drain_thread.join();
             }
@@ -1905,7 +1911,7 @@ namespace lfs::training {
                     request.strategy, request.params,
                     request.bilateral_grid, request.ppisp,
                     request.ppisp_controller_pool,
-                    request.sparsity_optimizer);
+                    request.popspa_controller, request.popspa_optimizer);
                 if (!serialized) {
                     return lfs::Status::failure(
                         std::move(serialized)
@@ -1988,7 +1994,7 @@ namespace lfs::training {
                 request.strategy, request.params,
                 request.bilateral_grid, request.ppisp,
                 request.ppisp_controller_pool,
-                request.sparsity_optimizer);
+                request.popspa_controller, request.popspa_optimizer);
             if (!serialized) {
                 return std::move(serialized)
                     .error()
@@ -2273,8 +2279,8 @@ namespace lfs::training {
                         request.ppisp,
                         request
                             .ppisp_controller_pool,
-                        request
-                            .sparsity_optimizer);
+                        request.popspa_controller,
+                        request.popspa_optimizer);
                 if (!serialized) {
                     const auto& error =
                         serialized.error();

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/persisted_settings.hpp"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"
@@ -88,7 +90,7 @@ namespace lfs::core::persisted_settings {
     } // namespace
 
     Json readObject(const std::filesystem::path& path) {
-        std::ifstream stream(path, std::ios::binary);
+        std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!stream)
             throw std::runtime_error("settings file could not be opened");
         Json result = Json::parse(stream);
@@ -145,14 +147,14 @@ namespace lfs::core::persisted_settings {
         Json existing = Json::object();
         bool already_backed_up = false;
         std::error_code error;
-        const bool exists = std::filesystem::exists(path, error);
+        const bool exists = lfs::core::native_fs::exists(path, error);
         if (error)
             throw std::runtime_error("settings file could not be inspected: " + error.message());
         if (exists) {
             try {
                 existing = readObject(path);
             } catch (const std::exception& read_error) {
-                LOG_WARN("Could not load settings from '{}': {}", path.string(), read_error.what());
+                LOG_WARN("Could not load settings from '{}': {}", lfs::core::path_to_utf8(path), read_error.what());
                 backupDamaged(path, backup_root);
                 already_backed_up = true;
                 if (backed_up)

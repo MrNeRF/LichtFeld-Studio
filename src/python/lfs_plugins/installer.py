@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin dependency installer using uv."""
+from _lfs_path_io import native_path, open, executable_kwargs
 
 from collections import deque
 from dataclasses import asdict, dataclass
@@ -11,7 +12,7 @@ import json
 import logging
 import os
 import platform
-from pathlib import Path
+from _lfs_path_io import Path
 from pathlib import PurePosixPath
 import queue
 import shutil
@@ -199,6 +200,7 @@ def _run_cancellable_process(
         "env": env,
     }
     popen_kwargs.update(_process_group_popen_kwargs())
+    popen_kwargs.update(executable_kwargs(cmd))
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
     output_queue: queue.Queue[Optional[str]] = queue.Queue()
@@ -415,7 +417,7 @@ def _extract_zip_archive(
     dest: Path,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
-    with zipfile.ZipFile(src) as archive:
+    with zipfile.ZipFile(native_path(src)) as archive:
         members: list[tuple[zipfile.ZipInfo, Path]] = []
         for member in archive.infolist():
             rel_path = _sanitize_archive_path(member.filename)
@@ -448,7 +450,7 @@ def _extract_tar_archive(
     if isinstance(src, io.BytesIO):
         archive_file = tarfile.open(fileobj=src, mode="r:*")
     else:
-        archive_file = tarfile.open(src, "r:*")
+        archive_file = tarfile.open(native_path(src), "r:*")
     with archive_file as archive:
         members: list[tuple[tarfile.TarInfo, Path]] = []
         for member in archive.getmembers():
@@ -526,7 +528,7 @@ def prepare_archive_from_download_url(
         )
         if _cancel_requested(should_cancel):
             raise PluginLoadCancelled("Plugin installation cancelled before staging")
-        staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=staging_parent))
+        staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=native_path(staging_parent)))
         archive = archive_path.read_bytes()
         if archive_validator is not None:
             archive_validator(archive)
@@ -534,7 +536,7 @@ def prepare_archive_from_download_url(
         return staging_dir
     except BaseException:
         if staging_dir is not None:
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            shutil.rmtree(native_path(staging_dir, force_extended=True), ignore_errors=True)
         raise
     finally:
         if archive_path is not None:
@@ -816,12 +818,12 @@ class PluginInstaller:
         if not _is_windows():
             bin_path = venv_path / "bin"
             names = ("python", "python3", f"python{current_version[0]}.{current_version[1]}")
-            links = [bin_path / name for name in names if os.path.lexists(bin_path / name)]
+            links = [bin_path / name for name in names if os.path.lexists(native_path(bin_path / name))]
             if not links:
                 bin_path.mkdir(parents=True, exist_ok=True)
                 links = [bin_path / name for name in names]
             for link in links:
-                if os.path.lexists(link) and not link.is_symlink():
+                if os.path.lexists(native_path(link)) and not link.is_symlink():
                     raise RuntimeError(f"plugin venv interpreter is not a symlink: {link}")
             for link in links:
                 if link.is_symlink():
@@ -880,10 +882,10 @@ class PluginInstaller:
                     "Existing plugin venv was not created from bundled Python, recreating: %s",
                     venv_path,
                 )
-                shutil.rmtree(venv_path, ignore_errors=True)
+                shutil.rmtree(native_path(venv_path, force_extended=True), ignore_errors=True)
             else:
                 logger.warning("Broken venv (missing python), removing: %s", venv_path)
-                shutil.rmtree(venv_path)
+                shutil.rmtree(native_path(venv_path, force_extended=True))
 
         uv = self._find_uv()
         if not uv:
@@ -1139,7 +1141,7 @@ def clone_from_url(
     if _cancel_requested(should_cancel):
         raise PluginLoadCancelled("Plugin installation cancelled before git clone")
     plugins_dir.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=plugins_dir))
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=native_path(plugins_dir)))
     keep_staging = False
     try:
         if on_progress:
@@ -1193,7 +1195,7 @@ def clone_from_url(
         return temp_dir
     finally:
         if not keep_staging:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            shutil.rmtree(native_path(temp_dir, force_extended=True), ignore_errors=True)
 
 
 def update_plugin(
@@ -1226,6 +1228,7 @@ def update_plugin(
 
     result = subprocess.run(
         [git, "pull", "--ff-only"],
+        **executable_kwargs([git]),
         cwd=plugin_dir,
         capture_output=True,
         text=True,
@@ -1259,7 +1262,7 @@ def uninstall_plugin(plugin_dir: Path) -> bool:
     def _on_remove_error(func, path, exc):
         # Git marks object/pack files read-only; make writable and retry.
         if isinstance(exc, PermissionError):
-            os.chmod(path, stat.S_IWRITE)
+            os.chmod(native_path(path), stat.S_IWRITE)
             func(path)
             return
         raise exc
@@ -1268,7 +1271,7 @@ def uninstall_plugin(plugin_dir: Path) -> bool:
     last_error: Optional[Exception] = None
     for attempt in range(3):
         try:
-            shutil.rmtree(plugin_dir, onexc=_on_remove_error)
+            shutil.rmtree(native_path(plugin_dir, force_extended=True), onexc=_on_remove_error)
             return True
         except PermissionError as e:
             last_error = e

@@ -187,9 +187,9 @@ namespace lfs::core::nn::kernels {
             const int warp_n = warp % Tile::kWarpsN;
             const int warp_m = warp / Tile::kWarpsN;
             const int ni = static_cast<int>(blockIdx.z);
-            const int n0 = static_cast<int>(blockIdx.x) * BN;
+            const int n0 = static_cast<int>(blockIdx.y) * BN;
             const int tiles_w = (out_w + TW - 1) / TW;
-            const int tile = static_cast<int>(blockIdx.y);
+            const int tile = static_cast<int>(blockIdx.x);
             const int oh0 = (tile / tiles_w) * TH;
             const int ow0 = (tile % tiles_w) * TW;
             const int nchunks = (cin + kBK - 1) / kBK;
@@ -401,7 +401,7 @@ namespace lfs::core::nn::kernels {
                                 const int pad_mode, const int activation,
                                 const cudaStream_t stream) {
             const int tiles = ((out_w + TW - 1) / TW) * ((out_h + TH - 1) / TH);
-            dim3 grid((cout + BN - 1) / BN, tiles, n);
+            dim3 grid(tiles, (cout + BN - 1) / BN, n);
             conv3x3_mma_kernel<BN, TH, TW><<<grid, kThreads, 0, stream>>>(
                 x, wp, b, y, cin, h, w, cout, out_h, out_w, pad_mode, activation);
             LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_mma");

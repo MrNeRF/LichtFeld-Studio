@@ -26,12 +26,13 @@ def _theme_size_values(node, key):
             yield from _theme_size_values(value, key)
 
 
-def test_every_scrollbar_uses_the_theme_size():
-    # Catches a panel or theme drifting back to its own scrollbar width.
+def test_every_visible_scrollbar_uses_the_theme_size():
+    # Keep intentional family metrics while preventing panels from overriding them.
     themes_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
     for theme_path in themes_dir.glob("*.json"):
         theme = json.loads(theme_path.read_text(encoding="utf-8"))
-        assert set(_theme_size_values(theme, "scrollbar_size")) <= {4.0}, theme_path.name
+        expected_scrollbar_size = 6.0 if theme.get("id") == "graphite" else 4.0
+        assert set(_theme_size_values(theme, "scrollbar_size")) <= {expected_scrollbar_size}, theme_path.name
         assert set(_theme_size_values(theme, "grab_min_size")) <= {12.0}, theme_path.name
 
     resources_dir = PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
@@ -40,6 +41,11 @@ def test_every_scrollbar_uses_the_theme_size():
         if rcss_path.name.startswith("components"):
             continue
         for selector, body in rule.findall(rcss_path.read_text(encoding="utf-8")):
+            # Sidebar overflow supports native keyboard focus scrolling, while
+            # its custom tab rail deliberately hides the scrollbar.
+            if rcss_path.name == "right_panel.rcss" and selector.strip() == "#tab-strip-viewport scrollbarvertical":
+                assert re.search(r"\bwidth:\s*0\s*;", body)
+                continue
             assert not re.search(r"\b(?:width|height|min-width|min-height):", body), (
                 f"{rcss_path.name}: {selector.strip()}"
             )
@@ -224,9 +230,7 @@ def test_optional_gradients_style_the_primary_application_chrome():
     consumers = {
         "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
         "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
-        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
         "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
-        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
         "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_icon": ("viewport_overlay.theme.rcss",),
@@ -386,7 +390,7 @@ def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
     assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
 
 
-def test_all_optional_theme_gradients_reach_rml_consumers():
+def test_optional_theme_gradients_remain_supported_and_active_consumers_resolve():
     theme_cpp = (
         PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
     ).read_text(encoding="utf-8")
@@ -452,48 +456,21 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
         assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
         assert f"t.gradients.{gradient}" in rml_theme_cpp
         resource = (resources / resource_name).read_text(encoding="utf-8")
-        assert f"@{{{token}}}" in resource
+        # Legacy histogram gradients still parse and hash, but charts now use
+        # solid semantic colors rather than consuming these decorators.
+        if not gradient.startswith("histogram_"):
+            assert f"@{{{token}}}" in resource
 
 
-def test_histogram_history_icons_follow_theme_contrast():
-    resources = (
-        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
-    )
-    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    rml_theme_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "rml_theme.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        ".histogram-history-icon {\n"
-        "    image-color: @{text};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:hover .histogram-history-icon {\n"
-        "    image-color: @{primary};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        ".histogram-history-btn:disabled .histogram-history-icon {\n"
-        "    image-color: @{panel.histogram_history_icon_disabled};\n"
-        "}"
-        in histogram_theme
-    )
-    assert (
-        '{"panel.histogram_history_icon_disabled", '
-        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
-        in rml_theme_cpp
-    )
+def test_histogram_controls_and_chart_follow_semantic_theme_colors():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    theme = (resources / "histogram_panel.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "histogram_panel.rml").read_text(encoding="utf-8")
+    assert "histogram-history-icon" not in rml
+    assert "vertical-gradient" not in theme
+    assert "@{panel.histogram_fill_decor}" not in theme
+    assert "background-color: @{primary};" in theme
+    assert "background-color: @{warning};" in theme
 
 
 def test_signal_family_keeps_a_distinct_visual_language():
@@ -527,54 +504,32 @@ def test_signal_family_keeps_a_distinct_visual_language():
     )
 
 
-def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
-    sequencer_rml = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.rml"
-    ).read_text(encoding="utf-8")
-    sequencer_rcss = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.rcss"
-    ).read_text(encoding="utf-8")
-    sequencer_theme = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "sequencer.theme.rcss"
-    ).read_text(encoding="utf-8")
+def test_sequencer_export_quality_uses_shared_native_range_and_theme():
+    resources = PROJECT_ROOT / "src/visualizer/gui/rmlui/resources"
+    sequencer = (resources / "sequencer.rml").read_text(encoding="utf-8")
+    modal_css = (resources / "modal_overlay.rcss").read_text(encoding="utf-8")
+    components = (resources / "components.theme.rcss").read_text(encoding="utf-8")
+    implementation = (PROJECT_ROOT / "src/visualizer/gui/sequencer_ui_manager.cpp").read_text(encoding="utf-8")
 
-    assert 'id="quality-scrub" class="scrub-field"' in sequencer_rml
-    assert 'id="quality-fill" class="scrub-field-fill"' in sequencer_rml
-    quality_scrubber = sequencer_rcss.split("/* ── Quality Scrub Field", 1)[1].split(
-        "#btn-equirect", 1
-    )[0]
-    assert "decorator: vertical-gradient" not in quality_scrubber
-    assert "decorator: horizontal-gradient" not in quality_scrubber
-    assert "color: #cdd6f4;" not in quality_scrubber
-    assert sequencer_theme.count("@{panel.body_decor}") == 2
-    assert "@{components.header_decor}" in sequencer_theme
+    assert 'id="quality-scrub"' not in sequencer
+    assert 'id="quality-fill"' not in sequencer
+    assert 'type="range" name="quality_slider"' in implementation
+    assert 'name="quality"' in implementation
+    assert 'data-tooltip="sequencer.export_quality_hint"' in implementation
+    quality_rules = modal_css.split(".export-quality-scale", 1)[1].split("@media", 1)[0]
+    assert "decorator:" not in quality_rules
+    assert re.search(r"#[0-9a-fA-F]{3,8}\b", quality_rules) is None
+    track = components.split('input[type="range"] slidertrack {', 1)[1].split("\n}", 1)[0]
+    thumb = components.split('input[type="range"] sliderbar {', 1)[1].split("\n}", 1)[0]
+    assert "background-color: @{border};" in track
+    assert "background-color: @{primary};" in thumb
 
-    assert "@media (max-width: 1620dp)" not in sequencer_rcss
-    responsive_rules = sequencer_rcss.split("@media", 1)[1]
-    assert ".quality-group" not in responsive_rules
-    assert "#quality-scrub" not in responsive_rules
-    assert ".speed-text" not in responsive_rules
-    assert "#btn-speed" not in responsive_rules
-    assert "#sequence-fps-field" not in responsive_rules
-    assert "#resolution-field" not in responsive_rules
+
+def test_camera_aspect_tooltip_resolves_in_every_locale():
+    for locale in (PROJECT_ROOT / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(locale.read_text(encoding="utf-8"))
+        assert data["tooltip"]["seq_camera_aspect"], locale.name
+        assert "seq_camera_aspect" not in data.get("training", {}).get("tooltip", {}), locale.name
 
 
 def test_asset_manager_palette_is_fully_theme_driven():
@@ -759,7 +714,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
     assert "margin-right: 6dp;" in scene_view_rule
 
     tree_rule = _rule_body(scene_rcss, "#tree-container")
-    assert "overflow-y: scroll;" in tree_rule
+    assert "overflow-y: auto;" in tree_rule
 
     node_name_rule = _rule_body(scene_rcss, ".node-name")
     assert "flex-grow: 1;" in node_name_rule

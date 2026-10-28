@@ -125,7 +125,9 @@ namespace lfs::vis::input {
                                      std::to_string(static_cast<int>(mode)));
                         EXPECT_EQ(bindings.getActionForShortcut(mode, physical, logical,
                                                                 trigger->modifiers),
-                                  binding.action);
+                                  mode == ToolMode::WALK && binding.action == Action::CANCEL_POLYGON
+                                      ? Action::EXIT_WALK
+                                      : binding.action);
                     }
                 }
             }

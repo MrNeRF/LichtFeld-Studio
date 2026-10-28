@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera_distortion_layout.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "distortion_model.cuh"
@@ -14,7 +16,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <limits>
 #include <nvtx3/nvToolsExt.h>
 #include <stdexcept>
 
@@ -25,9 +26,9 @@ namespace lfs::core {
         constexpr int BLOCK_DIM = 16;
         constexpr float PIXEL_CENTER_OFFSET = 0.5f;
         constexpr float NEWTON_EPSILON = 1e-6f;
-        constexpr float MAX_FISHEYE_THETA = 1.56079632679f;
+        // CUDA fast tan rounds the nearest float below pi/2 to infinity.
+        constexpr float MAX_FISHEYE_THETA = 1.570795f;
         constexpr int MAX_NEWTON_ITERATIONS = 20;
-        constexpr int THIN_PRISM_SEED_ITERATIONS = 5;
         constexpr float INVERSE_RESIDUAL_PIXELS = 5.0e-4f;
         // Float32 Newton stalls near 6e-4 px at 8k image scales; accepting up to 1e-2 px keeps
         // those pixels valid while the geometric error stays far below sampling resolution.
@@ -43,9 +44,7 @@ namespace lfs::core {
         constexpr float EVALUATION_MIN_COVERAGE = 0.999f;
 
         using detail::apply_distortion;
-        using detail::apply_distortion_pinhole;
         using detail::thin_prism_fisheye_from_theta_point;
-        using detail::thin_prism_increment;
 
         __device__ float bilinear_sample_renormalized(
             const float* __restrict__ src,
@@ -189,132 +188,176 @@ namespace lfs::core {
                 dst[channel * output_plane + output_index] = result[channel] * inverse_samples;
         }
 
-        // The fisheye radial model is one-dimensional in the incidence angle: solving it in theta
-        // stays well conditioned up to the angle limit, where Newton in the image plane cannot reach
-        // the root because r = tan(theta) grows without bound.
-        __host__ __device__ bool solve_fisheye_theta(
-            const float theta_d, const float* __restrict__ dist, float& theta) {
-            theta = fminf(theta_d, MAX_FISHEYE_THETA);
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float theta2 = theta * theta;
-                const float theta4 = theta2 * theta2;
-                const float theta6 = theta4 * theta2;
-                const float theta8 = theta4 * theta4;
-                const float residual = theta * (1.0f + dist[0] * theta2 + dist[1] * theta4 +
-                                                dist[2] * theta6 + dist[3] * theta8) -
-                                       theta_d;
-                const float slope = 1.0f + 3.0f * dist[0] * theta2 + 5.0f * dist[1] * theta4 +
-                                    7.0f * dist[2] * theta6 + 9.0f * dist[3] * theta8;
-                if (!isfinite(residual) || !isfinite(slope) || fabsf(slope) < NEWTON_EPSILON)
-                    return false;
-                const float step = residual / slope;
-                theta -= step;
-                if (fabsf(step) < 1e-7f)
-                    break;
-            }
-            return theta > 0.0f && theta < MAX_FISHEYE_THETA;
+        struct RadialBranch {
+            float bound;
+            float maximum;
+        };
+
+        __device__ void radial_mapping(const float r, const UndistortParams& params,
+                                       float& value, float& derivative, float& denominator) {
+            const auto* k = params.distortion;
+            const bool fisheye = params.model_type != CameraModelType::PINHOLE;
+            const float s = r * r;
+            const float k1 = params.num_distortion > 0 ? k[0] : 0.0f;
+            const float k2 = params.num_distortion > 1 ? k[1] : 0.0f;
+            const float k3 = params.num_distortion > 2 ? k[2] : 0.0f;
+            const float k4 = fisheye && params.num_distortion > 3 ? k[3] : 0.0f;
+            const float numerator = 1.0f + s * (k1 + s * (k2 + s * (k3 + s * k4)));
+            const float dn = k1 + s * (2.0f * k2 + s * (3.0f * k3 + s * 4.0f * k4));
+            const bool rational = !fisheye && params.num_distortion >= 6;
+            denominator = rational ? 1.0f + s * (k[3] + s * (k[4] + s * k[5])) : 1.0f;
+            const float dd = rational ? k[3] + s * (2.0f * k[4] + s * 3.0f * k[5]) : 0.0f;
+            const float radial = numerator / denominator;
+            value = r * radial;
+            derivative = radial + 2.0f * s * (dn - radial * dd) / denominator;
         }
 
-        __host__ __device__ bool inverse_fisheye_radial(
-            const float xd, const float yd, const float* __restrict__ dist,
+        __device__ RadialBranch radial_branch(const UndistortParams& params) {
+            constexpr int SAMPLES = 1024;
+            constexpr int THREADS = BLOCK_DIM * BLOCK_DIM;
+            __shared__ int first[THREADS];
+            __shared__ RadialBranch branch;
+            const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+            const bool fisheye = params.model_type != CameraModelType::PINHOLE;
+            int crossing = SAMPLES + 1;
+            // Scanning atan(r) covers pinhole radii without a lens-specific cutoff.
+            for (int i = tid + 1; i <= SAMPLES; i += THREADS) {
+                const float angle = MAX_FISHEYE_THETA * (static_cast<float>(i) / SAMPLES);
+                const float r = fisheye ? angle : tanf(angle);
+                float value, derivative, denominator;
+                radial_mapping(r, params, value, derivative, denominator);
+                if (derivative <= 0.0f || denominator <= 0.0f)
+                    crossing = min(crossing, i);
+            }
+            first[tid] = crossing;
+            __syncthreads();
+            for (int stride = THREADS / 2; stride > 0; stride /= 2) {
+                if (tid < stride)
+                    first[tid] = min(first[tid], first[tid + stride]);
+                __syncthreads();
+            }
+            if (tid == 0) {
+                branch.bound = fisheye ? MAX_FISHEYE_THETA : INFINITY;
+                branch.maximum = INFINITY;
+                if (first[0] <= SAMPLES) {
+                    float lo = MAX_FISHEYE_THETA * (static_cast<float>(first[0] - 1) / SAMPLES);
+                    float hi = MAX_FISHEYE_THETA * (static_cast<float>(first[0]) / SAMPLES);
+                    for (int i = 0; i < 24; ++i) {
+                        const float mid = 0.5f * (lo + hi);
+                        float value, derivative, denominator;
+                        radial_mapping(fisheye ? mid : tanf(mid), params, value, derivative, denominator);
+                        if (derivative > 0.0f && denominator > 0.0f)
+                            lo = mid;
+                        else
+                            hi = mid;
+                    }
+                    branch.bound = fisheye ? lo : tanf(lo);
+                }
+                if (isfinite(branch.bound)) {
+                    float derivative, denominator;
+                    radial_mapping(branch.bound, params, branch.maximum, derivative, denominator);
+                }
+            }
+            __syncthreads();
+            return branch;
+        }
+
+        __device__ bool inverse_distortion(
+            const float xd, const float yd, const UndistortParams& params, const RadialBranch branch,
             float& ux, float& uy) {
-            const float theta_d = sqrtf(xd * xd + yd * yd);
-            if (theta_d < 1e-8f) {
+            const bool fisheye = params.model_type != CameraModelType::PINHOLE;
+            const bool prism = params.model_type == CameraModelType::THIN_PRISM_FISHEYE;
+            const int offset = params.num_distortion >= 6 ? 6 : 3;
+            bool coupled = !fisheye &&
+                           ((params.num_distortion > offset && params.distortion[offset] != 0.0f) ||
+                            (params.num_distortion > offset + 1 && params.distortion[offset + 1] != 0.0f));
+            if (prism) {
+                for (int i = 4; i < params.num_distortion; ++i)
+                    coupled |= params.distortion[i] != 0.0f;
+            }
+            const float rd = sqrtf(xd * xd + yd * yd);
+            if (!isfinite(rd) || (!coupled && rd >= branch.maximum))
+                return false;
+            if (rd < 1e-8f) {
                 ux = xd;
                 uy = yd;
                 return true;
             }
-            float theta;
-            if (!solve_fisheye_theta(theta_d, dist, theta))
-                return false;
-            const float scale = tanf(theta) / theta_d;
-            ux = xd * scale;
-            uy = yd * scale;
-            return true;
-        }
-
-        // The prism and tangential terms move the distorted radius away from the radial polynomial,
-        // which seeds the Newton solve near the angle limit at r = tan(theta) too far out to recover
-        // or rejects the ray outright; strip them by fixed-point iteration on the theta point first.
-        __host__ __device__ bool inverse_thin_prism_seed(
-            const float xd, const float yd, const float* __restrict__ dist, const int num_dist,
-            float& ux, float& uy) {
-            float wx = xd;
-            float wy = yd;
-            float theta = 0.0f;
-            for (int iter = 0; iter < THIN_PRISM_SEED_ITERATIONS; ++iter) {
-                float tx, ty;
-                thin_prism_increment(wx, wy, dist, num_dist, tx, ty);
-                const float zx = xd - tx;
-                const float zy = yd - ty;
-                const float theta_d = hypotf(zx, zy);
-                if (theta_d < 1e-8f) {
-                    wx = zx;
-                    wy = zy;
-                    theta = theta_d;
-                    continue;
+            const float px = params.src_fx * xd;
+            const float py = params.src_fy * yd;
+            const float pixel_scale = sqrtf(px * px + py * py) / rd;
+            float lo = 0.0f;
+            float hi = branch.bound;
+            if (!isfinite(hi)) {
+                hi = fmaxf(1.0f, 2.0f * rd);
+                for (int i = 0; i < 32; ++i) {
+                    float value, derivative, denominator;
+                    radial_mapping(hi, params, value, derivative, denominator);
+                    if (value >= rd)
+                        break;
+                    hi *= 2.0f;
                 }
-                if (!solve_fisheye_theta(theta_d, dist, theta))
-                    return false;
-                wx = zx * theta / theta_d;
-                wy = zy * theta / theta_d;
             }
-            const float scale = theta > 1e-8f ? tanf(theta) / theta : 1.0f;
-            ux = wx * scale;
-            uy = wy * scale;
-            return true;
-        }
+            float r = isfinite(branch.maximum) ? rd * (branch.bound / branch.maximum) : rd;
+            r = fminf(r, hi);
+            if (rd >= branch.maximum) {
+                r = nextafterf(branch.bound, 0.0f);
+            } else {
+                float previous_error_px = INFINITY;
+                for (int i = 0; i < 40; ++i) {
+                    float value, derivative, denominator;
+                    radial_mapping(r, params, value, derivative, denominator);
+                    const float residual = value - rd;
+                    const float error_px = fabsf(residual) * pixel_scale;
+                    if (error_px <= INVERSE_RESIDUAL_PIXELS ||
+                        (error_px <= INVERSE_ACCEPT_PIXELS && error_px >= previous_error_px))
+                        break;
+                    previous_error_px = error_px;
+                    if (residual < 0.0f)
+                        lo = r;
+                    else
+                        hi = r;
+                    const float next = r - residual / derivative;
+                    r = next > lo && next < hi ? next : 0.5f * (lo + hi);
+                }
+            }
+            if (!coupled) {
+                float value, derivative, denominator;
+                radial_mapping(r, params, value, derivative, denominator);
+                if (!(r < branch.bound) || !isfinite(value) ||
+                    fabsf(value - rd) * pixel_scale > INVERSE_ACCEPT_PIXELS)
+                    return false;
+                const float scale = (fisheye ? tanf(r) : r) / rd;
+                ux = xd * scale;
+                uy = yd * scale;
+                return isfinite(ux) && isfinite(uy);
+            }
+            ux = xd * r / rd;
+            uy = yd * r / rd;
 
-        __host__ __device__ bool seed_inverse_distortion(
-            const float xd, const float yd, const CameraModelType model,
-            const float* __restrict__ dist, const int num_dist,
-            float& ux, float& uy) {
-            if (model == CameraModelType::THIN_PRISM_FISHEYE && num_dist > 4)
-                return inverse_thin_prism_seed(xd, yd, dist, num_dist, ux, uy);
-            if (model == CameraModelType::FISHEYE || model == CameraModelType::THIN_PRISM_FISHEYE)
-                return inverse_fisheye_radial(xd, yd, dist, ux, uy);
-            ux = xd;
-            uy = yd;
-            return true;
-        }
-
-        __device__ bool inverse_distortion(
-            const float xd, const float yd, const UndistortParams& params,
-            float& ux, float& uy) {
-            if (!seed_inverse_distortion(xd, yd, params.model_type, params.distortion,
-                                         params.num_distortion, ux, uy))
-                return false;
-
+            // Coupled roots must converge in pixels inside the first radial branch with det J > 0.
+            // Prism refinement stays in theta coordinates so a horizon seed does not overflow tan(theta).
+            const auto forward = [&](const float x, const float y, float& dx, float& dy) {
+                if (prism)
+                    thin_prism_fisheye_from_theta_point(x, y, params.distortion, params.num_distortion, dx, dy);
+                else
+                    apply_distortion(x, y, params.model_type, params.distortion, params.num_distortion, dx, dy);
+            };
             float previous_error_px = INFINITY;
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
+            for (int iter = 0; iter <= MAX_NEWTON_ITERATIONS; ++iter) {
                 float eval_x, eval_y;
-                apply_distortion(ux, uy, params.model_type, params.distortion,
-                                 params.num_distortion, eval_x, eval_y);
+                forward(ux, uy, eval_x, eval_y);
                 const float rx = eval_x - xd;
                 const float ry = eval_y - yd;
                 const float error_px = hypotf(rx * params.src_fx, ry * params.src_fy);
                 if (!isfinite(error_px))
                     return false;
-                const bool stalled = error_px <= INVERSE_ACCEPT_PIXELS && error_px >= previous_error_px;
-                if (error_px <= INVERSE_RESIDUAL_PIXELS || stalled)
-                    break;
-                previous_error_px = error_px;
-
                 float xp_x, xp_y, xm_x, xm_y;
                 float yp_x, yp_y, ym_x, ym_y;
-                apply_distortion(ux + INVERSE_JACOBIAN_STEP, uy,
-                                 params.model_type, params.distortion,
-                                 params.num_distortion, xp_x, xp_y);
-                apply_distortion(ux - INVERSE_JACOBIAN_STEP, uy,
-                                 params.model_type, params.distortion,
-                                 params.num_distortion, xm_x, xm_y);
-                apply_distortion(ux, uy + INVERSE_JACOBIAN_STEP,
-                                 params.model_type, params.distortion,
-                                 params.num_distortion, yp_x, yp_y);
-                apply_distortion(ux, uy - INVERSE_JACOBIAN_STEP,
-                                 params.model_type, params.distortion,
-                                 params.num_distortion, ym_x, ym_y);
-
+                forward(ux + INVERSE_JACOBIAN_STEP, uy, xp_x, xp_y);
+                forward(ux - INVERSE_JACOBIAN_STEP, uy, xm_x, xm_y);
+                forward(ux, uy + INVERSE_JACOBIAN_STEP, yp_x, yp_y);
+                forward(ux, uy - INVERSE_JACOBIAN_STEP, ym_x, ym_y);
                 const float inverse_step = 0.5f / INVERSE_JACOBIAN_STEP;
                 const float j00 = (xp_x - xm_x) * inverse_step;
                 const float j10 = (xp_y - xm_y) * inverse_step;
@@ -323,7 +366,19 @@ namespace lfs::core {
                 const float det = j00 * j11 - j01 * j10;
                 if (!isfinite(det) || fabsf(det) < NEWTON_EPSILON)
                     return false;
-
+                const bool stalled = error_px <= INVERSE_ACCEPT_PIXELS && error_px >= previous_error_px;
+                if (error_px <= INVERSE_RESIDUAL_PIXELS || stalled || iter == MAX_NEWTON_ITERATIONS) {
+                    const float radius = hypotf(ux, uy);
+                    if (error_px > INVERSE_ACCEPT_PIXELS || det <= 0.0f || !(radius < branch.bound))
+                        return false;
+                    if (prism && radius > 1e-8f) {
+                        const float scale = tanf(radius) / radius;
+                        ux *= scale;
+                        uy *= scale;
+                    }
+                    return isfinite(ux) && isfinite(uy);
+                }
+                previous_error_px = error_px;
                 float step_x = (j11 * rx - j01 * ry) / det;
                 float step_y = (-j10 * rx + j00 * ry) / det;
                 if (!isfinite(step_x) || !isfinite(step_y))
@@ -335,23 +390,81 @@ namespace lfs::core {
                 }
                 ux -= step_x;
                 uy -= step_y;
-                if (!isfinite(ux) || !isfinite(uy))
-                    return false;
             }
+            return false;
+        }
 
-            float final_x, final_y;
-            apply_distortion(ux, uy, params.model_type, params.distortion,
-                             params.num_distortion, final_x, final_y);
-            const float final_error_px = hypotf(
-                (final_x - xd) * params.src_fx,
-                (final_y - yd) * params.src_fy);
-            if (!isfinite(final_error_px) || final_error_px > INVERSE_ACCEPT_PIXELS)
-                return false;
-            if ((params.model_type == CameraModelType::FISHEYE ||
-                 params.model_type == CameraModelType::THIN_PRISM_FISHEYE) &&
-                atanf(hypotf(ux, uy)) >= MAX_FISHEYE_THETA)
-                return false;
-            return true;
+        // Parameter memory avoids a private calibration copy when the inverse takes its address.
+        __global__ void compute_undistort_crop(const __grid_constant__ UndistortParams params, const float blank_pixels, int* dimensions) {
+            constexpr int THREADS = BLOCK_DIM * BLOCK_DIM;
+            __shared__ float bounds[8][THREADS];
+            const auto branch = radial_branch(params);
+            const float radius = params.model_type == CameraModelType::PINHOLE ? branch.bound : tanf(branch.bound);
+            const int tid = threadIdx.x;
+            float low[4] = {INFINITY, INFINITY, INFINITY, INFINITY};
+            float high[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
+            for (int edge = 0; edge < 4; ++edge) {
+                const int length = edge < 2 ? params.src_height : params.src_width;
+                for (int i = tid; i < length; i += THREADS) {
+                    const float px = edge < 2 ? (edge == 0 ? 0.5f : params.src_width - 0.5f) : i + 0.5f;
+                    const float py = edge >= 2 ? (edge == 2 ? 0.5f : params.src_height - 0.5f) : i + 0.5f;
+                    const float xd = (px - params.src_cx) / params.src_fx;
+                    const float yd = (py - params.src_cy) / params.src_fy;
+                    float ux, uy;
+                    if (!inverse_distortion(xd, yd, params, branch, ux, uy)) {
+                        const float rd = hypotf(xd, yd);
+                        if (!isfinite(radius) || rd <= 0.0f)
+                            continue;
+                        ux = xd * radius / rd;
+                        uy = yd * radius / rd;
+                    }
+                    const float value = edge < 2 ? params.src_fx * ux : params.src_fy * uy;
+                    low[edge] = fminf(low[edge], value);
+                    high[edge] = fmaxf(high[edge], value);
+                }
+                bounds[2 * edge][tid] = low[edge];
+                bounds[2 * edge + 1][tid] = high[edge];
+            }
+            __syncthreads();
+            for (int stride = THREADS / 2; stride > 0; stride /= 2) {
+                if (tid < stride) {
+                    for (int edge = 0; edge < 4; ++edge) {
+                        bounds[2 * edge][tid] = fminf(bounds[2 * edge][tid], bounds[2 * edge][tid + stride]);
+                        bounds[2 * edge + 1][tid] = fmaxf(bounds[2 * edge + 1][tid], bounds[2 * edge + 1][tid + stride]);
+                    }
+                }
+                __syncthreads();
+            }
+            if (tid != 0)
+                return;
+            float scale[2];
+            for (int axis = 0; axis < 2; ++axis) {
+                const float center = axis == 0 ? params.src_cx : params.src_cy;
+                const float size = axis == 0 ? params.src_width : params.src_height;
+                const int e = 4 * axis;
+                const float outer = fminf(center / -bounds[e][0], (size - 0.5f - center) / bounds[e + 3][0]);
+                const float inner = fmaxf(center / -bounds[e + 1][0], (size - 0.5f - center) / bounds[e + 2][0]);
+                const float blended = outer * blank_pixels + inner * (1.0f - blank_pixels);
+                if (!isfinite(blended) || blended <= 0.0f) {
+                    dimensions[0] = dimensions[1] = 0;
+                    return;
+                }
+                scale[axis] = fminf(COLMAP_MAX_SCALE, fmaxf(COLMAP_MIN_SCALE, 1.0f / blended));
+            }
+            const float corner = hypotf(
+                fmaxf(params.src_cx, params.src_width - params.src_cx) * scale[0] / params.src_fx,
+                fmaxf(params.src_cy, params.src_height - params.src_cy) * scale[1] / params.src_fy);
+            if (corner >= radius) {
+                const float shrink = nextafterf(radius, 0.0f) / corner;
+                scale[0] *= shrink;
+                scale[1] *= shrink;
+            }
+            if (scale[0] < COLMAP_MIN_SCALE || scale[1] < COLMAP_MIN_SCALE) {
+                dimensions[0] = dimensions[1] = 0;
+                return;
+            }
+            dimensions[0] = max(1, static_cast<int>(params.src_width * scale[0]));
+            dimensions[1] = max(1, static_cast<int>(params.src_height * scale[1]));
         }
 
         __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
@@ -361,7 +474,8 @@ namespace lfs::core {
                 uint8_t* __restrict__ validity,
                 const int channels,
                 const int output_y_offset,
-                const UndistortParams params) {
+                const __grid_constant__ UndistortParams params) {
+            const auto branch = radial_branch(params);
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
             const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
             if (ox >= params.src_width || oy >= params.src_height)
@@ -380,7 +494,7 @@ namespace lfs::core {
                     const float xd = (pixel_x - params.src_cx) / params.src_fx;
                     const float yd = (pixel_y - params.src_cy) / params.src_fy;
                     float ux, uy;
-                    if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                    if (!inverse_distortion(xd, yd, params, branch, ux, uy)) {
                         converged = false;
                         break;
                     }
@@ -511,7 +625,8 @@ namespace lfs::core {
                 const int channels,
                 const AreaFilterMode mode,
                 const int output_y_offset,
-                const UndistortParams params) {
+                const __grid_constant__ UndistortParams params) {
+            const auto branch = radial_branch(params);
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
             const int oy = output_y_offset + blockIdx.y * BLOCK_DIM + threadIdx.y;
             if (ox >= params.src_width || oy >= params.src_height)
@@ -530,7 +645,7 @@ namespace lfs::core {
                     const float xd = (pixel_x - params.src_cx) / params.src_fx;
                     const float yd = (pixel_y - params.src_cy) / params.src_fy;
                     float ux, uy;
-                    if (!inverse_distortion(xd, yd, params, ux, uy)) {
+                    if (!inverse_distortion(xd, yd, params, branch, ux, uy)) {
                         converged = false;
                         break;
                     }
@@ -580,272 +695,6 @@ namespace lfs::core {
                 dst[channel * output_plane + output_index] = result[channel];
         }
 
-        void apply_distortion_cpu(
-            const float x, const float y,
-            const CameraModelType model,
-            const float* dist, const int num_dist,
-            float& dx, float& dy) {
-
-            switch (model) {
-            case CameraModelType::PINHOLE: {
-                apply_distortion_pinhole(x, y, dist, num_dist, dx, dy);
-                break;
-            }
-            case CameraModelType::FISHEYE: {
-                const float r = std::sqrt(x * x + y * y);
-                if (r < 1e-8f) {
-                    dx = x;
-                    dy = y;
-                    return;
-                }
-                const float theta = std::atan(r);
-                const float theta2 = theta * theta;
-                const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-                const float theta_d = theta * (1.0f + k1 * theta2 + k2 * theta2 * theta2 +
-                                               k3 * theta2 * theta2 * theta2 + k4 * theta2 * theta2 * theta2 * theta2);
-                const float scale = theta_d / r;
-                dx = x * scale;
-                dy = y * scale;
-                break;
-            }
-            case CameraModelType::THIN_PRISM_FISHEYE: {
-                const float r = std::sqrt(x * x + y * y);
-                if (r < 1e-8f) {
-                    dx = x;
-                    dy = y;
-                    return;
-                }
-                const float theta_over_r = std::atan(r) / r;
-                thin_prism_fisheye_from_theta_point(
-                    x * theta_over_r, y * theta_over_r, dist, num_dist, dx, dy);
-                break;
-            }
-            default:
-                dx = x;
-                dy = y;
-                break;
-            }
-        }
-
-        bool cam_from_img_pinhole_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            if (num_dist <= 0) {
-                ux = (img_x - cx) / fx;
-                uy = (img_y - cy) / fy;
-                return true;
-            }
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            ux = xd;
-            uy = yd;
-
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float r2 = ux * ux + uy * uy;
-                const float r4 = r2 * r2;
-                const float r6 = r4 * r2;
-
-                const float k1 = dist[0];
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const bool rational = num_dist >= 6;
-                const float k4 = rational ? dist[3] : 0.0f;
-                const float k5 = rational ? dist[4] : 0.0f;
-                const float k6 = rational ? dist[5] : 0.0f;
-                const int tangential_offset = rational ? 6 : 3;
-                const float p1 = num_dist > tangential_offset ? dist[tangential_offset] : 0.0f;
-                const float p2 = num_dist > tangential_offset + 1 ? dist[tangential_offset + 1] : 0.0f;
-
-                const float numerator = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
-                const float d_numerator_dr2 = k1 + 2.0f * k2 * r2 + 3.0f * k3 * r4;
-                float radial = numerator;
-                float d_radial_dr2 = d_numerator_dr2;
-                if (rational) {
-                    const float denominator = 1.0f + k4 * r2 + k5 * r4 + k6 * r6;
-                    if (!std::isfinite(denominator) ||
-                        std::fabs(denominator) < NEWTON_EPSILON) {
-                        return false;
-                    }
-                    const float d_denominator_dr2 =
-                        k4 + 2.0f * k5 * r2 + 3.0f * k6 * r4;
-                    radial = numerator / denominator;
-                    d_radial_dr2 =
-                        (d_numerator_dr2 * denominator -
-                         numerator * d_denominator_dr2) /
-                        (denominator * denominator);
-                }
-                if (!std::isfinite(radial) || !std::isfinite(d_radial_dr2)) {
-                    return false;
-                }
-                const float d_radial_dx = 2.0f * ux * d_radial_dr2;
-                const float d_radial_dy = 2.0f * uy * d_radial_dr2;
-
-                const float fx_residual =
-                    ux * radial + 2.0f * p1 * ux * uy + p2 * (r2 + 2.0f * ux * ux) - xd;
-                const float fy_residual =
-                    uy * radial + p1 * (r2 + 2.0f * uy * uy) + 2.0f * p2 * ux * uy - yd;
-
-                const float j00 = radial + ux * d_radial_dx + 2.0f * p1 * uy + 6.0f * p2 * ux;
-                const float j01 = ux * d_radial_dy + 2.0f * p1 * ux + 2.0f * p2 * uy;
-                const float j10 = uy * d_radial_dx + 2.0f * p2 * uy + 2.0f * p1 * ux;
-                const float j11 = radial + uy * d_radial_dy + 6.0f * p1 * uy + 2.0f * p2 * ux;
-
-                const float det = j00 * j11 - j01 * j10;
-                if (std::fabs(det) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step_x = (j11 * fx_residual - j01 * fy_residual) / det;
-                const float step_y = (-j10 * fx_residual + j00 * fy_residual) / det;
-                ux -= step_x;
-                uy -= step_y;
-
-                if (std::fabs(step_x) < NEWTON_EPSILON && std::fabs(step_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-            }
-
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_fisheye_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            const float rd = std::sqrt(xd * xd + yd * yd);
-            if (rd < NEWTON_EPSILON) {
-                ux = 0.0f;
-                uy = 0.0f;
-                return true;
-            }
-
-            float theta = rd;
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                const float theta2 = theta * theta;
-                const float theta4 = theta2 * theta2;
-                const float theta6 = theta4 * theta2;
-                const float theta8 = theta4 * theta4;
-
-                const float k1 = num_dist > 0 ? dist[0] : 0.0f;
-                const float k2 = num_dist > 1 ? dist[1] : 0.0f;
-                const float k3 = num_dist > 2 ? dist[2] : 0.0f;
-                const float k4 = num_dist > 3 ? dist[3] : 0.0f;
-
-                const float theta_d =
-                    theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
-                const float derivative =
-                    1.0f + 3.0f * k1 * theta2 + 5.0f * k2 * theta4 + 7.0f * k3 * theta6 +
-                    9.0f * k4 * theta8;
-                if (std::fabs(derivative) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step = (theta_d - rd) / derivative;
-                theta -= step;
-                if (std::fabs(step) < NEWTON_EPSILON) {
-                    break;
-                }
-            }
-
-            if (!std::isfinite(theta) || theta < 0.0f || theta >= MAX_FISHEYE_THETA) {
-                return false;
-            }
-
-            const float r = std::tan(theta);
-            const float scale = r / rd;
-            ux = xd * scale;
-            uy = yd * scale;
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_generic_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const CameraModelType model,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            const float xd = (img_x - cx) / fx;
-            const float yd = (img_y - cy) / fy;
-            if (!seed_inverse_distortion(xd, yd, model, dist, num_dist, ux, uy))
-                return false;
-
-            for (int iter = 0; iter < MAX_NEWTON_ITERATIONS; ++iter) {
-                float fx_eval, fy_eval;
-                apply_distortion_cpu(ux, uy, model, dist, num_dist, fx_eval, fy_eval);
-
-                const float residual_x = fx_eval - xd;
-                const float residual_y = fy_eval - yd;
-                if (std::fabs(residual_x) < NEWTON_EPSILON &&
-                    std::fabs(residual_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-
-                constexpr float jacobian_step = 1e-4f;
-                float fx_dx, fy_dx;
-                float fx_dy, fy_dy;
-                apply_distortion_cpu(ux + jacobian_step, uy, model, dist, num_dist, fx_dx, fy_dx);
-                apply_distortion_cpu(ux, uy + jacobian_step, model, dist, num_dist, fx_dy, fy_dy);
-
-                const float j00 = (fx_dx - fx_eval) / jacobian_step;
-                const float j10 = (fy_dx - fy_eval) / jacobian_step;
-                const float j01 = (fx_dy - fx_eval) / jacobian_step;
-                const float j11 = (fy_dy - fy_eval) / jacobian_step;
-
-                const float det = j00 * j11 - j01 * j10;
-                if (std::fabs(det) < NEWTON_EPSILON) {
-                    return false;
-                }
-
-                const float step_x = (j11 * residual_x - j01 * residual_y) / det;
-                const float step_y = (-j10 * residual_x + j00 * residual_y) / det;
-                ux -= step_x;
-                uy -= step_y;
-
-                if (std::fabs(step_x) < NEWTON_EPSILON && std::fabs(step_y) < NEWTON_EPSILON) {
-                    return std::isfinite(ux) && std::isfinite(uy);
-                }
-            }
-
-            return std::isfinite(ux) && std::isfinite(uy);
-        }
-
-        bool cam_from_img_cpu(
-            const float img_x, const float img_y,
-            const float fx, const float fy,
-            const float cx, const float cy,
-            const CameraModelType model,
-            const float* dist, const int num_dist,
-            float& ux, float& uy) {
-
-            switch (model) {
-            case CameraModelType::PINHOLE:
-                return cam_from_img_pinhole_cpu(img_x, img_y, fx, fy, cx, cy, dist, num_dist, ux, uy);
-            case CameraModelType::FISHEYE:
-                return cam_from_img_fisheye_cpu(img_x, img_y, fx, fy, cx, cy, dist, num_dist, ux, uy);
-            case CameraModelType::THIN_PRISM_FISHEYE:
-                return cam_from_img_generic_cpu(img_x, img_y, fx, fy, cx, cy, model, dist, num_dist, ux, uy);
-            default:
-                ux = (img_x - cx) / fx;
-                uy = (img_y - cy) / fy;
-                return true;
-            }
-        }
-
         // At least one sample per source pixel along each axis, so strong minification still
         // integrates the whole footprint instead of aliasing on a fixed sample lattice.
         int area_quadrature(const UndistortParams& params) {
@@ -872,7 +721,8 @@ namespace lfs::core {
         __global__ void __launch_bounds__(BLOCK_DIM* BLOCK_DIM)
             inverse_distortion_sample_map_kernel(
                 float2* __restrict__ samples,
-                const UndistortParams params) {
+                const __grid_constant__ UndistortParams params) {
+            const auto branch = radial_branch(params);
             const int ox = blockIdx.x * BLOCK_DIM + threadIdx.x;
             const int oy = blockIdx.y * BLOCK_DIM + threadIdx.y;
             if (ox >= params.src_width || oy >= params.src_height)
@@ -882,7 +732,7 @@ namespace lfs::core {
             const float yd = (static_cast<float>(oy) + PIXEL_CENTER_OFFSET - params.src_cy) /
                              params.src_fy;
             float ux, uy;
-            if (!inverse_distortion(xd, yd, params, ux, uy)) {
+            if (!inverse_distortion(xd, yd, params, branch, ux, uy)) {
                 ux = nanf("");
                 uy = nanf("");
             }
@@ -890,30 +740,6 @@ namespace lfs::core {
         }
 
     } // anonymous namespace
-
-    void distort_normalized_point(
-        const UndistortParams& params,
-        const float x,
-        const float y,
-        float& distorted_x,
-        float& distorted_y) {
-        apply_distortion_cpu(
-            x, y, params.model_type, params.distortion, params.num_distortion,
-            distorted_x, distorted_y);
-    }
-
-    bool undistort_image_point(
-        const UndistortParams& params,
-        const float image_x,
-        const float image_y,
-        float& normalized_x,
-        float& normalized_y) {
-        return cam_from_img_cpu(
-            image_x, image_y,
-            params.src_fx, params.src_fy, params.src_cx, params.src_cy,
-            params.model_type, params.distortion, params.num_distortion,
-            normalized_x, normalized_y);
-    }
 
     UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,
@@ -930,35 +756,19 @@ namespace lfs::core {
         params.src_height = height;
         params.model_type = model;
 
-        // Coefficient layout per model:
-        // PINHOLE polynomial: [k1, k2, k3, p1, p2]               indices 0-4
-        // PINHOLE rational:   [k1, k2, k3, k4, k5, k6, p1, p2]  indices 0-7
-        // FISHEYE:            [k1, k2, k3, k4]                   indices 0-3
-        // THIN_PRISM_FISHEYE: [k1, k2, k3, k4, p1, p2, sx1, sx2, sy1, sy2]  indices 0-9
-        std::memset(params.distortion, 0, sizeof(params.distortion));
-        params.num_distortion = 0;
-
-        std::vector<float> rad_vec, tan_vec;
-        if (radial.is_valid() && radial.numel() > 0) {
-            assert(radial.ndim() == 1);
-            auto rad_cpu = radial.cpu();
-            auto rad_acc = rad_cpu.accessor<float, 1>();
-            for (size_t i = 0; i < rad_cpu.numel(); ++i)
-                rad_vec.push_back(rad_acc(i));
-        }
-        if (tangential.is_valid() && tangential.numel() > 0) {
-            assert(tangential.ndim() == 1);
-            auto tan_cpu = tangential.cpu();
-            auto tan_acc = tan_cpu.accessor<float, 1>();
-            for (size_t i = 0; i < tan_cpu.numel(); ++i)
-                tan_vec.push_back(tan_acc(i));
-        }
-
-        const auto place = [&](int idx, float val) {
-            assert(idx < 12);
-            params.distortion[idx] = val;
-            params.num_distortion = std::max(params.num_distortion, idx + 1);
+        const auto coefficients = [](const Tensor& tensor) {
+            std::vector<float> values;
+            if (tensor.is_valid() && tensor.numel() > 0) {
+                assert(tensor.ndim() == 1);
+                auto cpu = tensor.cpu();
+                auto acc = cpu.accessor<float, 1>();
+                for (size_t i = 0; i < cpu.numel(); ++i)
+                    values.push_back(acc(i));
+            }
+            return values;
         };
+        const auto rad_vec = coefficients(radial);
+        const auto tan_vec = coefficients(tangential);
 
         switch (model) {
         case CameraModelType::PINHOLE: {
@@ -970,15 +780,6 @@ namespace lfs::core {
                 throw std::invalid_argument(
                     "Pinhole distortion supports exactly two tangential coefficients");
             }
-            const bool rational =
-                rad_vec.size() == 6 &&
-                (rad_vec[3] != 0.0f || rad_vec[4] != 0.0f || rad_vec[5] != 0.0f);
-            const size_t radial_count = rational ? rad_vec.size() : std::min<size_t>(rad_vec.size(), 3);
-            for (size_t i = 0; i < radial_count; ++i)
-                place(static_cast<int>(i), rad_vec[i]);
-            const int tangential_offset = rational ? 6 : 3;
-            for (size_t i = 0; i < tan_vec.size(); ++i)
-                place(tangential_offset + static_cast<int>(i), tan_vec[i]);
             break;
         }
 
@@ -993,21 +794,13 @@ namespace lfs::core {
                 throw std::invalid_argument(
                     "Fisheye distortion does not support tangential coefficients");
             }
-            for (size_t i = 0; i < rad_vec.size(); ++i)
-                place(static_cast<int>(i), rad_vec[i]);
             break;
 
         case CameraModelType::THIN_PRISM_FISHEYE: {
-            // Tangential tuple in COLMAP order {p1, p2, sx1, sy1}, optionally extended by {sx2, sy2}.
-            constexpr std::array<int, 6> thin_prism_slots = {4, 5, 6, 8, 7, 9};
-            if (rad_vec.size() > 4 || tan_vec.size() > thin_prism_slots.size()) {
+            if (rad_vec.size() > 4 || tan_vec.size() > 6) {
                 throw std::invalid_argument(
                     "Thin prism fisheye distortion supports four radial and six tangential or prism coefficients");
             }
-            for (size_t i = 0; i < rad_vec.size(); ++i)
-                place(static_cast<int>(i), rad_vec[i]);
-            for (size_t i = 0; i < tan_vec.size(); ++i)
-                place(thin_prism_slots[i], tan_vec[i]);
             break;
         }
 
@@ -1019,6 +812,8 @@ namespace lfs::core {
             break;
         }
 
+        params.num_distortion = packCameraDistortion(model, rad_vec, tan_vec, std::span(params.distortion));
+
         params.dst_fx = fx;
         params.dst_fy = fy;
         params.dst_cx = cx;
@@ -1026,167 +821,32 @@ namespace lfs::core {
         params.dst_width = width;
         params.dst_height = height;
 
-        const bool needs_undistorted_crop =
-            model != CameraModelType::PINHOLE || params.num_distortion > 0;
-        if (!needs_undistorted_crop) {
+        if (is_identity_resample(params)) {
             return params;
         }
 
-        float left_min_x = std::numeric_limits<float>::max();
-        float left_max_x = std::numeric_limits<float>::lowest();
-        float right_min_x = std::numeric_limits<float>::max();
-        float right_max_x = std::numeric_limits<float>::lowest();
-        float top_min_y = std::numeric_limits<float>::max();
-        float top_max_y = std::numeric_limits<float>::lowest();
-        float bottom_min_y = std::numeric_limits<float>::max();
-        float bottom_max_y = std::numeric_limits<float>::lowest();
-        bool found_valid_border_point = false;
-        bool left_has_valid_sample = false;
-        bool right_has_valid_sample = false;
-        bool top_has_valid_sample = false;
-        bool bottom_has_valid_sample = false;
-
-        const auto trace_pixel = [&](const float px, const float py, float& min_axis, float& max_axis,
-                                     const bool trace_x_axis, bool& edge_has_valid_sample) {
-            float ux, uy;
-            if (!undistort_image_point(params, px, py, ux, uy)) {
-                return;
-            }
-
-            found_valid_border_point = true;
-            edge_has_valid_sample = true;
-            const float undistorted_x = fx * ux + cx;
-            const float undistorted_y = fy * uy + cy;
-            const float value = trace_x_axis ? undistorted_x : undistorted_y;
-            min_axis = std::min(min_axis, value);
-            max_axis = std::max(max_axis, value);
-        };
-
-        for (int y = 0; y < height; ++y) {
-            const float py = static_cast<float>(y) + PIXEL_CENTER_OFFSET;
-            trace_pixel(PIXEL_CENTER_OFFSET, py, left_min_x, left_max_x, true, left_has_valid_sample);
-            trace_pixel(static_cast<float>(width) - PIXEL_CENTER_OFFSET, py,
-                        right_min_x, right_max_x, true, right_has_valid_sample);
-        }
-        for (int x = 0; x < width; ++x) {
-            const float px = static_cast<float>(x) + PIXEL_CENTER_OFFSET;
-            trace_pixel(px, PIXEL_CENTER_OFFSET, top_min_y, top_max_y, false, top_has_valid_sample);
-            trace_pixel(px, static_cast<float>(height) - PIXEL_CENTER_OFFSET,
-                        bottom_min_y, bottom_max_y, false, bottom_has_valid_sample);
-        }
-
-        if (!found_valid_border_point) {
+        if (width <= 0 || height <= 0 || fx <= 0.0f || fy <= 0.0f) {
             params.crop_solve_failed = true;
-            LOG_DEBUG("Undistort crop solve found no valid border samples, keeping original intrinsics");
             return params;
         }
-
-        const auto accumulate_scale_candidate = [&](const float numerator, const float denominator,
-                                                    const bool take_min, float& result, bool& has_result) {
-            if (!std::isfinite(numerator) || !std::isfinite(denominator) ||
-                std::fabs(denominator) <= NEWTON_EPSILON) {
-                return;
-            }
-
-            const float candidate = numerator / denominator;
-            if (!std::isfinite(candidate) || candidate <= NEWTON_EPSILON) {
-                return;
-            }
-
-            if (!has_result) {
-                result = candidate;
-                has_result = true;
-            } else if (take_min) {
-                result = std::min(result, candidate);
-            } else {
-                result = std::max(result, candidate);
-            }
-        };
-
-        const auto resolve_axis_scale = [&](const char* axis_name,
-                                            const float min_scale_candidate, const bool has_min_scale_candidate,
-                                            const float max_scale_candidate, const bool has_max_scale_candidate) {
-            if (!has_min_scale_candidate && !has_max_scale_candidate) {
-                LOG_WARN("Undistort crop solve found no valid {}-axis scale candidates, keeping axis scale at 1.0",
-                         axis_name);
-                return 1.0f;
-            }
-
-            const float min_scale = has_min_scale_candidate ? min_scale_candidate : max_scale_candidate;
-            const float max_scale = has_max_scale_candidate ? max_scale_candidate : min_scale_candidate;
-            if (!has_min_scale_candidate || !has_max_scale_candidate) {
-                LOG_WARN("Undistort crop solve found incomplete {}-axis border constraints, reusing available scale candidate",
-                         axis_name);
-            }
-
-            const float blended_scale = min_scale * blank_pixels + max_scale * (1.0f - blank_pixels);
-            if (!std::isfinite(blended_scale) || std::fabs(blended_scale) <= NEWTON_EPSILON) {
-                LOG_WARN("Undistort crop solve produced invalid {}-axis blended scale, keeping axis scale at 1.0",
-                         axis_name);
-                return 1.0f;
-            }
-
-            const float scale = 1.0f / blended_scale;
-            if (!std::isfinite(scale)) {
-                LOG_WARN("Undistort crop solve produced non-finite {}-axis scale, keeping axis scale at 1.0",
-                         axis_name);
-                return 1.0f;
-            }
-
-            return std::clamp(scale, COLMAP_MIN_SCALE, COLMAP_MAX_SCALE);
-        };
-
-        float min_scale_x_candidate = 1.0f;
-        float max_scale_x_candidate = 1.0f;
-        float min_scale_y_candidate = 1.0f;
-        float max_scale_y_candidate = 1.0f;
-        bool has_min_scale_x_candidate = false;
-        bool has_max_scale_x_candidate = false;
-        bool has_min_scale_y_candidate = false;
-        bool has_max_scale_y_candidate = false;
-
-        if (left_has_valid_sample) {
-            accumulate_scale_candidate(cx, cx - left_min_x, true,
-                                       min_scale_x_candidate, has_min_scale_x_candidate);
-            accumulate_scale_candidate(cx, cx - left_max_x, false,
-                                       max_scale_x_candidate, has_max_scale_x_candidate);
+        auto dimensions = Tensor::empty({2}, Device::CUDA, DataType::Int32);
+        compute_undistort_crop<<<1, BLOCK_DIM * BLOCK_DIM, 0, dimensions.stream()>>>(
+            params, blank_pixels, dimensions.ptr<int>());
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Undistort crop kernel launch");
+        const auto result = dimensions.cpu();
+        const int* size = result.ptr<int>();
+        if (size[0] <= 0 || size[1] <= 0) {
+            params.crop_solve_failed = true;
+            return params;
         }
-        if (right_has_valid_sample) {
-            const float right_extent = static_cast<float>(width) - PIXEL_CENTER_OFFSET - cx;
-            accumulate_scale_candidate(right_extent, right_max_x - cx, true,
-                                       min_scale_x_candidate, has_min_scale_x_candidate);
-            accumulate_scale_candidate(right_extent, right_min_x - cx, false,
-                                       max_scale_x_candidate, has_max_scale_x_candidate);
-        }
-        if (top_has_valid_sample) {
-            accumulate_scale_candidate(cy, cy - top_min_y, true,
-                                       min_scale_y_candidate, has_min_scale_y_candidate);
-            accumulate_scale_candidate(cy, cy - top_max_y, false,
-                                       max_scale_y_candidate, has_max_scale_y_candidate);
-        }
-        if (bottom_has_valid_sample) {
-            const float bottom_extent = static_cast<float>(height) - PIXEL_CENTER_OFFSET - cy;
-            accumulate_scale_candidate(bottom_extent, bottom_max_y - cy, true,
-                                       min_scale_y_candidate, has_min_scale_y_candidate);
-            accumulate_scale_candidate(bottom_extent, bottom_min_y - cy, false,
-                                       max_scale_y_candidate, has_max_scale_y_candidate);
-        }
-
-        const float scale_x = resolve_axis_scale(
-            "x", min_scale_x_candidate, has_min_scale_x_candidate,
-            max_scale_x_candidate, has_max_scale_x_candidate);
-        const float scale_y = resolve_axis_scale(
-            "y", min_scale_y_candidate, has_min_scale_y_candidate,
-            max_scale_y_candidate, has_max_scale_y_candidate);
-
-        params.dst_width = std::max(1, static_cast<int>(scale_x * static_cast<float>(width)));
-        params.dst_height = std::max(1, static_cast<int>(scale_y * static_cast<float>(height)));
+        params.dst_width = size[0];
+        params.dst_height = size[1];
         params.dst_cx = cx * static_cast<float>(params.dst_width) / static_cast<float>(width);
         params.dst_cy = cy * static_cast<float>(params.dst_height) / static_cast<float>(height);
 
-        LOG_INFO("Undistort: %dx%d -> %dx%d, fx=%.1f->%.1f, fy=%.1f->%.1f",
-                 width, height, params.dst_width, params.dst_height,
-                 fx, params.dst_fx, fy, params.dst_fy);
+        LOG_DEBUG("Undistort: %dx%d -> %dx%d, fx=%.1f->%.1f, fy=%.1f->%.1f",
+                  width, height, params.dst_width, params.dst_height,
+                  fx, params.dst_fx, fy, params.dst_fy);
 
         return params;
     }

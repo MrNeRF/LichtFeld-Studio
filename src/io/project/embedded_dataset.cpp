@@ -4,6 +4,7 @@
  */
 
 #include "io/embedded_dataset.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -60,7 +61,7 @@ namespace lfs::io::project {
     } // namespace
 
     lfs::Result<Hash128> hash_dataset_file(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
         if (!input) {
             return embed_error(
                 lfs::ErrorCode::PermissionDenied,
@@ -112,14 +113,14 @@ namespace lfs::io::project {
             return std::optional<std::filesystem::path>{};
         }
         std::error_code error;
-        std::filesystem::create_directories(cache, error);
+        lfs::core::native_fs::create_directories(cache, error);
         if (error) {
             return embed_error(lfs::ErrorCode::PermissionDenied,
                                "The embedded dataset cache could not be created.",
                                error.message());
         }
         const auto marker = cache / ".complete";
-        std::filesystem::remove(marker, error);
+        lfs::core::native_fs::remove(marker, error);
         const auto total_bytes = std::ranges::fold_left(
             (*manifest)->entries, std::uint64_t{0},
             [](const std::uint64_t total, const auto& entry) {
@@ -168,9 +169,9 @@ namespace lfs::io::project {
                                 entry.bytes));
             }
             bool valid_existing = false;
-            if (std::filesystem::is_regular_file(destination)) {
+            if (lfs::core::native_fs::is_regular_file(destination)) {
                 std::error_code size_error;
-                valid_existing = std::filesystem::file_size(destination, size_error) ==
+                valid_existing = lfs::core::native_fs::file_size(destination, size_error) ==
                                      entry.bytes &&
                                  !size_error;
                 if (valid_existing) {
@@ -183,7 +184,7 @@ namespace lfs::io::project {
                 ++reused_files;
                 continue;
             }
-            std::filesystem::create_directories(destination.parent_path(), error);
+            lfs::core::native_fs::create_directories(destination.parent_path(), error);
             if (error) {
                 return embed_error(
                     lfs::ErrorCode::PermissionDenied,
@@ -246,16 +247,16 @@ namespace lfs::io::project {
                 });
             output.close();
             if (!copied || !hasher.valid() || hasher.digest() != entry.xxh3_128) {
-                std::filesystem::remove(temporary, error);
+                lfs::core::native_fs::remove(temporary, error);
                 return copied ? embed_error(
                                     lfs::ErrorCode::DataLoss,
                                     "The embedded dataset file failed hash verification.",
                                     lfs::core::path_to_utf8(destination))
                               : std::move(copied).error();
             }
-            std::filesystem::rename(temporary, destination, error);
+            lfs::core::native_fs::rename(temporary, destination, error);
             if (error) {
-                std::filesystem::remove(temporary);
+                lfs::core::native_fs::remove(temporary);
                 return embed_error(
                     lfs::ErrorCode::PermissionDenied,
                     "The embedded dataset file could not be published.",
@@ -270,7 +271,7 @@ namespace lfs::io::project {
                 "Embedded dataset extraction was canceled.",
                 "The caller requested cancellation");
         }
-        std::ofstream complete_marker(marker,
+        std::ofstream complete_marker(lfs::core::native_fs::native_path(marker),
                                       std::ios::binary | std::ios::trunc);
         if (!complete_marker) {
             return embed_error(
@@ -305,7 +306,7 @@ namespace lfs::io::project {
         }
         const auto external = resolve_path_reference(
             document.references(), project_root_for(document), **dataset_ref, {});
-        if (external && std::filesystem::exists(*external)) {
+        if (external && lfs::core::native_fs::exists(*external)) {
             return std::optional<std::filesystem::path>{};
         }
         // Resolve cache dir path from UserPaths

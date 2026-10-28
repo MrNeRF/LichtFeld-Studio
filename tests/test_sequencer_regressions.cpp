@@ -3,7 +3,6 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/film_strip_renderer.hpp"
@@ -72,6 +71,10 @@ namespace {
         EXPECT_FLOAT_EQ(actual.z, expected.z);
     }
 
+    float quaternionAngle(const glm::quat& a, const glm::quat& b) {
+        return 2.0f * std::acos(std::clamp(std::abs(glm::dot(glm::normalize(a), glm::normalize(b))), 0.0f, 1.0f));
+    }
+
     struct TempJsonPath {
         std::filesystem::path path = std::filesystem::temp_directory_path() /
                                      std::format("sequencer-regression-{}.json",
@@ -90,7 +93,6 @@ namespace {
                 previous_home_ = previous;
             setHome(temporary_.path.string().c_str());
             lfs::event::EventBridge::instance().clear_all();
-            lfs::core::event::bus().clear_all();
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             ASSERT_TRUE(lfs::event::LocalizationManager::getInstance().initialize(
@@ -100,7 +102,6 @@ namespace {
         void TearDown() override {
             lfs::vis::op::undoHistory().clear();
             lfs::vis::services().clear();
-            lfs::core::event::bus().clear_all();
             lfs::event::EventBridge::instance().clear_all();
             lfs::event::LocalizationManager::getInstance().reset();
             setHome(previous_home_ ? previous_home_->c_str() : nullptr);
@@ -1061,6 +1062,46 @@ namespace {
         }
     }
 
+    TEST(SequencerTimelineRegressionTest, RevealClipRoundTripsAndClampsProgress) {
+        Timeline timeline;
+        timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f});
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(1.0f), 0.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(3.5f), 0.5f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(6.0f), 1.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->softness, 0.2f);
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        for (const auto effect : {lfs::sequencer::RevealEffect::Magic, lfs::sequencer::RevealEffect::Spread,
+                                  lfs::sequencer::RevealEffect::Unroll, lfs::sequencer::RevealEffect::Twister,
+                                  lfs::sequencer::RevealEffect::Rain, lfs::sequencer::RevealEffect::Unveil,
+                                  lfs::sequencer::RevealEffect::LightEdge, lfs::sequencer::RevealEffect::Rainbow,
+                                  lfs::sequencer::RevealEffect::DarkToLight, lfs::sequencer::RevealEffect::Distortion,
+                                  lfs::sequencer::RevealEffect::CameraLight}) {
+            timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f, effect});
+            ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+            EXPECT_EQ(loaded.revealClip()->effect, effect);
+        }
+        auto legacy = timeline.saveToJson();
+        legacy["reveal_clip"].erase("effect");
+        ASSERT_TRUE(loaded.loadFromJson(legacy));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid_effect = legacy;
+        invalid_effect["reveal_clip"]["effect"] = 12;
+        EXPECT_FALSE(loaded.loadFromJson(invalid_effect));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid = loaded.saveToJson();
+        invalid["reveal_clip"]["end"] = 1.0f;
+        EXPECT_FALSE(loaded.loadFromJson(invalid));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->end, 5.0f);
+        loaded.setClipDuration(1.0f);
+        EXPECT_FLOAT_EQ(loaded.clipDuration(), 5.0f);
+        loaded.clear();
+        EXPECT_FALSE(loaded.revealClip().has_value());
+    }
+
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
         Timeline timeline;
 
@@ -1126,6 +1167,181 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST(SequencerTimelineRegressionTest, SavedCameraPathDoesNotFlipMidSegment) {
+        const std::array times{0.0f, 5.065666198730469f, 12.063790321350098f};
+        const std::array rotations{
+            glm::quat{0.7606963515281677f, -0.0820314958691597f, -0.6401920318603516f, -0.06903663277626038f},
+            glm::quat{0.7713736295700073f, -0.015757152810692787f, -0.6360547542572021f, -0.012992939911782742f},
+            glm::quat{0.308904767036438f, -0.04253435879945755f, 0.9412603378295898f, 0.1296059787273407f}};
+        Timeline timeline;
+        for (size_t i = 0; i < times.size(); ++i) {
+            auto keyframe = makeKeyframe(times[i]);
+            keyframe.rotation = rotations[i];
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (size_t i = 0; i < times.size(); ++i) {
+            SCOPED_TRACE(times[i]);
+            EXPECT_NEAR(quaternionAngle(timeline.evaluate(times[i]).rotation, rotations[i]), 0.0f, 2.0e-3f);
+        }
+        auto previous = timeline.evaluate(times[1]).rotation;
+        for (int i = 1; i <= 840; ++i) {
+            const float time = times[1] + (times[2] - times[1]) * static_cast<float>(i) / 840.0f;
+            SCOPED_TRACE(time);
+            const auto current = timeline.evaluate(time).rotation;
+            EXPECT_TRUE(std::isfinite(current.w) && std::isfinite(current.x) &&
+                        std::isfinite(current.y) && std::isfinite(current.z));
+            EXPECT_NEAR(glm::length(current), 1.0f, 1.0e-5f);
+            EXPECT_LT(quaternionAngle(previous, current), glm::radians(1.0f));
+            previous = current;
+        }
+        for (int mask = 1; mask < 8; ++mask) {
+            Timeline equivalent;
+            for (size_t i = 0; i < times.size(); ++i) {
+                auto keyframe = makeKeyframe(times[i]);
+                keyframe.rotation = (mask & (1 << i)) ? -rotations[i] : rotations[i];
+                keyframe.easing = EasingType::LINEAR;
+                equivalent.addKeyframe(keyframe);
+            }
+            for (const float time : {8.555f, 8.56f, 10.0f}) {
+                SCOPED_TRACE(std::format("mask {} time {}", mask, time));
+                EXPECT_NEAR(quaternionAngle(timeline.evaluate(time).rotation, equivalent.evaluate(time).rotation), 0.0f, 2.0e-3f);
+            }
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, ConstantOrientationDollyRemainsFixed) {
+        Timeline timeline;
+        const auto orientation = glm::angleAxis(glm::radians(60.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        for (int i = 0; i < 3; ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i), {0.0f, 0.0f, -static_cast<float>(i)});
+            keyframe.rotation = i == 1 ? -orientation : orientation;
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (const float time : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f}) {
+            SCOPED_TRACE(time);
+            const auto state = timeline.evaluate(time);
+            EXPECT_TRUE(std::isfinite(state.rotation.w));
+            EXPECT_NEAR(glm::length(state.rotation), 1.0f, 1.0e-5f);
+            EXPECT_NEAR(quaternionAngle(state.rotation, orientation), 0.0f, 2.0e-3f);
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, HoldThenTurnAndEvenYawStaySmooth) {
+        Timeline hold;
+        Timeline yaw;
+        for (int i = 0; i < 4; ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i));
+            keyframe.easing = EasingType::LINEAR;
+            keyframe.rotation = glm::angleAxis(glm::radians(i < 2 ? 45.0f : 85.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            hold.addKeyframe(keyframe);
+            keyframe.rotation = glm::angleAxis(glm::radians(15.0f + 20.0f * i), glm::vec3(0.0f, 1.0f, 0.0f));
+            yaw.addKeyframe(keyframe);
+        }
+        const auto held = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        for (const float time : {0.25f, 0.5f, 0.75f}) {
+            SCOPED_TRACE(time);
+            EXPECT_LT(quaternionAngle(hold.evaluate(time).rotation, held), glm::radians(4.0f));
+        }
+        for (const float time : {1.25f, 1.5f, 1.75f}) {
+            SCOPED_TRACE(time);
+            const auto expected = glm::angleAxis(glm::radians(15.0f + 20.0f * time), glm::vec3(0.0f, 1.0f, 0.0f));
+            EXPECT_NEAR(quaternionAngle(yaw.evaluate(time).rotation, expected), 0.0f, 2.0e-3f);
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, FocalLengthStaysWithinEachKeyedSegment) {
+        Timeline timeline;
+        const std::array focal_lengths{200.0f, 15.0f, 15.0f, 200.0f};
+        for (size_t i = 0; i < focal_lengths.size(); ++i) {
+            auto keyframe = makeKeyframe(static_cast<float>(i), {}, focal_lengths[i]);
+            keyframe.easing = EasingType::LINEAR;
+            timeline.addKeyframe(keyframe);
+        }
+        for (size_t segment = 0; segment + 1 < focal_lengths.size(); ++segment) {
+            for (const float fraction : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+                SCOPED_TRACE(std::format("segment {} fraction {}", segment, fraction));
+                const float focal = timeline.evaluate(static_cast<float>(segment) + fraction).focal_length_mm;
+                EXPECT_GE(focal, std::min(focal_lengths[segment], focal_lengths[segment + 1]));
+                EXPECT_LE(focal, std::max(focal_lengths[segment], focal_lengths[segment + 1]));
+                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths({1920, 1080}, focal);
+                EXPECT_TRUE(std::isfinite(fx) && fx > 0.0f);
+                EXPECT_TRUE(std::isfinite(fy) && fy > 0.0f);
+            }
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, CameraPoseUsesCubicCurves) {
+        std::vector<Keyframe> keyframes{
+            makeKeyframe(0.0f, {0.0f, 0.0f, 0.0f}, 10.0f),
+            makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}, 20.0f),
+            makeKeyframe(2.0f, {3.0f, 0.0f, 0.0f}, 100.0f),
+            makeKeyframe(3.0f, {4.0f, 0.0f, 0.0f}, 110.0f)};
+        for (size_t index = 0; index < keyframes.size(); ++index) {
+            keyframes[index].rotation = glm::angleAxis(glm::radians(15.0f + 35.0f * static_cast<float>(index)), glm::vec3(0.0f, 1.0f, 0.0f));
+            keyframes[index].easing = EasingType::LINEAR;
+        }
+        keyframes[2].rotation = -keyframes[2].rotation;
+
+        const auto at_key = lfs::sequencer::interpolateSpline(keyframes, 1.0f);
+        expectVec3Eq(at_key.position, keyframes[1].position);
+        EXPECT_FLOAT_EQ(at_key.focal_length_mm, keyframes[1].focal_length_mm);
+        EXPECT_NEAR(quaternionAngle(at_key.rotation, keyframes[1].rotation), 0.0f, 1.0e-5f);
+
+        const auto curved = lfs::sequencer::interpolateSpline(keyframes, 1.25f);
+        EXPECT_NEAR(curved.focal_length_mm, 34.166667f, 1.0e-4f);
+        EXPECT_NE(curved.focal_length_mm, 40.0f);
+        EXPECT_NEAR(glm::length(curved.rotation), 1.0f, 1.0e-5f);
+        EXPECT_TRUE(std::isfinite(curved.rotation.w));
+
+        auto equivalent_signs = keyframes;
+        equivalent_signs[2].rotation = -equivalent_signs[2].rotation;
+        const auto equivalent_curve = lfs::sequencer::interpolateSpline(equivalent_signs, 1.25f);
+        EXPECT_NEAR(quaternionAngle(curved.rotation, equivalent_curve.rotation), 0.0f, 1.0e-5f);
+
+        constexpr float epsilon = 1.0e-3f;
+        const auto before = lfs::sequencer::interpolateSpline(keyframes, 1.0f - epsilon);
+        const auto after = lfs::sequencer::interpolateSpline(keyframes, 1.0f + epsilon);
+        EXPECT_NEAR(glm::length(before.rotation), 1.0f, 1.0e-5f);
+        EXPECT_NEAR(glm::length(after.rotation), 1.0f, 1.0e-5f);
+        EXPECT_LT(quaternionAngle(before.rotation, after.rotation), 1.0e-2f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoopClosureUsesCyclicSplineNeighbors) {
+        std::vector<Keyframe> keyframes{
+            makeKeyframe(0.0f, {0.0f, 0.0f, 0.0f}, 30.0f),
+            makeKeyframe(1.0f, {2.0f, 0.0f, 0.0f}, 40.0f),
+            makeKeyframe(2.0f, {0.0f, 2.0f, 0.0f}, 60.0f)};
+        for (size_t index = 0; index < keyframes.size(); ++index) {
+            keyframes[index].rotation = glm::angleAxis(glm::radians(45.0f * static_cast<float>(index)), glm::vec3(0.0f, 1.0f, 0.0f));
+            keyframes[index].easing = EasingType::LINEAR;
+        }
+        auto loop_point = keyframes.front();
+        loop_point.time = 3.0f;
+        loop_point.is_loop_point = true;
+        keyframes.push_back(loop_point);
+
+        constexpr float epsilon = 1.0e-3f;
+        const auto seam = lfs::sequencer::interpolateSpline(keyframes, 0.0f);
+        const auto before = lfs::sequencer::interpolateSpline(keyframes, 3.0f - epsilon);
+        const auto after = lfs::sequencer::interpolateSpline(keyframes, epsilon);
+        expectVec3Eq(seam.position, keyframes.front().position);
+        EXPECT_FLOAT_EQ(seam.focal_length_mm, keyframes.front().focal_length_mm);
+        EXPECT_NEAR(glm::length((seam.position - before.position) / epsilon -
+                                (after.position - seam.position) / epsilon),
+                    0.0f, 1.0e-2f);
+        constexpr float lens_step = 1.0e-2f;
+        const float lens_before = lfs::sequencer::interpolateSpline(keyframes, 3.0f - lens_step).focal_length_mm;
+        const float lens_before2 = lfs::sequencer::interpolateSpline(keyframes, 3.0f - 2.0f * lens_step).focal_length_mm;
+        const float lens_after = lfs::sequencer::interpolateSpline(keyframes, lens_step).focal_length_mm;
+        const float lens_after2 = lfs::sequencer::interpolateSpline(keyframes, 2.0f * lens_step).focal_length_mm;
+        const float left_tangent = (3.0f * seam.focal_length_mm - 4.0f * lens_before + lens_before2) / (2.0f * lens_step);
+        const float right_tangent = (-3.0f * seam.focal_length_mm + 4.0f * lens_after - lens_after2) / (2.0f * lens_step);
+        EXPECT_NEAR(left_tangent, right_tangent, 3.0e-2f);
+        EXPECT_NEAR(quaternionAngle(before.rotation, seam.rotation), quaternionAngle(seam.rotation, after.rotation), 2.0e-4f);
     }
 
     TEST(SequencerTimelineRegressionTest, SortingOrderedKeysAndAddingLoopPointKeepEqualTimeOrder) {
@@ -2277,10 +2493,12 @@ namespace {
             auto* element = document_->GetElementById(id);
             ASSERT_NE(element, nullptr);
             ASSERT_TRUE(element->IsVisible(true));
-            const auto origin = row()->GetAbsoluteOffset();
-            const auto x = element->GetAbsoluteOffset(Rml::BoxArea::Border).x;
-            row()->SetScrollLeft(row()->GetScrollLeft() + x - origin.x);
+            auto origin = row()->GetAbsoluteOffset();
+            auto* body = document_->GetElementById("body");
+            const auto y = element->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+            body->SetScrollTop(body->GetScrollTop() + y - body->GetAbsoluteOffset().y);
             context_->Update();
+            origin = row()->GetAbsoluteOffset();
             EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x, origin.x - 1.0f);
             EXPECT_LE(right(element), origin.x + row()->GetClientWidth() + 1.0f);
             EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y, origin.y - 1.0f);
@@ -2292,15 +2510,13 @@ namespace {
         Rml::ElementDocument* document_ = nullptr;
     };
 
-    TEST_F(SequencerToolbarLayoutTest, OverflowControlsRemainReachable) {
+    TEST_F(SequencerToolbarLayoutTest, GroupedControlsRemainReachableWithoutHorizontalScrolling) {
         for (const auto& language : {"en", "de"}) {
             for (const auto [width, scale] : {std::pair{1240, 1.0f}, {600, 1.0f}, {1240, 2.0f}}) {
                 SCOPED_TRACE(std::format("{} width={} scale={}", language, width, scale));
                 load(width, scale, language);
-                ASSERT_GT(row()->GetScrollWidth(), row()->GetClientWidth());
-                // A scroll range without a visible affordance still leaves these controls unreachable.
-                ASSERT_GT(row()->GetOffsetHeight() - row()->GetClientHeight(), 2.0f * scale);
-                for (const auto* id : {"quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle", "btn-play"})
+                EXPECT_LE(row()->GetScrollWidth(), row()->GetClientWidth() + 1.0f);
+                for (const auto* id : {"btn-export", "btn-path-menu", "btn-dock-toggle", "btn-play"})
                     expectReachable(id);
             }
         }
@@ -2310,15 +2526,15 @@ namespace {
         load(1040, 2.0f, "en", 286);
         document_->GetElementById("duration")->SetInnerRML(" / 0:01.00");
         context_->Update();
-        for (const auto* id : {"btn-play", "btn-speed", "sequence-fps-field", "quality-scrub",
-                               "btn-export", "btn-clear", "btn-dock-toggle"})
+        for (const auto* id : {"btn-play", "btn-speed", "btn-load-sequence",
+                               "btn-export", "btn-path-menu", "btn-dock-toggle"})
             expectReachable(id);
-        auto* last_transport_button = document_->GetElementById("btn-add");
+        auto* last_transport_button = document_->GetElementById("transport");
         auto* display = document_->GetElementById("time-display");
         EXPECT_LE(right(last_transport_button), display->GetAbsoluteOffset(Rml::BoxArea::Border).x);
         EXPECT_LE(right(display), document_->GetElementById("btn-speed")->GetAbsoluteOffset(Rml::BoxArea::Border).x);
 
-        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 112.0f);
+        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 56.0f * 2.0f - 1.0f);
         auto* panel = document_->GetElementById("body");
         auto* strip = document_->GetElementById("film-strip-panel");
         ASSERT_GT(panel->GetScrollHeight(), panel->GetClientHeight());
@@ -2332,17 +2548,46 @@ namespace {
         EXPECT_FLOAT_EQ(strip->GetOffsetHeight(), 112.0f);
     }
 
+    TEST_F(SequencerToolbarLayoutTest, ExportPreferencesDoNotOccupyTheTransportRow) {
+        load(1240);
+        for (const char* id : {"btn-format", "resolution-field", "quality-scrub"})
+            EXPECT_EQ(document_->GetElementById(id), nullptr);
+        ASSERT_NE(document_->GetElementById("btn-export"), nullptr);
+        EXPECT_FALSE(document_->GetElementById("btn-export")->IsClassSet("disabled"));
+        expectReachable("btn-export");
+    }
+
     TEST_F(SequencerToolbarLayoutTest, WideToolbarNeedsNoScrollingAndKeepsTimelinePosition) {
         load(2400);
         EXPECT_FLOAT_EQ(row()->GetScrollWidth(), row()->GetClientWidth());
         EXPECT_FLOAT_EQ(row()->GetScrollLeft(), 0.0f);
-        EXPECT_FLOAT_EQ(row()->GetBox().GetSize(Rml::BoxArea::Content).y, 36.0f);
+        EXPECT_LE(row()->GetOffsetHeight(), 40.0f);
         const auto timeline_y = document_->GetElementById("timeline")->GetAbsoluteOffset().y;
-        for (const auto* id : {"btn-play", "quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle"})
+        for (const auto* id : {"btn-play", "btn-export", "btn-path-menu", "btn-dock-toggle"})
             expectReachable(id);
         load(1240);
-        EXPECT_FLOAT_EQ(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+        EXPECT_GE(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+        load(600);
+        EXPECT_GT(row()->GetOffsetHeight(), 40.0f);
+        EXPECT_GE(document_->GetElementById("timeline")->GetAbsoluteOffset().y,
+                  row()->GetAbsoluteOffset().y + row()->GetOffsetHeight());
     }
+    TEST_F(SequencerToolbarLayoutTest, AllLocalesKeepSemanticGroupsAndOptionsReachable) {
+        for (const auto* language : {"en", "it", "de", "es", "fr", "ja", "ko", "nl", "pl", "zh"}) {
+            for (const auto [width, scale] : {std::pair{600, 1.0f}, {1040, 2.0f}, {2400, 1.0f}}) {
+                SCOPED_TRACE(std::format("{} {} {}", language, width, scale));
+                load(width, scale, language, 640);
+                EXPECT_EQ(document_->GetElementById("btn-speed")->GetParentNode()->GetId(), "playback-controls");
+                EXPECT_EQ(document_->GetElementById("btn-add")->GetParentNode()->GetId(), "editing-controls");
+                EXPECT_EQ(document_->GetElementById("sequence-fps-field")->GetParentNode()->GetId(), "file-controls");
+                EXPECT_LE(row()->GetScrollWidth(), row()->GetClientWidth() + 1.0f);
+                for (const auto* id : {"btn-play", "btn-speed", "btn-add", "btn-snap-options", "btn-preview-options",
+                                       "btn-camera-aspect", "btn-path-menu", "btn-load-sequence", "btn-export"})
+                    expectReachable(id);
+            }
+        }
+    }
+
     TEST_F(SequencerToolbarLayoutTest, RecordsLayoutUpdateCost) {
         load(1240);
         std::array<double, 7> batches;

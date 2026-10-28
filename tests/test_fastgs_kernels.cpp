@@ -322,6 +322,41 @@ namespace {
         return std::max(codec_step, float_step);
     }
 
+    // One fixed visible splat keeps a comparison independent of other tests' random state.
+    std::unique_ptr<SplatData> make_comparison_splat() {
+        constexpr size_t n = 1;
+        auto rotation = Tensor::from_vector({1.0f, 0.2f, -0.3f, 0.1f}, {n, 4}, Device::CUDA);
+        return std::make_unique<SplatData>(
+            1, Tensor::from_vector({0.17f, -0.21f, 1.5f}, {n, 3}, Device::CUDA),
+            Tensor::from_vector({0.1f, 0.3f, 0.5f}, {n, 1, 3}, Device::CUDA),
+            Tensor::full({n, 3, 3}, 0.01f, Device::CUDA),
+            Tensor::from_vector({-2.0f, -2.3f, -2.6f}, {n, 3}, Device::CUDA),
+            rotation / rotation.pow(2.0f).sum(-1, true).sqrt(), Tensor::full({n}, 0.2f, Device::CUDA), 1.0f);
+    }
+
+    // Blend backward adds each warp's share of a splat gradient with a float atomic, so with
+    // many shaded pixels the summation order and rounding change between identical runs.
+    // One non-zero pixel leaves one contribution and makes repeated backward passes
+    // bit-identical. It sits on the splat flank, where position and shape gradients are large.
+    Tensor single_pixel_image_gradient(const RenderOutput& render) {
+        const auto alpha = render.alpha.to(Device::CPU).to_vector();
+        if (alpha.empty() || render.image.numel() != 3 * alpha.size())
+            throw std::runtime_error("Unexpected render layout");
+        const size_t peak = static_cast<size_t>(std::max_element(alpha.begin(), alpha.end()) - alpha.begin());
+        if (!(alpha[peak] > 0.0f))
+            throw std::runtime_error("The test splat covers no pixel");
+        const float half = 0.5f * alpha[peak];
+        size_t pixel = peak;
+        for (size_t i = 0; i < alpha.size(); ++i) {
+            if (std::abs(alpha[i] - half) < std::abs(alpha[pixel] - half))
+                pixel = i;
+        }
+        std::vector<float> gradient(render.image.numel(), 0.0f);
+        for (size_t channel = 0; channel < 3; ++channel)
+            gradient[channel * alpha.size() + pixel] = 1.0f;
+        return Tensor::from_vector(gradient, render.image.shape(), Device::CUDA);
+    }
+
     // Allow five comparison steps for reduction-order roundoff. Stored float spacing
     // bounds the effective precision when a codec range is narrow or constant.
     void expect_joint_adam_state_equivalent(const AdamParamState& reference,
@@ -644,22 +679,9 @@ TEST_F(FastGSKernelTest, Backward_Blend) {
 }
 
 TEST_F(FastGSKernelTest, DisabledSeptemberFeaturesMatchGenericBackwardNumerically) {
-    // A single splat avoids nondeterministic cross-splat atomics in the gradient path.
-    const size_t test_n = 1;
-    auto test_means = means_.slice(0, 0, test_n).contiguous();
-    auto test_sh0 = sh0_.slice(0, 0, test_n).contiguous();
-    auto test_scaling = scaling_.slice(0, 0, test_n).contiguous();
-    auto test_rotation = rotation_.slice(0, 0, test_n).contiguous();
-    auto test_opacity = opacity_.slice(0, 0, test_n).contiguous();
-    auto sh_rest = Tensor::full({test_n, 3, 3}, 0.01f, Device::CUDA);
-    auto make_model = [&] {
-        auto model = std::make_unique<SplatData>(
-            1, test_means.clone(), test_sh0.clone(), sh_rest.clone(), test_scaling.clone(),
-            test_rotation.clone(), test_opacity.clone(), 1.0f);
-        return model;
-    };
-    auto reference_model = make_model();
-    auto specialized_model = make_model();
+    // A single splat and a single-pixel image gradient keep float atomics out of the comparison.
+    auto reference_model = make_comparison_splat();
+    auto specialized_model = make_comparison_splat();
     AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     AdamOptimizer reference_opt(*reference_model, cfg);
     AdamOptimizer specialized_opt(*specialized_model, cfg);
@@ -682,7 +704,7 @@ TEST_F(FastGSKernelTest, DisabledSeptemberFeaturesMatchGenericBackwardNumericall
     ref_extra.opacity_reg_weight = fast_extra.opacity_reg_weight = 0.01f;
     ref_extra.opacity_reg_loss_out = ref_opacity_loss.ptr<float>();
     fast_extra.opacity_reg_loss_out = fast_opacity_loss.ptr<float>();
-    const auto grad_ref = Tensor::ones_like(reference_forward->first.image);
+    const auto grad_ref = single_pixel_image_gradient(reference_forward->first);
 
     fast_lfs::rasterization::set_force_generic_preprocess_for_testing(true);
     fast_rasterize_backward(reference_forward->second, grad_ref, *reference_model, reference_opt,
@@ -690,7 +712,7 @@ TEST_F(FastGSKernelTest, DisabledSeptemberFeaturesMatchGenericBackwardNumericall
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     auto specialized_forward = fast_rasterize_forward(*camera_, *specialized_model, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(specialized_forward.has_value());
-    const auto grad_fast = Tensor::ones_like(specialized_forward->first.image);
+    const auto grad_fast = single_pixel_image_gradient(specialized_forward->first);
     fast_lfs::rasterization::set_force_generic_preprocess_for_testing(false);
     fast_rasterize_backward(specialized_forward->second, grad_fast, *specialized_model, specialized_opt,
                             {}, {}, DensificationType::None, 1, fast_extra);
@@ -797,20 +819,8 @@ TEST_F(FastGSKernelTest, DisabledSeptemberFeaturesBackwardIsFasterThanGenericRef
 
 TEST_F(FastGSKernelTest, MrnfEnabledSeptemberFeaturesMatchGenericBackwardNumerically) {
     constexpr size_t test_n = 1;
-    auto test_means = means_.slice(0, 0, test_n).contiguous();
-    auto test_sh0 = sh0_.slice(0, 0, test_n).contiguous();
-    auto test_scaling = scaling_.slice(0, 0, test_n).contiguous();
-    auto test_rotation = rotation_.slice(0, 0, test_n).contiguous();
-    auto test_opacity = opacity_.slice(0, 0, test_n).contiguous();
-    auto sh_rest = Tensor::full({test_n, 3, 3}, 0.01f, Device::CUDA);
-    auto make_model = [&] {
-        auto model = std::make_unique<SplatData>(
-            1, test_means.clone(), test_sh0.clone(), sh_rest.clone(), test_scaling.clone(),
-            test_rotation.clone(), test_opacity.clone(), 1.0f);
-        return model;
-    };
-    auto reference_model = make_model();
-    auto specialized_model = make_model();
+    auto reference_model = make_comparison_splat();
+    auto specialized_model = make_comparison_splat();
     AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     AdamOptimizer reference_opt(*reference_model, cfg);
     AdamOptimizer specialized_opt(*specialized_model, cfg);
@@ -860,13 +870,13 @@ TEST_F(FastGSKernelTest, MrnfEnabledSeptemberFeaturesMatchGenericBackwardNumeric
     fast_extra.rendered_count = fast_rendered_count.ptr<float>();
 
     fast_lfs::rasterization::set_force_generic_preprocess_for_testing(true);
-    fast_rasterize_backward(reference_forward->second, Tensor::ones_like(reference_forward->first.image),
+    fast_rasterize_backward(reference_forward->second, single_pixel_image_gradient(reference_forward->first),
                             *reference_model, reference_opt, {}, {}, DensificationType::None, 1, ref_extra);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     auto specialized_forward = fast_rasterize_forward(*camera_, *specialized_model, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(specialized_forward.has_value());
     fast_lfs::rasterization::set_force_generic_preprocess_for_testing(false);
-    fast_rasterize_backward(specialized_forward->second, Tensor::ones_like(specialized_forward->first.image),
+    fast_rasterize_backward(specialized_forward->second, single_pixel_image_gradient(specialized_forward->first),
                             *specialized_model, specialized_opt, {}, {}, DensificationType::None, 1, fast_extra);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -938,6 +948,96 @@ TEST_F(FastGSKernelTest, EdgeWeightedContributionUsesFloatMapInMainBackward) {
     EXPECT_GT(actual_total_contribution, 0.0f);
     EXPECT_NEAR(actual_total_contribution, expected_total_contribution,
                 std::max(1.0e-3f, expected_total_contribution * 1.0e-4f));
+}
+
+TEST(FastGSImpactTest, RemovalImpactMatchesTwoSplatComposite) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    constexpr int width = 64, height = 48;
+    constexpr float sh_c0 = 0.28209479177387814f;
+    auto R = Tensor::eye(3, Device::CUDA);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto camera = Camera(R, T, 60.0f, 60.0f, width / 2.0f, height / 2.0f,
+                         Tensor(), Tensor(), CameraModelType::PINHOLE,
+                         "impact", "", std::filesystem::path{}, width, height, 0);
+    auto bg = Tensor::full({3}, 0.5f, Device::CUDA);
+
+    const auto make_model = [&](const std::array<float, 3>& front_color, const bool include_back) {
+        const size_t n = include_back ? 2u : 1u;
+        std::vector<float> means{0.0f, 0.0f, 0.0f};
+        std::vector<float> scales(3 * n, -1.6f);
+        std::vector<float> rotations(4 * n, 0.0f);
+        std::vector<float> opacities{
+            std::log(0.95f / 0.05f)};
+        std::vector<float> sh0{
+            (front_color[0] - 0.5f) / sh_c0,
+            (front_color[1] - 0.5f) / sh_c0,
+            (front_color[2] - 0.5f) / sh_c0};
+        rotations[0] = 1.0f;
+        if (include_back) {
+            means.insert(means.end(), {0.0f, 0.0f, 0.5f});
+            opacities.push_back(std::log(0.8f / 0.2f));
+            sh0.insert(sh0.end(), {0.0f, 0.0f, 0.0f});
+            rotations[4] = 1.0f;
+        }
+        return std::make_unique<SplatData>(
+            0,
+            Tensor::from_blob(means.data(), {n, size_t{3}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::from_blob(sh0.data(), {n, size_t{1}, size_t{3}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::zeros({n, size_t{0}, size_t{3}}, Device::CUDA),
+            Tensor::from_blob(scales.data(), {n, size_t{3}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::from_blob(rotations.data(), {n, size_t{4}}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            Tensor::from_blob(opacities.data(), {n}, Device::CPU, DataType::Float32).to(Device::CUDA),
+            1.0f);
+    };
+
+    const std::array<float, 3> different{0.9f, 0.1f, 0.5f};
+    auto solo = make_model(different, false);
+    auto solo_forward = fast_rasterize_forward(camera, *solo, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(solo_forward.has_value()) << lfs::format_for_developer(solo_forward.error());
+    const auto front_alpha = solo_forward->first.alpha.clone();
+    solo_forward->second.release_forward_context();
+
+    const auto measure = [&](const std::array<float, 3>& front_color) {
+        auto model = make_model(front_color, true);
+        auto forward = fast_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, false);
+        EXPECT_TRUE(forward.has_value());
+        if (!forward.has_value())
+            return std::pair{std::vector<float>{}, std::vector<float>{}};
+        AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+        AdamOptimizer opt(*model, cfg);
+        opt.allocate_gradients();
+        opt.zero_grad(0);
+        auto impact_sum = Tensor::zeros({size_t{2}}, Device::CUDA, DataType::Float32);
+        auto impact_peak = Tensor::zeros({size_t{2}}, Device::CUDA, DataType::Float32);
+        FastGSFusedExtraGradients fused;
+        fused.impact_sum_out = impact_sum.ptr<float>();
+        fused.impact_peak_out = impact_peak.ptr<float>();
+        fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image), *model, opt,
+                                {}, {}, DensificationType::None, 1, fused);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        return std::pair{impact_sum.cpu().to_vector(), impact_peak.cpu().to_vector()};
+    };
+
+    const auto [different_sum, different_peak] = measure(different);
+    ASSERT_EQ(different_sum.size(), 2u);
+    ASSERT_EQ(different_peak.size(), 2u);
+    constexpr float color_l1 = 0.8f;
+    const float expected_sum = front_alpha.sum().item<float>() * color_l1;
+    const float expected_peak = front_alpha.max().item<float>() * color_l1;
+    EXPECT_NEAR(different_sum[0], expected_sum, std::max(1.0e-4f, expected_sum * 2.0e-4f));
+    EXPECT_NEAR(different_peak[0], expected_peak, 1.0e-4f);
+    EXPECT_NEAR(different_sum[1], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(different_peak[1], 0.0f, 1.0e-6f);
+
+    const auto [same_sum, same_peak] = measure({0.5f, 0.5f, 0.5f});
+    ASSERT_EQ(same_sum.size(), 2u);
+    ASSERT_EQ(same_peak.size(), 2u);
+    EXPECT_NEAR(same_sum[0], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(same_peak[0], 0.0f, 1.0e-6f);
 }
 
 TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {

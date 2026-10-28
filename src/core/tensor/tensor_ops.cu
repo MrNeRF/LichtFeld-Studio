@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cub/device/device_reduce.cuh>
 #include <cub/device/device_segmented_reduce.cuh>
+#include <cuda/std/functional>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -30,8 +31,6 @@
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/fill.h>
-#include <thrust/functional.h>
-#include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/reduce.h>
@@ -1030,12 +1029,12 @@ namespace lfs::core::tensor_ops {
                     return;
                 // Contiguous segments - use vectorized warp reduction
                 if (should_use_warp_reduce(n, outer_size)) {
-                    LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer={} reduce={} inner=1", outer_size, reduce_size);
+                    LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer=%zu reduce=%zu inner=1", outer_size, reduce_size);
                     // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_segmented_reduce(input_f, output_f, outer_size, reduce_size, op, stream);
                     return;
                 } else {
-                    LOG_DEBUG("[REDUCE] Fallback to CUB: outer={} reduce={} inner=1", outer_size, reduce_size);
+                    LOG_DEBUG("[REDUCE] Fallback to CUB: outer=%zu reduce=%zu inner=1", outer_size, reduce_size);
                 }
             } else {
                 // Strided segments - strided memory access is slow on GPU
@@ -1052,7 +1051,7 @@ namespace lfs::core::tensor_ops {
                 bool use_strided_warp = small_inner_stride && should_use_warp_reduce(n, output_size);
 
                 if (use_strided_warp) {
-                    LOG_DEBUG("[REDUCE] Using warp STRIDED reduce: outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
+                    LOG_DEBUG("[REDUCE] Using warp STRIDED reduce: outer=%zu reduce=%zu inner=%zu", outer_size, reduce_size, inner_size);
                     // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_strided_reduce(input_f, output_f, outer_size, reduce_size, inner_size, op, stream);
                     return;
@@ -1060,7 +1059,7 @@ namespace lfs::core::tensor_ops {
             }
 
             // SLOW PATH: Use CUB/Thrust for very large tensors
-            LOG_DEBUG("[REDUCE] Using SLOW PATH (CUB/Thrust): outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
+            LOG_DEBUG("[REDUCE] Using SLOW PATH (CUB/Thrust): outer=%zu reduce=%zu inner=%zu", outer_size, reduce_size, inner_size);
             float init_val = 0.0f;
 
             switch (op) {
@@ -1415,7 +1414,7 @@ namespace lfs::core::tensor_ops {
                 auto in_ptr = thrust::device_pointer_cast(d_in);
                 int64_t result = thrust::transform_reduce(
                     thrust::cuda::par.on(stream), in_ptr, in_ptr + n,
-                    Int32ToInt64Op{}, int64_t{1}, thrust::multiplies<int64_t>{});
+                    Int32ToInt64Op{}, int64_t{1}, cuda::std::multiplies<int64_t>{});
                 init_scalar_gpu(static_cast<int64_t*>(output), result, stream);
             } break;
             default:
@@ -2909,7 +2908,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_binary_op_generic<unsigned char, unsigned char, ops::not_equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*, size_t, ops::not_equal_op, cudaStream_t);
 
-    // Scalar operations (uses constant_iterator, different from scalar_right_op!)
+    // Scalar operations
     template LFS_CORE_API void launch_scalar_op_generic<float, float, ops::add_op>(
         const float*, float, float*, size_t, ops::add_op, cudaStream_t);
     template LFS_CORE_API void launch_scalar_op_generic<float, float, ops::sub_op>(

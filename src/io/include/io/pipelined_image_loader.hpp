@@ -43,6 +43,7 @@ namespace lfs::io {
         constexpr size_t DEFAULT_COLD_THREADS = 2;
         constexpr size_t DEFAULT_MAX_CACHE_BYTES = 0;
         constexpr int DEFAULT_JPEG_QUALITY = 95;
+        constexpr std::uintmax_t DEFAULT_MIN_SPILL_FREE_BYTES = std::uintmax_t{20} << 30;
         constexpr int DEFAULT_BATCH_TIMEOUT_MS = 3;
         constexpr int DEFAULT_OUTPUT_TIMEOUT_MS = 50;
     } // namespace config
@@ -83,6 +84,8 @@ namespace lfs::io {
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
+        // A run spill never takes its volume below this much free space; an image it cannot spill is decoded again.
+        std::uintmax_t min_spill_free_bytes = config::DEFAULT_MIN_SPILL_FREE_BYTES;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
         bool use_16bit_color = false;
@@ -593,6 +596,7 @@ namespace lfs::io {
         std::filesystem::path run_spill_folder_;
         size_t spill_cache_bytes_ = 0;
         std::uint64_t spill_sequence_ = 0;
+        bool spill_floor_reported_ = false;
 
         struct DecodedFrameRing;
         std::shared_ptr<DecodedFrameRing> decoded_frame_ring_;

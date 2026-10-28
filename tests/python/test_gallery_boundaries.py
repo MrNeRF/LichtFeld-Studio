@@ -329,7 +329,12 @@ def test_native_registry_exposes_defaults_and_preferences_rows():
         assert f'.value("{name}", Action::{name})' in bindings
         assert f'Action::{name}, "' in source
         assert f'case Action::{name}: return "{name.lower()}"' in source
-    assert 'LAST_ACTION = Action::TOGGLE_PYTHON_CONSOLE' in source
+    # LAST_ACTION must name the final Action, so every appended action stays registered.
+    header = (root/'src/visualizer/input/input_bindings.hpp').read_text()
+    actions = header.split('enum class Action {', 1)[1].split('};', 1)[0]
+    last = [line.split('//')[0].strip().rstrip(',').split('=')[0].strip()
+            for line in actions.splitlines() if line.split('//')[0].strip()][-1]
+    assert f'LAST_ACTION = Action::{last};' in source
 
 @pytest.mark.parametrize('kind', ['diverged', 'remote'])
 def test_gallery_target_does_not_accept_card_drops(convenience, kind):

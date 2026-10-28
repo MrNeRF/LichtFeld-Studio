@@ -368,7 +368,7 @@ TEST_F(MaskedSSIMWindowTest, DuplicatePoseMaskedSquareDoesNotMoveTrainedSurface)
     }
     EXPECT_LE(max_repeat_difference, repeat_tolerance);
     EXPECT_LE(max_painted_difference, repeat_tolerance);
-    double band = 0.0, far = 0.0, control_band = 0.0, inside_band = 0.0, outside_band = 0.0;
+    double band = 0.0, far_difference = 0.0, control_band = 0.0, inside_band = 0.0, outside_band = 0.0;
     int band_count = 0, far_count = 0, inside_count = 0, outside_count = 0;
     for (int c = 0; c < 3; ++c) {
         for (int y = 0; y < H; ++y) {
@@ -388,7 +388,7 @@ TEST_F(MaskedSSIMWindowTest, DuplicatePoseMaskedSquareDoesNotMoveTrainedSurface)
                         ++outside_count;
                     }
                 } else if (x < left - 16 || x >= right + 16 || y < top - 16 || y >= bottom + 16) {
-                    far += std::abs(a[i] - ab_painted[i]);
+                    far_difference += std::abs(a[i] - ab_painted[i]);
                     ++far_count;
                 }
             }
@@ -396,12 +396,12 @@ TEST_F(MaskedSSIMWindowTest, DuplicatePoseMaskedSquareDoesNotMoveTrainedSurface)
     }
     band /= band_count;
     control_band /= band_count;
-    far /= far_count;
-    std::cout << "masked duplicate: band=" << band << " far=" << far
+    far_difference /= far_count;
+    std::cout << "masked duplicate: band=" << band << " far=" << far_difference
               << " inside8=" << inside_band / inside_count
               << " outside8=" << outside_band / outside_count
               << " clean_duplicate_band=" << control_band << '\n';
-    EXPECT_LE(band, far + control_band + 2.0e-5);
+    EXPECT_LE(band, far_difference + control_band + 2.0e-5);
     std::cout << "SGD control: repeat_max=" << max_repeat_difference
               << " painted_clean_max=" << max_painted_difference
               << " tolerance=" << repeat_tolerance << '\n';

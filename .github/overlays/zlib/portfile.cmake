@@ -20,6 +20,24 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
 vcpkg_cmake_config_fixup(PACKAGE_NAME ZLIB CONFIG_PATH lib/cmake/ZLIB)
+# Ports built against zlib 1.3.2 request its "shared"/"static" components and, for
+# static linkage, the ZLIB::ZLIBSTATIC target. zlib-ng's config provides neither.
+if(BUILD_SHARED)
+    set(ZLIB_COMPONENT_SHIM [[
+set(ZLIB_shared_FOUND TRUE)
+]])
+else()
+    set(ZLIB_COMPONENT_SHIM [[
+set(ZLIB_static_FOUND TRUE)
+if(NOT TARGET ZLIB::ZLIBSTATIC)
+    add_library(ZLIB::ZLIBSTATIC INTERFACE IMPORTED)
+    set_target_properties(ZLIB::ZLIBSTATIC PROPERTIES INTERFACE_LINK_LIBRARIES ZLIB::ZLIB)
+endif()
+]])
+endif()
+vcpkg_replace_string("${CURRENT_PACKAGES_DIR}/share/ZLIB/zlib-config.cmake"
+    "check_required_components(ZLIB)"
+    "${ZLIB_COMPONENT_SHIM}check_required_components(ZLIB)")
 vcpkg_fixup_pkgconfig()
 if(VCPKG_TARGET_IS_WINDOWS)
     if(BUILD_SHARED)

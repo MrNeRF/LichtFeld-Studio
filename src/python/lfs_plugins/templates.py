@@ -4,7 +4,7 @@
 
 import logging
 import os
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Optional
 
 _log = logging.getLogger(__name__)

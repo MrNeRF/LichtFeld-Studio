@@ -29,6 +29,7 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=lambda key: key,
         property_group_info=lambda _group: {"properties": []},
+        confirm_dialog=lambda *args, **kwargs: None,
     )
     lf_stub.optimization_params = lambda: None
     lf_stub.dataset_params = lambda: None
@@ -51,7 +52,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
 
     for locale_path in locale_dir.glob("*.json"):
-        data = json.loads(locale_path.read_text())
+        data = json.loads(locale_path.read_text(encoding="utf-8"))
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
@@ -60,6 +61,42 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_sparsity_toggle_controls_popspa_rows_and_search(
+    training_panel_module, monkeypatch, enabled
+):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, mask_mode=SimpleNamespace(value=0),
+        use_depth_loss=False, use_normal_loss=False, ppisp=False,
+        use_exposure_correction=False, ppisp_use_controller=False,
+        use_bilateral_grid=False, strategy="mcmc", random=False,
+        enable_sparsity=enabled, enable_eval=False, eval_mask="", undistort=False,
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    assert panel._property_view_condition_visible("dep_sparsity") is enabled
+    view = module.property_view
+    sparsity_run = next(run for run in view.BASIC_RUNS if run.id == "sparsity")
+    assert sparsity_run.prop_ids == view.POPSPA_PROPS
+    assert sparsity_run.visibility_condition_id == "dep_sparsity"
+    assert not set(view.POPSPA_PROPS) & set(view.PROP_VISIBILITY_CONDITION_IDS)
+    # Search hides the whole run while sparsity is off, like ordinary rendering.
+    rows = [
+        dict(id=prop_id, kind="number", label_key="", name=prop_id,
+             tooltip_key="", precision=0, text="0", strategies=())
+        for prop_id in ("popspa_target_count", "popspa_sparsify_steps")
+    ]
+    binding = view.SectionBinding(
+        "sparsity", rows, lambda: params, {}, lambda _binding: None,
+        search_accessor=lambda: "s",
+        visibility_condition_id="dep_sparsity",
+        visibility_predicate=panel._property_view_condition_visible,
+    )
+    visible = {row["id"] for row in binding._records()}
+    assert visible == ({"popspa_target_count", "popspa_sparsify_steps"} if enabled else set())
 
 
 @pytest.fixture
@@ -115,9 +152,15 @@ class _ParamsStub:
         self.bg_color = (0.0, 0.0, 0.0)
         self.bg_image_path = ""
         self.auto_scaled_for = None
+        self.undistort = False
+        self.gut = False
+        self.strategy = "mrnf"
 
     def has_params(self):
         return True
+
+    def validate(self):
+        return ""
 
     def apply_step_scaling(self, value):
         scale = value / self.steps_scaler if self.steps_scaler else value
@@ -151,7 +194,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.007,
                 "lambda_dssim": 0.2,
                 "init_opacity": 0.5,
-                "prune_ratio": 0.6,
                 "sh_degree": 3,
                 "depth_loss_mode": "ssi",
                 "ppisp_controller_activation_step": 25_000,
@@ -165,7 +207,6 @@ class _StrategyParamsStub:
                 "scaling_lr": 0.02,
                 "lambda_dssim": 0.35,
                 "init_opacity": 0.1,
-                "prune_ratio": 0.4,
                 "sh_degree": 2,
                 "depth_loss_mode": "ssi-depth",
                 "ppisp_controller_activation_step": 12_000,
@@ -293,7 +334,6 @@ def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
     assert panel._text_bufs[binding.input_key("scaling_lr")] == "0.020000"
     assert panel._get_scrub_value("lambda_dssim") == pytest.approx(0.35)
     assert panel._get_scrub_value("init_opacity") == pytest.approx(0.1)
-    assert panel._get_scrub_value("prune_ratio") == pytest.approx(0.4)
     assert model.bindings["sh_degree_str"][0]() == "2"
     assert model.bindings["depth_loss_mode_str"][0]() == "ssi-depth"
     assert panel._text_bufs["ppisp_activation_step_str"] == "12,000"
@@ -937,6 +977,30 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
     assert "label_ppisp_auto" not in content
 
 
+def test_training_rml_makes_every_panel_section_collapsible(training_panel_module):
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    panel_blocks = {"basic_params", "advanced_params"}
+    for name in training_panel_module.SECTIONS:
+        if name in panel_blocks:
+            continue
+        dom_name = name.replace("_", "-")
+        assert f'id="hdr-{dom_name}" data-event-click="toggle_section(\'{name}\')"' in content
+        assert f'id="arrow-{dom_name}"' in content
+        assert f'class="section-content collapsed" id="sec-{dom_name}"' in content
+
+
+def test_training_panel_restores_new_sections_collapsed(training_panel_module):
+    panel = training_panel_module.TrainingPanel.__new__(training_panel_module.TrainingPanel)
+    panel._handle = None
+    panel.apply_chrome({"expanded": ["losses", "retired_section"]})
+
+    assert panel._collapsed == training_panel_module.INITIALLY_COLLAPSED - {"losses"}
+    assert panel.capture_chrome()["expanded"] == ["basic_params", "losses"]
+
+
 def test_training_rml_exposes_mrnf_grow_until_iter():
     project_root = Path(__file__).parent.parent.parent
     training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
@@ -1025,6 +1089,36 @@ def test_browse_background_image_uses_current_image_dialog(training_panel_module
     assert calls == [""]
     assert params.bg_image_path == selected_path
     assert panel._handle.dirty_all_count == 1
+
+
+# Catches the mesh resolution row showing for splat or point inits, or a file probe on every redraw.
+def test_mesh_resolution_row_follows_the_init_file(training_panel_module, monkeypatch):
+    dataset = SimpleNamespace(init_path="", has_params=lambda: True)
+    probes = []
+
+    def is_mesh_file(path):
+        probes.append(path)
+        return path.endswith(".obj")
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset, io=SimpleNamespace(is_mesh_file=is_mesh_file)),
+    )
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    dataset.init_path = "/scan/model.obj"
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    assert panel._property_view_condition_visible("dep_init_mesh") is True
+    dataset.init_path = "/scan/points.ply"
+    assert panel._property_view_condition_visible("dep_init_mesh") is False
+    assert probes == ["/scan/model.obj", "/scan/points.ply"]
+
+    training_rml = Path(__file__).parent.parent.parent / "src/visualizer/gui/rmlui/resources/training.rml"
+    content = training_rml.read_text()
+    guard = content.index('<div data-if="dep_init_mesh">')
+    assert guard < content.index("pv_init_mesh_rows") < content.index("</div>", guard + 1)
 
 
 # Catches a cleared path leaving pixel sets listed or a browse action ignoring its start directory.
@@ -1998,7 +2092,6 @@ def test_restored_control_echo_is_not_an_edit(
     ("prop", "saved", "control_echo"),
     [
         ("init_opacity", 0.5, 0.4999999701976776),
-        ("prune_ratio", 0.6000000238418579, 0.5999999642372131),
         ("lambda_dssim", 0.2, 0.20000000298023224),
     ],
 )
@@ -2126,7 +2219,7 @@ def test_camera_guidance_locales_use_gui_options():
     locales = list(locale_dir.glob("*.json"))
     assert len(locales) == 10
     for path in locales:
-        messages = json.loads(path.read_text())["messages"]
+        messages = json.loads(path.read_text(encoding="utf-8"))["messages"]
         for key in ("err_distorted_images", "err_non_pinhole"):
             assert "--gut" not in messages[key], path.name
             assert "--undistort" not in messages[key], path.name
@@ -2385,3 +2478,294 @@ def test_external_change_refreshes_derived_activation_step(ready_panel_settings,
     change("optimization", prop, value)
     panel.on_update(None)
     assert panel._text_bufs["ppisp_activation_step_str"] == expected
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_label_reset_respects_coupled_step_lock(training_panel_module, monkeypatch, locked):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = locked
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: 100)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    prop = next(run.prop_ids[0] for run in module.property_view.RUNS
+                if run.disabled_condition_id == "step_scaling_params_locked")
+    assert panel._reset_default(prop) == (None if locked else 100)
+
+
+@pytest.mark.parametrize("state,iteration,editable", [
+    ("ready", 0, True),
+    ("ready", 100, False),
+    ("running", 100, False),
+    ("paused", 100, False),
+    ("completed", 100, True),
+    ("stopped", 100, True),
+    ("error", 100, True),
+])
+def test_configuration_editability_follows_run_state(
+    training_panel_module, monkeypatch, state, iteration, editable
+):
+    module = training_panel_module
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(
+        trainer_state=_make_signal(state), iteration=_make_signal(iteration)))
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: 100)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_disabled(model, lambda: params)
+
+    assert panel._can_edit_configuration() is editable
+    for binding in ("struct_disabled", "live_disabled", "adv_disabled"):
+        assert model.bindings[binding][0]() is (not editable)
+    assert panel._reset_default("means_lr") == (100 if editable else None)
+
+
+def test_label_reset_rejects_training_runtime_and_forced_method_fields(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, strategy="igs+",
+        prop_info=lambda prop: {"readonly": False}, builtin_default=lambda prop: False)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    monkeypatch.setattr(module, "_trainer_run_is_finished", lambda: False)
+    assert panel._reset_default("iterations") is None
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    assert panel._reset_default("gut") is None
+    assert panel._reset_default("strategy") is None
+
+
+def test_label_reset_uses_iterations_scaling_path(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._auto_scale_steps_locked = True
+    calls = []
+    params = SimpleNamespace(has_params=lambda: True, strategy="mrnf", iterations=60000, steps_scaler=2.,
+        apply_step_scaling=lambda value: calls.append(value))
+    params.get = lambda prop: getattr(params, prop)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_reset_default", lambda prop: 30000)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    assert panel._apply_reset("iterations", 30000)
+    assert calls == [1.0] and params.iterations == 30000
+
+
+def test_distorted_images_shows_prompt_and_handles_undistort(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: True,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+
+    dialog_opened = []
+    def mock_confirm_dialog(title, message, buttons, callback, style="info"):
+        dialog_opened.append((title, message, buttons, callback, style))
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", mock_confirm_dialog)
+
+    panel._check_distortion_and_start()
+
+    assert len(dialog_opened) == 1
+    title, message, buttons, callback, style = dialog_opened[0]
+    assert style == "warning"
+    assert len(buttons) == 3
+    btn_undistort, btn_gut, btn_cancel = buttons
+
+    assert len(started) == 0
+    callback(btn_undistort)
+    assert params.undistort is True
+    assert panel._handle.dirty_all_count == 1
+    assert len(started) == 1
+
+
+def test_distorted_images_shows_prompt_and_handles_gut(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: True,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+
+    dialog_opened = []
+    def mock_confirm_dialog(title, message, buttons, callback, style="info"):
+        dialog_opened.append((title, message, buttons, callback, style))
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", mock_confirm_dialog)
+
+    panel._check_distortion_and_start()
+
+    assert len(dialog_opened) == 1
+    _, _, buttons, callback, _ = dialog_opened[0]
+    btn_undistort, btn_gut, btn_cancel = buttons
+
+    callback(btn_gut)
+    assert params.gut is True
+    assert panel._handle.dirty_all_count == 1
+    assert len(started) == 1
+
+
+def test_distorted_images_shows_prompt_and_handles_cancel(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: True,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+
+    dialog_opened = []
+    def mock_confirm_dialog(title, message, buttons, callback, style="info"):
+        dialog_opened.append((title, message, buttons, callback, style))
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", mock_confirm_dialog)
+
+    panel._check_distortion_and_start()
+
+    assert len(dialog_opened) == 1
+    _, _, buttons, callback, _ = dialog_opened[0]
+    btn_undistort, btn_gut, btn_cancel = buttons
+
+    callback(btn_cancel)
+    assert params.undistort is False
+    assert params.gut is False
+    assert len(started) == 0
+
+
+def test_distorted_images_equirectangular_offers_only_gut(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    params.strategy = "mrnf"
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: False,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+
+    dialog_opened = []
+    def mock_confirm_dialog(title, message, buttons, callback, style="info"):
+        dialog_opened.append((title, message, buttons, callback, style))
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", mock_confirm_dialog)
+
+    panel._check_distortion_and_start()
+
+    assert len(dialog_opened) == 1
+    _, _, buttons, callback, _ = dialog_opened[0]
+    assert len(buttons) == 2
+    btn_gut, btn_cancel = buttons
+
+    callback(btn_gut)
+    assert params.gut is True
+    assert panel._handle.dirty_all_count == 1
+    assert len(started) == 1
+
+
+def test_distorted_images_igs_strategy_offers_only_undistort(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    params = _ParamsStub()
+    params.strategy = "igs+"
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: True,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+
+    dialog_opened = []
+    def mock_confirm_dialog(title, message, buttons, callback, style="info"):
+        dialog_opened.append((title, message, buttons, callback, style))
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", mock_confirm_dialog)
+
+    panel._check_distortion_and_start()
+
+    assert len(dialog_opened) == 1
+    _, _, buttons, callback, _ = dialog_opened[0]
+    assert len(buttons) == 2
+    btn_undistort, btn_cancel = buttons
+
+    callback(btn_undistort)
+    assert params.undistort is True
+    assert panel._handle.dirty_all_count == 1
+    assert len(started) == 1
+
+
+def test_distorted_images_skipped_if_already_undistorted_or_gut(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    scene = SimpleNamespace(
+        has_active_distorted_cameras=lambda: True,
+        can_undistort_active_cameras=lambda: True,
+    )
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+
+    dialog_opened = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args, **kwargs: dialog_opened.append(args))
+
+    # Case 1: undistort is True
+    started = []
+    monkeypatch.setattr(module.lf, "start_training", lambda: started.append(True))
+    params = _ParamsStub()
+    params.undistort = True
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel._check_distortion_and_start()
+    assert len(dialog_opened) == 0
+    assert len(started) == 1
+
+    # Case 2: gut is True
+    started.clear()
+    params = _ParamsStub()
+    params.gut = True
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel._check_distortion_and_start()
+    assert len(dialog_opened) == 0
+    assert len(started) == 1
+
+    # Case 3: no distorted cameras
+    started.clear()
+    scene.has_active_distorted_cameras = lambda: False
+    params = _ParamsStub()
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel._check_distortion_and_start()
+    assert len(dialog_opened) == 0
+    assert len(started) == 1

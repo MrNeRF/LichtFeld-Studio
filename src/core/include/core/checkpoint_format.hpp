@@ -19,7 +19,8 @@ namespace lfs::core {
     constexpr uint32_t CHECKPOINT_MIN_SUPPORTED_VERSION = 1;
     constexpr uint32_t CHECKPOINT_VERSION_HAS_SPARSITY = 2;
     constexpr uint32_t CHECKPOINT_VERSION_FIELDWISE_CONFIGS = 3;
-    constexpr uint32_t CHECKPOINT_VERSION = CHECKPOINT_VERSION_FIELDWISE_CONFIGS;
+    constexpr uint32_t CHECKPOINT_VERSION_HAS_POPSPA = 4;
+    constexpr uint32_t CHECKPOINT_VERSION = CHECKPOINT_VERSION_HAS_POPSPA;
     constexpr uint64_t MAX_CHECKPOINT_FILE_BYTES = 256ULL * 1024ULL * 1024ULL * 1024ULL;
     constexpr uint64_t MAX_CHECKPOINT_JSON_BYTES = 16ULL * 1024ULL * 1024ULL;
     constexpr uint32_t MAX_CHECKPOINT_STRATEGY_NAME_BYTES = 64;
@@ -31,6 +32,7 @@ namespace lfs::core {
         HAS_PPISP = 1 << 1,
         HAS_PPISP_CONTROLLER = 1 << 2,
         HAS_SPARSITY = 1 << 3,
+        HAS_POPSPA = 1 << 4,
     };
 
     constexpr CheckpointFlags operator|(const CheckpointFlags a, const CheckpointFlags b) {

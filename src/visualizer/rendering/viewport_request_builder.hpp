@@ -46,16 +46,21 @@ namespace lfs::vis {
         const RenderSettings& settings,
         const glm::vec3& camera_backward);
 
+    // The transforms argument must outlive the returned request.
+    [[nodiscard]] LFS_VIS_API lfs::rendering::PointCloudRenderRequest buildPointCloudNodeRenderRequest(
+        const FrameContext& ctx, const core::Scene& scene, const core::SceneNode& node,
+        glm::ivec2 render_size, const std::vector<glm::mat4>& transforms);
+
     struct PlyComparisonNode {
         const core::SceneNode* node = nullptr;
-        // Combined-model slot of a splat node; empty for a mesh, which the mesh pass draws.
+        // Combined-model slot of a splat node; empty for point clouds and meshes.
         std::optional<size_t> splat_slot;
     };
 
-    // Nodes the PLY comparison pairs, in pair order: visible splat slots, then visible meshes.
+    // Visible comparison-eligible nodes in depth-first scene-tree order.
     [[nodiscard]] LFS_VIS_API std::vector<PlyComparisonNode> plyComparisonNodes(const core::Scene& scene);
 
-    // Visible splat or mesh node shown in a PLY-comparison panel, or null when
+    // Visible splat, point cloud, or mesh shown in a comparison panel, or null when
     // the scene has fewer than two of them.
     [[nodiscard]] LFS_VIS_API const core::SceneNode* plyComparisonNodeForPanel(
         const core::Scene& scene,

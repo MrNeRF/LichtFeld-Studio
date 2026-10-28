@@ -3,10 +3,66 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/property_registry.hpp"
 #include "py_ui.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 
+#include <glm/glm.hpp>
+
 namespace lfs::python {
+
+    vis::op::OperatorProperties builtin_operator_properties(const std::string& id, const nb::kwargs& kwargs) {
+        using core::prop::PropType;
+        vis::op::OperatorProperties props;
+        const auto group = core::prop::PropertyRegistry::instance().get_group_snapshot("operator." + id);
+        for (auto [key, value] : kwargs) {
+            const auto name = nb::cast<std::string>(key);
+            const core::prop::PropertyMeta* meta = nullptr;
+            if (group) {
+                for (const auto& property : group->properties) {
+                    if (property.id == name)
+                        meta = &property;
+                }
+            }
+            if (!meta)
+                throw nb::type_error(("Operator '" + id + "' has no argument '" + name + "'").c_str());
+            switch (meta->type) {
+            case PropType::Bool:
+                props.set(name, nb::cast<bool>(value));
+                break;
+            case PropType::Int:
+            case PropType::SizeT:
+                props.set(name, nb::cast<int>(value));
+                break;
+            case PropType::Float:
+                props.set(name, nb::cast<float>(value));
+                break;
+            case PropType::String:
+            case PropType::Enum:
+                props.set(name, nb::cast<std::string>(value));
+                break;
+            case PropType::IntVector:
+                props.set(name, nb::cast<std::vector<int>>(value));
+                break;
+            case PropType::Vec3:
+            case PropType::Color3:
+            case PropType::FloatVector: {
+                auto values = nb::cast<std::vector<float>>(value);
+                if (meta->type != PropType::FloatVector || meta->vector_size == 3) {
+                    if (values.size() != 3)
+                        throw nb::type_error(("Argument '" + name + "' needs three values").c_str());
+                    props.set(name, glm::vec3(values[0], values[1], values[2]));
+                } else {
+                    props.set(name, std::move(values));
+                }
+                break;
+            }
+            default:
+                throw nb::type_error(("Argument '" + name + "' cannot be passed from Python").c_str());
+            }
+        }
+        return props;
+    }
 
     void register_operator_return_value(nb::module_& m) {
         nb::class_<PyOperatorReturnValue>(m, "OperatorReturnValue")
@@ -74,8 +130,12 @@ namespace lfs::python {
                 nb::object instance = get_python_operator_instance(id);
                 std::vector<std::string> set_kwargs;
 
+                // Builtin C++ operators take their arguments as properties.
+                const bool python_operator = instance.is_valid() && !instance.is_none();
+                const bool builtin = !python_operator && vis::op::builtin_op_from_string(id).has_value();
+                auto builtin_props = builtin ? builtin_operator_properties(id, kwargs) : vis::op::OperatorProperties{};
                 if (kwargs && nb::len(kwargs) > 0) {
-                    if (instance.is_valid() && !instance.is_none()) {
+                    if (python_operator) {
                         for (auto [key, value] : kwargs) {
                             std::string key_str = nb::cast<std::string>(key);
                             nb::setattr(instance, key_str.c_str(), value);
@@ -84,7 +144,7 @@ namespace lfs::python {
                     }
                 }
 
-                auto result = registry.invoke(id);
+                auto result = registry.invoke(id, builtin ? &builtin_props : nullptr);
 
                 std::string status_str;
                 switch (result.status) {

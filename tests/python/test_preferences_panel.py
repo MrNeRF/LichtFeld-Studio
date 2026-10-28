@@ -40,6 +40,7 @@ def preferences_panel_module(monkeypatch):
 
     state = SimpleNamespace(
         language="it",
+        splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
         sidebar_clear_calls=[],
         set_language_calls=[],
         mcp_preferences={
@@ -85,6 +86,8 @@ def preferences_panel_module(monkeypatch):
         set_viewport_chrome_style_calls=[],
         viewport_toolbar_position="centered",
         set_viewport_toolbar_position_calls=[],
+        camera_browse_repeat=True,
+        camera_browse_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
         project_location="",
@@ -144,6 +147,8 @@ def preferences_panel_module(monkeypatch):
     state.marketplace_preferences = {"view": "list", "git_checkout": False}
     state.marketplace_notifications = []
     lf_stub.ui = SimpleNamespace(
+        get_splat_drag_preferences=lambda: dict(state.splat_drag_preferences),
+        set_splat_drag_preferences=lambda values: state.splat_drag_preferences.update(values),
         get_marketplace_preferences=lambda: dict(state.marketplace_preferences),
         set_marketplace_view=lambda value: state.marketplace_preferences.update(view=value),
         set_marketplace_git_checkout=lambda value: state.marketplace_preferences.update(git_checkout=value),
@@ -229,6 +234,10 @@ def preferences_panel_module(monkeypatch):
         set_viewport_chrome_style=set_viewport_chrome_style,
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
+        get_camera_browse_repeat=lambda: state.camera_browse_repeat,
+        set_camera_browse_repeat=lambda value: setattr(state, "camera_browse_repeat", bool(value)),
+        get_camera_browse_repeat_rate=lambda: state.camera_browse_repeat_rate,
+        set_camera_browse_repeat_rate=lambda value, persist=True: setattr(state, "camera_browse_repeat_rate", float(value)),
         get_zoom_speed_preference=lambda: state.zoom_speed,
         set_zoom_speed_preference=lambda value, persist=True: set_speed("zoom_speed", value),
         get_navigation_speed_preference=lambda: state.navigation_speed,
@@ -250,11 +259,12 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK")
                 )
             },
         ),
         Action=SimpleNamespace(
+            EXIT_WALK=SimpleNamespace(name="EXIT_WALK", value=999),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),
@@ -272,6 +282,7 @@ def preferences_panel_module(monkeypatch):
             ZOOM_SPEED_DOWN=SimpleNamespace(name="ZOOM_SPEED_DOWN", value=15),
             CAMERA_RESET_HOME=SimpleNamespace(name="CAMERA_RESET_HOME", value=16),
             CAMERA_SET_HOME=SimpleNamespace(name="CAMERA_SET_HOME", value=17),
+            CAMERA_RESTORE_HOME=SimpleNamespace(name="CAMERA_RESTORE_HOME", value=91),
             CAMERA_NEXT_VIEW=SimpleNamespace(name="CAMERA_NEXT_VIEW", value=18),
             CAMERA_PREV_VIEW=SimpleNamespace(name="CAMERA_PREV_VIEW", value=19),
             CAMERA_FOCUS_SELECTION=SimpleNamespace(name="CAMERA_FOCUS_SELECTION", value=76),
@@ -298,6 +309,10 @@ def preferences_panel_module(monkeypatch):
             ),
             DEPTH_ADJUST_FAR=SimpleNamespace(name="DEPTH_ADJUST_FAR", value=36),
             APPLY_CROP_BOX=SimpleNamespace(name="APPLY_CROP_BOX", value=37),
+            REMOVE_LAST_POINT=SimpleNamespace(name="REMOVE_LAST_POINT", value=94),
+            APPLY_ALIGNMENT=SimpleNamespace(name="APPLY_ALIGNMENT", value=95),
+            INSERT_CROP_POLYGON_VERTEX=SimpleNamespace(name="INSERT_CROP_POLYGON_VERTEX", value=96),
+            REMOVE_CROP_POLYGON_VERTEX=SimpleNamespace(name="REMOVE_CROP_POLYGON_VERTEX", value=97),
             NODE_PICK=SimpleNamespace(name="NODE_PICK", value=38),
             NODE_RECT_SELECT=SimpleNamespace(name="NODE_RECT_SELECT", value=39),
             UNDO=SimpleNamespace(name="UNDO", value=40),
@@ -324,6 +339,7 @@ def preferences_panel_module(monkeypatch):
             TOOL_SCALE=SimpleNamespace(name="TOOL_SCALE", value=59),
             TOOL_MIRROR=SimpleNamespace(name="TOOL_MIRROR", value=60),
             TOOL_ALIGN=SimpleNamespace(name="TOOL_ALIGN", value=61),
+            TOOL_SCALE_DISTANCE=SimpleNamespace(name="TOOL_SCALE_DISTANCE", value=94),
             PIE_MENU=SimpleNamespace(name="PIE_MENU", value=62),
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
@@ -356,6 +372,8 @@ def preferences_panel_module(monkeypatch):
             ASSET_GALLERY_PRIMARY=SimpleNamespace(
                 name="ASSET_GALLERY_PRIMARY", value=80
             ),
+            NEXT_SIDEBAR_CATEGORY=SimpleNamespace(name="NEXT_SIDEBAR_CATEGORY", value=92),
+            PREVIOUS_SIDEBAR_CATEGORY=SimpleNamespace(name="PREVIOUS_SIDEBAR_CATEGORY", value=93),
             ASSET_GALLERY_COPY_LINK=SimpleNamespace(
                 name="ASSET_GALLERY_COPY_LINK", value=81
             ),
@@ -640,6 +658,52 @@ def test_navigation_speed_preferences_reset_with_input_section(preferences_panel
     assert state.navigation_speed == 10
 
 
+@pytest.mark.parametrize("safe_mode", [False, True])
+@pytest.mark.parametrize("scope", ["input", "all"])
+def test_gamepad_reset_failure_does_not_skip_navigation_defaults(preferences_panel_module, safe_mode, scope):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    panel._refresh_selection = lambda: None
+    state.zoom_speed = 42
+    state.navigation_speed = 73
+    state.camera_browse_repeat = False
+    state.camera_browse_repeat_rate = 17
+    state.new_project_axis = "data_z"
+    state.new_project_align_grid = False
+    state.navigation_up_axis = "data_z"
+    camera_changes, resets, messages = [], [], []
+    module.lf.set_camera_navigation_mode = lambda mode: camera_changes.append(("mode", mode))
+    module.lf.set_camera_view_snap_enabled = lambda enabled: camera_changes.append(("snap", enabled))
+    module.lf.ui.set_remember_camera_navigation = lambda enabled: camera_changes.append(("remember_mode", enabled))
+    module.lf.ui.set_remember_camera_view_snap = lambda enabled: camera_changes.append(("remember_snap", enabled))
+    panel._gamepad_test.reset = lambda all_profiles=False: "profile is read-only or unsupported"
+
+    if scope == "input":
+        assert panel._reset_section("input") == "profile is read-only or unsupported"
+    else:
+        reset = panel._reset_section
+        def reset_section(section):
+            resets.append(section)
+            return reset(section) if section == "input" else None
+        panel._reset_section = reset_section
+        module.lf.ui.reset_window_state = lambda: resets.append("window")
+        module.lf.ui.message_dialog = lambda *args: messages.append(args)
+        module.lf.ui.confirm_dialog = lambda _title, _message, buttons, callback: callback(buttons[1])
+        panel._on_reset_all_settings(None, None, None)
+        assert resets == ["general", "appearance", "viewport", "input", "interface", "marketplace", "mcp", "window"]
+        assert "profile is read-only or unsupported" in messages[0][1]
+
+    assert state.zoom_speed == 11
+    assert state.navigation_speed == 10
+    assert state.camera_browse_repeat is True
+    assert state.camera_browse_repeat_rate == 5
+    assert state.new_project_axis == "legacy_y"
+    assert state.new_project_align_grid is True
+    assert state.navigation_up_axis == "data_z"
+    assert camera_changes == [("remember_mode", False), ("remember_snap", False), ("mode", "orbit"), ("snap", False)]
+
+
 def test_project_location_is_saved_and_can_return_to_default(
     preferences_panel_module,
 ):
@@ -921,6 +985,9 @@ def test_title_bar_close_listener_discards_unconfirmed_mcp_port(
             close_button if element_id == "close-btn" else None
         ),
         query_selector_all=lambda _selector: [],
+        add_event_listener=lambda *_: None,
+        set_attribute=lambda *_: None,
+        has_attribute=lambda *_: False,
     )
     monkeypatch.setattr(panel, "_dirty_expanded_sections", lambda: None)
     monkeypatch.setattr(panel, "_rebuild_records", lambda: None)
@@ -1043,7 +1110,11 @@ def test_safe_mode_disables_preferences_and_status_bar_mcp_controls():
     preferences = (resources / "preferences.rml").read_text(encoding="utf-8")
     status_bar = (resources / "statusbar.rml").read_text(encoding="utf-8")
 
-    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') == 8
+    import re
+    drag_controls = re.findall(r'<(?:input|select)\b[^>]*splat_drag_[^>]*>', preferences)
+    assert drag_controls
+    assert all('data-attrif-disabled="mcp_safe_mode"' in control for control in drag_controls)
+    assert preferences.count('data-attrif-disabled="mcp_safe_mode"') - len(drag_controls) == 8
     assert preferences.count('data-class-disabled="mcp_safe_mode"') == 2
     assert (
         '<button id="mcp-toggle" data-class-is-on="mcp_server_enabled" '
@@ -1194,6 +1265,15 @@ def test_preferences_close_retains_the_mounted_document(preferences_panel_module
     panel = module.PreferencesPanel()
 
     class Document:
+        def has_attribute(self, _name):
+            return False
+
+        def set_attribute(self, _name, _value):
+            pass
+
+        def add_event_listener(self, _name, _callback):
+            pass
+
         def get_element_by_id(self, _element_id):
             return None
 
@@ -1224,6 +1304,7 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
         update_record_list=lambda name, items: records.__setitem__(name, list(items)),
     )
     panel._section = "input"
+    panel._input_page = "shortcuts"
 
     assert "key_bindings" in panel._expanded_sections
     assert panel._keymap._rows_built is False
@@ -1235,6 +1316,216 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
     assert records["binding_rows"]
 
 
+def test_hiding_mounted_preferences_releases_gamepad_discovery(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    calls = []
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel.on_visibility_changed(True)
+    assert calls == []
+    panel.on_visibility_changed(False)
+    assert calls == ["release"]
+
+
+def test_input_pages_cancel_capture_and_release_diagnostic_device(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = "gamepad"
+    panel._gamepad_page = "test"
+    calls = []
+    module.lf.keymap.cancel_capture = lambda: calls.append("cancel")
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel._keymap.ensure_binding_rows = lambda: calls.append("rows")
+    assert not panel._show_section_reset()
+    panel._set_input_page("invalid")
+    assert not calls
+    panel._set_input_page("shortcuts")
+    assert calls == ["cancel", "release", "rows"]
+    assert panel._show_section_reset()
+    panel._set_input_page("navigation")
+    assert calls[-2:] == ["cancel", "release"]
+    panel._set_section("general")
+    assert calls[-2:] == ["cancel", "release"]
+
+
+@pytest.mark.parametrize("page", ["navigation", "shortcuts", "gamepad"])
+def test_input_page_reset_does_not_reset_other_pages(preferences_panel_module, page):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = page
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    resets = []
+    panel._keymap.reset_to_default = lambda: resets.append("shortcuts")
+    panel._gamepad_test.reset = lambda: resets.append("gamepad")
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(buttons[1])
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._on_reset_current_section(None, None, None)
+    assert resets == ([] if page == "navigation" else [page])
+    assert state.zoom_speed == (11 if page == "navigation" else 42)
+    assert state.navigation_speed == (10 if page == "navigation" else 73)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("section", ["input_gamepad", "input"])
+def test_gamepad_reset_preserves_second_controller_and_discovery(preferences_panel_module, monkeypatch, enabled, section):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    owner = panel._gamepad_test
+    navigation = dict(enabled=enabled, selected=22, dead_zone=.3, look_speed=2., move_speed=3.)
+    discovery = []
+    state = dict(available=True, selected=0, devices=[
+        dict(id=11, name="Pad", mapped=True), dict(id=22, name="Pad", mapped=True)])
+
+    def active(value):
+        discovery.append(value)
+        state["available"] = value or navigation["enabled"]
+        if not state["available"]:
+            navigation["selected"] = 0
+
+    def configure(enabled, selected, dead_zone, look_speed, move_speed):
+        navigation.update(enabled=enabled, selected=selected if state["available"] else 0,
+                          dead_zone=dead_zone, look_speed=look_speed, move_speed=move_speed)
+        return True
+
+    def reset_library():
+        return configure(False, navigation["selected"], .15, 1.5, 1.)
+
+    for name, value in dict(set_gamepad_test_active=active,
+                            get_gamepad_test_state=lambda: dict(state),
+                            get_gamepad_navigation_state=lambda: dict(navigation),
+                            set_gamepad_navigation=configure,
+                            set_gamepad_profile_json=lambda _value: True,
+                            get_gamepad_default_profile_json=lambda: "{}",
+                            reset_gamepad_profiles=reset_library).items():
+        monkeypatch.setattr(module.lf.ui, name, value, raising=False)
+    owner.handle = SimpleNamespace(dirty=lambda _name: None, update_record_list=lambda *_args: None)
+    owner.activate()
+    owner.sync()
+    panel._refresh_selection = lambda: None
+    assert panel._reset_section(section) is None
+    owner.activate()
+    owner.sync()
+    assert navigation["selected"] == owner.navigation["selected"] == 22
+    assert navigation["enabled"] is False
+    assert (navigation["dead_zone"], navigation["look_speed"], navigation["move_speed"]) == (.15, 1.5, 1.)
+    assert discovery == [True]
+    panel.on_visibility_changed(False)
+    assert discovery == [True, False]
+    assert navigation["selected"] == 0
+
+
+def test_shortcut_search_keeps_matching_sections_and_typed_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    heading = dict(is_section=True, section_title="Navigazione")
+    orbit = dict(is_section=False, action_name="Orbita camera", desc_text="MMB Trascina", action_id="5", mode_id="0")
+    other = dict(is_section=True, section_title="Sequencer")
+    play = dict(is_section=False, action_name="Play/Pause", desc_text="Space", action_id="9", mode_id="0")
+    rows = [heading, orbit, other, play]
+    assert keymap._filter_rows(rows, "  ") == rows
+    assert keymap._filter_rows(rows, "NAVIGAZIONE mmb") == [heading, orbit]
+    assert keymap._filter_rows(rows, "space") == [other, play]
+    assert keymap._filter_rows(rows, "missing") == []
+    assert keymap._filter_rows(rows, "camera")[1] is orbit
+
+
+def test_input_page_labels_and_search_exist_in_all_locales():
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    keys = ["preferences." + key for key in ("input_navigation", "input_shortcuts", "input_gamepad", "gamepad_controls", "gamepad_diagnostics")]
+    keys += ["input_settings." + key for key in ("search_commands", "clear_search", "no_matches")]
+    for path in root.glob("*.json"):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        assert all(values.get(key) for key in keys), path.name
+
+
+def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    assert not panel._input_expanded
+    panel._toggle_input_group()
+    assert panel._section == "input" and panel._input_expanded
+    panel._set_input_page("gamepad")
+    panel._toggle_input_group()
+    assert not panel._input_expanded and panel._input_page == "gamepad"
+    assert panel._section == "input"
+    panel._set_section("general")
+    panel._set_input_page("gamepad")
+    assert panel._section == "input" and panel._input_expanded
+    assert panel._input_page == "gamepad"
+
+
+@pytest.mark.parametrize("section,safe,visible", [
+    ("portal", False, False), ("file_associations", False, False),
+    ("mcp", True, False), ("mcp", False, True), ("input", True, True),
+])
+def test_reset_visibility_respects_scope_and_safe_mode(preferences_panel_module, section, safe, visible):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._mcp_safe_mode = section, safe
+    confirmations = []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    assert panel._show_section_reset() == visible
+    panel._on_reset_current_section(None, None, None)
+    assert bool(confirmations) == visible
+
+
+def test_page_reset_confirmation_captures_scope_and_explains_hidden_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._input_page, panel._mcp_safe_mode = "input", "shortcuts", True
+    confirmations, resets = [], []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._reset_section = lambda scope: resets.append(scope)
+    panel._on_reset_current_section(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "input_settings.reset_scope" in message
+    assert "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not resets
+    panel._input_page = "gamepad"
+    callback(buttons[1])
+    assert resets == ["input_shortcuts"]
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_shortcut_table_reset_also_requires_confirmation(preferences_panel_module, confirmed):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    resets, confirmations = [], []
+    keymap.reset_to_default = lambda: resets.append(True)
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    keymap._on_reset_default(None, None, None)
+    assert not resets
+    _title, message, buttons, callback = confirmations[0]
+    assert message == "input_settings.reset_scope"
+    callback(buttons[1 if confirmed else 0])
+    assert resets == ([True] if confirmed else [])
+
+
+def test_global_reset_covers_input_macro_and_documents_exclusions(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._refresh_selection = lambda: None
+    confirmations, scopes = [], []
+    panel._reset_section = lambda scope: scopes.append(scope)
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    panel._on_reset_all_settings(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "preferences.reset_all_scope" in message and "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not scopes
+    callback(buttons[1])
+    assert scopes == ["general", "appearance", "viewport", "input", "interface", "marketplace", "mcp"]
+
+
 @pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_input_reset_restores_bindings_and_refreshes_rows(
@@ -1243,6 +1534,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._section = "input"
+    panel._input_page = "shortcuts"
     panel._refresh_selection = lambda: None
     panel._set_zoom_speed(42)
     panel._set_navigation_speed(73)
@@ -1290,7 +1582,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
         assert panel._keymap._last_state_key == ("old bindings",)
         assert dirty == []
 
-    reset_input = confirmed and reset_scope != "bindings"
+    reset_input = confirmed and reset_scope == "all"
     assert state.zoom_speed == (11 if reset_input else 42)
     assert state.navigation_speed == (10 if reset_input else 73)
     assert panel._navigation_up_index() == ("0" if reset_input else "1")
@@ -1418,3 +1710,201 @@ def test_marketplace_git_checkout_requires_git_without_changing_saved_choice(pre
     assert state.marketplace_preferences["git_checkout"] is True
     reopened._set_marketplace_preference("git_checkout", False)
     assert state.marketplace_preferences["git_checkout"] is False
+
+
+def test_splat_drag_preferences_convert_ui_values_and_respect_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("sh_degree", "2")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+    assert panel._get_splat_drag_preference("sh_degree") == "2"
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("sh_degree", "1")
+    assert state.splat_drag_preferences["sh_degree"] == 2
+
+
+@pytest.mark.parametrize("axis", [-2, 2, -3, 3])
+def test_drag_up_axis_accepts_the_four_maintainer_options(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", str(axis))
+    assert state.splat_drag_preferences["up_axis"] == axis
+    assert panel._get_splat_drag_preference("up_axis") == str(axis)
+
+
+@pytest.mark.parametrize("axis", ["0", "1", "-1", "4", "not-an-axis", None])
+def test_drag_up_axis_rejects_unsupported_values(preferences_panel_module, axis):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._set_splat_drag_preference("up_axis", axis)
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+def test_drag_up_axis_respects_safe_mode(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._set_splat_drag_preference("up_axis", "3")
+    assert state.splat_drag_preferences["up_axis"] == -2
+
+
+@pytest.mark.parametrize("key,value", [("format", "spz"), ("sh_degree", 1), ("up_axis", 3)])
+def test_external_drag_preference_changes_refresh_open_panel(preferences_panel_module, key, value):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._last_state = panel._state()
+    state.splat_drag_preferences[key] = value
+    assert panel._state() != panel._last_state
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._dirty_selection()
+    assert {"splat_drag_format", "splat_drag_sh_degree", "splat_drag_up_axis"} <= set(dirty)
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+def test_interface_reset_refreshes_drag_controls_and_respects_safe_mode(preferences_panel_module, safe_mode):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    customized = {"format": "spz", "sh_degree": 1, "up_axis": 3}
+    state.splat_drag_preferences.update(customized)
+    module.lf.ui.set_scene_graph_selection_markers = lambda _enabled: None
+    events = []
+    panel._refresh_selection = lambda: events.append("refresh")
+    module.lf.ui.reset_layout = lambda: events.append("layout")
+    panel._reset_section("interface")
+    expected = customized if safe_mode else {"format": "ply", "sh_degree": 3, "up_axis": -2}
+    assert state.splat_drag_preferences == expected
+    assert events == ["refresh", "layout"]
+
+
+def test_quick_export_offers_only_ply_and_spz_with_plain_translated_labels():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    select = next(element for element in document.iter("select")
+                  if element.get("data-value") == "splat_drag_format")
+    assert [option.get("value") for option in select] == ["ply", "spz"]
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        preferences = json.loads(path.read_text(encoding="utf-8"))
+        assert preferences["preferences.drag_ply"] == "PLY", path.name
+        assert preferences["preferences.drag_spz"] == "SPZ", path.name
+
+
+@pytest.mark.parametrize("value", ["-1", "4", "invalid", None])
+def test_drag_sh_limit_rejects_invalid_ui_values(preferences_panel_module, value):
+    module, state = preferences_panel_module
+    module.PreferencesPanel()._set_splat_drag_preference("sh_degree", value)
+    assert state.splat_drag_preferences["sh_degree"] == 3
+
+
+def test_drag_settings_use_one_sh_cap_and_localized_tooltips():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/preferences.rml")
+    cap = next(element for element in document.iter("select")
+               if element.get("data-value") == "splat_drag_sh_degree")
+    assert [option.get("value") for option in cap] == ["0", "1", "2", "3"]
+    text = (root / "src/visualizer/gui/rmlui/resources/preferences.rml").read_text(encoding="utf-8")
+    assert "splat_drag_maximum_quality" not in text
+    assert "splat_drag_ply_sh" not in text and "splat_drag_spz_sh" not in text
+    tooltip_keys = {"preferences.drag_format_hint", "preferences.drag_sh_hint", "preferences.drag_axes_hint"}
+    assert tooltip_keys <= {element.get("data-tooltip") for element in document.iter()}
+    inline = " ".join("".join(element.itertext()) for element in document.iter("span")
+                      if "preferences-description" in element.get("class", ""))
+    assert not any(key in inline for key in tooltip_keys)
+    marker_hint = "preferences.scene_graph_selection_markers_description"
+    marker_row = next(element for element in document.iter("div")
+                      if element.get("data-tooltip") == marker_hint)
+    marker = next(element for element in marker_row.iter("input")
+                  if element.get("data-checked") == "scene_graph_selection_markers")
+    assert marker.get("data-attrif-disabled") == "mcp_safe_mode"
+    assert marker_hint not in inline
+    axes = next(element for element in document.iter()
+                if element.get("data-tooltip") == "preferences.drag_axes_hint")
+    assert axes.get("data-if") == "splat_drag_format == 'ply'"
+    selector = next(element for element in axes.iter("select"))
+    assert selector.get("data-value") == "splat_drag_up_axis"
+    assert [option.get("value") for option in selector] == ["-2", "2", "-3", "3"]
+    assert selector[0].text == "@tr:preferences.drag_axis_default"
+    assert selector.get("data-attrif-disabled") == "mcp_safe_mode"
+    for path in (root / "src/visualizer/gui/resources/locales").glob("*.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert all(data.get(key) for key in tooltip_keys), path.name
+        assert not any("SOG" in data[key].upper() for key in tooltip_keys), path.name
+        assert "-Y" in data["preferences.drag_axis_default"], path.name
+        assert data["preferences"]["scene_graph_selection_markers_description"].strip(), path.name
+
+
+def test_camera_repeat_numeric_preference_and_step_buttons(preferences_panel_module, monkeypatch):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    writes = []
+
+    def set_rate(value, persist=True):
+        state.camera_browse_repeat_rate = float(value)
+        writes.append((float(value), persist))
+
+    monkeypatch.setattr(module.lf.ui, "set_camera_browse_repeat_rate", set_rate)
+    panel._set_camera_browse_repeat(False)
+    assert not state.camera_browse_repeat
+    panel._set_camera_browse_repeat_rate("12")
+    assert state.camera_browse_repeat_rate == 5
+    assert writes == []
+    assert panel._get_camera_repeat_rate_draft() == "12"
+    assert panel._commit_camera_repeat_rate()
+    assert state.camera_browse_repeat_rate == 12
+    assert writes == [(12, True)]
+    for invalid in ("", "abc", "nan", "inf", "0", "21"):
+        panel._set_camera_browse_repeat_rate(invalid)
+        assert panel._get_camera_repeat_rate_draft() == invalid
+        assert not panel._commit_camera_repeat_rate()
+        assert panel._get_camera_repeat_rate_draft() == "12"
+    assert writes == [(12, True)]
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.camera_browse_repeat_rate == 11
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.camera_browse_repeat_rate == 12
+    panel._set_camera_browse_repeat_rate("20")
+    panel._step_camera_repeat_rate(None, None, [1])
+    assert state.camera_browse_repeat_rate == 20
+    panel._set_camera_browse_repeat_rate("1")
+    panel._step_camera_repeat_rate(None, None, [-1])
+    assert state.camera_browse_repeat_rate == 1
+    panel._reset_section("input")
+    assert state.camera_browse_repeat
+    assert state.camera_browse_repeat_rate == 5.0
+
+
+def test_camera_repeat_draft_survives_refresh_and_commits_on_enter(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._set_camera_browse_repeat_rate("")
+    assert panel._get_camera_repeat_rate_draft() == ""
+    assert state.camera_browse_repeat_rate == 5
+    on_change = module.draft_change_handler(panel._set_camera_browse_repeat_rate, panel._commit_camera_repeat_rate)
+    event = SimpleNamespace(get_bool_parameter=lambda key, default: False)
+    on_change(None, event, ["1"])
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.camera_browse_repeat_rate == 5
+    event.get_bool_parameter = lambda key, default: True
+    on_change(None, event, ["1"])
+    assert state.camera_browse_repeat_rate == 1
+    panel._set_camera_browse_repeat_rate("12")
+    panel._cancel_camera_repeat_rate()
+    assert panel._get_camera_repeat_rate_draft() == "1"
+    assert state.camera_browse_repeat_rate == 1
+
+
+def test_draft_change_handler_keeps_draft_until_enter(preferences_panel_module):
+    module, _state = preferences_panel_module
+    calls = []
+    on_change = module.draft_change_handler(lambda value: calls.append(value), lambda: calls.append("commit"))
+    typing = SimpleNamespace(get_bool_parameter=lambda key, default: False)
+    enter = SimpleNamespace(get_bool_parameter=lambda key, default: key == "linebreak")
+    on_change(None, typing, ["4"])
+    on_change(None, typing, [])
+    on_change(None, enter, ["45"])
+    assert calls == ["4", "45", "commit"]

@@ -777,25 +777,48 @@ Splat_2D_AlphaBlend load_splat_alphablend(
 
 [ForceInline]
 Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
-    int32_t g_idx,
+    uint g_idx,
+    uint rgb_idx,
     StructuredBuffer<float> xyz_ws,
-    StructuredBuffer<float4> rotations,
-    StructuredBuffer<float> scaling_raw,
-    StructuredBuffer<float> opacity_raw,
+    ByteAddressBuffer rotations,
+    ByteAddressBuffer scaling_raw,
+    ByteAddressBuffer opacity_raw,
     StructuredBuffer<float> rgb,
+    uint lod_flags,
+    bool quantized_pool,
     uint splat_render_profile
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
-    float4 g_rotation = rotations[g_idx];
-    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
-    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
-    float3 g_rgb = read_t3_float3(g_idx, rgb);
+    float4 g_rotation;
+    float3 raw_scale;
+    float raw_opacity;
+    // Match the canonical RAD pool layout used by load_gaussian_split_quant.
+    if (quantized_pool) {
+        uint2 rq = rotations.Load2(g_idx * 8u);
+        g_rotation = float4(f16tof32(rq.x & 0xffffu), f16tof32(rq.x >> 16),
+                            f16tof32(rq.y & 0xffffu), f16tof32(rq.y >> 16));
+        uint2 sq = scaling_raw.Load2(g_idx * 8u);
+        raw_scale = float3(f16tof32(sq.x & 0xffffu), f16tof32(sq.x >> 16),
+                           f16tof32(sq.y & 0xffffu));
+        uint word = opacity_raw.Load((g_idx >> 1u) * 4u);
+        raw_opacity = f16tof32((g_idx & 1u) != 0u ? word >> 16 : word & 0xffffu);
+    } else {
+        g_rotation = asfloat(rotations.Load4(g_idx * 16u));
+        raw_scale = asfloat(scaling_raw.Load3(g_idx * 12u));
+        raw_opacity = asfloat(opacity_raw.Load(g_idx * 4u));
+    }
+    float3 g_scale = exp(min(raw_scale, float3(MAX_RAW_SCALE)));
+    const bool spark_rad_opacity = (lod_flags & 4u) != 0u;
+    float g_opacity = spark_rad_opacity ? max(raw_opacity, 0.0f) : sigmoid_activation(raw_opacity);
+    if (spark_rad_opacity && g_opacity > 1.0f)
+        g_opacity = min(g_opacity * 4.0f - 3.0f, 5.0f);
+    float3 g_rgb = read_t3_float3(rgb_idx, rgb);
     if (splat_render_profile == 1u) {
         g_rotation = lfsPortalCompactRotation(g_rotation);
         g_scale = lfsPortalCompactScales(g_scale);
         g_opacity = lfsPortalCompactOpacity(g_opacity);
     }
-    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
     float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
@@ -920,6 +943,28 @@ float evaluate_splat_alpha(
 
     float alpha = clipOpacity(g_opacity * val);
     return float(alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat_lod(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction,
+                              bool spark_rad, uint profile) {
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 distance = cross(grd, gro);
+    float sigma_over_2 = 0.5f * dot(distance, distance);
+    float value = exp(-sigma_over_2);
+    float alpha;
+    // Spark RAD leaves (opacity <= 1) blend like ordinary splats; only high-density LOD parents
+    // need the Spark kernel, so the ordinary path keeps its cost.
+    if (spark_rad && g.opacity > 1.0f) {
+        alpha = spark_rad_alpha_from_value(
+            g.opacity, sigma_over_2 > power_threshold_for_spark_rad_opacity(g.opacity) ? 0.0f : value);
+    } else {
+        alpha = clipOpacity(g.opacity * value);
+        if (!spark_rad && profile == 1u && alpha < (1.0f / 255.0f))
+            alpha = 0.0f;
+    }
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
 }
 
 [ForceInline]
@@ -1181,9 +1226,9 @@ struct Uniforms {
     float rasterization_scale;
     // Distance the orthographic eye was moved back; subtracted from every depth output.
     float depth_offset;
-    uint depth_offset_pad0;
-    uint depth_offset_pad1;
-    uint depth_offset_pad2;
+    uint stochastic_frame;
+    uint stochastic_mode;
+    uint stochastic_history_valid;
 }
 
 // mip_filter packs MIP filtering (bit 0), exact depth replay (bit 1),
@@ -1239,6 +1284,7 @@ uint higs_replay_mask_base(Uniforms uniforms) {
 
 static const uint OVERLAY_FLAG_DIM = 1;
 static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
+static const uint OVERLAY_FLAG_OUTLINE_SELECTED = 4;
 
 static const uint SELECTION_PREVIEW_FLAG = 0x80;
 static const uint SELECTION_GROUP_MASK = 0x7F;
@@ -1270,7 +1316,186 @@ static const uint OVERLAY_PARAM_CROP_EXTRA_COUNT = 15;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE = OVERLAY_PARAM_CROP_EXTRA_BASE + OVERLAY_PARAM_CROP_STRIDE * OVERLAY_PARAM_CROP_EXTRA_COUNT;
 static const uint OVERLAY_PARAM_ELLIPSOID_STRIDE = 5;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT = 15;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+// Polygon slots: flags, (half_depth, vertex_count), world->local rows, then two
+// vertices per float4. Mirrors vksplat_overlay_params.hpp.
+static const uint OVERLAY_PARAM_CROP_POLYGON_BASE = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_CROP_POLYGON_PARAMS = 1;
+static const uint OVERLAY_PARAM_CROP_POLYGON_TRANSFORM = 2;
+static const uint OVERLAY_PARAM_CROP_POLYGON_VERTICES = 6;
+static const uint OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES = 64;
+static const uint OVERLAY_PARAM_CROP_POLYGON_STRIDE = OVERLAY_PARAM_CROP_POLYGON_VERTICES + OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES / 2;
+static const uint OVERLAY_PARAM_CROP_POLYGON_COUNT = 16;
+static const uint OVERLAY_PARAM_REVEAL = OVERLAY_PARAM_CROP_POLYGON_BASE + OVERLAY_PARAM_CROP_POLYGON_STRIDE * OVERLAY_PARAM_CROP_POLYGON_COUNT;
+static const uint OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS = OVERLAY_PARAM_REVEAL + 1;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS + 1;
+
+// Adapted from https://github.com/sparkjsdev/spark/blob/main/examples/splat-reveal-effects/index.html
+// Spark Spread's radial expansion, seed/full scale, and color stages. Map the
+// sequencer interval to the time needed for the whole scene to settle.
+float4 lfs_reveal_spread(float3 position, float4 reveal, float4 bounds) {
+    float progress = saturate(reveal.w);
+    // Spark's examples operate on models a few units wide. Normalize by the
+    // scene's typical radius so large reconstructions animate at the same pace.
+    float unit = max(bounds.w * 0.5f, 0.0001f);
+    float radius = length(position.xz - bounds.yz) / unit;
+    float end_time = 14.0f;
+    float tt = 0.5f + progress * progress * (end_time - 0.5f);
+    float expansion = min(1.0f, 0.3f + max(0.0f, tt * 0.05f));
+    float scale = max(0.0001f, max(min(tt - 7.0f - radius * 2.5f, 1.0f),
+                                  0.2f * min(tt - 1.0f - radius * 2.0f, 1.0f)));
+    float color = saturate(tt - radius * 2.5f - 3.0f);
+    return float4(scale, color, expansion, 0.0f);
+}
+
+// Effect equations adapted from Spark's splat-reveal-effects example.
+struct LfsRevealEffect {
+    float3 position;
+    float scale_mix;
+    float seed_scale;
+    float opacity_multiplier;
+    float color_mix;
+    float color_add;
+    float spin;
+    float3 edge_rgb;
+    float grayscale;
+};
+
+float3 lfs_reveal_hash(float3 p) {
+    p = frac(p * 0.3183099f + 0.1f) * 17.0f;
+    return frac(float3(p.x*p.y*p.z, p.x+p.y*p.z, p.x*p.y+p.z));
+}
+
+float3 lfs_reveal_noise(float3 p) {
+    float3 i = floor(p), f = frac(p);
+    f = f*f*(3.0f-2.0f*f);
+    float3 a = lerp(lfs_reveal_hash(i), lfs_reveal_hash(i+float3(1,0,0)), f.x);
+    float3 b = lerp(lfs_reveal_hash(i+float3(0,1,0)), lfs_reveal_hash(i+float3(1,1,0)), f.x);
+    float3 c = lerp(lfs_reveal_hash(i+float3(0,0,1)), lfs_reveal_hash(i+float3(1,0,1)), f.x);
+    float3 d = lerp(lfs_reveal_hash(i+float3(0,1,1)), lfs_reveal_hash(i+float3(1,1,1)), f.x);
+    return lerp(lerp(a,b,f.y), lerp(c,d,f.y), f.z);
+}
+
+float2 lfs_reveal_rotate(float2 p, float a) {
+    float s = sin(a), c = cos(a);
+    return float2(c*p.x + s*p.y, -s*p.x + c*p.y);
+}
+
+LfsRevealEffect lfs_reveal_finish(LfsRevealEffect e, float3 original, float progress) {
+    // Blend the final part of the clip to the original splat, including rare
+    // points outside the robust scene bounds, instead of popping at the end.
+    float settle = smoothstep(0.9f, 1.0f, progress);
+    e.position = lerp(e.position, original, settle);
+    e.scale_mix = lerp(e.scale_mix, 1.0f, settle);
+    e.seed_scale *= 1.0f - settle;
+    e.opacity_multiplier = lerp(e.opacity_multiplier, 1.0f, settle);
+    e.color_mix = lerp(e.color_mix, 1.0f, settle);
+    e.color_add *= 1.0f - settle;
+    e.spin *= 1.0f - settle;
+    e.edge_rgb *= 1.0f - settle;
+    e.grayscale *= 1.0f - settle;
+    return e;
+}
+
+LfsRevealEffect lfs_reveal_effect(float3 position, float3 scales, float4 reveal, float4 bounds) {
+    LfsRevealEffect e = {position, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, float3(0.0f), 0.0f};
+    float progress = saturate(reveal.w);
+    if (progress >= 1.0f) return e;
+    int type = int(round(bounds.x));
+    if (type >= 6 && type <= 10) {
+        // Unveil is a spherical wave from the scene origin. Use the
+        // robust scene extent and the clip's softness in place of fixed units.
+        float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);
+        float blend_range = max(range * (reveal.x - 1.0f), range * 0.001f);
+        float distance = length(position);
+        float blend = 1.0f - saturate((distance - progress * (range + blend_range) + blend_range) / blend_range);
+        if (type != 9) e.scale_mix = max(blend, 0.000001f);
+        if (type == 9) e.grayscale = 1.0f - blend;
+        float edge_delta = distance / range - progress;
+        if (type == 7 || type == 8) {
+            float glow = exp(-pow(abs(edge_delta) / 0.01f, 2.0f));
+            if (type == 7) e.edge_rgb = float3(glow);
+            else {
+                float h = frac(distance / range * 10.0f);
+                float3 rgb = saturate(float3(abs(h*6.0f-3.0f)-1.0f, 2.0f-abs(h*6.0f-2.0f), 2.0f-abs(h*6.0f-4.0f)));
+                e.edge_rgb = 1.5f * glow * rgb;
+            }
+        }
+        if (type == 10) {
+            float glow = exp(-pow(abs(edge_delta) / 0.04f, 2.0f));
+            float3 direction = position.zxy;
+            e.position -= 0.04f * range * glow * direction / max(length(direction), 0.000001f);
+        }
+        return lfs_reveal_finish(e, position, progress);
+    }
+    if (type == 11) return e; // Camera light is applied after color projection.
+    float unit = max(bounds.w * 0.5f, 0.0001f);
+    float3 p = (position - float3(bounds.y, 0.0f, bounds.z)) / unit;
+    float l = length(p.xz);
+    if (type == 2) {
+        float4 spread = lfs_reveal_spread(position, reveal, bounds);
+        e.position.xz = bounds.yz + p.xz * unit * spread.z;
+        e.scale_mix = spread.x;
+        e.color_mix = spread.y;
+        return lfs_reveal_finish(e, position, progress);
+    }
+    // Spark evaluates its modifier before a 180-degree X rotation. Convert
+    // both Y and Z, so its vertical direction and handedness match in world
+    // space. Spread above is radial and can stay directly in world space.
+    p.yz = -p.yz;
+    float t = progress * (type == 3 ? max(15.0f, 2.7f + reveal.z / unit) : 15.0f);
+    if (type == 1) {
+        float s = smoothstep(0.0f, 10.0f, t - 4.5f) * 10.0f;
+        float border = abs(s - l - 0.5f);
+        p *= 1.0f - 0.2f * exp(-20.0f * border);
+        float hidden = smoothstep(s - 0.5f, s, l + 0.5f);
+        float3 animated = p + 0.1f*lfs_reveal_noise(p*2.0f+t*0.5f)*hidden;
+        animated.yz = -animated.yz;
+        e.position = animated * unit + float3(bounds.y,0,bounds.z);
+        e.scale_mix = 1.0f - hidden;
+        e.seed_scale = 0.002f * unit * hidden;
+        float angle = atan2(p.x,p.z)/3.1416f;
+        e.opacity_multiplier = step(angle, t-3.1416f);
+        e.color_add = exp(-20.0f*border) + exp(-50.0f*abs(t-angle-3.1416f))*0.5f;
+        return lfs_reveal_finish(e, position, progress);
+    }
+    if (type == 3) {
+        p.xz = lfs_reveal_rotate(p.xz, (p.y*50.0f-20.0f)*exp(-t));
+        float3 animated = p;
+        animated.yz = -animated.yz;
+        e.position = animated * unit * (1.0f - exp(-t)*2.0f) + float3(bounds.y,0,bounds.z);
+        e.scale_mix = smoothstep(0.3f,0.7f,t+p.y-2.0f);
+        e.seed_scale = 0.002f*unit*(1.0f-e.scale_mix);
+        e.opacity_multiplier = step(0.0f,t*0.5f+p.y-0.5f);
+        return lfs_reveal_finish(e, position, progress);
+    }
+    float3 h = lfs_reveal_hash(p);
+    if (type == 4) {
+        float s = smoothstep(0.0f,8.0f,t*t*0.1f-l*2.0f+2.0f);
+        if (length(scales)/unit<0.05f) p.y = lerp(min(-10.0f,-reveal.z/unit-1.0f),p.y,pow(s,2.0f*h.x));
+        p.xz = lerp(p.xz*0.5f,p.xz,pow(s,2.0f*h.x));
+        p.xz = lfs_reveal_rotate(p.xz,t*(1.0f-s)*0.2f+p.y*20.0f*(1.0f-s)*exp(-length(p.xz)));
+        float strength = s*s*s*s;
+        e.scale_mix = pow(strength,12.0f);
+        e.seed_scale = 0.002f*unit*(1.0f-e.scale_mix);
+        e.spin = -t*0.3f*(1.0f-strength);
+    } else if (type == 5) {
+        float s = pow(smoothstep(0.0f,5.0f,t*t*0.1f-l*2.0f+1.0f),0.5f+h.x);
+        float y = p.y;
+        float bottom = min(-10.0f,-reveal.z/unit-1.0f);
+        float top = max(5.0f,-reveal.y/unit+1.0f);
+        p.y = min(lerp(bottom,top,s),p.y);
+        p.xz = lfs_reveal_rotate(lerp(p.xz*0.3f,p.xz,s),t*0.3f*(1.0f-s));
+        float strength = y <= bottom + 1e-6f ? step(y,p.y) : smoothstep(bottom,y,p.y);
+        e.scale_mix = pow(strength,30.0f);
+        e.seed_scale = 0.005f*unit*(1.0f-e.scale_mix);
+        e.spin = -t*0.3f*(1.0f-s);
+    }
+    p.yz = -p.yz;
+    // The model rotation reverses the direction of rotation about world Y.
+    e.spin = -e.spin;
+    e.position = p * unit + float3(bounds.y,0,bounds.z);
+    return lfs_reveal_finish(e, position, progress);
+}
 
 [ForceInline]
 bool overlay_enabled(float value)
@@ -1356,7 +1581,7 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
 }
 
 // Pack per-splat overlay payload for groupshared staging: flags | sel | preview.
-// Flags currently use 2 bits; 16 bits leave headroom without a second shared slot.
+// Flags currently use 3 bits; 16 bits leave headroom without a second shared slot.
 [ForceInline]
 uint pack_overlay_per_splat(uint flags, uint selection_byte, uint preview_byte)
 {

@@ -28,7 +28,8 @@ namespace lfs::vis {
         // Switching tools leaves the crop tool and selects the volume's parent,
         // so a selected crop volume makes its parent the tool target.
         [[nodiscard]] const core::SceneNode* toolTargetNode(const core::Scene& scene, const core::SceneNode& node) {
-            if (node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID)
+            if (node.type == core::NodeType::CROPBOX || node.type == core::NodeType::ELLIPSOID ||
+                node.type == core::NodeType::CROP_POLYGON)
                 return scene.getNodeById(node.parent_id);
             return &node;
         }
@@ -41,6 +42,7 @@ namespace lfs::vis {
             case ToolType::Scale: return "builtin.scale";
             case ToolType::Mirror: return "builtin.mirror";
             case ToolType::Align: return "builtin.align";
+            case ToolType::ScaleDistance: return "builtin.scale_distance";
             case ToolType::None:
             default: return {};
             }
@@ -226,6 +228,7 @@ namespace lfs::vis {
         case ToolType::Scale:
             return canTransformSelectedNode();
         case ToolType::Align:
+        case ToolType::ScaleDistance:
             return has_editable_align_selection_;
         }
         return false;
@@ -257,6 +260,7 @@ namespace lfs::vis {
                 return nullptr;
             return transform_selection_error_.empty() ? "select parent node" : transform_selection_error_.c_str();
         case ToolType::Align:
+        case ToolType::ScaleDistance:
             if (has_editable_align_selection_)
                 return nullptr;
             if (has_locked_align_selection_)

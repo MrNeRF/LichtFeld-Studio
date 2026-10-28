@@ -352,6 +352,8 @@ namespace lfs::io {
 
     std::vector<std::byte> JsonChapterDom::to_bytes() const {
         const std::string serialized = dump();
+        if (serialized.size() > MAX_JSON_CHAPTER_BYTES)
+            throw std::length_error("Project JSON chapter exceeds the size supported by the reader");
         std::vector<std::byte> bytes(serialized.size());
         std::memcpy(bytes.data(), serialized.data(), serialized.size());
         return bytes;

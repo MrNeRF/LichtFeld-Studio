@@ -9,10 +9,8 @@
 
 namespace gut_camera_model_test {
     namespace {
-        using Model = ThinPrismFisheyeCameraModel<>;
-
-        Model::Parameters parameters_of(const ThinPrismCamera& camera) {
-            Model::Parameters parameters{};
+        ThinPrismFisheyeCameraModel<>::Parameters parameters_of(const ThinPrismCamera& camera) {
+            ThinPrismFisheyeCameraModel<>::Parameters parameters{};
             parameters.resolution = {static_cast<uint32_t>(camera.resolution[0]),
                                      static_cast<uint32_t>(camera.resolution[1])};
             parameters.focal_length = camera.focal;
@@ -22,6 +20,17 @@ namespace gut_camera_model_test {
             return parameters;
         }
 
+        OpenCVFisheyeCameraModel<>::Parameters parameters_of(const OpenCvFisheyeCamera& camera) {
+            OpenCVFisheyeCameraModel<>::Parameters parameters{};
+            parameters.resolution = {static_cast<uint32_t>(camera.resolution[0]),
+                                     static_cast<uint32_t>(camera.resolution[1])};
+            parameters.focal_length = camera.focal;
+            parameters.principal_point = camera.principal;
+            parameters.radial_coeffs = camera.radial;
+            return parameters;
+        }
+
+        template <typename Model>
         __global__ void project_kernel(const Model model, const float* rays, const int count, float* points) {
             const int i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i >= count)
@@ -32,6 +41,7 @@ namespace gut_camera_model_test {
             points[3 * i + 2] = result.valid_flag ? 1.f : 0.f;
         }
 
+        template <typename Model>
         __global__ void unproject_kernel(const Model model, const float* points, const int count, float* rays) {
             const int i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i >= count)
@@ -43,7 +53,7 @@ namespace gut_camera_model_test {
             rays[4 * i + 3] = result.valid_flag ? 1.f : 0.f;
         }
 
-        template <typename Kernel>
+        template <typename Kernel, typename Model>
         std::vector<float> run(Kernel kernel, const Model& model, const std::vector<float>& input, const int count,
                                const int output_width) {
             float* device_input = nullptr;
@@ -65,11 +75,23 @@ namespace gut_camera_model_test {
     } // namespace
 
     std::vector<float> project(const ThinPrismCamera& camera, const std::vector<float>& rays) {
-        return run(project_kernel, Model(parameters_of(camera)), rays, static_cast<int>(rays.size() / 3), 3);
+        using Model = ThinPrismFisheyeCameraModel<>;
+        return run(project_kernel<Model>, Model(parameters_of(camera)), rays, static_cast<int>(rays.size() / 3), 3);
     }
 
     std::vector<float> unproject(const ThinPrismCamera& camera, const std::vector<float>& points) {
-        return run(unproject_kernel, Model(parameters_of(camera)), points, static_cast<int>(points.size() / 2), 4);
+        using Model = ThinPrismFisheyeCameraModel<>;
+        return run(unproject_kernel<Model>, Model(parameters_of(camera)), points, static_cast<int>(points.size() / 2), 4);
+    }
+
+    std::vector<float> project(const OpenCvFisheyeCamera& camera, const std::vector<float>& rays) {
+        using Model = OpenCVFisheyeCameraModel<>;
+        return run(project_kernel<Model>, Model(parameters_of(camera)), rays, static_cast<int>(rays.size() / 3), 3);
+    }
+
+    std::vector<float> unproject(const OpenCvFisheyeCamera& camera, const std::vector<float>& points) {
+        using Model = OpenCVFisheyeCameraModel<>;
+        return run(unproject_kernel<Model>, Model(parameters_of(camera)), points, static_cast<int>(points.size() / 2), 4);
     }
 
 } // namespace gut_camera_model_test

@@ -433,9 +433,9 @@ namespace lfs::test::licht {
                 .init_num_pts = 80'000 + tag_i,
                 .init_extent = 4.0f + delta,
                 .enable_sparsity = true,
-                .sparsify_steps = 12'000 + tag_i,
-                .init_rho = 0.027f + delta,
-                .prune_ratio = 0.55f + delta,
+                .popspa_sparsify_steps = 12'000 + tag_i,
+                .popspa_rho = 0.027f + delta,
+                .popspa_ssim_weight = 0.55f + delta,
                 .config_file = std::format("excluded-config-{}.json", tag),
             };
         }

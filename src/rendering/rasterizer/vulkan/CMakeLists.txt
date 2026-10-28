@@ -7,6 +7,7 @@ add_library(lfs_vulkan_rasterizer STATIC
         src/buffer.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
+        src/stochastic.cpp
         src/perf_timer.cpp
         src/vma_implementation.cpp
         # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
@@ -40,6 +41,27 @@ set_target_properties(lfs_vulkan_rasterizer PROPERTIES
 target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
+
+# The SteadySplats STBN volume (1 MiB) is generated at build time instead of
+# being checked in: about 10 s with optimization, deterministic, cached.
+add_executable(lfs_generate_stbn tools/generate_stbn.cpp)
+target_compile_features(lfs_generate_stbn PRIVATE cxx_std_20)
+target_include_directories(lfs_generate_stbn PRIVATE ${CMAKE_SOURCE_DIR}/src/core/include)
+target_compile_options(lfs_generate_stbn PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O2>)
+add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc"
+        COMMAND lfs_generate_stbn "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc"
+        DEPENDS lfs_generate_stbn
+        COMMENT "Generating the 128x128x64 STBN volume"
+        VERBATIM)
+add_custom_target(lfs_stbn_data DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/stbn_data.inc")
+add_dependencies(lfs_vulkan_rasterizer lfs_stbn_data)
+target_include_directories(lfs_vulkan_rasterizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+# The Windows preflight compiles sources after building only lfs_shader_headers; the volume is one of their includes.
+if(NOT TARGET lfs_shader_headers)
+    add_custom_target(lfs_shader_headers)
+endif()
+add_dependencies(lfs_shader_headers lfs_stbn_data)
 
 set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
 set_property(TARGET lfs_vulkan_rasterizer PROPERTY
@@ -174,6 +196,40 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                 )
                 list(APPEND _outputs ${_banded_out})
         endif()
+        # Reveal shaders are selected only while a sequencer reveal is active.
+        if(OUT_NAME MATCHES "^projection_forward" OR OUT_NAME STREQUAL "cull_splats"
+           OR OUT_NAME MATCHES "^rasterize_forward_3dgut" OR OUT_NAME MATCHES "^rasterize_outline_gut")
+                set(_reveal_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal.spv)
+                set(_reveal_validation)
+                if(_VULKAN_SPIRV_VAL)
+                        set(_reveal_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_out})
+                endif()
+                add_custom_command(
+                        OUTPUT ${_reveal_out}
+                        COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1
+                                -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_out}
+                        ${_reveal_validation}
+                        DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                        COMMENT "slangc ${OUT_NAME}_reveal.spv" VERBATIM)
+                list(APPEND _outputs ${_reveal_out})
+                if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward)")
+                        set(_reveal_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal_banded.spv)
+                        set(_reveal_banded_validation)
+                        if(_VULKAN_SPIRV_VAL)
+                                set(_reveal_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_banded_out})
+                        endif()
+                        add_custom_command(
+                                OUTPUT ${_reveal_banded_out}
+                                COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
+                                        ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1 -DLFS_BANDED_EXPORT_RENDER=1
+                                        -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_banded_out}
+                                ${_reveal_banded_validation}
+                                DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
+                                COMMENT "slangc ${OUT_NAME}_reveal_banded.spv" VERBATIM)
+                        list(APPEND _outputs ${_reveal_banded_out})
+                endif()
+        endif()
         set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_outputs} PARENT_SCOPE)
 endfunction()
 
@@ -213,6 +269,20 @@ _vulkan_add_slang_shader(cumsum_add_block_offsets  cumsum.slang CUMSUM_PHASE=3)
 _vulkan_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
 _vulkan_add_slang_shader(radix_histogram_clear     radix_histogram_clear.slang)
 _vulkan_add_slang_shader(expected_depth_finalize   expected_depth_finalize.slang)
+_vulkan_add_slang_shader(stochastic_reuse          stochastic_reuse.slang)
+_vulkan_add_slang_shader(stochastic_resolve        stochastic_resolve.slang)
+_vulkan_add_slang_shader(selection_outline_coverage selection_outline_coverage.slang)
+_vulkan_add_slang_shader(selection_outline_resolve selection_outline_resolve.slang)
+_vulkan_add_slang_shader(selection_outline_seeds selection_outline_seeds.slang)
+_vulkan_add_slang_shader(selection_outline_horizontal selection_outline_horizontal.slang)
+_vulkan_add_slang_shader(selection_outline_background_init selection_outline_background.slang OUTLINE_BACKGROUND_INIT=1)
+_vulkan_add_slang_shader(selection_outline_background_union selection_outline_background.slang)
+_vulkan_add_slang_shader(selection_outline_tiles macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=7)
+_vulkan_add_slang_shader(selection_outline_mask selection_outline_mask.slang)
+_vulkan_add_slang_shader(rasterize_outline alphablend_shader.slang EXPORT_MODE=0 LFS_SELECTION_OUTLINE=1)
+_vulkan_add_slang_shader(rasterize_outline_gut alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_SELECTION_OUTLINE=1)
+_vulkan_add_slang_shader(rasterize_outline_plain alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0 LFS_SELECTION_OUTLINE=1)
+_vulkan_add_slang_shader(rasterize_outline_gut_plain alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0 LFS_SELECTION_OUTLINE=1)
 
 _vulkan_add_slang_shader(generate_keys_wave        tile_shader.slang EXPORT_MODE=0 ENTRY=1)
 _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE=0 ENTRY=2)
@@ -254,7 +324,14 @@ _vulkan_add_slang_shader(selection_polygon_rasterize selection_polygon_rasterize
 _vulkan_add_slang_shader(rasterize_forward               alphablend_shader.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut         alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1)
 _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0)
+_vulkan_add_slang_shader(rasterize_stochastic            alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1)
+_vulkan_add_slang_shader(rasterize_stochastic_plain      alphablend_shader.slang EXPORT_MODE=0 LFS_STOCHASTIC_RASTER=1 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
+# Spark RAD scenes get their own 3DGUT variants so LOD-parent kernels stay out of the ordinary loop.
+_vulkan_add_slang_shader(rasterize_outline_gut_rad alphablend_shader.slang EXPORT_MODE=0 LFS_SELECTION_OUTLINE=1 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
+_vulkan_add_slang_shader(rasterize_outline_gut_plain_rad alphablend_shader.slang EXPORT_MODE=0 LFS_SELECTION_OUTLINE=1 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0 LFS_SPARK_RAD_RASTER=1)
+_vulkan_add_slang_shader(rasterize_forward_3dgut_rad       alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_SPARK_RAD_RASTER=1)
+_vulkan_add_slang_shader(rasterize_forward_3dgut_plain_rad alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0 LFS_SPARK_RAD_RASTER=1)
 _vulkan_add_slang_shader(rasterize_forward_light         alphablend_shader.slang EXPORT_MODE=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(rasterize_forward_light_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(tile_batch_descriptors          tile_batch_shader.slang TILE_BATCH_ENTRY=2)

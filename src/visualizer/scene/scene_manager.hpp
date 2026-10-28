@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -203,6 +204,10 @@ namespace lfs::vis {
         const core::EllipsoidData* getSelectedNodeEllipsoid() const;
         core::NodeId getActiveSelectionEllipsoidId() const;
 
+        // The selected crop polygon, or the one attached to the selected splat.
+        core::NodeId getSelectedNodeCropPolygonId() const;
+        core::NodeId getActiveSelectionCropPolygonId() const;
+
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
                                                      const lfs::core::param::TrainingParameters& params);
 
@@ -379,6 +384,9 @@ namespace lfs::vis {
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);
         void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
         void handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
+        void handleCropByPolygon(const glm::mat4& world_transform, const core::CropPolygonData& polygon, core::NodeId target_node_id);
+        void cropPointCloudByPolygon(core::NodeId node_id, const glm::mat4& world_transform,
+                                     const core::CropPolygonData& polygon);
         void handleRenamePly(const lfs::core::events::cmd::RenamePLY& event);
         void handleAddCropBox(std::string node_name);
         void handleAddCropBox(core::NodeId node_id);
@@ -420,8 +428,10 @@ namespace lfs::vis {
                 glm::mat4 local_transform{1.0f};
                 bool visible = true;
                 bool locked = false;
+                bool point_cloud_source = false;
                 std::unique_ptr<lfs::core::SplatData> data;
                 std::shared_ptr<lfs::core::MeshData> mesh;
+                std::shared_ptr<const core::CollisionVolume> collision{};
                 std::unique_ptr<core::CropBoxData> cropbox;
                 std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;
@@ -467,6 +477,8 @@ namespace lfs::vis {
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
         mutable bool cached_render_metadata_only_ = false;
+
+        lfs::event::ScopedHandler event_handlers_;
     };
 
 } // namespace lfs::vis

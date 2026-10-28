@@ -5,17 +5,18 @@
 <body id="body" data-model="menu_bar">
     <div id="menu-row">
         <div id="menu-left">
-            <img id="brand-logo" />
             <div id="menu-items">
                 <span class="menu-label"
                       data-for="menu : menu_labels"
                       data-class-active="menu.active"
-                      data-attr-data-index="menu.index">{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
+                      data-class-logo="menu.logo"
+                      data-attr-data-index="menu.index"><img data-if="menu.logo" data-attr-src="brand_logo_src" />{{ menu.access.label_before }}<span class="access-key" data-if="menu.access.access_mark != ''">{{ menu.access.access_mark }}</span>{{ menu.access.label_after }}</span>
             </div>
         </div>
         <div id="menu-toolbar">
             <div class="icon-btn menu-toolbar-btn"
                  data-for="button : menu_camera_buttons"
+                 data-class-disabled="!button.enabled"
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-action="button.action"
@@ -206,8 +207,8 @@
                                                          data-attr-title="leaf.tooltip"
                                                          data-attrif-disabled="!leaf.enabled">
                                                         <span class="label">{{ leaf.access.label_before }}<span class="access-key" data-if="leaf.access.access_mark != ''">{{ leaf.access.access_mark }}</span>{{ leaf.access.label_after }}</span>
-                                                        <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
                                                         <span class="checkmark" data-if="leaf.show_checkmark">{{ leaf.checkmark }}</span>
+                                                        <span class="shortcut" data-if="leaf.has_shortcut">{{ leaf.shortcut }}</span>
                                             </div>
                                         </div>
                                             </div>
@@ -227,8 +228,8 @@
                                              data-attr-title="grandchild.tooltip"
                                              data-attrif-disabled="!grandchild.enabled">
                                             <span class="label">{{ grandchild.access.label_before }}<span class="access-key" data-if="grandchild.access.access_mark != ''">{{ grandchild.access.access_mark }}</span>{{ grandchild.access.label_after }}</span>
-                                            <span class="shortcut" data-if="grandchild.has_shortcut">{{ grandchild.shortcut }}</span>
                                             <span class="checkmark" data-if="grandchild.show_checkmark">{{ grandchild.checkmark }}</span>
+                                            <span class="shortcut" data-if="grandchild.has_shortcut">{{ grandchild.shortcut }}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -247,8 +248,8 @@
                                  data-attr-title="child.tooltip"
                                  data-attrif-disabled="!child.enabled">
                                 <span class="label">{{ child.access.label_before }}<span class="access-key" data-if="child.access.access_mark != ''">{{ child.access.access_mark }}</span>{{ child.access.label_after }}</span>
-                                <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
                                 <span class="checkmark" data-if="child.show_checkmark">{{ child.checkmark }}</span>
+                                <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
                             </div>
                         </div>
                     </div>
@@ -266,8 +267,8 @@
                      data-attr-title="item.tooltip"
                      data-attrif-disabled="!item.enabled">
                     <span class="label">{{ item.access.label_before }}<span class="access-key" data-if="item.access.access_mark != ''">{{ item.access.access_mark }}</span>{{ item.access.label_after }}</span>
-                    <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
                     <span class="checkmark" data-if="item.show_checkmark">{{ item.checkmark }}</span>
+                    <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
                 </div>
             </div>
         </div>

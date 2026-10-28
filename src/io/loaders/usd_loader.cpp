@@ -4,6 +4,7 @@
 
 #include "usd_loader.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/nurec_usdz.hpp"
@@ -41,19 +42,19 @@ namespace lfs::io {
             options.progress(0.0f, "Loading USD gaussian file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "USD file does not exist",
                               path);
         }
 
-        if (!std::filesystem::is_regular_file(path)) {
+        if (!lfs::core::native_fs::is_regular_file(path)) {
             return make_error(ErrorCode::NOT_A_FILE,
                               "Path is not a regular file",
                               path);
         }
 
-        auto extension = path.extension().string();
+        auto extension = lfs::core::path_to_utf8(path.extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
 
         if (options.validate_only) {
@@ -201,11 +202,11 @@ namespace lfs::io {
     }
 
     bool USDLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+        if (!lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz";
     }

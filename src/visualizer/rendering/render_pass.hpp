@@ -50,6 +50,16 @@ namespace lfs::vis {
         glm::mat4 ellipsoid_transform{1};
         bool ellipsoid_affects_render = true;
         int ellipsoid_parent_node_index = -1;
+        bool crop_polygon_active = false;
+        std::vector<glm::vec2> crop_polygon_vertices;
+        float crop_polygon_half_depth = 1.0f;
+        glm::mat4 crop_polygon_transform{1};
+        bool crop_polygon_affects_render = true;
+        int crop_polygon_parent_node_index = -1;
+        // Outline being drawn, in visualizer world space; the cursor point
+        // lies on the drawing plane and trails the last placed vertex.
+        std::vector<glm::vec3> crop_polygon_draft;
+        std::optional<glm::vec3> crop_polygon_draft_cursor;
     };
 
     struct FrameViewPanel {
@@ -80,6 +90,7 @@ namespace lfs::vis {
         glm::ivec2 viewport_pos;
         DirtyMask frame_dirty = 0;
         bool training_active = false;
+        bool deterministic_export = false;
         bool gaussian_selection_visible = true;
         // Surface tools must not unproject HiGS batch-approximate depth.
         bool exact_surface_picking = false;

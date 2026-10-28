@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "internal/tensor_serialization.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/contiguous_streambuf.hpp"
 #include "core/cuda_error.hpp"
@@ -9,6 +10,7 @@
 #include "core/tensor_serialization_sink.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -112,14 +114,17 @@ namespace lfs::core {
             throw std::runtime_error("Cannot serialize invalid tensor");
         }
 
-        const TensorFileHeader header{
-            TENSOR_FILE_MAGIC,
-            TENSOR_FILE_VERSION,
-            static_cast<uint8_t>(descriptor.dtype),
-            static_cast<uint8_t>(descriptor.serialized_device),
-            static_cast<uint16_t>(
-                descriptor.serialized_shape.rank()),
-            descriptor.serialized_shape.elements()};
+        // v1 writes the native header layout, including alignment padding.
+        // Clear its representation so checkpoints never contain uninitialized
+        // stack bytes and repeated snapshots remain identical.
+        TensorFileHeader header;
+        std::memset(&header, 0, sizeof(header));
+        header.magic = TENSOR_FILE_MAGIC;
+        header.version = TENSOR_FILE_VERSION;
+        header.dtype = static_cast<uint8_t>(descriptor.dtype);
+        header.device = static_cast<uint8_t>(descriptor.serialized_device);
+        header.rank = static_cast<uint16_t>(descriptor.serialized_shape.rank());
+        header.numel = descriptor.serialized_shape.elements();
         os.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
         for (const size_t dim :

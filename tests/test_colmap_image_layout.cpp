@@ -1068,6 +1068,26 @@ TEST_F(ColmapImageLayoutTest, DetectDatasetInfoCountsNestedImagesAndMasks) {
     EXPECT_EQ(info.depth_count, 2);
 }
 
+// Fails if a chosen images folder is ignored: a reconstruction kept beside its photos has no images folder of its
+// own, so the photos must be named explicitly, absolute or relative to the dataset folder.
+TEST_F(ColmapImageLayoutTest, DetectDatasetInfoUsesAChosenImagesFolderOutsideTheDataset) {
+    const fs::path dataset_dir = temp_dir_ / "reconstruction";
+    const fs::path photos = temp_dir_ / "photos";
+
+    write_png(photos / "frame_0001.png");
+    write_png(photos / "frame_0002.png");
+    write_png(photos / "frame_0003.png");
+    write_text_file(dataset_dir / "sparse" / "0" / "cameras.txt",
+                    "1 PINHOLE 1 1 1 1 0.5 0.5\n");
+
+    EXPECT_EQ(lfs::io::detect_dataset_info(dataset_dir).image_count, 0);
+    for (const fs::path& chosen : {photos, fs::path("../photos")}) {
+        const lfs::io::DatasetInfo info = lfs::io::detect_dataset_info(dataset_dir, chosen);
+        EXPECT_TRUE(fs::equivalent(info.images_path, photos));
+        EXPECT_EQ(info.image_count, 3);
+    }
+}
+
 TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";

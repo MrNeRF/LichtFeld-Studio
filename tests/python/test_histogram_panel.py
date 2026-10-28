@@ -313,6 +313,54 @@ def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module
     expected, _ = numpy.histogram(values, bins=numpy.asarray(result["primary"]["edges"]))
     assert result["primary"]["counts"] == expected.tolist()
 
+def test_worker_job_never_touches_the_live_scene(histogram_panel_module, lf, numpy, monkeypatch):
+    """The scene and combined-model bindings wrap live C++ objects that the UI and render threads keep
+    using, so the worker must not call into them once _refresh has queued the job. Fails if _refresh
+    hands the live objects to the worker instead of a snapshot."""
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._metric_id = "opacity"
+    panel._compare_metric_id = "scale_x"
+    values = numpy.array([0.1, 0.4, 0.6, 0.9], dtype=numpy.float32)
+    opacity = lf.Tensor.from_numpy(values)
+    scaling = lf.Tensor.from_numpy(numpy.repeat(values[:, None], 3, axis=1))
+    deleted = lf.Tensor.from_numpy(numpy.array([False, True, False, False]))
+    released = {"value": False}
+
+    def live(fn):
+        def call(*args, **kwargs):
+            assert not released["value"], "worker used the live scene after the job was queued"
+            return fn(*args, **kwargs)
+
+        return call
+
+    def crop(mask):
+        mask[3] = False
+
+    model = SimpleNamespace(num_points=len(values), get_opacity=live(lambda: opacity),
+                            get_scaling=live(lambda: scaling), has_deleted_mask=live(lambda: True),
+                            deleted=deleted)
+    scene = SimpleNamespace(is_valid=lambda: True, combined_model=lambda: model,
+                            get_nodes=live(lambda: []), apply_crop_filter=live(crop))
+    monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
+    monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
+    monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
+    queued = []
+    monkeypatch.setattr(panel, "_queue_histogram_compute", lambda *args, **_kwargs: queued.append(args))
+
+    panel._refresh()
+    released["value"] = True
+    job_scene, job_model, _cache_key, scope_ids = queued[0]
+    result = panel._compute_histogram_result(
+        job_scene, job_model, "opacity", 16, "scale_x", 8, 8, (None, None), (None, None), scope_ids,
+    )
+
+    assert result["kind"] == "ok"
+    numpy.testing.assert_array_equal(result["primary"]["finite_mask"].numpy(), [True, False, True, False])
+    assert sum(result["compare"]["counts"]) == 2
+
+
 @pytest.mark.parametrize("crop_enabled", [False, True])
 def test_histogram_applies_render_crop_to_both_axes(histogram_panel_module, lf, numpy, crop_enabled):
     values = lf.Tensor.from_numpy(numpy.array([0.1, 0.3, 0.6, 0.9], dtype=numpy.float32))
@@ -697,12 +745,12 @@ def test_histogram_rebin_does_not_expand_selected_samples(histogram_panel_module
     panel._sync_marked_range(apply_scene=False)
 
     assert panel._marked_count == 1
-    assert panel._marked_range_text == "0.0625 to 0.125"
+    assert panel._marked_range_text == "6.25e-2 to 1.25e-1"
 
     panel._set_histogram_bin_count(17)
 
     assert panel._marked_count == 1
-    assert panel._marked_range_text == "0.0625 to 0.125"
+    assert panel._marked_range_text == "6.25e-2 to 1.25e-1"
 
 
 def test_histogram_drag_can_expand_across_multiple_bins(histogram_panel_module, lf, numpy):
@@ -1396,20 +1444,23 @@ def test_histogram_ctrl_click_unhighlights_the_removed_bin_at_once(histogram_pan
     assert highlighted == {5}
 
 
-def test_histogram_follows_selection_changes_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
+def test_histogram_resets_when_the_selection_changes_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
     panel, scene = _three_bin_panel(histogram_panel_module, lf, numpy, monkeypatch)
     _click_bin(panel, 0)
     assert panel._selected_histogram_bins == {0}
 
-    # A viewport tool selects the second Gaussian instead.
+    # A viewport tool selects the second Gaussian instead: the panel's mark resets
+    # and the tool's selection stays in the scene.
     scene.selection_mask = lf.Tensor.from_numpy(numpy.array([False, True, False], dtype=bool))
     _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=5)
-    assert panel._selected_histogram_bins == {2}
-
-    # Clearing the selection elsewhere clears the chart too.
-    scene.clear_selection()
-    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
     assert panel._selected_histogram_bins == set()
+    assert panel._panel_selection_mask is None
+    numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), numpy.array([False, True, False], dtype=bool))
+
+    # The panel's own next selection is kept across updates.
+    _click_bin(panel, 0)
+    _settle_on_update(panel, histogram_panel_module, lf, monkeypatch, selection_generation=6)
+    assert panel._selected_histogram_bins == {0}
 
 
 def test_histogram_shift_click_adds_to_a_selection_made_outside_the_panel(histogram_panel_module, lf, numpy, monkeypatch):
@@ -1541,42 +1592,97 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
     assert panel._histogram_overlay_bounds == (5, 5)
 
 
-def test_histogram_panel_can_toggle_between_bottom_dock_and_floating(histogram_panel_module, lf):
+@pytest.mark.parametrize("saved_space", ["FLOATING", "BOTTOM_DOCK"])
+def test_histogram_panel_preserves_and_toggles_saved_space(histogram_panel_module, lf, monkeypatch, saved_space):
     panel = histogram_panel_module.HistogramPanel()
-    state = {"space": lf.ui.PanelSpace.BOTTOM_DOCK}
+    state = {"space": getattr(lf.ui.PanelSpace, saved_space)}
+    moves = []
+    monkeypatch.setattr(lf.ui, "get_panel", lambda panel_id: SimpleNamespace(space=state["space"]))
 
-    def _get_panel(panel_id):
+    def set_space(panel_id, space):
         assert panel_id == panel.id
-        return SimpleNamespace(space=state["space"])
-
-    def _set_panel_space(panel_id, space):
-        assert panel_id == panel.id
+        moves.append(space)
         state["space"] = space
         return True
 
-    original_get_panel = lf.ui.get_panel
-    original_set_panel_space = lf.ui.set_panel_space
-    try:
-        lf.ui.get_panel = _get_panel
-        lf.ui.set_panel_space = _set_panel_space
+    monkeypatch.setattr(lf.ui, "set_panel_space", set_space)
+    assert panel._sync_panel_space_state() is (saved_space == "FLOATING")
+    assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
+    assert panel._sync_panel_space_state() is False
+    assert moves == []
+    assert panel._dock_toggle_label() == ("Dock" if saved_space == "FLOATING" else "Undock")
 
+    for _ in range(2):
+        previous = state["space"]
+        panel._on_toggle_dock_mode(None, None, None)
+        assert state["space"] != previous
+        assert panel._is_floating == (state["space"] == lf.ui.PanelSpace.FLOATING)
         assert panel._sync_panel_space_state() is False
-        assert panel._is_floating is False
-        assert panel._dock_toggle_label() == "Undock"
+    assert state["space"] == getattr(lf.ui.PanelSpace, saved_space)
+    assert len(moves) == 2
 
-        panel._on_toggle_dock_mode(None, None, None)
 
-        assert state["space"] == lf.ui.PanelSpace.FLOATING
-        assert panel._is_floating is True
-        assert panel._dock_toggle_label() == "Dock"
+def test_histogram_failed_dock_toggle_preserves_state(histogram_panel_module, lf, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    monkeypatch.setattr(lf.ui, "get_panel", lambda _: SimpleNamespace(space=lf.ui.PanelSpace.BOTTOM_DOCK))
+    monkeypatch.setattr(lf.ui, "set_panel_space", lambda *_: False)
+    panel._on_toggle_dock_mode(None, None, None)
+    assert panel._dock_toggle_label() == "Undock"
+    assert not panel._is_floating
 
-        panel._on_toggle_dock_mode(None, None, None)
 
-        assert state["space"] == lf.ui.PanelSpace.BOTTOM_DOCK
-        assert panel._is_floating is False
-    finally:
-        lf.ui.get_panel = original_get_panel
-        lf.ui.set_panel_space = original_set_panel_space
+
+@pytest.mark.parametrize("prop,minimum,maximum", [
+    ("histogram_bin_count", 16, 128),
+    ("compare_x_bin_count", 8, 48),
+    ("compare_y_bin_count", 8, 48),
+])
+def test_bin_scrub_drag_cancel_and_typed_value(histogram_panel_module, prop, minimum, maximum):
+    from unittest.mock import MagicMock
+    from lfs_plugins.scrub_fields import _ScrubFieldState
+    from lfs_plugins.rml_keys import KI_ESCAPE
+
+    panel = histogram_panel_module.HistogramPanel()
+    controller = panel._scrub_fields
+    attrs = {}
+    input_el = MagicMock()
+    input_el.get_attribute.side_effect = lambda name, default="": attrs.get(name, default)
+    input_el.set_attribute.side_effect = attrs.__setitem__
+    state = _ScrubFieldState(prop, controller._specs[prop], MagicMock(absolute_width=100.0),
+                             MagicMock(), MagicMock(), input_el)
+    controller._fields[prop] = state
+    initial = panel._get_bin_scrub_value(prop)
+
+    def event(**params):
+        return SimpleNamespace(get_parameter=lambda name, default: params.get(name, default),
+                               get_bool_parameter=lambda name, default: params.get(name, default),
+                               stop_propagation=lambda: None)
+
+    controller._on_field_mousedown(prop, event(mouse_x=0))
+    controller._on_body_mousemove(event(mouse_x=10))
+    assert panel._get_bin_scrub_value(prop) > initial
+    controller._on_keydown(event(key_identifier=KI_ESCAPE))
+    assert panel._get_bin_scrub_value(prop) == initial
+    controller._enter_edit(state)
+    attrs["value"] = "32"
+    controller._on_input_change(prop, event(linebreak=True))
+    controller._on_input_blur(prop, event())
+    assert panel._get_bin_scrub_value(prop) == 32
+    for value, expected in [(999, maximum), (-5, minimum)]:
+        controller._apply_value(state, value)
+        assert panel._get_bin_scrub_value(prop) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0.0, "0"), (1e-4, "1e-4"), (-0.0001234, "-1.234e-4"),
+    (0.003531, "3.531e-3"), (0.9821, "9.821e-1"), (1234000.0, "1.234e6"),
+])
+def test_range_scientific_text_is_compact_and_parseable(histogram_panel_module, value, expected):
+    panel = histogram_panel_module.HistogramPanel()
+    text = panel._format_range_input(value)
+    assert text == expected
+    assert panel._parse_range_input(text) == pytest.approx(value, rel=5e-4)
+    assert len(text) <= 10
 
 
 # --- Snappiness / elite-UX regressions -------------------------------------------------
@@ -1793,7 +1899,7 @@ def test_selection_change_updates_highlights_without_recomputing(histogram_panel
     monkeypatch.setattr(panel, '_sync_panel_space_state', lambda: False)
     calls = []
     monkeypatch.setattr(panel, '_refresh', lambda: calls.append('recompute'))
-    monkeypatch.setattr(panel, '_sync_panel_selection_from_scene', lambda: calls.append('highlight'))
+    monkeypatch.setattr(panel, '_reset_marks_after_external_selection', lambda: calls.append('highlight'))
     panel.on_scene_changed(None)
     panel.on_update(None)
     assert calls == ['highlight']
@@ -1838,8 +1944,7 @@ def pending_range_panel(histogram_panel_module, lf, numpy, monkeypatch):
     monkeypatch.setattr(module.lf, "get_scene", lambda: scene)
     monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 1)
     monkeypatch.setattr(panel, "_scene_node_selection_signature", lambda: ())
-    monkeypatch.setattr(panel, "_clear_all_marks", lambda **_kwargs: None)
-    monkeypatch.setattr(panel, "_sync_panel_selection_from_scene", lambda: None)
+    monkeypatch.setattr(panel, "_reset_marks_after_external_selection", lambda: None)
     queued = []
     scheduled = []
     panel._ui_scheduler = scheduled.append
@@ -1946,11 +2051,11 @@ def test_range_reset_and_cached_commit_update_fields(pending_range_panel, axis):
     setter("0.")  # Reset intentionally discards pending text.
     reset(None, None, None)
     assert getattr(panel, f"{prefix}_min_value") is None
-    assert getattr(panel, f"{prefix}_min_str") == "0.1"
+    assert getattr(panel, f"{prefix}_min_str") == "1e-1"
     setter("0.35")
     commit()  # The same range is now in the result cache.
     assert not panel._computing
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
     assert getattr(panel, f"{prefix}_min_value") == 0.35
 
 
@@ -1995,8 +2100,8 @@ def test_pending_metric_switch_cannot_commit_previous_metric(pending_range_panel
     assert getattr(panel, f"{prefix}_min_value") is None
     assert getattr(panel, f"{prefix}_max_value") is None
     deliver()
-    assert getattr(panel, f"{prefix}_min_str") == "-40"
-    assert getattr(panel, f"{prefix}_max_str") == "58"
+    assert getattr(panel, f"{prefix}_min_str") == "-4e1"
+    assert getattr(panel, f"{prefix}_max_str") == "5.8e1"
     assert not panel._computing
 
 
@@ -2027,14 +2132,14 @@ def test_editing_one_bound_preserves_other_typed_constraint(pending_range_panel,
     set_min("0.35")
     commit()
     deliver()
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
     set_max("0.65")
     commit()
     deliver()
     assert getattr(panel, f"{prefix}_min_value") == 0.35
     assert getattr(panel, f"{prefix}_max_value") == 0.65
-    assert getattr(panel, f"{prefix}_min_str") == "0.4"
-    assert getattr(panel, f"{prefix}_max_str") == "0.6"
+    assert getattr(panel, f"{prefix}_min_str") == "4e-1"
+    assert getattr(panel, f"{prefix}_max_str") == "6e-1"
 
 
 @pytest.mark.parametrize("axis", ["primary", "compare_y"])
@@ -2049,8 +2154,8 @@ def test_outdated_metric_result_cannot_replace_current_range(pending_range_panel
     assert panel._computing
     deliver()
     assert not panel._computing
-    assert getattr(panel, f"{prefix}_min_str") == "-10"
-    assert getattr(panel, f"{prefix}_max_str") == "20"
+    assert getattr(panel, f"{prefix}_min_str") == "-1e1"
+    assert getattr(panel, f"{prefix}_max_str") == "2e1"
 
 
 def test_bin_count_change_rebins_loaded_snapshot_without_the_worker(histogram_panel_module, lf, numpy, monkeypatch):
@@ -2131,3 +2236,149 @@ def test_sampled_sorted_snapping_matches_the_full_scan_on_many_values(histogram_
     assert sample[0] > 1
     expected = panel_type._snap_bounds_to_data(tensor, *bounds)
     assert panel_type._snap_sorted_bounds_to_data(tensor, *bounds, sample=sample) == expected
+
+
+@pytest.mark.parametrize("grid", [(8, 8), (8, 48), (48, 8), (24, 32), (48, 48)])
+@pytest.mark.parametrize("mode", ["replace", "add", "remove", "intersect"])
+@pytest.mark.parametrize("seed", [5, 23, 42, 99])
+def test_compare_selection_seeded_drag_fuzz(histogram_panel_module, lf, numpy, monkeypatch, grid, mode, seed):
+    """Exercise real press/move/release handlers against a per-point oracle."""
+    rng = numpy.random.default_rng(seed)
+    x_count, y_count = grid
+    size = 521
+    domain = rng.random(size) > 0.15
+    xs = rng.integers(0, x_count, size, dtype=numpy.int32)
+    ys = rng.integers(0, y_count, size, dtype=numpy.int32)
+    # Dense cells and partially selected cells catch count shortcuts that only
+    # work when the previous selection covers every point in each touched cell.
+    xs[:200], ys[:200] = 0, 0
+    xs[~domain], ys[~domain] = -1, -1
+    xs[200:220], ys[200:220] = -1, -1  # Finite points outside the zoomed view.
+    in_view = domain & (xs >= 0) & (ys >= 0)
+    base = (rng.random(size) < 0.35) & domain
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(base))
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    panel = histogram_panel_module.HistogramPanel()
+    values = lf.Tensor.from_numpy(numpy.zeros(size, dtype=numpy.float32))
+    panel._primary_values = panel._compare_values = values
+    panel._primary_finite_mask = panel._compare_finite_mask = lf.Tensor.from_numpy(domain)
+    panel._compare_x_bin_indices = lf.Tensor.from_numpy(xs)
+    panel._compare_y_bin_indices = lf.Tensor.from_numpy(ys)
+    panel._compare_x_bin_count, panel._compare_y_bin_count = grid
+    panel._compare_x_edges = numpy.linspace(0, 1, x_count + 1).tolist()
+    panel._compare_y_edges = numpy.linspace(0, 1, y_count + 1).tolist()
+    panel._compare_counts = numpy.bincount((ys[in_view] * x_count + xs[in_view]), minlength=x_count*y_count).tolist()
+    panel._show_chart = panel._show_compare_chart = True
+    panel._compare_chart_el = SimpleNamespace(absolute_left=0, absolute_top=0,
+                                              absolute_width=x_count*10, absolute_height=y_count*10,
+                                              focus=lambda: None)
+    panel._handle = _UpdateHandleStub()
+    start = (0, 0)
+    modifiers = {"shift": mode == "add", "ctrl": mode == "remove", "alt": mode == "intersect"}
+
+    def event(cell):
+        return _MouseEventStub(mouse_x=(cell[0]+0.5)*10,
+                               mouse_y=(y_count-cell[1]-0.5)*10, **modifiers)
+
+    panel._on_compare_chart_mousedown(event(start))
+    endpoints = [(x_count-1, y_count-1), (0, 0)] + [tuple(rng.integers([0, 0], grid)) for _ in range(10)]
+    for end in endpoints:
+        panel._on_document_mousemove(event(end))
+        swept = in_view & (xs <= end[0]) & (ys <= end[1])
+        expected = {"replace": swept, "add": base | swept,
+                    "remove": base & ~swept, "intersect": base & swept}[mode]
+        numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+        assert panel._marked_count == int(expected.sum()), (grid, mode, seed, end)
+        assert panel._marked_count == int(panel._panel_selection_mask.count_nonzero())
+    panel._on_document_mouseup(event(endpoints[-1]))
+    assert scene.commit_preview_calls == 1
+    assert not panel._dragging_compare_mark
+
+
+@pytest.mark.parametrize("seed", [5, 23, 42, 99])
+@pytest.mark.parametrize("mode", ["replace", "add", "remove", "intersect"])
+def test_histogram_partial_selection_count_fuzz(histogram_panel_module, lf, numpy, monkeypatch, seed, mode):
+    rng = numpy.random.default_rng(seed)
+    panel = histogram_panel_module.HistogramPanel()
+    size, bins = 521, 16
+    domain = rng.random(size) > 0.15
+    indices = rng.integers(0, bins, size, dtype=numpy.int32)
+    indices[:200] = 0
+    indices[~domain] = -1
+    indices[200:220] = -1  # Finite points outside the zoomed view.
+    in_view = domain & (indices >= 0)
+    base = (rng.random(size) < 0.35) & domain
+    scene = _SceneSelectionStub(lf.Tensor.from_numpy(base))
+    monkeypatch.setattr(lf, "get_scene", lambda: scene)
+    panel._primary_values = lf.Tensor.from_numpy(numpy.zeros(size, dtype=numpy.float32))
+    panel._primary_finite_mask = lf.Tensor.from_numpy(domain)
+    panel._selection_bin_indices = lf.Tensor.from_numpy(indices)
+    panel._histogram_bin_count = bins
+    panel._hist_counts = numpy.bincount(indices[in_view], minlength=bins).tolist()
+    panel._hist_prefix_counts = panel._prefix_counts(panel._hist_counts)
+    panel._hist_edges = numpy.linspace(0, 1, bins+1).tolist()
+    panel._show_chart = True
+    panel._chart_el = SimpleNamespace(absolute_left=0, absolute_width=160, focus=lambda: None)
+    modifiers = {"shift": mode == "add", "ctrl": mode == "remove", "alt": mode == "intersect"}
+    def event(index):
+        left, width = panel._histogram_selection_geometry(index, index)
+        return _MouseEventStub(mouse_x=left+width/2, **modifiers)
+    panel._on_chart_mousedown(event(0))
+    for end in [15, 0] + rng.integers(0, bins, 10).tolist():
+        panel._on_document_mousemove(event(end))
+        swept = in_view & (indices <= end)
+        expected = {"replace": swept, "add": base | swept,
+                    "remove": base & ~swept, "intersect": base & swept}[mode]
+        numpy.testing.assert_array_equal(scene.selection_mask.cpu().numpy(), expected)
+        assert panel._marked_count == int(expected.sum())
+    panel._on_document_mouseup(event(end))
+    assert scene.commit_preview_calls == 1
+
+
+def test_compare_records_cache_selection_and_invalidation(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._compare_x_bin_count, panel._compare_y_bin_count = 8, 9
+    panel._compare_counts = list(range(72))
+    panel._compare_x_edges = list(range(9))
+    panel._compare_y_edges = list(range(10))
+    calls = []
+    original = panel._format_range_text
+    monkeypatch.setattr(panel, "_format_range_text", lambda lo, hi: (calls.append((lo, hi)), original(lo, hi))[1])
+    first = panel._build_compare_bin_records()
+    assert len(calls) == 17  # Each axis range is formatted once, not per cell.
+    for selected in [{(0, 0)}, {(7, 8)}, {(0, 0), (7, 8)}]:
+        panel._selected_compare_cells = selected
+        records = panel._build_compare_bin_records()
+        assert len(calls) == 17
+        assert [record["selected"] for record in records] == [
+            (index % 8, 8-index//8) in selected for index in range(72)]
+        assert [{k: v for k, v in record.items() if k != "selected"} for record in records] == [
+            {k: v for k, v in record.items() if k != "selected"} for record in first]
+    assert not any(record["selected"] for record in first)
+    for change in [lambda: panel._compare_counts.__setitem__(0, 300),
+                   lambda: panel._compare_x_edges.__setitem__(0, -1),
+                   lambda: panel._compare_y_edges.__setitem__(0, -2),
+                   lambda: setattr(panel, "_log_scale_enabled", True),
+                   lambda: setattr(panel, "_last_lang", "de")]:
+        previous = panel._static_compare_records_value
+        change()
+        panel._build_compare_bin_records()
+        assert panel._static_compare_records_value is not previous
+    panel._clear_compare_cache()
+    assert panel._build_compare_bin_records() == []
+    assert panel._static_compare_records_value is None
+
+
+def test_histogram_bar_color_is_constant_while_heatmap_encodes_density(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    for log in [False, True]:
+        panel._log_scale_enabled = log
+        bars = list(panel._build_bin_records([0, 100, 500, 1000], [0, 1, 2, 3, 4]))
+        assert [bar["opacity_style"] for bar in bars] == ["0.000", "1.000", "1.000", "1.000"]
+        assert len({bar["height_style"] for bar in bars}) == 4
+        panel._compare_x_bin_count, panel._compare_y_bin_count = 2, 2
+        panel._compare_counts = [0, 1, 10, 1000]
+        panel._compare_x_edges = panel._compare_y_edges = [0, 1, 2]
+        heatmap = panel._build_compare_bin_records()
+        assert len({cell["opacity_style"] for cell in heatmap}) == 4

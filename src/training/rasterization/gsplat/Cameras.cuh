@@ -905,11 +905,12 @@ struct OpenCVFisheyeCameraModel
                     max_radius_pixels / parameters.focal_length[1]));
 
         // approximate backward poly (mapping normalized distances to angles)
-        // *very crudely* by linear interpolation / equidistant angle model
-        // (also assuming image-centered principal point)
-        auto const max_normalized_dist = std::max(
-            parameters.resolution[0] / 2.f / parameters.focal_length[0],
-            parameters.resolution[1] / 2.f / parameters.focal_length[1]);
+        // *very crudely* by the line through the origin and the radius the
+        // lens reaches at max_angle, so that Newton starts below the turning
+        // point for every radius up to it; a lens whose widest angle lies
+        // beyond half the image width keeps its rim
+        auto const max_normalized_dist =
+            eval_poly_odd_horner(forward_poly_odd, max_angle);
         approx_backward_poly = {0.f, max_angle / max_normalized_dist};
     }
 

@@ -3,7 +3,6 @@
 
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/property_registry.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
@@ -115,7 +114,6 @@ class OperatorRegistryPropsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::operators().clear();
@@ -140,7 +138,6 @@ protected:
         scene_manager_.reset();
         rendering_manager_.reset();
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
     }
 
     void add_node(const std::string& name,

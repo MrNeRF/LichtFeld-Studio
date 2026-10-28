@@ -9,6 +9,7 @@
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
+#include <span>
 #include <string>
 
 namespace lfs::geometry {
@@ -21,6 +22,7 @@ namespace lfs::core {
     class SplatData;
     class Tensor;
     struct PointCloud;
+    struct CropPolygonData;
 
     /**
      * @brief Apply a transformation matrix to SplatData
@@ -34,6 +36,13 @@ namespace lfs::core {
                                              const glm::vec3& crop_min,
                                              const glm::vec3& crop_max,
                                              const glm::mat4& points_to_cropbox);
+
+    // Rows of means (first three columns) inside the extruded polygon: |z| <= half_depth in the
+    // polygon frame and the even-odd rule over the outline, the test crop_polygon::containsPoint makes.
+    LFS_CORE_API Tensor compute_crop_polygon_mask(const Tensor& means,
+                                                  std::span<const glm::vec2> vertices,
+                                                  float half_depth,
+                                                  const glm::mat4& points_to_polygon);
 
     /**
      * @brief Crop SplatData by a bounding box (creates new filtered copy)
@@ -59,6 +68,13 @@ namespace lfs::core {
                                                const glm::mat4& transform,
                                                const glm::vec3& radii,
                                                bool inverse = false);
+
+    // Soft crop by an extruded polygon: mark gaussians as deleted if outside the prism
+    // world_to_local: world-to-polygon-local transform (combined with node world transform)
+    // Inside means |z| <= half_depth and the even-odd rule holds for (x, y).
+    LFS_CORE_API Tensor soft_crop_by_polygon(SplatData& splat_data,
+                                             const glm::mat4& world_to_local,
+                                             const CropPolygonData& polygon);
 
     /**
      * @brief Randomly select a subset of splats

@@ -20,7 +20,8 @@ namespace gsplat_lfs {
         int64_t total_elements,
         float* colors,
         uint32_t color_stride,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds) {
         if (total_elements == 0) {
             return;
         }
@@ -29,7 +30,7 @@ namespace gsplat_lfs {
             degrees_to_use, layout_degree, color_stride,
             dirs, sh0, sh_rest_swizzled, masks,
             total_elements,
-            colors, stream);
+            colors, stream, sh_value_bounds);
     }
 
     void spherical_harmonics_swizzled_bwd(
@@ -46,7 +47,8 @@ namespace gsplat_lfs {
         float* v_coeffs,
         float* v_dirs,
         uint32_t color_stride,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds) {
         if (total_elements == 0) {
             return;
         }
@@ -56,7 +58,7 @@ namespace gsplat_lfs {
             dirs, sh0, sh_rest_swizzled, masks, v_colors,
             total_elements, K,
             compute_v_dirs,
-            v_coeffs, v_dirs, stream);
+            v_coeffs, v_dirs, stream, sh_value_bounds);
     }
 
 } // namespace gsplat_lfs

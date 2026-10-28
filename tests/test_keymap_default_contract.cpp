@@ -77,14 +77,19 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForScroll(mode, MODIFIER_NONE), Action::CAMERA_ZOOM);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_Z, MODIFIER_CTRL), Action::UNDO);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_Y, MODIFIER_CTRL), Action::REDO);
+                EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL),
+                          Action::NEXT_SIDEBAR_CATEGORY);
+                EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
+                          Action::PREVIOUS_SIDEBAR_CATEGORY);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
-                          Action::CANCEL_POLYGON);
+                          mode == ToolMode::WALK ? Action::EXIT_WALK : Action::CANCEL_POLYGON);
                 if (mode == ToolMode::SELECTION)
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_ENTER, MODIFIER_CTRL),
                               Action::ASSET_GALLERY_PRIMARY);
                 constexpr std::array tools = {Action::TOOL_SELECT, Action::TOOL_TRANSLATE,
                                               Action::TOOL_ROTATE, Action::TOOL_SCALE,
-                                              Action::TOOL_MIRROR, Action::TOOL_ALIGN};
+                                              Action::TOOL_MIRROR, Action::TOOL_ALIGN,
+                                              Action::TOOL_SCALE_DISTANCE};
                 for (int i = 0; i < static_cast<int>(tools.size()); ++i) {
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_1 + i, MODIFIER_NONE),
                               tools[i]);
@@ -95,7 +100,7 @@ namespace lfs::vis::input {
                         ? Action::DELETE_SELECTED
                         : Action::DELETE_NODE;
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_DELETE, MODIFIER_NONE),
-                          delete_action);
+                          mode == ToolMode::WALK ? Action::NONE : delete_action);
             }
             EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT,
                                                 MODIFIER_NONE),
@@ -124,7 +129,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::TOGGLE_PYTHON_CONSOLE); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::PREVIOUS_SIDEBAR_CATEGORY); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())

@@ -55,6 +55,7 @@ namespace lfs::vis {
         PythonRedraw,
         PythonFrameCallback,
         Mcp,
+        StochasticAccumulation,
         Count
     };
 
@@ -88,6 +89,7 @@ namespace lfs::vis {
         case FrameReason::PythonRedraw: return "PythonRedraw";
         case FrameReason::PythonFrameCallback: return "PythonFrameCallback";
         case FrameReason::Mcp: return "Mcp";
+        case FrameReason::StochasticAccumulation: return "StochasticAccumulation";
         case FrameReason::Count: break;
         }
         return "?";
@@ -283,6 +285,12 @@ namespace lfs::vis {
             else
                 last_plan_started_ = now;
             return plan;
+        }
+
+        [[nodiscard]] bool hasPendingRequest(const FrameReason reason) const {
+            std::lock_guard lock(mutex_);
+            return std::any_of(one_shots_.begin(), one_shots_.end(),
+                               [reason](const FrameRequest& request) { return request.reason == reason; });
         }
 
         // Earliest time anything needs the loop awake; empty means block forever.

@@ -45,7 +45,10 @@ namespace lfs::python {
             .value("EllipsoidAdd", vis::op::BuiltinOp::EllipsoidAdd)
             .value("EllipsoidSet", vis::op::BuiltinOp::EllipsoidSet)
             .value("EllipsoidFit", vis::op::BuiltinOp::EllipsoidFit)
-            .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset);
+            .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset)
+            .value("CropPolygonDraw", vis::op::BuiltinOp::CropPolygonDraw)
+            .value("CropPolygonSet", vis::op::BuiltinOp::CropPolygonSet)
+            .value("ScaleDistancePickPoint", vis::op::BuiltinOp::ScaleDistancePickPoint);
 
         nb::enum_<vis::op::BuiltinTool>(ops, "BuiltinTool")
             .value("Select", vis::op::BuiltinTool::Select)
@@ -53,7 +56,8 @@ namespace lfs::python {
             .value("Rotate", vis::op::BuiltinTool::Rotate)
             .value("Scale", vis::op::BuiltinTool::Scale)
             .value("Mirror", vis::op::BuiltinTool::Mirror)
-            .value("Align", vis::op::BuiltinTool::Align);
+            .value("Align", vis::op::BuiltinTool::Align)
+            .value("ScaleDistance", vis::op::BuiltinTool::ScaleDistance);
 
         nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags", nb::is_flag())
             .value("NONE", vis::op::OperatorFlags::NONE)
@@ -80,8 +84,12 @@ namespace lfs::python {
 
                 nb::object instance = get_python_operator_instance(id);
                 std::vector<std::string> set_kwargs;
+                // Builtin C++ operators take their arguments as properties.
+                const bool python_operator = instance.is_valid() && !instance.is_none();
+                const bool builtin = !python_operator && vis::op::builtin_op_from_string(id).has_value();
+                auto builtin_props = builtin ? builtin_operator_properties(id, kwargs) : vis::op::OperatorProperties{};
                 if (kwargs && nb::len(kwargs) > 0) {
-                    if (instance.is_valid() && !instance.is_none()) {
+                    if (python_operator) {
                         for (auto [key, value] : kwargs) {
                             std::string key_str = nb::cast<std::string>(key);
                             nb::setattr(instance, key_str.c_str(), value);
@@ -90,7 +98,7 @@ namespace lfs::python {
                     }
                 }
 
-                auto result = registry.invoke(id);
+                auto result = registry.invoke(id, builtin ? &builtin_props : nullptr);
 
                 std::string status_str;
                 switch (result.status) {

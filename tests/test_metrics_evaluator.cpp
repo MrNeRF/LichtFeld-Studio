@@ -1820,8 +1820,8 @@ TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv
     const auto per_image = read(out_dir / "per_image_metrics.json");
     ASSERT_EQ(per_image.size(), 2u);
     const auto& close = per_image.at("close.png");
-    const auto& far = per_image.at("far.png");
-    for (const auto& document : {close, far}) {
+    const auto& far_metrics = per_image.at("far.png");
+    for (const auto& document : {close, far_metrics}) {
         EXPECT_EQ(document.at("width"), kW);
         EXPECT_EQ(document.at("height"), kH);
         ASSERT_EQ(document.at("evaluations").size(), 2u);
@@ -1831,9 +1831,9 @@ TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv
         EXPECT_EQ(document.at("evaluations")[1].at("masked"), false);
     }
     EXPECT_FLOAT_EQ(close.at("evaluations")[1].at("psnr").get<float>(), *final_step.views[0].psnr);
-    EXPECT_FLOAT_EQ(far.at("evaluations")[1].at("psnr").get<float>(), *final_step.views[1].psnr);
+    EXPECT_FLOAT_EQ(far_metrics.at("evaluations")[1].at("psnr").get<float>(), *final_step.views[1].psnr);
     EXPECT_GT(close.at("evaluations")[1].at("psnr").get<float>(),
-              far.at("evaluations")[1].at("psnr").get<float>() + 10.0f);
+              far_metrics.at("evaluations")[1].at("psnr").get<float>() + 10.0f);
 
     std::filesystem::remove_all(tmp);
 }

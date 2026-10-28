@@ -5,12 +5,15 @@
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -74,7 +77,8 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 7> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 9> kRuntimeJobIds = {
+            "collision.main",
             "editor.python",
             "training.main",
             "export.scene",
@@ -82,6 +86,7 @@ namespace lfs::app {
             "export.video",
             "mesh2splat",
             "operator.modal",
+            "apriltag.scan",
         };
 
         json supported_runtime_job_ids_json() {
@@ -109,6 +114,10 @@ namespace lfs::app {
         }
 
         std::string_view runtime_job_label(const std::string_view job_id) {
+            if (job_id == "apriltag.scan")
+                return LOC("runtime.apriltag_scan");
+            if (job_id == "collision.main")
+                return "Collision";
             if (job_id == "editor.python") {
                 return "Python Editor";
             }
@@ -654,6 +663,46 @@ namespace lfs::app {
             return payload;
         }
 
+        json apriltag_job_json(vis::gui::GuiManager& gui) {
+            auto& tasks = gui.asyncTasks();
+            const auto state = tasks.aprilTagScanStatus();
+            const bool active = state && state->running();
+            const bool completed = state && state->status == vis::JobStatus::Completed;
+            const bool canceled = state && state->status == vis::JobStatus::Canceled;
+            const bool failed = state && state->status == vis::JobStatus::Failed;
+            json payload{
+                {"id", "apriltag.scan"},
+                {"label", LOC("runtime.apriltag_scan")},
+                {"kind", "calibration"},
+                {"active", active},
+                {"status", active ? "running" : completed ? "finished"
+                                            : failed      ? "failed"
+                                                          : "idle"},
+                {"outcome", active ? "running" : completed ? "completed"
+                                             : canceled    ? "cancelled"
+                                             : failed      ? "failed"
+                                                           : "idle"},
+                {"progress", state ? state->progress : 0.0f},
+                {"stage", state ? state->stage : ""},
+                {"cancel_supported", true},
+                {"dismiss_supported", false},
+                {"actions", {{"start", false}, {"pause", false}, {"resume", false}, {"cancel", active}, {"dismiss", false}}},
+            };
+            if (state) {
+                payload["cancel_requested"] = state->cancel_requested;
+                if (!state->error.empty())
+                    payload["error"] = state->error;
+            }
+            if (completed || failed) {
+                auto output = vis::aprilTagResultJson(tasks.aprilTagScanResult());
+                output["success"] = completed && tasks.aprilTagScanResult().scale_report.success;
+                output.erase("manifest_json");
+                payload["result"] = std::move(output);
+            }
+            add_runtime_job_links(payload);
+            return payload;
+        }
+
         json operator_modal_job_json() {
             auto& operators = vis::op::operators();
             const auto modal_state = operators.modalState();
@@ -698,6 +747,11 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "apriltag.scan") {
+                return gui ? std::expected<json, std::string>(apriltag_job_json(*gui))
+                           : std::expected<json, std::string>(unavailable_job_json(
+                                 "apriltag.scan", LOC("runtime.apriltag_scan"), "calibration", "GUI manager is not initialized"));
+            }
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);
             }
@@ -735,6 +789,17 @@ namespace lfs::app {
                                  "Mesh to Splat",
                                  "conversion",
                                  "GUI manager is not initialized"));
+            }
+            if (job_id == "collision.main") {
+                if (!gui)
+                    return unavailable_job_json("collision.main", "Collision", "conversion", "GUI manager is not initialized");
+                const auto state = gui->asyncTasks().collisionJob();
+                const bool active = state && state->running();
+                const std::string status = !state ? "idle" : active                                  ? "running"
+                                                         : state->status == vis::JobStatus::Failed   ? "failed"
+                                                         : state->status == vis::JobStatus::Canceled ? "cancelled"
+                                                                                                     : "finished";
+                return json{{"id", "collision.main"}, {"label", "Collision"}, {"kind", "conversion"}, {"active", active}, {"status", status}, {"outcome", status}, {"progress", state ? state->progress : 0.f}, {"stage", state ? state->stage : ""}, {"error", state ? state->error : ""}, {"cancel_supported", active}, {"actions", {{"cancel", active}, {"start", false}, {"pause", false}, {"resume", false}, {"dismiss", false}}}};
             }
             if (job_id == "operator.modal") {
                 return operator_modal_job_json();
@@ -995,6 +1060,15 @@ namespace lfs::app {
 
             auto* const gui = viewer_impl->getGuiManager();
 
+            if (job_id == "apriltag.scan") {
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Only cancellation is supported for apriltag.scan");
+                const auto state = gui->asyncTasks().aprilTagScanStatus();
+                if (!state || !state->running())
+                    return std::unexpected("AprilTag scan is not running");
+                gui->asyncTasks().cancelAprilTagScan();
+                return {};
+            }
             if (job_id == "editor.python") {
                 auto& console = vis::gui::panels::PythonConsoleState::getInstance();
                 if (action != "cancel") {
@@ -1077,6 +1151,12 @@ namespace lfs::app {
                 return {};
             }
 
+            if (job_id == "collision.main") {
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Collision supports cancel only while the GUI is active");
+                gui->asyncTasks().cancelCollision();
+                return {};
+            }
             if (job_id == "mesh2splat") {
                 return std::unexpected("mesh2splat does not currently support runtime control");
             }

@@ -90,7 +90,7 @@ namespace lfs::vis::gui {
                     return error.severity() == lfs::Severity::Warning ? Keys::EXPORT_WARNING
                                                                       : Keys::EXPORT_FAILED;
                 }
-                if (op == error_op::kNewProject || op == error_op::kProjectSettings) {
+                if (op == error_op::kNewProject || op == error_op::kProjectSettings || op == "enter_walk") {
                     return Keys::GENERIC;
                 }
                 return Keys::FILE_OPEN_FAILED;
@@ -148,19 +148,12 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::string presentedMessage(const lfs::Error& error) {
-            if (error.domain() == lfs::ErrorDomain::Training && !error.frames().empty()) {
-                for (const auto& field : error.frames().front().fields.entries()) {
-                    if (field.key != "message_key")
-                        continue;
-                    const auto* key = std::get_if<std::string>(&field.value);
-                    if (!key)
-                        break;
-                    if (*key == "messages.err_distorted_images")
-                        return LOC("messages.err_distorted_images");
-                    if (*key == "messages.err_non_pinhole")
-                        return LOC("messages.err_non_pinhole");
-                }
-            }
+            for (const auto& frame : error.frames())
+                for (const auto& field : frame.fields.entries())
+                    if (field.key == "message_key")
+                        if (const auto* key = std::get_if<std::string>(&field.value);
+                            key && lfs::event::LocalizationManager::getInstance().hasKey(*key))
+                            return LOC(*key);
             return std::string(error.user_message());
         }
 

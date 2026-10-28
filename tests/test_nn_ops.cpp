@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "core/nn.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -12,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
@@ -452,6 +454,32 @@ TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
     EXPECT_TRUE(all_close(host_f32(yr), rms_ref, kF32Rtol, kF32Atol));
 }
 
+// Rows span several warps, so every warp must normalise with the block-wide mean; under compute-sanitizer racecheck
+// this fails when the reduction scratch is reused before all warps have read the mean.
+TEST_F(NnOpsTest, LayerNormAcrossWarpsMatchesReference) {
+    const int rows = 257;
+    for (const int cols : {112, 224, 448, 896}) {
+        SCOPED_TRACE(cols);
+        std::vector<float> x(static_cast<std::size_t>(rows) * cols), w(cols), b(cols);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            x[i] = std::sin(0.13f * i) + 0.3f * std::cos(0.23f * i);
+        }
+        for (int c = 0; c < cols; ++c) {
+            w[c] = 0.7f + 0.001f * c;
+            b[c] = 0.03f * std::sin(0.1f * c);
+        }
+        const auto expected = cpu_layer_norm(x, w, b, rows, cols, 1e-6f);
+        for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+            auto X = upload(x, {static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)}, dtype);
+            auto W = upload(w, {static_cast<std::size_t>(cols)}, dtype);
+            auto B = upload(b, {static_cast<std::size_t>(cols)}, dtype);
+            auto y = lfs::core::nn::layer_norm(X, W, B, 1e-6f);
+            const bool half = dtype == lfs::core::DataType::Float16;
+            EXPECT_TRUE(all_close(host_f32(y), expected, half ? kF16Rtol : kF32Rtol, half ? kF16Atol : kF32Atol));
+        }
+    }
+}
+
 TEST_F(NnOpsTest, SoftmaxLastDim) {
     std::vector<float> x = {1.0f, 2.0f, 3.0f, -1.0f, 0.0f, 5.0f};
     auto X = upload(x, {2, 3}, lfs::core::DataType::Float32);
@@ -690,6 +718,82 @@ TEST_F(NnOpsTest, Conv2dFp16Large3x3MatchesRef) {
     const auto refr = cpu_conv2d(in, wt, &bias, n, cin, h, w, cout, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1);
     auto OutR = lfs::core::nn::conv2d(In, W, &B, p);
     EXPECT_TRUE(all_close(host_f32(OutR), refr, kF16Rtol, kF16Atol)) << "3x3 replicate";
+}
+
+// Fails when a convolution over a large photo cannot launch or misses pixels: the output tiles used to sit in
+// grid.y, whose 65,535 blocks of 64 pixels end at 4.2 MP, and a 1x1 convolution runs as a GEMM over the same pixels.
+// A committed photo crop is enlarged past that limit; rows on both sides of it are checked against direct sums.
+TEST_F(NnOpsTest, ConvolutionsCoverPhotosAboveFourMegapixels) {
+    auto [data, crop_width, crop_height, channels] =
+        lfs::core::load_image(std::filesystem::path(project_root()) / "tests/data/nn/lpips_crop_a.png");
+    ASSERT_TRUE(data != nullptr && channels == 3);
+    constexpr int width = 2400, height = 2400;
+    const std::size_t pixels = static_cast<std::size_t>(width) * height;
+    ASSERT_GT(pixels, std::size_t{65535} * 64);
+    constexpr int cin = 8, cout = 8;
+    std::vector<float> in(cin * pixels);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const std::size_t source =
+                static_cast<std::size_t>(y * crop_height / height) * crop_width + x * crop_width / width;
+            for (int c = 0; c < cin; ++c) {
+                in[c * pixels + static_cast<std::size_t>(y) * width + x] =
+                    static_cast<float>(data[3 * source + c % 3]) / 255.0f * (c < 3 ? 1.0f : -0.5f);
+            }
+        }
+    }
+    lfs::core::free_image(data);
+    std::vector<float> w3(cout * cin * 9), w1(cout * cin), bias(cout);
+    for (int i = 0; i < static_cast<int>(w3.size()); ++i) {
+        w3[i] = std::cos(0.05f * i) * 0.1f;
+    }
+    for (int i = 0; i < static_cast<int>(w1.size()); ++i) {
+        w1[i] = std::cos(0.07f * i) * 0.2f;
+    }
+    for (int i = 0; i < cout; ++i) {
+        bias[i] = 0.01f * i;
+    }
+    const auto direct_row = [&](const std::vector<float>& weights, const int k, const int row) {
+        std::vector<float> out(static_cast<std::size_t>(cout) * width);
+        const int r = k / 2;
+        for (int o = 0; o < cout; ++o) {
+            for (int x = 0; x < width; ++x) {
+                double sum = bias[o];
+                for (int c = 0; c < cin; ++c) {
+                    for (int dy = 0; dy < k; ++dy) {
+                        for (int dx = 0; dx < k; ++dx) {
+                            const int y = row + dy - r, xx = x + dx - r;
+                            if (y < 0 || y >= height || xx < 0 || xx >= width) {
+                                continue;
+                            }
+                            sum += static_cast<double>(weights[((o * cin + c) * k + dy) * k + dx]) *
+                                   in[c * pixels + static_cast<std::size_t>(y) * width + xx];
+                        }
+                    }
+                }
+                out[static_cast<std::size_t>(o) * width + x] = static_cast<float>(sum);
+            }
+        }
+        return out;
+    };
+    const auto shape = std::vector<std::size_t>{1, cin, static_cast<std::size_t>(height), static_cast<std::size_t>(width)};
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        auto In = upload(in, shape, dtype);
+        auto B = upload(bias, {cout}, dtype);
+        lfs::core::nn::Conv2dParams p3;
+        p3.pad_h = 1;
+        p3.pad_w = 1;
+        const auto Out3 = lfs::core::nn::conv2d(In, upload(w3, {cout, cin, 3, 3}, dtype), &B, p3);
+        const auto Out1 = lfs::core::nn::conv2d(In, upload(w1, {cout, cin, 1, 1}, dtype), &B, lfs::core::nn::Conv2dParams{});
+        const float rtol = dtype == lfs::core::DataType::Float16 ? kF16Rtol : 2e-5f;
+        const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : 2e-5f;
+        for (const int row : {0, height / 2, height - 1}) {
+            EXPECT_TRUE(all_close(host_f32(Out3.slice(2, row, row + 1)), direct_row(w3, 3, row), rtol, atol))
+                << "3x3 row " << row << " dtype " << static_cast<int>(dtype);
+            EXPECT_TRUE(all_close(host_f32(Out1.slice(2, row, row + 1)), direct_row(w1, 1, row), rtol, atol))
+                << "1x1 row " << row << " dtype " << static_cast<int>(dtype);
+        }
+    }
 }
 
 TEST_F(NnOpsTest, SplitQkvWindow2dMatchesComposed) {

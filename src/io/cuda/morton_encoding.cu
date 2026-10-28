@@ -87,27 +87,27 @@ namespace lfs::io {
             using lfs::core::Device;
 
             if (!positions.is_valid()) {
-                LOG_ERROR("{}: Invalid input tensor", op_name);
+                LOG_ERROR("%s: Invalid input tensor", op_name);
                 return false;
             }
 
             if (positions.ndim() != 2 || positions.size(1) != 3) {
-                LOG_ERROR("{}: Positions must have shape [N, 3], got {}", op_name, positions.shape().str());
+                LOG_ERROR("%s: Positions must have shape [N, 3], got %s", op_name, positions.shape().str().c_str());
                 return false;
             }
 
             if (positions.dtype() != DataType::Float32) {
-                LOG_ERROR("{}: Positions must be Float32", op_name);
+                LOG_ERROR("%s: Positions must be Float32", op_name);
                 return false;
             }
 
             if (positions.device() != Device::CUDA) {
-                LOG_ERROR("{}: Positions must be on CUDA", op_name);
+                LOG_ERROR("%s: Positions must be on CUDA", op_name);
                 return false;
             }
 
             if (positions.size(0) > static_cast<size_t>(std::numeric_limits<int>::max())) {
-                LOG_ERROR("{}: Position count exceeds INT_MAX", op_name);
+                LOG_ERROR("%s: Position count exceeds INT_MAX", op_name);
                 return false;
             }
 
@@ -169,7 +169,7 @@ namespace lfs::io {
 
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            LOG_ERROR("CUDA error in morton_encode_kernel: {}", cudaGetErrorString(err));
+            LOG_ERROR("CUDA error in morton_encode_kernel: %s", cudaGetErrorString(err));
             return Tensor();
         }
 

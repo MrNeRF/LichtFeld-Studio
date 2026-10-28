@@ -387,6 +387,25 @@ TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     }
 }
 
+// Catches a NaN weight getting a NaN key, which the descending sort puts before every real candidate.
+TEST(DensifyEvents4x, GumbelNeverPicksNanOrNonPositiveWeights) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::vector<float> weights{nan, 1.0f, 0.0f, -2.0f, 3.0f, nan, 4.0f, 0.5f};
+    const std::vector<int64_t> positive{1, 4, 6, 7};
+    const auto w = Tensor::from_vector(weights, TensorShape({weights.size()}), Device::CUDA);
+    for (const bool compact : {false, true}) {
+        SCOPED_TRACE(compact ? "compact" : "dense");
+        auto picks = Tensor::empty({positive.size()}, Device::CUDA, DataType::Int64);
+        GumbelTopKScratch scratch;
+        mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), weights.size(), positive.size(), 0x5eedULL,
+                                          picks.ptr<int64_t>(), nullptr, compact, &scratch);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        auto values = picks.cpu().to_vector_int64();
+        std::sort(values.begin(), values.end());
+        EXPECT_EQ(values, positive);
+    }
+}
+
 TEST(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
     GumbelTopKScratch gumbel;
     gumbel.ensure_n(128, Device::CUDA);

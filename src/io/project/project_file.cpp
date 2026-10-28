@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/filename_key.hpp"
+#include "core/native_fs.hpp"
 #include "io/project_container.hpp"
 
 #include "project_container_internal.hpp"
@@ -547,6 +549,24 @@ namespace lfs::io::project::detail {
 #endif
     }
 
+    lfs::Result<bool> NativeFile::same_file(const NativeFile& other) const {
+#ifdef _WIN32
+        BY_HANDLE_FILE_INFORMATION a{}, b{};
+        if (GetFileInformationByHandle(handle_, &a) && GetFileInformationByHandle(other.handle_, &b))
+            return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+                   a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+        const auto error = GetLastError();
+#else
+        struct stat a {
+        }, b{};
+        if (::fstat(fd_, &a) == 0 && ::fstat(other.fd_, &b) == 0)
+            return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+        const auto error = errno;
+#endif
+        return project_error(lfs::ErrorCode::Unavailable, "The project file identity could not be checked.",
+                             std::format("File identity query failed ({})", error), path_);
+    }
+
     lfs::Result<std::uint64_t> NativeFile::size() const {
 #ifdef _WIN32
         LARGE_INTEGER size{};
@@ -872,16 +892,18 @@ namespace lfs::io::project::detail {
 
     lfs::Result<WriterLock> WriterLock::acquire(const std::filesystem::path& project_path) {
         std::error_code error;
-        auto lock_path = std::filesystem::absolute(project_path, error);
-        if (!error)
-            lock_path = project_fs::weakly_canonical(lock_path, error);
+        if (project_path.empty())
+            return project_error(lfs::ErrorCode::FailedPrecondition,
+                                 "The project path could not be locked.", "The project path is empty.", project_path);
+        auto lock_path = project_fs::weakly_canonical(project_path, error);
         if (error)
             return project_error(lfs::ErrorCode::FailedPrecondition,
                                  "The project path could not be locked.", error.message(), project_path);
-        lock_path += ".lock";
         if (auto parent = ensure_parent_directory(lock_path); !parent) {
             return std::move(parent).error();
         }
+        // Query case semantics only after the actual containing directory exists.
+        lock_path = project_lock_path(lock_path);
         constexpr int kAcquireAttempts = 5;
 #ifdef _WIN32
         const DWORD share_mode =
@@ -999,6 +1021,29 @@ namespace lfs::io::project::detail {
         return acquired;
     }
 
+    std::filesystem::path project_artifact_path(
+        const std::filesystem::path& source, const std::string_view suffix) {
+        auto name = source.filename();
+        const auto native_suffix = lfs::core::utf8_to_path(std::string(suffix));
+        // Preserve native filename bytes (including non-UTF-8 POSIX names).
+        // Bound only artifacts that exceed the filesystem component limit.
+        if (name.native().size() + native_suffix.native().size() > 255) {
+#ifdef _WIN32
+            const auto original = lfs::core::path_to_utf8(lfs::core::detail::artifact_filename_key(source));
+#else
+            const auto original = lfs::core::detail::artifact_filename_key(source).native();
+#endif
+            const auto key = XXH3_128bits(original.data(), original.size());
+            name = lfs::core::utf8_to_path(std::format(".lfs-artifact-{:016x}{:016x}", key.high64, key.low64));
+        }
+        name += native_suffix;
+        return source.parent_path() / name;
+    }
+
+    std::filesystem::path project_lock_path(const std::filesystem::path& source) {
+        return project_artifact_path(source, ".lock");
+    }
+
     std::filesystem::path temporary_project_stem(const std::filesystem::path& destination) {
         const auto name = lfs::core::path_to_utf8(destination.filename());
         // Reserve the longest sibling suffix (72 bytes) and its .lock (5).
@@ -1055,7 +1100,7 @@ namespace lfs::io::project::detail {
         std::error_code error;
         auto parent = path.parent_path();
         if (parent.empty()) {
-            parent = std::filesystem::current_path(error);
+            parent = lfs::core::native_fs::current_path(error);
         }
         const auto space = project_fs::space(parent, error);
         if (error) {

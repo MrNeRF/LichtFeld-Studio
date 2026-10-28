@@ -3,13 +3,14 @@
 """Export panel for exporting scene nodes."""
 
 import html
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Set
 from enum import IntEnum
 
 import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .default_reset import LabelDefaultReset, values_match
 from .types import Panel
 from .panels import panel_class
 from .ui import RuntimeState, native_value as _native_store_value
@@ -81,6 +82,12 @@ def _exported_count(node):
     return int(splat.visible_count())
 
 
+SSOG_DEFAULTS = {
+    "lod_levels": 4, "lod_ratio": 0.5, "chunk_count_k": 512,
+    "chunk_extent": 16.0, "chunk_min_k": 8, "kmeans_iterations": 10,
+}
+
+
 @panel_class("export")
 class ExportPanel(Panel):
 
@@ -92,10 +99,7 @@ class ExportPanel(Panel):
         self._pinned_sh_degree = True
         self._ssog_folder_name = ""
         self._ssog_bundle = True
-        self._ssog_settings = {
-            "lod_levels": 4, "lod_ratio": 0.5, "chunk_count_k": 512,
-            "chunk_extent": 16.0, "chunk_min_k": 8, "kmeans_iterations": 10,
-        }
+        self._ssog_settings = SSOG_DEFAULTS.copy()
         self._spz_version = 4  # SPZ container: 4 (zstd) or 3 (legacy gzip)
         self._selection_seeded = False
         self._handle = None
@@ -108,6 +112,7 @@ class ExportPanel(Panel):
         self._progress_value = "0"
         self._has_models = False
         self._cached_export_state = {}
+        self._default_reset = LabelDefaultReset(self._reset_default, self._apply_reset)
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -121,6 +126,29 @@ class ExportPanel(Panel):
         self._reactive_unsubscribers = []
 
     # ── Data model ────────────────────────────────────────────
+
+    def _reset_default(self, prop):
+        if self._exporting:
+            return None
+        return {"sh_degree": self._max_export_sh_degree, "spz_version": 4, **SSOG_DEFAULTS}.get(prop)
+
+    def _apply_reset(self, prop, value):
+        if self._reset_default(prop) is None:
+            return False
+        self._scrub_fields.prepare_reset(prop)
+        if prop == "sh_degree":
+            self._set_sh_degree(value)
+            current = self._export_sh_degree
+        elif prop == "spz_version":
+            self._set_spz_version(value)
+            current = self._spz_version
+        elif prop in SSOG_DEFAULTS:
+            self._set_ssog_setting(prop, value)
+            current = self._ssog_settings[prop]
+        else:
+            return False
+        self._scrub_fields.sync_all()
+        return values_match(current, value)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("export")
@@ -317,9 +345,9 @@ class ExportPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
-        self._exporting = False
+        self._cached_export_state = self._export_state()
+        self._exporting = bool(self._cached_export_state.get("active", False))
         self._last_progress = -1.0
-        self._cached_export_state = {}
         self._selection_seeded = False
         self._last_node_key = None
         self._last_colmap_source_path = ""
@@ -349,6 +377,7 @@ class ExportPanel(Panel):
         self._rebuild_format_records()
         self._rebuild_model_records(self._scene_nodes())
         self._scrub_fields.mount(doc)
+        self._default_reset.mount(doc)
         self._subscribe_reactive_state()
 
     def _subscribe_reactive_state(self):
@@ -380,7 +409,9 @@ class ExportPanel(Panel):
             rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
-        if self._exporting:
+        # Drag export can start outside this panel. Opening it during that job
+        # must show progress directly, without exposing the manual export form.
+        if self._exporting or self._export_state().get("active", False):
             dirty = self._update_export_progress()
             dirty |= self._scrub_fields.sync_all()
             return dirty
@@ -393,6 +424,18 @@ class ExportPanel(Panel):
             return True
 
         dirty = False
+        requested = lf.ui.take_splat_export_request()
+        if requested:
+            self._selected_nodes = set(requested)
+            self._selection_seeded = True
+            self._pinned_sh_degree = True
+            self._last_node_key = None
+            if self._format == ExportFormat.COLMAP:
+                self._format = ExportFormat.PLY
+                self._rebuild_format_records()
+                self._dirty_model()
+            self._dirty_model("export_label", "can_export", "export_error_text")
+            dirty = True
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang
@@ -443,6 +486,7 @@ class ExportPanel(Panel):
         self._handle = None
         self._doc = None
         self._scrub_fields.unmount()
+        self._default_reset.unmount()
 
     # ── Helpers ──────────────────────────────────────────────
 

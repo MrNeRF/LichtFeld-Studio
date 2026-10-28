@@ -3,11 +3,12 @@
 """Startup recent-projects chooser (no silent session restore)."""
 
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import os
 import threading
 import time
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 
@@ -42,7 +43,7 @@ def display_name_for_path(path: str) -> str:
 
 def format_mtime(path: str) -> str:
     try:
-        mtime = os.path.getmtime(path)
+        mtime = os.path.getmtime(native_path(path))
     except OSError:
         return "?"
     try:
@@ -272,7 +273,7 @@ class StartupRecentPanel(Panel):
         def worker() -> None:
             for path in pending:
                 try:
-                    stat = os.stat(path)
+                    stat = os.stat(native_path(path))
                     mtime_ns = int(stat.st_mtime_ns)
                 except OSError:
                     mtime_ns = 0

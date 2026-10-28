@@ -51,8 +51,8 @@ namespace lfs::training {
         lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
         int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
-        size_t capacity = 0; // Allocated capacity (moment rows / float cells)
-        size_t size = 0;     // Used size
+        size_t capacity = 0; // Primitive rows, or float-layout cells for SH-rest (never packed bytes)
+        size_t size = 0;     // Used size in the same units as capacity
         [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
 
@@ -108,12 +108,6 @@ namespace lfs::training {
         float eps = 1e-15f;
         float scale_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
-        const float* sparsity_opa_sigmoid = nullptr;
-        const float* sparsity_z = nullptr;
-        const float* sparsity_u = nullptr;
-        int sparsity_n = 0;
-        float sparsity_rho = 0.0f;
-        float sparsity_grad_loss = 0.0f;
         bool per_splat_mean_step = false;
         float mean_step_median_extent = 0.0f;
         FastGSFusedAdamParam means;
@@ -130,13 +124,18 @@ namespace lfs::training {
     public:
         explicit AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config);
 
-        void step(int iteration);
+        // Post-training refinement can update resident SH coefficients immediately.
+        void step(int iteration, bool apply_sh_warmup = true);
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
         void set_frozen_lr_scale(float scale);
         void set_crop_damping_mask(lfs::core::Tensor mask);
+        // Rows whose refine, sampling and keep scores are scaled by cropbox_lr_scale.
+        void set_crop_score_mask(lfs::core::Tensor mask);
+        // Rows inside the crop box ROI and the share of new splats they receive.
+        void set_crop_roi_rows(lfs::core::Tensor rows, float growth_inside);
         void set_cropbox_lr_scale(float scale);
         void set_per_splat_mean_step(bool enabled, float median_extent);
         // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
@@ -155,6 +154,13 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
             return crop_damping_mask_;
         }
+        [[nodiscard]] const lfs::core::Tensor& crop_score_mask() const noexcept {
+            return crop_score_mask_;
+        }
+        [[nodiscard]] const lfs::core::Tensor& crop_roi_rows() const noexcept {
+            return crop_roi_rows_;
+        }
+        [[nodiscard]] float cropbox_growth_inside() const noexcept { return cropbox_growth_inside_; }
         [[nodiscard]] float cropbox_lr_scale() const noexcept { return cropbox_lr_scale_; }
 
         // Gradient management
@@ -225,6 +231,9 @@ namespace lfs::training {
         lfs::core::Tensor frozen_mask_;
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
+        lfs::core::Tensor crop_score_mask_;
+        lfs::core::Tensor crop_roi_rows_;
+        float cropbox_growth_inside_ = 1.0f;
         float cropbox_lr_scale_ = 1.0f;
         bool per_splat_mean_step_ = false;
         float mean_step_median_extent_ = 0.0f;
@@ -243,7 +252,7 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_param(ParamType type, int iteration);
+        void step_param(ParamType type, int iteration, bool apply_sh_warmup);
         void validate_mean_step_far_mask();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 

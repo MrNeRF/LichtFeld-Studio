@@ -164,7 +164,7 @@ namespace lfs::training {
         bwd_grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
         bwd_grad_fc1_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
 
-        LOG_DEBUG("PPISPController: iterations={}, lr={:.2e}", total_iterations, config.lr);
+        LOG_DEBUG("PPISPController: iterations=%d, lr=%.2e", total_iterations, config.lr);
     }
 
     void PPISPController::preallocate_shared_buffers(const size_t max_H, const size_t max_W) {
@@ -183,7 +183,7 @@ namespace lfs::training {
         shared_buf_h_ = max_H;
         shared_buf_w_ = max_W;
 
-        LOG_INFO("[PPISPController] Shared buffers: {}x{}", max_H, max_W);
+        LOG_INFO("[PPISPController] Shared buffers: %zux%zu", max_H, max_W);
     }
 
     void PPISPController::release_shared_buffers() noexcept {

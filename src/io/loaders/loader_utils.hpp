@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "io/loader.hpp"
 #include <algorithm>
@@ -58,7 +59,7 @@ namespace lfs::io {
             const auto& cam = cameras[i];
             if (!cam->has_image())
                 continue;
-            auto ext = cam->image_path().extension().string();
+            auto ext = lfs::core::path_to_utf8(cam->image_path().extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".jpg" || ext == ".jpeg")
                 continue;

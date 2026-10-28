@@ -1350,14 +1350,14 @@ namespace lfs::core {
                             decommit_unused_memory(*arena, true);
                         } catch (const std::exception& e) {
                             LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
-                                      "(continuing teardown): {}",
+                                      "(continuing teardown): %s",
                                       e.what());
                         } catch (...) {
                             LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
                                       "(unknown; continuing teardown)");
                         }
                     } else {
-                        LOG_WARN("Skipping rasterizer arena decommit: device {} did not drain", device);
+                        LOG_WARN("Skipping rasterizer arena decommit: device %d did not drain", device);
                     }
                 }
             }
@@ -1370,7 +1370,7 @@ namespace lfs::core {
                 empty_cuda_cache();
             } catch (const std::exception& e) {
                 LOG_ERROR("RasterizerMemoryArena full_reset empty_cuda_cache failed "
-                          "(continuing teardown): {}",
+                          "(continuing teardown): %s",
                           e.what());
             } catch (...) {
                 LOG_ERROR("RasterizerMemoryArena full_reset empty_cuda_cache failed "
@@ -1937,15 +1937,15 @@ namespace lfs::core {
                 if (shrunk_size != 0 && shrunk_size <= old_size) {
                     arena.committed_size = shrunk_size;
                     arena.capacity = shrunk_size;
-                    LOG_DEBUG("Shrank external arena '{}' from {} MiB to {} MiB "
-                              "(trainer_peak={} MiB, viewer_high_water={} MiB)",
+                    LOG_DEBUG("Shrank external arena '%s' from %zu MiB to %zu MiB "
+                              "(trainer_peak=%zu MiB, viewer_high_water=%zu MiB)",
                               arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                               old_size >> 20,
                               shrunk_size >> 20,
                               recent_peak >> 20,
                               viewer_high_water >> 20);
                 } else if (shrunk_size != 0) {
-                    LOG_WARN("External arena '{}' shrink returned invalid size {} MiB (old {} MiB)",
+                    LOG_WARN("External arena '%s' shrink returned invalid size %zu MiB (old %zu MiB)",
                              arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                              shrunk_size >> 20,
                              old_size >> 20);

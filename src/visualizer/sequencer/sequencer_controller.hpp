@@ -124,6 +124,11 @@ namespace lfs::vis {
         }
         void clearKeyframes();
         void clear();
+        void setRevealClip(std::optional<sequencer::RevealClip> clip);
+        using RevealCommitCallback = std::function<void(std::optional<sequencer::RevealClip>, std::optional<sequencer::RevealClip>, float, float)>;
+        void setRevealCommitCallback(RevealCommitCallback callback) { reveal_commit_callback_ = std::move(callback); }
+        void beginRevealEdit();
+        void endRevealEdit();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
         [[nodiscard]] nlohmann::json saveToJson() const;
@@ -148,6 +153,7 @@ namespace lfs::vis {
         bool selectKeyframeById(sequencer::KeyframeId id);
         void deselectKeyframe();
         [[nodiscard]] std::optional<size_t> selectedKeyframe() const;
+        [[nodiscard]] std::optional<size_t> adjacentKeyframeIndex(int direction) const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> selectedKeyframeId() const { return selected_keyframe_id_; }
         [[nodiscard]] bool hasSelection() const { return selected_keyframe_id_.has_value(); }
 
@@ -208,6 +214,12 @@ namespace lfs::vis {
         KeyframeTimeCommitCallback keyframe_time_commit_callback_;
 
         ClipDurationCommitCallback clip_duration_commit_callback_;
+        RevealCommitCallback reveal_commit_callback_;
+        struct PendingRevealEdit {
+            std::optional<sequencer::RevealClip> clip;
+            float duration;
+        };
+        std::optional<PendingRevealEdit> pending_reveal_edit_;
     };
 
 } // namespace lfs::vis

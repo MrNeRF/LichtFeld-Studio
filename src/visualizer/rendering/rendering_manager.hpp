@@ -97,6 +97,7 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             VulkanContext* vulkan_context = nullptr;
+            bool deterministic_export = false;
             bool preparing_import = false;
             core::Uuid provisional_import_node;
         };
@@ -185,7 +186,8 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
@@ -196,6 +198,11 @@ namespace lfs::vis {
                                                                   std::optional<float> ortho_scale_override = std::nullopt,
                                                                   int reference_height = 0,
                                                                   bool equirectangular = false);
+
+        std::shared_ptr<lfs::core::Tensor> renderLightFieldViewRgb8(
+            SceneManager* scene_manager, const glm::mat3& rotation, const glm::vec3& position,
+            int width, int height, float fov_degrees, float principal_shift_x,
+            float near_distance, float far_distance);
 
         // Image + per-pixel linear depth from the same viewport render. When
         // expected_depth is true, depth is alpha-weighted expected depth instead
@@ -229,7 +236,8 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
@@ -296,6 +304,16 @@ namespace lfs::vis {
         }
 
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
+        void setSequencerReveal(std::optional<lfs::rendering::GaussianRevealState> reveal) {
+            if (sequencer_reveal_ == reveal)
+                return;
+            sequencer_reveal_ = reveal;
+            markDirty(DirtyFlag::SPLATS, FrameReason::SettingsChange);
+        }
+
+        [[nodiscard]] bool revealMovesSplats() const {
+            return sequencer_reveal_ && (sequencer_reveal_->effect <= 8 || sequencer_reveal_->effect == 10);
+        }
 
         // Interactive edits validate changed environment maps before committing settings.
         [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings);
@@ -303,6 +321,7 @@ namespace lfs::vis {
         // Settings management (also used for restoring saved state).
         void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
+        bool setViewportRenderMode(std::string_view mode);
         void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
         struct CameraProjectionSettings {
@@ -525,6 +544,15 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
             return viewport_overlay_service_.cursorPreview().panel;
         }
+        // True when the active cursor preview already highlights this splat with this preview selection.
+        [[nodiscard]] bool cursorPreviewShows(const int focused_gaussian_id, const bool add_mode,
+                                              const std::optional<SplitViewPanelId> panel,
+                                              const lfs::core::Tensor* const preview_selection) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            return cursor.active && cursor.focused_gaussian_id == focused_gaussian_id &&
+                   cursor.add_mode == add_mode && cursor.panel == panel &&
+                   cursor.preview_selection == preview_selection;
+        }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
             const auto& cursor = viewport_overlay_service_.cursorPreview();
             x = cursor.x;
@@ -666,6 +694,17 @@ namespace lfs::vis {
                                     int parent_node_index) {
             viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
         }
+        void setCropPolygonGizmoState(bool active, const std::vector<glm::vec2>& vertices, float half_depth,
+                                      const glm::mat4& world_transform, bool affects_render,
+                                      int parent_node_index) {
+            viewport_overlay_service_.setCropPolygon(active, vertices, half_depth, world_transform, affects_render,
+                                                     parent_node_index);
+        }
+        void setCropPolygonGizmoActive(bool active) { viewport_overlay_service_.setCropPolygonActive(active); }
+        // Polygon outline being drawn (visualizer world); empty clears the preview.
+        void setCropPolygonDraft(std::vector<glm::vec3> points, std::optional<glm::vec3> cursor) {
+            viewport_overlay_service_.setCropPolygonDraft(std::move(points), cursor);
+        }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
         [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
@@ -741,7 +780,10 @@ namespace lfs::vis {
             std::optional<glm::vec3> background_color_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true,
+            bool deterministic_export = true);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -761,7 +803,9 @@ namespace lfs::vis {
             std::optional<bool> transparent_background_override,
             float rasterization_scale = 1.0f,
             bool deterministic_export = false,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            const RenderSettings* settings_override = nullptr,
+            bool gaussian_selection_visible = true);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -791,7 +835,8 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            bool deterministic_export = true);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;
@@ -889,6 +934,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        bool last_vksplat_object_outline_ = false;
         std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
         void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
         glm::ivec2 last_nonzero_viewport_size_{0, 0};
@@ -1029,6 +1075,7 @@ namespace lfs::vis {
         bool has_training_preview_iteration_ = false;
 
         RenderAnimationState animation_state_;
+        std::optional<lfs::rendering::GaussianRevealState> sequencer_reveal_;
         FramebufferViewportRect framebuffer_viewport_rect_;
         ViewportArtifactService viewport_artifact_service_;
         std::unique_ptr<ViewportInteropService> viewport_interop_;
@@ -1074,6 +1121,7 @@ namespace lfs::vis {
         friend class SceneManager;
         friend class AlignDepthIntegrationTest;
         friend struct SplitOutputLifetimeTestAccess;
+        friend struct HiGSExportTestAccess;
     };
 
 } // namespace lfs::vis

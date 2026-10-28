@@ -73,6 +73,7 @@ namespace lfs::vis {
         glm::mat4 projection{1.0f};
         glm::mat4 view_projection{1.0f};
         glm::vec3 view_position{0.0f, 0.0f, 0.0f};
+        glm::vec3 pivot{0.0f, 0.0f, 0.0f};
         int plane = 2;
         float opacity = 1.0f;
         bool orthographic = false;
@@ -133,6 +134,7 @@ namespace lfs::vis {
         glm::mat4 grid_projection{1.0f};
         glm::mat4 grid_view_projection{1.0f};
         glm::vec3 grid_view_position{0.0f, 0.0f, 0.0f};
+        glm::vec3 grid_pivot{0.0f, 0.0f, 0.0f};
         int grid_plane = 2;
         float grid_opacity = 1.0f;
         bool grid_orthographic = false;

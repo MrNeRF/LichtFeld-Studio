@@ -4,16 +4,48 @@
   <link type="text/rcss" href="histogram_panel.rcss"/>
 </head>
 <body template="docked-panel" data-model="histogram_panel">
-  <div id="histogram-shell" data-class-is-floating="is_floating">
-    <div id="histogram-floating-header" class="hidden" data-class-hidden="!is_floating">
-      <span id="histogram-floating-title">{{ panel_label }}</span>
-      <div class="histogram-panel-actions histogram-panel-actions--floating">
-        <button class="btn btn--secondary histogram-panel-action"
+  <div id="histogram-shell">
+    <div id="histogram-toolbar">
+      <div class="histogram-toolbar-row">
+        <label class="histogram-toolbar-item" for="histogram-field">
+          <span class="control-label">{{ field_label }}</span>
+          <select id="histogram-field" class="histogram-select" data-value="metric_id" data-attr-title="metric_description">
+            <option data-for="option : metric_options" data-attr-value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+        <label class="histogram-toolbar-item" for="histogram-compare-field">
+          <span class="control-label">{{ compare_with_label }}</span>
+          <select id="histogram-compare-field" class="histogram-select" data-value="compare_metric_id">
+            <option data-for="option : compare_metric_options" data-attr-value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_histogram_bins_control">
+          <label class="control-label" for="scrub-histogram-bin-count" data-reset-prop="histogram_bin_count">{{ histogram_bins_label }}</label>
+          <div class="histogram-bin-scrub">
+            <input id="histogram-bin-input" type="range" class="setting-slider" data-value="histogram_bin_count" min="16" max="128" step="1" />
+          </div>
+        </div>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_compare_bins_controls">
+          <label class="control-label" for="scrub-compare-x-bin-count" data-reset-prop="compare_x_bin_count">{{ compare_x_bins_label }}</label>
+          <div class="histogram-bin-scrub">
+            <input id="x-bin-input" type="range" class="setting-slider" data-value="compare_x_bin_count" min="8" max="48" step="1" />
+          </div>
+        </div>
+        <div class="histogram-toolbar-item histogram-bin-control hidden" data-reset-row="1" data-class-hidden="!show_compare_bins_controls">
+          <label class="control-label" for="scrub-compare-y-bin-count" data-reset-prop="compare_y_bin_count">{{ compare_y_bins_label }}</label>
+          <div class="histogram-bin-scrub">
+            <input id="y-bin-input" type="range" class="setting-slider" data-value="compare_y_bin_count" min="8" max="48" step="1" />
+          </div>
+        </div>
+        <label class="histogram-toolbar-item histogram-log-control">
+          <input id="histogram-log-scale" type="checkbox" data-checked="log_scale_enabled" />
+          <span class="control-label">{{ log_scale_label }}</span>
+        </label>
+        <button id="histogram-dock-toggle" class="btn btn--secondary histogram-dock-toggle"
                 data-event-click="toggle_dock_mode()"><span class="btn-label">{{ dock_toggle_label }}</span></button>
-        <button class="btn btn--secondary histogram-panel-action"
-                data-event-click="close_panel()"><span class="btn-label">{{ close_label }}</span></button>
       </div>
     </div>
+
     <div id="histogram-empty" data-class-hidden="!show_empty_state">
       <div class="empty-card">
         <span class="empty-title">{{ empty_title }}</span>
@@ -24,13 +56,9 @@
     <div id="histogram-content"
          data-class-hidden="!show_chart">
       <div id="histogram-card" class="hidden" data-class-hidden="!show_histogram_card">
-        <div id="histogram-card-header">
-          <span id="histogram-summary">{{ summary_text }}</span>
-          <span id="histogram-bin-count">{{ bin_count_text }}</span>
-        </div>
 
         <div id="histogram-range-of-interest">
-          <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
+          <span class="range-of-interest-label" data-attr-title="range_text">{{ range_of_interest_label }}</span>
           <div class="histogram-range-controls">
             <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
             <span class="range-separator">–</span>
@@ -78,21 +106,21 @@
         </div>
 
         <div id="compare-content" class="hidden" data-class-hidden="!show_compare_chart">
-          <div id="compare-card-header">
-            <span id="compare-summary">{{ compare_summary_text }}</span>
-            <span id="compare-bin-count">{{ compare_bin_count_text }}</span>
-          </div>
 
           <div id="compare-range-of-interest">
-            <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
-            <span class="compare-axis-marker">X</span>
-            <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
-            <span class="range-separator">–</span>
-            <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
-            <span class="compare-axis-marker">Y</span>
-            <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
-            <span class="range-separator">–</span>
-            <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
+            <span class="range-of-interest-label" data-attr-title="range_text">{{ range_of_interest_label }}</span>
+            <div class="compare-range-controls">
+              <span class="compare-axis-marker">X</span>
+              <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" data-attrif-disabled="!range_inputs_ready" />
+              <span class="range-separator">–</span>
+              <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" data-attrif-disabled="!range_inputs_ready" />
+            </div>
+            <div class="compare-range-controls">
+              <span class="compare-axis-marker">Y</span>
+              <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
+              <span class="range-separator">–</span>
+              <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" data-attrif-disabled="!compare_y_range_inputs_ready" />
+            </div>
             <button class="btn btn--secondary range-reset"
                     data-event-click="reset_compare_range()"
                     data-attrif-disabled="!compare_has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
@@ -100,7 +128,6 @@
 
           <div id="compare-chart-shell">
             <div id="compare-y-axis">
-              <span class="axis-metric">{{ compare_y_metric_label }}</span>
               <div id="compare-y-axis-values">
                 <span class="axis-label">{{ compare_y_axis_max }}</span>
                 <span class="axis-label">{{ compare_y_axis_min }}</span>
@@ -138,155 +165,32 @@
       </div>
     </div>
 
-    <div id="histogram-hero">
-      <div class="hero-copy">
-        <span class="hero-eyebrow">{{ analysis_label }}</span>
-        <span class="hero-title">{{ metric_title }}</span>
-        <span class="hero-description">{{ metric_description }}</span>
-      </div>
-      <div id="histogram-docked-controls" class="hidden" data-class-hidden="is_floating">
-        <div class="histogram-toolbar-row">
-          <div class="histogram-toolbar-item histogram-toolbar-item--select">
-            <span class="control-label histogram-inline-label">{{ field_label }}</span>
-            <select class="histogram-select" data-value="metric_id">
-              <option data-for="option : metric_options" data-attr-value="option.value">{{ option.label }}</option>
-            </select>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--select">
-            <span class="control-label histogram-inline-label">{{ compare_with_label }}</span>
-            <select class="histogram-select" data-value="compare_metric_id">
-              <option data-for="option : compare_metric_options" data-attr-value="option.value">{{ option.label }}</option>
-            </select>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--toggle">
-            <span class="control-label histogram-inline-label">{{ log_scale_label }}</span>
-            <label class="histogram-toggle-control">
-              <input type="checkbox" data-checked="log_scale_enabled" />
-            </label>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--slider hidden" data-class-hidden="!show_histogram_bins_control">
-            <span class="control-label histogram-inline-label">{{ histogram_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="histogram_bin_count"
-                   min="16"
-                   max="128"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ histogram_bin_count }}</span>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--compare-bins hidden" data-class-hidden="!show_compare_bins_controls">
-            <span class="control-label histogram-inline-label">{{ compare_x_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="compare_x_bin_count"
-                   min="8"
-                   max="48"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ compare_x_bin_count }}</span>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--compare-bins hidden" data-class-hidden="!show_compare_bins_controls">
-            <span class="control-label histogram-inline-label">{{ compare_y_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="compare_y_bin_count"
-                   min="8"
-                   max="48"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ compare_y_bin_count }}</span>
-          </div>
-          <div class="histogram-toolbar-item histogram-toolbar-item--action hidden"
-               data-class-hidden="is_floating">
-            <button class="btn btn--secondary histogram-panel-action"
-                    data-event-click="toggle_dock_mode()"><span class="btn-label">{{ dock_toggle_label }}</span></button>
-          </div>
-        </div>
-      </div>
-      <div id="histogram-floating-controls" class="hidden" data-class-hidden="!is_floating">
-        <div class="floating-controls-row">
-          <div class="floating-control-group floating-control-group--select">
-            <span class="control-label floating-control-label">{{ field_label }}</span>
-            <select class="histogram-select" data-value="metric_id">
-              <option data-for="option : metric_options" data-attr-value="option.value">{{ option.label }}</option>
-            </select>
-          </div>
-          <div class="floating-control-group floating-control-group--select">
-            <span class="control-label floating-control-label">{{ compare_with_label }}</span>
-            <select class="histogram-select" data-value="compare_metric_id">
-              <option data-for="option : compare_metric_options" data-attr-value="option.value">{{ option.label }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="floating-controls-row">
-          <div class="floating-control-group floating-control-group--toggle">
-            <span class="control-label floating-control-label">{{ log_scale_label }}</span>
-            <label class="histogram-toggle-control">
-              <input type="checkbox" data-checked="log_scale_enabled" />
-            </label>
-          </div>
-          <div class="floating-control-group floating-control-group--slider hidden" data-class-hidden="!show_histogram_bins_control">
-            <span class="control-label floating-control-label">{{ histogram_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="histogram_bin_count"
-                   min="16"
-                   max="128"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ histogram_bin_count }}</span>
-          </div>
-          <div class="floating-control-group floating-control-group--slider hidden" data-class-hidden="!show_compare_bins_controls">
-            <span class="control-label floating-control-label">{{ compare_x_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="compare_x_bin_count"
-                   min="8"
-                   max="48"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ compare_x_bin_count }}</span>
-          </div>
-          <div class="floating-control-group floating-control-group--slider hidden" data-class-hidden="!show_compare_bins_controls">
-            <span class="control-label floating-control-label">{{ compare_y_bins_label }}</span>
-            <input type="range"
-                   class="setting-slider histogram-setting-slider"
-                   data-value="compare_y_bin_count"
-                   min="8"
-                   max="48"
-                   step="1" />
-            <span class="slider-value histogram-slider-value">{{ compare_y_bin_count }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <div id="histogram-stats" data-class-hidden="!show_chart">
-      <div class="stat-card">
+      <div class="histogram-stat">
         <span class="stat-label">{{ samples_label }}</span>
         <span class="stat-value">{{ sample_count }}</span>
       </div>
-      <div class="stat-card">
-        <span class="stat-label">{{ range_label }}</span>
-        <span class="stat-value stat-value--small">{{ range_text }}</span>
-      </div>
-      <div class="stat-card">
+      <div class="histogram-stat">
         <span class="stat-label">{{ mean_label }}</span>
         <span class="stat-value">{{ mean_text }}</span>
       </div>
-      <div class="stat-card">
+      <div class="histogram-stat">
         <span class="stat-label">{{ median_label }}</span>
         <span class="stat-value">{{ median_text }}</span>
       </div>
-      <div class="stat-card">
+      <div class="histogram-stat">
         <span class="stat-label">{{ p95_label }}</span>
         <span class="stat-value">{{ p95_text }}</span>
       </div>
-      <div class="stat-card">
+      <div class="histogram-stat">
         <span class="stat-label">{{ peak_bin_label }}</span>
         <span class="stat-value">{{ peak_text }}</span>
       </div>
-      <div class="stat-card">
+      <div class="histogram-stat histogram-selection-stat">
         <span class="stat-label">{{ marked_label }}</span>
-        <span class="stat-value stat-value--small">{{ marked_range_text }}</span>
+        <span class="stat-value">{{ marked_range_text }}</span>
       </div>
-      <div class="stat-card">
+      <div class="histogram-stat" data-class-hidden="!has_marked_range">
         <span class="stat-label">{{ count_label }}</span>
         <span class="stat-value">{{ marked_count_text }}</span>
       </div>

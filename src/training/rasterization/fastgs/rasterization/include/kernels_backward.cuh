@@ -369,7 +369,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                         bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
                                                         2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
 
-            const float original_opacity = 1.0f / (1.0f + expf(-raw_opacities[primitive_idx]));
             const float grad_compensated_opacity = grad_opacity_helper[work_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
@@ -381,7 +380,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 }
             }
 
-            const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+            const float sigmoid_derivative = lfs::core::sigmoid_derivative_from_logit(raw_opacities[primitive_idx]);
             opacity_grads[0] = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                                opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
 
@@ -613,6 +612,21 @@ namespace fast_lfs::rasterization::kernels::backward {
         return -grad_alpha;
     }
 
+    __device__ __forceinline__ float3 background_color_at(
+        const BackgroundAlphaGradient& background,
+        const uint pixel_idx,
+        const uint n_pixels) {
+        if (background.bg_image != nullptr) {
+            return make_float3(background.bg_image[pixel_idx],
+                               background.bg_image[n_pixels + pixel_idx],
+                               background.bg_image[2 * n_pixels + pixel_idx]);
+        }
+        if (background.bg_color != nullptr) {
+            return make_float3(background.bg_color[0], background.bg_color[1], background.bg_color[2]);
+        }
+        return make_float3(0.0f);
+    }
+
     __device__ __forceinline__ int reverse_tile_primitive_idx(const int T_eff, const int reverse_i) {
         return T_eff - reverse_i - 1;
     }
@@ -639,8 +653,10 @@ namespace fast_lfs::rasterization::kernels::backward {
     // WARP_BWD_WALK_BEGIN / WARP_BWD_WALK_END mark the reverse-walk body: zero
     // The sync-count assertion depends on the block.sync and __syncthreads calls below.
     // ---------------------------------------------------------------------------
-    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, int WARP_CULL_MODE = 0>
-    __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
+    // The removal-impact walk keeps a colour composite per pixel live; at 8 blocks per SM it spills
+    // on every fragment, at 6 it fits in registers and runs faster.
+    template <DensificationType DENSIFICATION_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE = 0, bool COLOR_VARIANCE = false>
+    __global__ void __launch_bounds__(config::block_size_blend_backward, IMPACT_SCORE ? 6 : 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const uint* __restrict__ primitive_work_indices,
@@ -667,6 +683,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
         float* __restrict__ edge_score_out,
+        float* __restrict__ impact_sum_out,
+        float* __restrict__ impact_peak_out,
         FastGSForwardStatus* __restrict__ status,
         const uint n_instances,
         const uint n_primitives,
@@ -674,7 +692,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint width,
         const uint height,
         const uint grid_width,
-        const int blend_batch_size_runtime) {
+        const int blend_batch_size_runtime,
+        const ColorVarianceLoss color_variance = {}) {
         (void)image;
         (void)alpha_map;
         auto block = cg::this_thread_block();
@@ -775,6 +794,46 @@ namespace fast_lfs::rasterization::kernels::backward {
                              : make_float3(0.0f);
         float grad_T0 = inside0 ? background_transmittance_grad(background_grad, grad_c0, pixel_idx0, n_pixels) : 0.0f;
         float grad_T1 = inside1 ? background_transmittance_grad(background_grad, grad_c1, pixel_idx1, n_pixels) : 0.0f;
+        float3 target0 = make_float3(0.0f);
+        float3 target1 = make_float3(0.0f);
+        float variance_scale0 = 0.0f;
+        float variance_scale1 = 0.0f;
+        float variance_loss_local = 0.0f;
+        if constexpr (COLOR_VARIANCE) {
+            // The target is the expected splat color C = sum_i P(i) c_i / sum_i P(i): the forward
+            // color without the background, divided by the coverage sum_i P(i) = 1 - T_final.
+            // At this C, dL/dC = -2 sum_i P(i) (c_i - C) = 0, so holding it fixed below is exact.
+            // A covered pixel has coverage of at least min_alpha_threshold; an uncovered one has
+            // no fragments, so its target does not matter.
+            auto expected_color = [&](const bool inside, const uint idx, const float T_final) {
+                const float coverage = 1.0f - T_final;
+                if (!inside || !(coverage >= 0.5f * config::min_alpha_threshold))
+                    return make_float3(0.0f);
+                const float3 rendered = make_float3(image[idx], image[n_pixels + idx], image[2 * n_pixels + idx]);
+                return (rendered - T_final * background_color_at(background_grad, idx, n_pixels)) / coverage;
+            };
+            const float pixel_weight_sum =
+                color_variance.pixel_weight != nullptr ? *color_variance.pixel_weight_sum : 0.0f;
+            auto load_scale = [&](const bool inside, const uint idx) {
+                if (!inside)
+                    return 0.0f;
+                if (color_variance.pixel_weight == nullptr)
+                    return color_variance.weight / static_cast<float>(n_pixels);
+                return pixel_weight_sum > 0.0f
+                           ? color_variance.weight * color_variance.pixel_weight[idx] / pixel_weight_sum
+                           : 0.0f;
+            };
+            target0 = expected_color(inside0, pixel_idx0, T0);
+            target1 = expected_color(inside1, pixel_idx1, T1);
+            variance_scale0 = load_scale(inside0, pixel_idx0);
+            variance_scale1 = load_scale(inside1, pixel_idx1);
+        }
+        float3 behind0 = make_float3(0.0f);
+        float3 behind1 = make_float3(0.0f);
+        if constexpr (IMPACT_SCORE) {
+            behind0 = inside0 ? background_color_at(background_grad, pixel_idx0, n_pixels) : make_float3(0.0f);
+            behind1 = inside1 ? background_color_at(background_grad, pixel_idx1, n_pixels) : make_float3(0.0f);
+        }
         const float grad_d0 = (inside0 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx0] : 0.0f;
         const float grad_d1 = (inside1 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx1] : 0.0f;
         float3 grad_n0 = make_float3(0.0f);
@@ -1003,6 +1062,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                     }
 
                     BlendBackwardAccum accum = make_zero_blend_backward_accum();
+                    float impact_sum = 0.0f;
+                    float impact_peak = 0.0f;
                     bool has_contribution = false;
 
                     // Lambda-like: process one pixel's contribution into accum.
@@ -1010,7 +1071,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                 const float2 pixel, const float pixel_error,
                                                 const float edge_weight,
                                                 float& T, float3& grad_c, float& grad_T,
-                                                const float grad_d, const float3& grad_n) {
+                                                const float grad_d, const float3& grad_n,
+                                                float3& behind, const float3& target,
+                                                const float variance_scale) {
                         if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
                             return;
                         const float2 delta = mean2d - pixel;
@@ -1034,6 +1097,15 @@ namespace fast_lfs::rasterization::kernels::backward {
                         if (edge_score_out != nullptr) {
                             accum.edge_weighted_contribution += blending_weight * edge_weight;
                         }
+                        if constexpr (IMPACT_SCORE) {
+                            const float removal_impact = blending_weight *
+                                                         (fabsf(color.x - behind.x) +
+                                                          fabsf(color.y - behind.y) +
+                                                          fabsf(color.z - behind.z));
+                            impact_sum += removal_impact;
+                            impact_peak = fmaxf(impact_peak, removal_impact);
+                            behind = alpha * color + one_minus_alpha * behind;
+                        }
                         float normal_dot_grad = 0.0f;
                         if constexpr (NORMAL_CHANNEL) {
                             normal_dot_grad = dot(normal, grad_n);
@@ -1045,16 +1117,31 @@ namespace fast_lfs::rasterization::kernels::backward {
                             accum.densification_error_weighted += blending_weight * pixel_error;
                         }
 
-                        const float3 dL_dcolor = blending_weight * grad_c * color_grad_factor;
+                        float3 dL_dcolor = blending_weight * grad_c * color_grad_factor;
+                        float variance_cost = 0.0f;
+                        if constexpr (COLOR_VARIANCE) {
+                            const float3 residual = color - target;
+                            variance_cost = variance_scale * dot(residual, residual);
+                            // Differentiate the rendered [0, max_blend_color] colors.
+                            // Keep the photometric below-black recovery heuristic separate.
+                            const float3 positive = make_float3(color.x > 0.0f ? 1.0f : 0.0f,
+                                                                color.y > 0.0f ? 1.0f : 0.0f,
+                                                                color.z > 0.0f ? 1.0f : 0.0f);
+                            dL_dcolor += (2.0f * variance_scale * blending_weight) *
+                                         residual * positive * color_grad_factor;
+                            variance_loss_local += blending_weight * variance_cost;
+                        }
                         accum.color_x += dL_dcolor.x;
                         accum.color_y += dL_dcolor.y;
                         accum.color_z += dL_dcolor.z;
 
-                        const float dL_dalpha =
+                        float dL_dalpha =
                             dot(transmittance_before * color, grad_c) -
                             grad_transmittance_after * transmittance_before +
                             transmittance_before * depth * grad_d +
                             transmittance_before * normal_dot_grad;
+                        if constexpr (COLOR_VARIANCE)
+                            dL_dalpha += transmittance_before * variance_cost;
                         accum.compensated_opacity += alpha_saturated ? 0.0f : gaussian * dL_dalpha;
                         accum.depth += blending_weight * grad_d;
                         if constexpr (NORMAL_CHANNEL) {
@@ -1083,12 +1170,16 @@ namespace fast_lfs::rasterization::kernels::backward {
                                  alpha * depth * grad_d +
                                  alpha * normal_dot_grad +
                                  grad_transmittance_after * one_minus_alpha;
+                        // The same adjoint carries the complete occlusion tail (Eq. 36).
+                        // Its initial background value above has no variance term.
+                        if constexpr (COLOR_VARIANCE)
+                            grad_T += alpha * variance_cost;
                     };
 
                     accumulate_pixel(use0, inside0, last0, pixel0, pixel_error0, edge_weight0,
-                                     T0, grad_c0, grad_T0, grad_d0, grad_n0);
+                                     T0, grad_c0, grad_T0, grad_d0, grad_n0, behind0, target0, variance_scale0);
                     accumulate_pixel(use1, inside1, last1, pixel1, pixel_error1, edge_weight1,
-                                     T1, grad_c1, grad_T1, grad_d1, grad_n1);
+                                     T1, grad_c1, grad_T1, grad_d1, grad_n1, behind1, target1, variance_scale1);
 
                     // Warp-reduce → one global atomic per splat per warp.
                     const unsigned contrib_mask = __ballot_sync(0xffffffffu, has_contribution);
@@ -1125,6 +1216,14 @@ namespace fast_lfs::rasterization::kernels::backward {
                         const float edge_score = edge_score_out != nullptr
                                                      ? reduce_field(accum.edge_weighted_contribution)
                                                      : 0.0f;
+                        float reduced_impact_sum = 0.0f;
+                        float reduced_impact_peak = 0.0f;
+                        if constexpr (IMPACT_SCORE) {
+                            reduced_impact_sum = reduce_field(impact_sum);
+                            reduced_impact_peak = n_contrib == 1u
+                                                      ? __shfl_sync(0xffffffffu, impact_peak, src_lane)
+                                                      : lfs::core::warp_ops::warp_reduce_max(impact_peak);
+                        }
                         if (lane_id == 0u) {
                             atomicAdd(&grad_mean2d[work_idx].x, clamp_grad(mean_x));
                             atomicAdd(&grad_mean2d[work_idx].y, clamp_grad(mean_y));
@@ -1148,12 +1247,26 @@ namespace fast_lfs::rasterization::kernels::backward {
                             if (edge_score_out != nullptr) {
                                 atomicAdd(&edge_score_out[primitive_idx], edge_score);
                             }
+                            if constexpr (IMPACT_SCORE) {
+                                atomicAdd(&impact_sum_out[primitive_idx], reduced_impact_sum);
+                                if (reduced_impact_peak > 0.0f) {
+                                    atomicMax(reinterpret_cast<int*>(&impact_peak_out[primitive_idx]),
+                                              __float_as_int(reduced_impact_peak));
+                                }
+                            }
                         }
                     }
                 }
             }
             // WARP_BWD_WALK_END
             block.sync(); // end of batch: safe re-use of shared staging
+        }
+        if constexpr (COLOR_VARIANCE) {
+            if (color_variance.loss_out != nullptr) {
+                const float sum = lfs::core::warp_ops::block_reduce_sum(variance_loss_local);
+                if (thread_rank == 0)
+                    atomicAdd(color_variance.loss_out, sum);
+            }
         }
     }
 

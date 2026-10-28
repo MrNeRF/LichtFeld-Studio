@@ -6,7 +6,7 @@ from datetime import datetime
 from bisect import bisect_left
 from html import escape
 from itertools import islice
-from pathlib import Path
+from _lfs_path_io import Path
 import re
 import time
 

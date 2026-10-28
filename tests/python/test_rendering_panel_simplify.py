@@ -246,7 +246,9 @@ def test_simplify_window_close_is_available_without_source(rendering_panel_modul
     state.active = active
     listeners, enabled_calls = {}, []
     close = SimpleNamespace(add_event_listener=lambda event, handler: listeners.update({event: handler}))
-    doc = SimpleNamespace(get_element_by_id=lambda element_id: close if element_id == "close-btn" else None)
+    doc = SimpleNamespace(get_element_by_id=lambda element_id: close if element_id == "close-btn" else None,
+                          add_event_listener=lambda *_: None, set_attribute=lambda *_: None,
+                          has_attribute=lambda *_: False)
     monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: enabled_calls.append(args), raising=False)
     monkeypatch.setattr(panel._scrub_fields, "mount", lambda _doc: None)
     panel._reactive_binding = SimpleNamespace(

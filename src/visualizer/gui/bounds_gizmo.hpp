@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/line_renderer.hpp"
 
 #include <glm/glm.hpp>
@@ -52,8 +54,8 @@ namespace lfs::vis::gui {
 
     BoundsGizmoResult drawBoundsGizmo(const BoundsGizmoConfig& config);
 
-    [[nodiscard]] bool isBoundsGizmoHovered();
+    [[nodiscard]] LFS_VIS_API bool isBoundsGizmoHovered();
     [[nodiscard]] bool isBoundsGizmoActive();
-    void cancelBoundsGizmoDrag();
+    LFS_VIS_API void cancelBoundsGizmoDrag();
 
 } // namespace lfs::vis::gui

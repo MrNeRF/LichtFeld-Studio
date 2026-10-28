@@ -86,12 +86,20 @@ namespace lfs::vis {
         [[nodiscard]] bool isDatasetEditable() const;
         [[nodiscard]] bool canChangeStrategy(std::string_view strategy) const;
         [[nodiscard]] bool rejectsIterationLimit(std::size_t iterations) const;
+        [[nodiscard]] bool canChangeProperty(const core::prop::PropertyMeta& meta,
+                                             const std::any& current_value,
+                                             const std::any& new_value) const;
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
 
         // Link to scene for data access (Scene-based trainer mode)
         void setScene(core::Scene* scene) { scene_ = scene; }
+        // Publishes the training crop box to the trainer from the thread that owns the scene.
+        void syncCropBox();
+        // With "Crop to ROI at end" on, the training crop box that exports of the training model are cropped to.
+        // Read on the thread that owns the scene.
+        [[nodiscard]] std::optional<lfs::training::TrainingCropBoxGeometry> exportCropBox() const;
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control

@@ -3,7 +3,7 @@
 """Plugin data structures."""
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Optional, List, Any
 from enum import Enum
 import re
@@ -65,3 +65,4 @@ class PluginInstance:
     venv_path: Optional[Path] = None
     file_mtimes: dict = field(default_factory=dict)
     sys_paths: List[str] = field(default_factory=list)
+    needs_restart: bool = False

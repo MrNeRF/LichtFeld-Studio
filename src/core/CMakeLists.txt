@@ -79,7 +79,11 @@ set(CORE_SOURCES
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
+        collision_volume.cpp
+        collision_walk.cpp
+        collision_voxelization.cpp
         checkpoint_format.cpp
+        crop_polygon.cpp
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp

@@ -147,5 +147,44 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
                          r"pipeline_projection_forward = _ComputePipeline\(vksplatSkipBinding\(\d+, 8\)\)")
 
 
+    def test_overlay_param_layout_matches_between_host_and_shader(self):
+        # The host table and utils.slang name every slot twice; the polygon
+        # region must stay in step with both copies.
+        def evaluate(expression, values):
+            tree = ast.parse(expression.replace("/", "//"), mode="eval")
+            allowed = (ast.Expression, ast.BinOp, ast.Constant, ast.Name, ast.Load,
+                       ast.Add, ast.Sub, ast.Mult, ast.FloorDiv)
+            self.assertTrue(all(isinstance(node, allowed) for node in ast.walk(tree)), expression)
+            return eval(compile(tree, "<layout>", "eval"), {"__builtins__": {}}, values)
+
+        max_vertices = int(re.search(r"kMaxVertices\s*=\s*(\d+);",
+                                     read(ROOT / "src/core/include/core/crop_polygon.hpp")).group(1))
+        host = read(ROOT / "src/visualizer/rendering/vksplat_overlay_params.hpp")
+        enum = host[host.index("enum ParamIndex"):]
+        enum = enum[enum.index("{") + 1:enum.index("};")]
+        host_values = {"kMaxVertices": max_vertices}
+        for name, expression in re.findall(r"(\w+)\s*=\s*([^,]+),", enum):
+            host_values[name] = evaluate(expression.replace("lfs::core::crop_polygon::", ""), host_values)
+        shader_values = {}
+        for name, expression in re.findall(r"static const uint (OVERLAY_PARAM_\w+)\s*=\s*([^;]+);",
+                                           read(SHADERS / "utils.slang")):
+            shader_values[name] = evaluate(expression, shader_values)
+        pairs = {
+            "EllipsoidExtraBase": "OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE",
+            "CropPolygonBase": "OVERLAY_PARAM_CROP_POLYGON_BASE",
+            "CropPolygonParams": "OVERLAY_PARAM_CROP_POLYGON_PARAMS",
+            "CropPolygonTransform": "OVERLAY_PARAM_CROP_POLYGON_TRANSFORM",
+            "CropPolygonVertices": "OVERLAY_PARAM_CROP_POLYGON_VERTICES",
+            "CropPolygonParamStride": "OVERLAY_PARAM_CROP_POLYGON_STRIDE",
+            "CropPolygonCount": "OVERLAY_PARAM_CROP_POLYGON_COUNT",
+            "RevealParams": "OVERLAY_PARAM_REVEAL",
+            "RevealEffectBounds": "OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS",
+            "ParamCount": "OVERLAY_PARAM_COUNT",
+            "kMaxVertices": "OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES",
+        }
+        for host_name, shader_name in pairs.items():
+            with self.subTest(slot=host_name):
+                self.assertEqual(host_values[host_name], shader_values[shader_name])
+
 if __name__ == "__main__":
     unittest.main()

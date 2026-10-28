@@ -750,7 +750,8 @@ namespace lfs::io::project {
                 capabilities.set(SIDECAR_OVERLAY_V1);
             }
             for (const auto& [key, row] : rows) {
-                (void)key;
+                if (row.row_kind != RowKind::Tombstone && key.fourcc == FOURCC_COLV)
+                    capabilities.set(COLLISION_VOLUMES_V1);
                 if (row.row_kind == RowKind::Live) {
                     if (row.compression == Compression::ZstdFramed) {
                         capabilities.set(CHUNK_ZSTD_V1);
@@ -2821,6 +2822,8 @@ namespace lfs::io::project {
         CapabilitySet writer_capabilities = derive_writer_capabilities(
             impl_->superblock.role, impl_->used_opaque_carry_forward,
             impl_->used_clean_proof_reuse, preserve_legacy_fixture_envelope);
+        if (reader_capabilities.contains(COLLISION_VOLUMES_V1))
+            writer_capabilities.set(COLLISION_VOLUMES_V1);
         reader_capabilities |= options.extra_reader_capabilities;
         writer_capabilities |= options.extra_writer_capabilities;
         if (impl_->prior_reader.has_value()) {

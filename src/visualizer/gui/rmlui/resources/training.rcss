@@ -166,21 +166,8 @@ body {
     margin-top: 0;
 }
 
-.training-subsection-title {
-    padding-top: 6dp;
-    border-top-width: 1dp;
-    margin-bottom: 4dp;
-    font-size: 12dp;
-    font-weight: bold;
-}
-
 .training-panel-block > .training-subsection:first-child {
     margin-top: 0;
-}
-
-.training-panel-block > .training-subsection:first-child > .training-subsection-title {
-    padding-top: 0;
-    border-top-width: 0;
 }
 
 .training-subsection > .section-header {
@@ -297,7 +284,8 @@ loss-graph {
     display: block;
 }
 
-.mask-settings-group {
+.mask-settings-group,
+.sharpen-settings-group {
     margin: 3dp 0 6dp 8dp;
     padding: 2dp 0 2dp 8dp;
     border-left-width: 1dp;

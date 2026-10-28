@@ -241,7 +241,8 @@ namespace gsplat_lfs {
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
         RasterizeWithSHResult& result,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds) {
         gsplat_lfs::debug_validate_cuda_pointer(means, "means");
         gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -293,7 +294,7 @@ namespace gsplat_lfs {
             spherical_harmonics_swizzled_fwd(
                 sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
                 sh0, shN, nullptr, static_cast<int64_t>(C) * N,
-                result.colors, channels, stream);
+                result.colors, channels, stream, sh_value_bounds);
         }
         if (channels != 3) {
             geometry_features_fwd(means, quats, scales, viewmats0, result.colors,
@@ -410,7 +411,8 @@ namespace gsplat_lfs {
         const float* edge_weight_map,
         float* edge_score_out,
         cudaStream_t stream,
-        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss) {
+        const std::vector<TileBatch>& batches, int32_t* tiles_per_gauss,
+        const float* sh_value_bounds) {
         // Determine output channels
         uint32_t channels = 3;
         if (render_mode == 1 || render_mode == 2) {
@@ -491,7 +493,7 @@ namespace gsplat_lfs {
                 v_sh_coeffs,
                 nullptr, // v_dirs
                 channels,
-                stream);
+                stream, sh_value_bounds);
         }
 
         // Apply scaling modifier to scale gradients

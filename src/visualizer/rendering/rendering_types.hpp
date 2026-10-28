@@ -303,6 +303,12 @@ namespace lfs::vis {
         // Ellipsoid (data stored in scene graph EllipsoidData, these are UI toggles only)
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
+        bool selection_outline = false;
+        float selection_outline_opacity = 1.0f;
+        float selection_outline_width = 2.0f;
+        float selection_outline_threshold = 0.5f;
+        bool selection_outline_holes = true;
+        glm::vec3 selection_outline_color{0.0f, 0.604f, 0.733f};
         bool desaturate_unselected = false;     // Desaturate unselected PLYs when one is selected
         bool desaturate_cropping = false;       // Desaturate outside crop box/ellipsoid instead of hiding
         bool hide_outside_depth_box = false;    // Hide gaussians outside the selection depth box
@@ -319,6 +325,9 @@ namespace lfs::vis {
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
+        lfs::rendering::GaussianTransparencyMode transparency_mode =
+            lfs::rendering::GaussianTransparencyMode::AlphaBlend;
+        int stochastic_max_frames = lfs::rendering::DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
 
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -336,6 +345,7 @@ namespace lfs::vis {
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
+        float collision_preview_opacity = 0.4f;
 
         // Point cloud
         bool point_cloud_mode = false;

@@ -344,6 +344,7 @@ Python variable to `None` does not unregister them.
 | `look_at(eye, target, up=(0,1,0))`                    | `(Tensor, Tensor)` | Compute `(rotation, translation)` for rendering |
 | `render_view(rotation, translation, width, height, fov=60, bg_color=None, with_depth=False, depth_mode='median')` | `Tensor \| tuple \| None` | Render active scene from camera |
 | `render_view_u8(rotation, translation, width, height, fov=60, bg_color=None, orthographic=None, ortho_scale=None)` | `Tensor \| None` | Render active scene as CPU uint8 RGB |
+| `render_lightfield_view_u8(rotation, translation, width, height, fov=60, shift_x=0, near_distance=0, far_distance=100000)` | `Tensor \| None` | Off-axis CPU uint8 RGB view with per-call clipping and hidden selection highlights |
 | `render_at(eye, target, width, height, fov=60, up=(0,1,0), bg_color=None)` | `Tensor \| None` | Convenience look-at render |
 | `render_asset_preview(path, width=512, height=224, focal_length_mm=35)` | `Tensor \| None` | Offscreen asset thumbnail without mutating live scene |
 | `render_asset_preview_from_camera(path, eye, target, ...)` | `Tensor \| None` | Offscreen thumbnail from custom camera |
@@ -356,6 +357,14 @@ Python variable to `None` does not unregister them.
 `(image, depth)` with CPU float depth `[H,W]`. `bg_color` is accepted for
 compatibility, but the Vulkan preview uses the current render settings.
 A missing visualizer/capture is represented by `None`.
+
+`render_lightfield_view_u8()` uses parallel perspective cameras with a horizontal
+principal-point offset (`shift_x`, in pixels). Its finite clipping distances must
+satisfy `0 <= near_distance < far_distance`; clipping tests Gaussian centers, not
+their tails. Selection highlighting is hidden without clearing the selection,
+and viewport/model state is unchanged. Views are limited to 2048 x 2048 pixels.
+See [light-field rendering](../development/lightfield_rendering.md) for quilt
+camera geometry and the opt-in GUI regression test.
 
 ## Viewport Control
 

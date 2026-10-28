@@ -134,6 +134,11 @@ namespace lfs::io::video {
             width_ = opts.width;
             height_ = opts.height;
             framerate_ = opts.framerate;
+            framerate_denominator_ = opts.framerate_denominator;
+            render_size_ = opts.spherical_video ? VideoFrameGeometry{width_, height_} : videoCameraRenderSize(width_, height_, opts.camera_width, opts.camera_height, opts.framing);
+            mapping_ = videoFrameMapping(render_size_.width, render_size_.height, width_, height_, opts.framing);
+            reframe_ = !opts.spherical_video && opts.camera_width > 0 &&
+                       (render_size_.width != width_ || render_size_.height != height_);
             y_plane_bytes_ = static_cast<size_t>(width_) * static_cast<size_t>(height_);
             uv_plane_bytes_ = y_plane_bytes_ / 4;
 
@@ -147,6 +152,15 @@ namespace lfs::io::video {
                 }
             }
 
+            if (reframe_) {
+                if (auto result = checkCuda(cudaMalloc(reinterpret_cast<void**>(&reframed_rgb_),
+                                                       y_plane_bytes_ * 3 * sizeof(float)),
+                                            "Video reframing allocation");
+                    !result) {
+                    cleanup();
+                    return result;
+                }
+            }
             is_open_ = true;
             frame_count_ = 0;
             return {};
@@ -164,7 +178,7 @@ namespace lfs::io::video {
             if (!rgb_gpu_ptr) {
                 return std::unexpected("GPU frame pointer is null");
             }
-            if (width != width_ || height != height_) {
+            if (width != render_size_.width || height != render_size_.height) {
                 return std::unexpected("Frame size mismatch");
             }
 
@@ -173,8 +187,14 @@ namespace lfs::io::video {
             // Keep the expected-based API non-throwing so the GUI export
             // jthread is not terminate-on-exception (Phase 6B-3c-2).
             try {
-                return use_nvenc_ ? writeFrameNvenc(rgb_gpu_ptr, stream)
-                                  : writeFrameX264Gpu(rgb_gpu_ptr, stream);
+                const void* input = rgb_gpu_ptr;
+                if (reframe_) {
+                    reframeRgbCuda(static_cast<const float*>(input), reframed_rgb_, width, height,
+                                   width_, height_, mapping_, stream);
+                    input = reframed_rgb_;
+                }
+                return use_nvenc_ ? writeFrameNvenc(input, stream)
+                                  : writeFrameX264Gpu(input, stream);
             } catch (const lfs::Exception& e) {
                 lfs::Error error = lfs::Error(e.error())
                                        .with_context("write video frame", LFS_SOURCE_SITE_CURRENT(),
@@ -226,7 +246,7 @@ namespace lfs::io::video {
                 return "encoder unavailable";
             }
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(
                 &fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
@@ -244,12 +264,13 @@ namespace lfs::io::video {
 
             codec_ctx_->width = width_;
             codec_ctx_->height = height_;
-            codec_ctx_->time_base = AVRational{1, framerate_};
-            codec_ctx_->framerate = AVRational{framerate_, 1};
+            codec_ctx_->time_base = AVRational{framerate_denominator_, framerate_};
+            codec_ctx_->framerate = AVRational{framerate_, framerate_denominator_};
+            codec_ctx_->sample_aspect_ratio = AVRational{1, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_CUDA;
             codec_ctx_->colorspace = AVCOL_SPC_SMPTE170M;
             codec_ctx_->color_range = AVCOL_RANGE_MPEG;
-            codec_ctx_->gop_size = framerate_;
+            codec_ctx_->gop_size = std::max(1, static_cast<int>(std::lround(static_cast<double>(framerate_) / framerate_denominator_)));
             codec_ctx_->max_b_frames = 0;
 
             av_opt_set(codec_ctx_->priv_data, "preset", "p4", 0);
@@ -338,7 +359,7 @@ namespace lfs::io::video {
                 return "packet allocation failed";
 
             use_nvenc_ = true;
-            LOG_INFO("NVENC: {}x{} @ {} fps", width_, height_, framerate_);
+            LOG_INFO("NVENC: {}x{} @ {} fps", width_, height_, static_cast<double>(framerate_) / framerate_denominator_);
             return std::nullopt;
         }
 
@@ -346,7 +367,7 @@ namespace lfs::io::video {
             const std::filesystem::path& path,
             const VideoExportOptions& opts) {
 
-            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            const std::string path_utf8 = lfs::core::path_to_native_utf8(path);
 
             int ret = avformat_alloc_output_context2(
                 &fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
@@ -372,12 +393,13 @@ namespace lfs::io::video {
 
             codec_ctx_->width = width_;
             codec_ctx_->height = height_;
-            codec_ctx_->time_base = AVRational{1, framerate_};
-            codec_ctx_->framerate = AVRational{framerate_, 1};
+            codec_ctx_->time_base = AVRational{framerate_denominator_, framerate_};
+            codec_ctx_->framerate = AVRational{framerate_, framerate_denominator_};
+            codec_ctx_->sample_aspect_ratio = AVRational{1, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
             codec_ctx_->colorspace = AVCOL_SPC_SMPTE170M;
             codec_ctx_->color_range = AVCOL_RANGE_MPEG;
-            codec_ctx_->gop_size = framerate_;
+            codec_ctx_->gop_size = std::max(1, static_cast<int>(std::lround(static_cast<double>(framerate_) / framerate_denominator_)));
             codec_ctx_->max_b_frames = 2;
             codec_ctx_->thread_count = 0;
 
@@ -441,7 +463,7 @@ namespace lfs::io::video {
 
             if (const auto allocation = allocateGpuBuffers(); !allocation)
                 return allocation;
-            LOG_INFO("x264: {}x{} @ {} fps, CRF {}", width_, height_, framerate_, opts.crf);
+            LOG_INFO("x264: {}x{} @ {} fps, CRF {}", width_, height_, static_cast<double>(framerate_) / framerate_denominator_, opts.crf);
             return {};
         }
 
@@ -653,6 +675,11 @@ namespace lfs::io::video {
                 frame_ = nullptr;
             }
 
+            if (reframed_rgb_) {
+                if (const auto result = checkCuda(cudaFree(reframed_rgb_), "Video reframing release"); !result)
+                    LOG_WARN("{}", result.error());
+                reframed_rgb_ = nullptr;
+            }
             cleanupHwContexts();
             is_open_ = false;
             use_nvenc_ = false;
@@ -677,6 +704,11 @@ namespace lfs::io::video {
         int width_ = 0;
         int height_ = 0;
         int framerate_ = DEFAULT_FRAMERATE;
+        int framerate_denominator_ = 1;
+        VideoFrameGeometry render_size_{};
+        VideoFrameMapping mapping_{};
+        float* reframed_rgb_ = nullptr;
+        bool reframe_ = false;
         int64_t frame_count_ = 0;
         size_t y_plane_bytes_ = 0;
         size_t uv_plane_bytes_ = 0;

@@ -41,15 +41,6 @@ namespace lfs::core {
         const UndistortParams& params, int actual_src_width, int actual_src_height,
         int resize_factor, int max_width);
 
-    // Maps normalized camera coordinates through the encoded camera model.
-    void distort_normalized_point(
-        const UndistortParams& params, float x, float y, float& distorted_x, float& distorted_y);
-
-    // Inverts a distorted image pixel to normalized camera coordinates.
-    bool undistort_image_point(
-        const UndistortParams& params, float image_x, float image_y,
-        float& normalized_x, float& normalized_y);
-
     Tensor undistort_image(const Tensor& src, const UndistortParams& params,
                            cudaStream_t stream);
 

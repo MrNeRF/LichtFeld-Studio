@@ -100,6 +100,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::SidebarInputDispatchTest;
 
         // Registered after Python on_mount. Panel-specific close handlers run
         // first; this listener does not stop the click.

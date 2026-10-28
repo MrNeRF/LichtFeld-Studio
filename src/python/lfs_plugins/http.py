@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared HTTP helpers with a CA-bundle fallback for bundled Python runtimes."""
+"""Shared HTTP helpers with distrusted-CA hardening and a CA-bundle fallback for bundled Python runtimes."""
 
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import logging
 import os
@@ -11,6 +12,10 @@ from typing import Optional
 from .portal_security import redact
 
 _log = logging.getLogger(__name__)
+
+# eMudhra's compromised intermediate CAs. Windows still lists the roots behind them, and
+# OpenSSL ignores Windows' own distrust of them, so the bundled Python refuses them itself.
+_DISTRUSTED_CAFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "distrusted_cas.pem")
 
 
 def __getattr__(name):
@@ -41,21 +46,40 @@ def _load_ca_bundle_from_certifi() -> Optional[str]:
             _log.debug("Failed to resolve CA bundle from %s: %s", module_name, redact(exc))
             continue
 
-        if cafile and os.path.exists(cafile):
+        if cafile and os.path.exists(native_path(cafile)):
             return cafile
     return None
 
 
-@lru_cache(maxsize=1)
-def _fallback_ssl_context() -> Optional[object]:
+def _context_with_distrusted_cas_first():
+    """Create a client context whose store holds the distrusted CAs before any other CA.
+
+    OpenSSL keeps the first copy of a certificate added to a store. A distrusted
+    intermediate that arrives later as an ordinary CA, as Windows' "CA" store may
+    supply it, would otherwise stay trusted.
+    """
     import ssl
 
+    return ssl.create_default_context(cafile=_DISTRUSTED_CAFILE)
+
+
+@lru_cache(maxsize=1)
+def _system_ssl_context():
+    context = _context_with_distrusted_cas_first()
+    context.load_default_certs()
+    return context
+
+
+@lru_cache(maxsize=1)
+def _fallback_ssl_context() -> Optional[object]:
     cafile = _load_ca_bundle_from_certifi()
     if not cafile:
         return None
 
     try:
-        return ssl.create_default_context(cafile=cafile)
+        context = _context_with_distrusted_cas_first()
+        context.load_verify_locations(cafile=cafile)
+        return context
     except Exception as exc:
         _log.warning("Failed to create fallback SSL context from '%s': %s", cafile, redact(exc))
         return None
@@ -97,7 +121,7 @@ def urlopen(url, *, timeout: float, no_redirect: bool = False, **kwargs):
         return opener.open(url, timeout=timeout, **options)
 
     try:
-        return open_request(**kwargs)
+        return open_request(context=_system_ssl_context(), **kwargs)
     except Exception as exc:
         if not _is_cert_verify_error(exc):
             raise

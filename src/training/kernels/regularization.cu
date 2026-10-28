@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/sigmoid.cuh"
 #include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/regularization.cuh"
@@ -135,7 +136,7 @@ namespace lfs::training::kernels {
             local_sum += sigmoid_x;
 
             if (param_grads != nullptr) {
-                atomicAdd(&param_grads[idx], grad_scale * sigmoid_x * (1.0f - sigmoid_x));
+                atomicAdd(&param_grads[idx], grad_scale * lfs::core::sigmoid_derivative_from_logit(x));
             }
         }
 

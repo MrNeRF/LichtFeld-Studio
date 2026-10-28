@@ -5,6 +5,7 @@
 #include "texture_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/stb_file.hpp"
 #include <cassert>
 #include <limits>
 #include <stb_image.h>
@@ -18,7 +19,7 @@ namespace lfs::io::mesh {
         }
 
         TextureData tex;
-        auto* data = stbi_load(key.c_str(), &tex.width, &tex.height, &tex.channels, 4);
+        auto* data = lfs::core::stb_file::stb_load(path, &tex.width, &tex.height, &tex.channels, 4);
         if (!data) {
             LOG_ERROR("Failed to load texture: {}", key);
             return nullptr;

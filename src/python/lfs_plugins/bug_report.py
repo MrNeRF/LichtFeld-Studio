@@ -14,7 +14,7 @@ import socket
 import threading
 import urllib.parse
 from collections.abc import Mapping
-from pathlib import Path
+from _lfs_path_io import Path, logical_path, native_path
 from typing import Optional
 
 import lichtfeld as lf
@@ -162,7 +162,7 @@ def collect_diagnostics() -> dict[str, object]:
                     diagnostics[key] = dataset[key]
             data_path = dataset.get("data_path")
             if isinstance(data_path, (str, os.PathLike)) and os.fspath(data_path):
-                canonical_path = os.path.realpath(os.fspath(data_path))
+                canonical_path = str(Path(data_path).resolve())
                 diagnostics["dataset_fingerprint"] = hashlib.sha256(
                     os.fsencode(canonical_path)
                 ).hexdigest()[:12]
@@ -180,7 +180,9 @@ def _replace_path(text: str, raw_path: object, replacement: str) -> str:
     path = os.fspath(raw_path)
     if not path:
         return text
-    variants = {path, os.path.realpath(path)}
+    logical = logical_path(path)
+    canonical = str(Path(logical).resolve())
+    variants = {path, logical, canonical, native_path(canonical)}
     variants.update(value.rstrip("/\\") for value in tuple(variants))
     for value in sorted((value for value in variants if value), key=len, reverse=True):
         boundary = "" if value.endswith(("/", "\\")) else r"(?![A-Za-z0-9._-])"

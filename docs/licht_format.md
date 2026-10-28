@@ -51,11 +51,29 @@ not copied again, because generation 2's table of contents just points back at
 the bytes generation 1 already wrote. The preview thumbnail is a stored `THMB`
 chunk; the head stores only its locator, which updates atomically on publish.
 
+## Capability bits
+
+Each generation declares required reader and writer capabilities; a reader refuses
+requirements it does not implement. The canonical bit assignments are the
+[`CapabilityBit` enum](../src/io/include/io/project_container.hpp), rather than a
+second registry in this guide. Declaring an enum value does not enable support:
+bit 10 (`TILESET_REFERENCES`) remains reserved and unsupported, while collision
+volumes require bit 11 (`COLLISION_VOLUMES_V1`).
+
 ## Training and Edit Mode
 
 A `CKPT` chapter is resumable project state only while `SCNG` identifies the
 training-model node and binds that node to the checkpoint instance. Ordinary
 scene splats do not retain optimizer or training-session state.
+
+`PROJ.training_initialization` is optional. It stores `data_origin` (three finite
+floats), optional `scene_center` (three finite floats), and optional
+`init_reference_uuid` bound to a `REFS` row with key/kind `training_init`.
+The path and fingerprint live only in `REFS`. Untrained GUI reopen restores these
+values; a missing init file warns and falls back to the restored point cloud.
+Headless dataset-project adoption uses the stored init unless `--init` overrides
+it, and recomputes the origin and center on import. Older projects may omit the
+object; the format version is unchanged.
 
 Switching a completed or paused training session to Edit Mode is an explicit
 conversion: the current trained model becomes an editable splat, the training

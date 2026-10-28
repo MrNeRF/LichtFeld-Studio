@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "undo_entry.hpp"
+#include "core/collision.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
@@ -52,6 +53,16 @@ namespace lfs::vis::op {
                    lhs.flash_intensity == rhs.flash_intensity;
         }
 
+        bool cropPolygonsEqual(const lfs::core::CropPolygonData& lhs, const lfs::core::CropPolygonData& rhs) {
+            return lhs.vertices == rhs.vertices &&
+                   lhs.half_depth == rhs.half_depth &&
+                   lhs.inverse == rhs.inverse &&
+                   lhs.enabled == rhs.enabled &&
+                   lhs.color == rhs.color &&
+                   lhs.line_width == rhs.line_width &&
+                   lhs.flash_intensity == rhs.flash_intensity;
+        }
+
         std::string propertyUndoLabel(const std::string& property_path) {
             if (property_path.ends_with(".transform")) {
                 return "Set Transform";
@@ -74,6 +85,9 @@ namespace lfs::vis::op {
             }
             if (property_path.contains("ellipsoid")) {
                 return "ellipsoid";
+            }
+            if (property_path.contains("crop_polygon")) {
+                return "crop_polygon";
             }
             return "property";
         }
@@ -128,7 +142,8 @@ namespace lfs::vis::op {
             if (property_path.ends_with(".locked")) {
                 return DirtyFlag::OVERLAY;
             }
-            if (property_path.contains("crop_box") || property_path.contains("ellipsoid")) {
+            if (property_path.contains("crop_box") || property_path.contains("ellipsoid") ||
+                property_path.contains("crop_polygon")) {
                 return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
             }
             if (property_path.contains("scene_node")) {
@@ -286,6 +301,7 @@ namespace lfs::vis::op {
             else
                 node->training_enabled = target.training_enabled;
             node->payload_diverged = target.payload_diverged;
+            node->point_cloud_source = target.point_cloud_source;
             restorePlyPathForSnapshot(scene_manager, target.uuid, target.source_path);
         }
 
@@ -806,6 +822,7 @@ namespace lfs::vis::op {
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
             snapshot.payload_diverged = node.payload_diverged;
+            snapshot.point_cloud_source = node.point_cloud_source;
 
             if (node.parent_id != lfs::core::NULL_NODE) {
                 if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
@@ -835,6 +852,35 @@ namespace lfs::vis::op {
                    type == lfs::core::NodeType::KEYFRAME_GROUP;
         }
 
+        // Transient nodes and everything under them are not part of the
+        // document. They come and go without history, so history neither
+        // checks nor removes them, and whole-scene captures leave them out.
+        [[nodiscard]] bool isTransientSubtree(const lfs::core::Scene& scene,
+                                              const lfs::core::SceneNode& node) {
+            for (const auto* current = &node; current; current = scene.getNodeById(current->parent_id)) {
+                if (current->transient) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool isTransientOnly(const lfs::core::Scene& scene,
+                                           const lfs::core::SceneNode& node) {
+            return node.transient && std::ranges::all_of(node.children, [&](const lfs::core::NodeId child_id) {
+                       const auto* child = scene.getNodeById(child_id);
+                       return !child || isTransientOnly(scene, *child);
+                   });
+        }
+
+        // The training model as the document knows it: none while a transient
+        // preview is bound.
+        [[nodiscard]] lfs::core::Uuid documentTrainingModelUuid(const lfs::core::Scene& scene) {
+            const auto* const bound = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+            return bound && isTransientSubtree(scene, *bound) ? lfs::core::Uuid{}
+                                                              : scene.getTrainingModelNodeUuid();
+        }
+
         SceneGraphNodeSnapshot captureNodeSnapshot(const SceneManager& scene_manager,
                                                    const lfs::core::SceneNode& node,
                                                    const SceneGraphCaptureMode mode,
@@ -852,6 +898,8 @@ namespace lfs::vis::op {
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
             snapshot.payload_diverged = node.payload_diverged;
+            snapshot.point_cloud_source = node.point_cloud_source;
+            snapshot.transient = node.transient;
             snapshot.gaussian_count = node.gaussian_count.load(std::memory_order_acquire);
             snapshot.centroid = node.centroid;
 
@@ -893,6 +941,7 @@ namespace lfs::vis::op {
                 snapshot.payload_device = node.point_cloud->means.device();
                 snapshot.point_cloud = clonePointCloud(*node.point_cloud);
             }
+            snapshot.collision = node.collision;
             if (capture_payload && node.mesh) {
                 snapshot.payload_device = node.mesh->vertices.device();
                 snapshot.mesh = cloneMeshData(*node.mesh);
@@ -902,6 +951,9 @@ namespace lfs::vis::op {
             }
             if (capture_payload && node.ellipsoid) {
                 snapshot.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*node.ellipsoid);
+            }
+            if (capture_payload && node.crop_polygon) {
+                snapshot.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*node.crop_polygon);
             }
             if (capture_payload && node.keyframe) {
                 snapshot.keyframe = std::make_unique<lfs::core::KeyframeData>(*node.keyframe);
@@ -989,6 +1041,10 @@ namespace lfs::vis::op {
                 return;
             }
             switch (snapshot.type) {
+            case lfs::core::NodeType::COLLISION:
+                if (!snapshot.collision)
+                    throw HistoryCorruptionError("Collision payload is missing");
+                break;
             case lfs::core::NodeType::POINTCLOUD:
                 if (!snapshot.point_cloud &&
                     snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
@@ -1013,6 +1069,12 @@ namespace lfs::vis::op {
                 if (!snapshot.ellipsoid) {
                     throw HistoryCorruptionError(
                         "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::CROP_POLYGON:
+                if (!snapshot.crop_polygon) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore crop polygon node '" + snapshot.name + "': payload is missing");
                 }
                 break;
             case lfs::core::NodeType::CAMERA:
@@ -1209,6 +1271,9 @@ namespace lfs::vis::op {
                             desc.point_cloud = clonePointCloud(*snapshot.point_cloud);
                         }
                         break;
+                    case lfs::core::NodeType::COLLISION:
+                        desc.collision = snapshot.collision;
+                        break;
                     case lfs::core::NodeType::MESH:
                         if (!snapshot.mesh &&
                             snapshot.payload_hydration != lfs::core::PayloadHydrationState::Unloaded) {
@@ -1232,6 +1297,13 @@ namespace lfs::vis::op {
                                 "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
                         }
                         desc.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
+                        break;
+                    case lfs::core::NodeType::CROP_POLYGON:
+                        if (!snapshot.crop_polygon) {
+                            throw HistoryCorruptionError(
+                                "Cannot restore crop polygon node '" + snapshot.name + "': payload is missing");
+                        }
+                        desc.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*snapshot.crop_polygon);
                         break;
                     case lfs::core::NodeType::CAMERA:
                         if (!snapshot.camera) {
@@ -1361,6 +1433,8 @@ namespace lfs::vis::op {
                 total += tensorBytes(snapshot.point_cloud->scaling);
                 total += tensorBytes(snapshot.point_cloud->rotation);
             }
+            if (snapshot.collision)
+                total += snapshot.collision->words.size() * sizeof(uint32_t);
             if (snapshot.mesh) {
                 total += tensorBytes(snapshot.mesh->vertices);
                 total += tensorBytes(snapshot.mesh->normals);
@@ -1374,6 +1448,10 @@ namespace lfs::vis::op {
             }
             if (snapshot.ellipsoid) {
                 total += sizeof(*snapshot.ellipsoid);
+            }
+            if (snapshot.crop_polygon) {
+                total += sizeof(*snapshot.crop_polygon) +
+                         snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total += sizeof(*snapshot.keyframe);
@@ -1410,6 +1488,8 @@ namespace lfs::vis::op {
             if (snapshot.point_cloud) {
                 total += estimatePointCloudMemory(*snapshot.point_cloud);
             }
+            if (snapshot.collision)
+                total.cpu_bytes += snapshot.collision->words.size() * sizeof(uint32_t);
             if (snapshot.mesh) {
                 total += estimateMeshMemory(*snapshot.mesh);
             }
@@ -1418,6 +1498,10 @@ namespace lfs::vis::op {
             }
             if (snapshot.ellipsoid) {
                 total.cpu_bytes += sizeof(*snapshot.ellipsoid);
+            }
+            if (snapshot.crop_polygon) {
+                total.cpu_bytes += sizeof(*snapshot.crop_polygon) +
+                                   snapshot.crop_polygon->vertices.size() * sizeof(glm::vec2);
             }
             if (snapshot.keyframe) {
                 total.cpu_bytes += sizeof(*snapshot.keyframe);
@@ -1543,22 +1627,33 @@ namespace lfs::vis::op {
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
                 break;
+            case lfs::core::NodeType::COLLISION:
+                node.collision = snapshot.collision;
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
             case lfs::core::NodeType::MESH:
                 if (snapshot.mesh) {
                     node.mesh = cloneMeshData(*snapshot.mesh);
                     scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
                 }
                 break;
+            // Crop volumes are scene-graph state and leave the splat payload clean.
             case lfs::core::NodeType::CROPBOX:
                 if (snapshot.cropbox) {
                     node.cropbox = std::make_unique<lfs::core::CropBoxData>(*snapshot.cropbox);
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
             case lfs::core::NodeType::ELLIPSOID:
                 if (snapshot.ellipsoid) {
                     node.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+                }
+                break;
+            case lfs::core::NodeType::CROP_POLYGON:
+                if (snapshot.crop_polygon) {
+                    node.crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*snapshot.crop_polygon);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
                 }
                 break;
             case lfs::core::NodeType::CAMERA:
@@ -1568,13 +1663,15 @@ namespace lfs::vis::op {
                     node.image_path = lfs::core::path_to_utf8(node.camera->image_path());
                     node.mask_path = lfs::core::path_to_utf8(node.camera->mask_path());
                     node.depth_path = lfs::core::path_to_utf8(node.camera->depth_path());
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    // Cameras and keyframes are scene-graph state; announce the reinstated
+                    // node without marking a splat payload dirty.
+                    scene.notifyMutation(lfs::core::Scene::MutationType::NODE_ADDED);
                 }
                 break;
             case lfs::core::NodeType::KEYFRAME:
                 if (snapshot.keyframe) {
                     node.keyframe = std::make_unique<lfs::core::KeyframeData>(*snapshot.keyframe);
-                    scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                    scene.notifyMutation(lfs::core::Scene::MutationType::NODE_ADDED);
                 }
                 break;
             case lfs::core::NodeType::GROUP:
@@ -1608,6 +1705,7 @@ namespace lfs::vis::op {
                     existing->mesh.reset();
                     existing->cropbox.reset();
                     existing->ellipsoid.reset();
+                    existing->crop_polygon.reset();
                     existing->camera.reset();
                     existing->keyframe.reset();
                     existing->camera_uid = -1;
@@ -1639,6 +1737,8 @@ namespace lfs::vis::op {
                 existing->locked.setQuiet(snapshot.locked);
                 existing->training_enabled = snapshot.training_enabled;
                 existing->payload_diverged = snapshot.payload_diverged;
+                existing->point_cloud_source = snapshot.point_cloud_source;
+                existing->transient = snapshot.transient;
                 existing->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
                 existing->centroid = snapshot.centroid;
                 existing->transform_dirty = true;
@@ -1664,6 +1764,8 @@ namespace lfs::vis::op {
             restored->locked.setQuiet(snapshot.locked);
             restored->training_enabled = snapshot.training_enabled;
             restored->payload_diverged = snapshot.payload_diverged;
+            restored->point_cloud_source = snapshot.point_cloud_source;
+            restored->transient = snapshot.transient;
             restored->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
             restored->centroid = snapshot.centroid;
             restored->transform_dirty = true;
@@ -1784,7 +1886,7 @@ namespace lfs::vis::op {
             SceneTopologyProof proof;
             proof.scoped = scope && scope->scoped_topology;
             proof.training_model_uuid =
-                scene.getTrainingModelNodeUuid();
+                documentTrainingModelUuid(scene);
             proof.consolidated =
                 scene.isConsolidated();
             proof.consolidated_extent =
@@ -1801,13 +1903,21 @@ namespace lfs::vis::op {
                 proof.roots.reserve(scene.getRootNodes().size());
                 for (const auto root_id : scene.getRootNodes()) {
                     if (const auto* root = scene.getNodeById(root_id);
-                        root && !isSequencerProjectionNode(root->type)) {
+                        root && !root->transient && !isSequencerProjectionNode(root->type)) {
                         proof.roots.push_back(root->uuid);
                     }
                 }
             }
             proof.nodes.reserve(proof.scoped ? scoped_uuids.size() : nodes.size());
             for (const auto* node : nodes) {
+                if (node && isTransientSubtree(scene, *node)) {
+                    if (node->type == lfs::core::NodeType::SPLAT && scene.isNodeEffectivelyVisible(node->id)) {
+                        proof.consolidated_extent -= std::min(
+                            proof.consolidated_extent,
+                            node->gaussian_count.load(std::memory_order_acquire));
+                    }
+                    continue;
+                }
                 if (!node || (proof.scoped ? !scoped_uuids.contains(node->uuid)
                                            : isSequencerProjectionNode(node->type))) {
                     continue;
@@ -1866,7 +1976,8 @@ namespace lfs::vis::op {
                      node->children) {
                     if (const auto* child =
                             scene.getNodeById(
-                                child_id)) {
+                                child_id);
+                        child && !child->transient) {
                         if (proof.scoped ? scoped_uuids.contains(child->uuid)
                                          : !isSequencerProjectionNode(child->type)) {
                             item.children.push_back(child->uuid);
@@ -2184,6 +2295,8 @@ namespace lfs::vis::op {
           locked(other.locked),
           training_enabled(other.training_enabled),
           payload_diverged(other.payload_diverged),
+          point_cloud_source(other.point_cloud_source),
+          transient(other.transient),
           payload_hydration(other.payload_hydration),
           gaussian_count(other.gaussian_count),
           centroid(other.centroid),
@@ -2192,6 +2305,7 @@ namespace lfs::vis::op {
           selection_slice_device(other.selection_slice_device),
           source_path(other.source_path),
           shared_model(other.shared_model),
+          collision(other.collision),
           camera(other.camera),
           children(other.children) {
         if (other.selection_slice) {
@@ -2211,6 +2325,9 @@ namespace lfs::vis::op {
         }
         if (other.ellipsoid) {
             ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*other.ellipsoid);
+        }
+        if (other.crop_polygon) {
+            crop_polygon = std::make_unique<lfs::core::CropPolygonData>(*other.crop_polygon);
         }
         if (other.keyframe) {
             keyframe = std::make_unique<lfs::core::KeyframeData>(*other.keyframe);
@@ -2872,6 +2989,7 @@ namespace lfs::vis::op {
         applyTensorSwapStorage(flat, storage_);
         *current = flat.reshape(tensor_shape_).contiguous();
         if (scene_) {
+            scene_->getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             expected_topology_ =
                 captureTopologyProof(
                     scene_->getScene());
@@ -3000,6 +3118,7 @@ namespace lfs::vis::op {
         }
         canon.index_copy_(0, idx, src);
         model.shN_set_from_canonical(canon, model.means().capacity());
+        scene_->getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
         expected_topology_ =
             captureTopologyProof(
                 scene_->getScene());
@@ -3070,6 +3189,7 @@ namespace lfs::vis::op {
                 "Cannot replay crop-box history after its node changed");
         }
         *node->cropbox = before_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_before_);
         scene_.setNodeVisibility(
@@ -3097,6 +3217,7 @@ namespace lfs::vis::op {
                 "Cannot replay crop-box history after its node changed");
         }
         *node->cropbox = after_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_after_);
         scene_.setNodeVisibility(
@@ -3185,6 +3306,7 @@ namespace lfs::vis::op {
                 "Cannot replay ellipsoid history after its node changed");
         }
         *node->ellipsoid = before_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_before_);
         scene_.setNodeVisibility(
@@ -3212,6 +3334,7 @@ namespace lfs::vis::op {
                 "Cannot replay ellipsoid history after its node changed");
         }
         *node->ellipsoid = after_;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
         scene_.setNodeTransform(
             node->name, transform_after_);
         scene_.setNodeVisibility(
@@ -3244,6 +3367,83 @@ namespace lfs::vis::op {
     }
 
     DirtyMask EllipsoidUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
+    }
+
+    CropPolygonUndoEntry::CropPolygonUndoEntry(SceneManager& scene,
+                                               std::string node_name,
+                                               lfs::core::CropPolygonData before,
+                                               glm::mat4 transform_before,
+                                               const bool show_before)
+        : scene_(scene),
+          node_name_(std::move(node_name)),
+          before_(std::move(before)),
+          transform_before_(transform_before),
+          show_before_(show_before) {
+        if (const auto* node = scene_.getScene().getNode(node_name_)) {
+            node_uuid_ = node->uuid;
+        }
+        expected_topology_ = captureTopologyProof(scene_.getScene());
+        captureAfter();
+    }
+
+    void CropPolygonUndoEntry::captureAfter() {
+        const auto* node = scene_.getScene().getNode(node_name_);
+        if (!node || !node->crop_polygon) {
+            LOG_WARN("Crop polygon node '{}' removed during undo capture", node_name_);
+            after_ = before_;
+            transform_after_ = transform_before_;
+            show_after_ = show_before_;
+            return;
+        }
+        after_ = *node->crop_polygon;
+        transform_after_ = scene_.getNodeTransform(node_name_);
+        show_after_ = node->visible;
+    }
+
+    void CropPolygonUndoEntry::apply(const lfs::core::CropPolygonData& data, const glm::mat4& transform,
+                                     const bool show) {
+        requireTopologyProof(scene_.getScene(), expected_topology_, name());
+        auto* node = scene_.getScene().getNodeByUuid(node_uuid_);
+        if (!node || !node->crop_polygon) {
+            throw HistoryCorruptionError("Cannot replay crop polygon history after its node changed");
+        }
+        *node->crop_polygon = data;
+        scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::TRANSFORM_CHANGED);
+        scene_.setNodeTransform(node->name, transform);
+        scene_.setNodeVisibility(node->id, show);
+        expected_topology_ = captureTopologyProof(scene_.getScene());
+    }
+
+    void CropPolygonUndoEntry::undo() {
+        apply(before_, transform_before_, show_before_);
+    }
+
+    void CropPolygonUndoEntry::redo() {
+        apply(after_, transform_after_, show_after_);
+    }
+
+    bool CropPolygonUndoEntry::hasChanges() const {
+        return !cropPolygonsEqual(before_, after_) ||
+               transform_before_ != transform_after_ ||
+               show_before_ != show_after_;
+    }
+
+    UndoMetadata CropPolygonUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = "crop_polygon.transform",
+            .label = "Crop Polygon Transform",
+            .source = "ui",
+            .scope = "crop_polygon",
+        };
+    }
+
+    size_t CropPolygonUndoEntry::estimatedBytes() const {
+        return sizeof(*this) + node_name_.size() +
+               (before_.vertices.size() + after_.vertices.size()) * sizeof(glm::vec2);
+    }
+
+    DirtyMask CropPolygonUndoEntry::dirtyFlags() const {
         return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
     }
 
@@ -3520,12 +3720,13 @@ namespace lfs::vis::op {
             snapshot.selected_node_uuids = std::move(selected_node_uuids);
         }
         if (options.include_scene_context) {
+            const auto training_model_uuid = documentTrainingModelUuid(scene_manager.getScene());
             const std::string training_model_node_name =
-                scene_manager.getScene().getTrainingModelNodeName();
+                training_model_uuid.is_nil() ? std::string{} : scene_manager.getScene().getTrainingModelNodeName();
             snapshot.context = SceneGraphContextSnapshot{
                 .content_type = static_cast<int>(scene_manager.getContentType()),
                 .dataset_path = scene_manager.getDatasetPath(),
-                .training_model_uuid = scene_manager.getScene().getTrainingModelNodeUuid(),
+                .training_model_uuid = training_model_uuid,
                 .training_model_node_name = training_model_node_name,
             };
         }
@@ -3553,7 +3754,8 @@ namespace lfs::vis::op {
             const auto* node = scene.getNodeById(id);
             // Sequencer projection nodes are rebuilt by camera-key history.
             // Scoped scene edits must neither restore nor require their old UUIDs.
-            if (!node || (options.scoped_topology && isSequencerProjectionNode(node->type))) {
+            if (!node || (options.scoped_topology && isSequencerProjectionNode(node->type)) ||
+                (snapshot.complete_root_order && isTransientOnly(scene, *node))) {
                 continue;
             }
 
@@ -3636,7 +3838,7 @@ namespace lfs::vis::op {
                 collectSnapshotUuids(root, desired_uuids);
             }
             for (const auto* node : scene_.getScene().getNodes()) {
-                if (node && !desired_uuids.contains(node->uuid) &&
+                if (node && !desired_uuids.contains(node->uuid) && !isTransientSubtree(scene_.getScene(), *node) &&
                     (!current.scoped_topology || !isSequencerProjectionNode(node->type))) {
                     uuids_to_remove.insert(node->uuid);
                 }
@@ -3749,7 +3951,7 @@ namespace lfs::vis::op {
                 assert(scene.getNodeByUuid(desired.context->training_model_uuid) &&
                        "prevalidated training-model UUID disappeared during restore");
                 scene.setTrainingModelNode(desired.context->training_model_uuid);
-            } else {
+            } else if (!documentTrainingModelUuid(scene).is_nil()) {
                 scene.setTrainingModelNode(lfs::core::Uuid{});
             }
             scene_.setDatasetPath(desired.context->dataset_path);

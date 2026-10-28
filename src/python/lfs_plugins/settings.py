@@ -6,7 +6,7 @@ import logging
 import copy
 import os
 import threading
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Any, Dict, Optional
 
 from .plugin import validate_plugin_name

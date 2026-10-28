@@ -9,6 +9,7 @@
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loaders/loader_utils.hpp"
+#include "io/project/collision_serialization.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
 #include "io/project_document.hpp"
@@ -36,6 +37,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <iterator>
@@ -414,7 +416,7 @@ namespace {
         return result;
     }
 
-    void write_phase_a_fixture(const fs::path& path) {
+    void write_phase_a_fixture(const fs::path& path, Scene* collision_scene = nullptr) {
         const Uuid project_uuid = fixed_uuid(950);
         const Uuid root_uuid = fixed_uuid(951);
         const Uuid splat_uuid = fixed_uuid(952);
@@ -543,6 +545,26 @@ namespace {
                             PointCloud,
                     .mask = {4, 0},
                 }));
+        if (collision_scene) {
+            require_status(hydrate_scene_graph(scene, *collision_scene, {.splat = [](const auto&) { return make_splat(3); }, .point_cloud = [](const auto&) { return make_point_cloud(2); }, .mesh = [](const auto&) { return make_triangle_mesh(); }}));
+            const auto parent = collision_scene->addGroup("Parent");
+            collision_scene->setNodeTransform(parent, glm::translate(glm::mat4(1), {4, 5, 6}));
+            auto volume = std::make_shared<lfs::core::CollisionVolume>(*collision_test::box({1, 2, 3}, {3, 1, 2}, .0125f));
+            volume->settings = {.0125f, .35f, 2.5f, true, true};
+            for (int i = 0; i < 13; ++i) {
+                const auto id = collision_scene->addCollision(std::to_string(i), i < 12 ? volume : collision_test::box({}, {1, 1, 1}), parent);
+                collision_scene->setNodeTransform(id, glm::translate(glm::mat4(1), {float(i), 2, 3}));
+                collision_scene->setNodeVisibility(id, i != 0);
+            }
+            ScenePayloadBindings bindings;
+            for (const auto& node : require_result(document->scene_graph().nodes()))
+                if (node.payload)
+                    bindings.emplace(node.uuid, *node.payload);
+            auto captured = require_result(capture_scene_graph_state(*collision_scene, bindings));
+            for (const auto& [uuid, volume] : captured.collisions)
+                require_status(document->set_collision(uuid, volume));
+            document->edit_scene_graph() = require_result(materialize_scene_graph_chapter(std::move(captured)));
+        }
         const auto saved =
             document->save(path, save_options(960, 200));
         ASSERT_TRUE(saved)
@@ -1062,6 +1084,73 @@ namespace {
         ASSERT_FALSE(restored);
         EXPECT_EQ(restored.error().code(), lfs::ErrorCode::DataLoss);
         EXPECT_EQ(live.getNodeCount(), 1u);
+        EXPECT_NE(live.getNode("Existing"), nullptr);
+    }
+
+    TEST(SceneChapterAdapterTest, CropPolygonSurvivesCaptureAndHydrationUnderItsSplat) {
+        Scene scene;
+        const auto splat = scene.addSplat("Model", make_splat(3));
+        lfs::core::CropPolygonData data;
+        data.vertices = {{-1.0f, -0.5f}, {1.0f, -0.5f}, {1.0f, 0.5f}, {0.25f, 0.5f}, {0.25f, 0.0f}, {-1.0f, 0.0f}};
+        data.half_depth = 2.5f;
+        data.inverse = true;
+        data.color = {0.2f, 0.4f, 0.6f};
+        data.line_width = 3.0f;
+        const glm::mat4 transform =
+            glm::scale(glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)),
+                                   glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
+                       glm::vec3(1.0f, 2.0f, 0.5f));
+        const auto polygon = scene.addCropPolygon("Model_crop_polygon", splat, data, transform);
+        ASSERT_NE(polygon, lfs::core::NULL_NODE);
+        const auto splat_uuid = scene.getNodeUuid(splat);
+        const auto polygon_uuid = scene.getNodeUuid(polygon);
+
+        const ScenePayloadBindings bindings{{splat_uuid, PayloadBinding{.fourcc = "DSRC",
+                                                                        .instance_uuid = splat_uuid,
+                                                                        .reference_uuid = std::nullopt,
+                                                                        .source_kind = "ply"}}};
+        auto captured = capture_scene_graph(scene, bindings);
+        ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+        auto decoded = SceneGraphChapter::from_bytes(captured->to_bytes());
+        ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+        const auto record = require_result(decoded->find(polygon_uuid));
+        ASSERT_TRUE(record && record->crop_polygon);
+        EXPECT_EQ(record->type, "crop_polygon");
+
+        Scene restored;
+        const ScenePayloadResolver resolver{
+            .splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> {
+                return make_splat(3);
+            }};
+        auto hydrated = hydrate_scene_graph(*decoded, restored, resolver);
+        ASSERT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+        const auto* node = restored.getNodeByUuid(polygon_uuid);
+        ASSERT_NE(node, nullptr);
+        EXPECT_EQ(node->type, NodeType::CROP_POLYGON);
+        EXPECT_EQ(node->parent_id, restored.getNodeIdByUuid(splat_uuid));
+        EXPECT_EQ(node->local_transform.get(), transform);
+        ASSERT_TRUE(node->crop_polygon);
+        EXPECT_EQ(node->crop_polygon->vertices, data.vertices);
+        EXPECT_EQ(node->crop_polygon->half_depth, data.half_depth);
+        EXPECT_TRUE(node->crop_polygon->inverse);
+        EXPECT_TRUE(node->crop_polygon->enabled);
+        EXPECT_EQ(node->crop_polygon->color, data.color);
+        EXPECT_EQ(node->crop_polygon->line_width, data.line_width);
+
+        // A polygon record on any other node type is refused before the live scene changes.
+        SceneGraphChapter mismatched;
+        require_status(mismatched.upsert_node(SceneNodeRecord{
+            .uuid = fixed_uuid(940),
+            .type = "group",
+            .name = "Malformed group",
+            .child_order = 0,
+            .crop_polygon = *record->crop_polygon,
+        }));
+        Scene live;
+        ASSERT_NE(live.addGroup("Existing"), lfs::core::NULL_NODE);
+        auto refused = hydrate_scene_graph(mismatched, live, ScenePayloadResolver{});
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(), lfs::ErrorCode::DataLoss);
         EXPECT_NE(live.getNode("Existing"), nullptr);
     }
 
@@ -1842,8 +1931,7 @@ namespace {
 
         std::ostringstream stream(std::ios::binary | std::ios::out);
         auto serialized = lfs::training::serialize_checkpoint(
-            stream, 11, strategy, parameters, nullptr, nullptr, nullptr,
-            nullptr);
+            stream, 11, strategy, parameters, nullptr, nullptr, nullptr);
         ASSERT_TRUE(serialized)
             << lfs::format_for_developer(serialized.error());
         const auto encoded = stream.str();
@@ -1887,7 +1975,8 @@ namespace {
         TemporaryDirectory temporary;
         const fs::path path =
             temporary.path / "phase-a-fixture.licht";
-        write_phase_a_fixture(path);
+        Scene collision_scene;
+        write_phase_a_fixture(path, &collision_scene);
 
         enum class Injection {
             Proj,
@@ -2041,6 +2130,56 @@ namespace {
             ASSERT_FALSE(staged);
             EXPECT_TRUE(witness_scene(live) == before);
         }
+        auto document = require_result(ProjectDocument::open(path));
+        const auto baseline = read_file_bytes(path);
+        {
+            const PayloadCapGuard cap(1);
+            auto limited = ProjectDocument::open(path);
+            ASSERT_FALSE(limited);
+            EXPECT_EQ(limited.error().code(), lfs::ErrorCode::ResourceExhausted);
+        }
+        const auto volume = collision_scene.getNode("0")->collision;
+        const auto bytes = encodeCollision(*volume);
+        collision_test::expectError([&] { decodeCollision(std::span(bytes).first(bytes.size() - 1)); }, "collision.data_invalid");
+        lfs::core::CollisionVolume padded{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {lfs::core::CollisionVolume::brick_tag | 1, 0x00110011, 0}};
+        ASSERT_NO_THROW(padded.validate());
+        padded.words[1] |= 2;
+        collision_test::expectError([&] { padded.validate(); }, "collision.data_invalid");
+        auto invalid = std::make_shared<lfs::core::CollisionVolume>(*volume);
+        invalid->words.front() = 0xffffffff;
+        const auto rejected = document.set_collision(collision_scene.getNode("0")->uuid, invalid);
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(lfs::core::collisionErrorField(rejected.error(), "message_key"), "collision.data_invalid");
+        EXPECT_NE(rejected.error().detail().find("Invalid collision"), std::string_view::npos);
+        fs::create_directory(temporary.path / "directory");
+        EXPECT_FALSE(document.save(temporary.path / "directory"));
+        EXPECT_EQ(read_file_bytes(path), baseline);
+        for (const bool erase : {false, true}) {
+            auto reader = require_result(ProjectReader::open(path));
+            auto writer = require_result(ProjectWriter::append(path));
+            require_status(writer.plan_commit());
+            auto corrupt = bytes;
+            corrupt[0] = std::byte{0};
+            require_status(writer.preflight(corrupt.size()));
+            for (const auto& row : reader.chunks()) {
+                if (!row.is_live())
+                    continue;
+                if (row.key.fourcc == FOURCC_COLV)
+                    require_status(erase ? writer.erase(row.key) : writer.write_chunk(row.key, corrupt));
+                else
+                    require_status(writer.reuse_if_clean(require_result(reader.make_clean_proof(row, 1)), 1));
+            }
+            require_status(writer.commit());
+            auto failed = ProjectDocument::open(path);
+            ASSERT_FALSE(failed);
+            EXPECT_EQ(failed.error().code(), lfs::ErrorCode::DataLoss);
+        }
+        Scene unchanged;
+        const auto retained = unchanged.addGroup("Retained");
+        const std::array omitted{fixed_uuid(951), fixed_uuid(952), fixed_uuid(953), fixed_uuid(954)};
+        EXPECT_FALSE(hydrate_scene_graph(require_result(capture_scene_graph(collision_scene, {}, omitted)), unchanged, {}));
+        EXPECT_EQ(unchanged.getNodes().size(), 1);
+        EXPECT_NE(unchanged.getNodeById(retained), nullptr);
     }
 
     TEST(ProjectDocumentTest,
@@ -2950,7 +3089,8 @@ namespace {
             temporary.path / "source.licht";
         const auto destination =
             temporary.path / "destination.licht";
-        write_phase_a_fixture(source);
+        Scene collision_scene;
+        write_phase_a_fixture(source, &collision_scene);
         {
             std::ofstream existing(
                 destination,
@@ -2959,11 +3099,35 @@ namespace {
             existing << "replace me";
         }
 
+        auto pinned = require_result(ProjectReader::open(source));
+        const auto verify_capabilities = [](const ProjectReader& reader) {
+            for (const auto& bits : {reader.commit().required_reader_capabilities, reader.commit().required_writer_capabilities}) {
+                EXPECT_TRUE(bits.contains(11));
+                EXPECT_FALSE(bits.contains(10));
+            }
+        };
+        verify_capabilities(pinned);
+        ReaderOptions old_reader;
+        old_reader.reader_capabilities.set(11, false);
+        auto incompatible = ProjectReader::open(source, old_reader);
+        ASSERT_FALSE(incompatible);
+        EXPECT_EQ(incompatible.error().code(), lfs::ErrorCode::Unsupported) << lfs::format_for_developer(incompatible.error());
+        EXPECT_NE(incompatible.error().user_message().find("newer LichtFeld"), std::string_view::npos);
+        ASSERT_TRUE(pinned.validate_source_identity());
+        auto newer = require_result(ProjectDocument::open(source));
+        ASSERT_TRUE(newer.set_collision(collision_scene.getNode("0")->uuid, collision_test::box({}, {1, 1, 1})));
+        ASSERT_TRUE(newer.save(source));
+        EXPECT_FALSE(pinned.validate_source_identity());
+        const auto retained = temporary.path / "retained.licht";
+        fs::rename(source, retained);
         auto document = require_result_ptr(ProjectDocument::open(
-            source,
-            ProjectDocumentOpenOptions{
-                .defer_geometry_payloads = true,
-            }));
+            source, {.defer_geometry_payloads = true, .retained_source = &pinned}));
+        EXPECT_EQ(document->source_commit_uuid(), pinned.commit().commit_uuid);
+        ScenePayloadBindings bindings;
+        for (const auto& node : require_result(document->scene_graph().nodes()))
+            if (node.payload)
+                bindings.emplace(node.uuid, *node.payload);
+        const auto expected = require_result(capture_scene_graph(collision_scene, bindings)).to_bytes();
         const auto project_uuid =
             document->project_uuid();
         auto saved = document->save_as(
@@ -2998,6 +3162,37 @@ namespace {
             reader->find(
                 FOURCC_MESH, fixed_uuid(954)),
             nullptr);
+        for (const bool deferred : {true, false}) {
+            SCOPED_TRACE(deferred);
+            if (!deferred)
+                ASSERT_TRUE(document->save_as(destination));
+            const auto saved_reader = require_result(ProjectReader::open(destination));
+            verify_capabilities(saved_reader);
+            EXPECT_EQ(std::ranges::count_if(saved_reader.chunks(), [](const auto& row) {
+                          return row.is_live() && row.key.fourcc == FOURCC_COLV;
+                      }),
+                      2);
+            for (const auto& state : document->payload_states())
+                if (state.fourcc == FOURCC_COLV)
+                    EXPECT_EQ(state.loaded, !deferred);
+            document = require_result_ptr(ProjectDocument::open(destination, {.defer_geometry_payloads = deferred}));
+            Scene target;
+            auto shell = require_result(document->stage_shell(target));
+            ASSERT_TRUE(document->hydrate(target));
+            for (const auto* restored : {shell.get(), &target}) {
+                EXPECT_EQ(require_result(capture_scene_graph(*restored, bindings)).to_bytes(), expected);
+                const auto* first = restored->getNode("0");
+                ASSERT_NE(first, nullptr);
+                for (const auto* node : restored->getNodes()) {
+                    if (!node->collision)
+                        continue;
+                    if (node->name != "12")
+                        EXPECT_EQ(node->collision, first->collision);
+                    EXPECT_EQ(encodeCollision(*node->collision), encodeCollision(*collision_scene.getNodeByUuid(node->uuid)->collision));
+                }
+            }
+        }
+        fs::rename(retained, source);
         EXPECT_TRUE(
             std::filesystem::is_regular_file(
                 source));
@@ -3673,7 +3868,7 @@ namespace {
                 checkpoint_stream, 17,
                 checkpoint_strategy,
                 checkpoint_parameters,
-                nullptr, nullptr, nullptr, nullptr);
+                nullptr, nullptr, nullptr);
         ASSERT_TRUE(serialized_checkpoint)
             << lfs::format_for_developer(
                    serialized_checkpoint.error());
@@ -4025,6 +4220,52 @@ namespace {
         EXPECT_EQ(*after, *before);
     }
 
+    TEST(ProjectDocumentTest, AutosaveWriterUsesBoundedNativeSidecarNames) {
+        TemporaryDirectory temporary;
+        std::vector<std::string> names;
+        for (size_t length = 247; length <= 255; ++length)
+            names.push_back(std::string(length - 6, 'x') + ".licht");
+#ifndef _WIN32
+        names.emplace_back("caf\xe9.licht");
+        names.emplace_back("caf\xe8.licht");
+        names.push_back(std::string(248, 'x') + "\xe9.licht");
+        names.push_back(std::string(248, 'x') + "\xe8.licht");
+#endif
+        std::unordered_set<std::string> locks;
+        std::unordered_set<std::string> sidecars;
+        for (const auto& name : names) {
+            SCOPED_TRACE(name.size());
+            const auto master = temporary.path / fs::path(name);
+            const auto sidecar = autosave_sidecar_path(master);
+            EXPECT_TRUE(locks.insert(detail::project_lock_path(master).filename().string()).second);
+            EXPECT_TRUE(sidecars.insert(sidecar.filename().string()).second);
+            if (master.filename().native().size() + 9 <= 255) {
+                auto expected = master;
+                expected += ".autosave";
+                EXPECT_EQ(sidecar, expected);
+            }
+            write_phase_a_fixture(master);
+            auto base = require_result(ProjectReader::open(master));
+            auto document = require_result_ptr(ProjectDocument::open(master));
+            require_status(document->edit_view().dom().set("recovery_marker", std::string{"native-name"}));
+            auto saved = document->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                              .file_uuid = fixed_uuid(981),
+                                                              .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                              .autosave_sequence = 1,
+                                                              .snapshot_uuid = fixed_uuid(980),
+                                                              .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                              .disk_reserve_bytes = 0,
+                                                          });
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto overlay = require_result(ProjectReader::open(sidecar));
+            EXPECT_EQ(overlay.superblock().role, ContainerRole::AutosaveSidecar);
+            EXPECT_EQ(overlay.superblock().base_explicit_commit_uuid, base.commit().commit_uuid);
+            require_status(overlay.verify_all());
+            auto unchanged = require_result(ProjectReader::open(master));
+            EXPECT_EQ(unchanged.commit().commit_uuid, base.commit().commit_uuid);
+        }
+    }
+
     TEST(ProjectDocumentTest,
          AutosaveIsCompleteBoundOverlayAndDoesNotMutateMasterOrDirtyState) {
         TemporaryDirectory temporary;
@@ -4312,7 +4553,7 @@ namespace {
         (void)require_result(
             lfs::training::serialize_checkpoint(
                 stream, iteration, strategy, parameters,
-                nullptr, nullptr, nullptr, nullptr));
+                nullptr, nullptr, nullptr));
         const auto encoded = stream.str();
         std::vector<std::byte> bytes(encoded.size());
         std::memcpy(
@@ -5733,10 +5974,22 @@ namespace {
                    live_parameters.error());
 
         Scene scene;
+        const auto parent = scene.addGroup("Parent");
+        scene.setNodeTransform(parent, glm::scale(glm::mat4(1), glm::vec3(10)));
         const auto model_id = scene.addSplat(
-            "training", make_splat(8));
+            "training", make_splat(8), parent);
         ASSERT_NE(model_id, lfs::core::NULL_NODE);
         scene.setTrainingModelNode(model_id);
+        scene.setNodeVisibility(model_id, false);
+        const auto volume = collision_test::box({1, 2, 3}, {3, 1, 2});
+        const auto first = scene.addCollision("First", volume, model_id);
+        const auto second = scene.addCollision("Second", volume, model_id);
+        const auto transform = glm::translate(glm::mat4(1), {-4, 5, -6});
+        scene.setNodeTransform(model_id, transform);
+        scene.setNodeTransform(first, transform);
+        const auto captured_source = scene.captureCollisionSource(model_id);
+        EXPECT_EQ(captured_source.transform, scene.getWorldTransform(model_id));
+        const auto first_uuid = scene.getNodeUuid(first), second_uuid = scene.getNodeUuid(second);
         const auto model_uuid =
             scene.getNodeUuid(model_id);
         const std::array selected_nodes{model_uuid};
@@ -5751,12 +6004,21 @@ namespace {
         ASSERT_TRUE(captured)
             << lfs::format_for_developer(
                    captured.error());
+        scene.removeNodeById(model_id);
+        EXPECT_EQ(captured_source.means.ptr<float>()[0], 0);
+        EXPECT_THROW((void)scene.captureCollisionSource(model_id), lfs::Exception);
         lfs::training::ProjectSnapshotChapters
             chapters;
         require_status(lfs::training::
                            materialize_project_snapshot_cpu_chapters(
                                std::move(cpu_state),
                                chapters));
+        ASSERT_EQ(chapters.collisions.size(), 1);
+        EXPECT_EQ(chapters.collisions.begin()->second, volume);
+        const auto one = chapters.scene_graph.find(first_uuid), two = chapters.scene_graph.find(second_uuid);
+        ASSERT_TRUE(one && *one && two && *two);
+        for (int axis = 0; axis < 3; ++axis)
+            EXPECT_EQ((**one).local_transform[12 + axis], transform[3][axis]);
         EXPECT_EQ(
             chapters.selection
                 .selected_node_uuids(),
@@ -6861,6 +7123,81 @@ namespace {
         }
     }
 #endif
+
+    TEST(ProjectDocumentTest, HeadlessAdoptionResolvesCurrentPresetPathReferences) {
+        TemporaryDirectory temporary;
+        const auto project_path = temporary.path / "training.licht";
+        const auto dataset = temporary.path / "dataset";
+        fs::create_directories(dataset / "images");
+        write_solid_png(dataset / "images" / "frame.png", 1, 1);
+        std::ofstream(dataset / "transforms.json") << R"({
+            "w":1,"h":1,"fl_x":1,"fl_y":1,"cx":0.5,"cy":0.5,
+            "frames":[{"file_path":"images/frame.png","transform_matrix":
+                [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})";
+        const auto background = temporary.path / "background.png";
+        const auto sidecar = temporary.path / "appearance.ppisp";
+        write_solid_png(background, 1, 1);
+        write_file_bytes(sidecar, lfs::test::licht::byte_vector("generated-sidecar"));
+
+        auto document = make_empty_document(fixed_uuid(2390), 100);
+        bind_dataset(*document, dataset);
+        auto snapshot = require_result(document->parameters().snapshot());
+        snapshot.active_strategy = "mcmc";
+        snapshot.mcmc_current.bg_image_path = background;
+        snapshot.mcmc_current.ppisp_sidecar_path = sidecar;
+        snapshot.mcmc_current_references.background_image_reference = require_result(
+            upsert_path_reference(document->edit_references(), temporary.path, background,
+                                  "presets.mcmc.current.background_image", "background_image"));
+        snapshot.mcmc_current_references.ppisp_reference = require_result(
+            upsert_path_reference(document->edit_references(), temporary.path, sidecar,
+                                  "presets.mcmc.current.ppisp_sidecar", "ppisp_sidecar"));
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+        (void)require_result(document->save(project_path, save_options(2391, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        snapshot = require_result(reopened->parameters().snapshot());
+        ASSERT_TRUE(snapshot.mcmc_current.bg_image_path.empty());
+        ASSERT_TRUE(snapshot.mcmc_current.ppisp_sidecar_path.empty());
+        lfs::core::param::TrainingParameters params;
+        params.dataset_project = project_path;
+        params.optimization.headless = true;
+        const auto adopt = [&](const fs::path& root) {
+            adopt_project_training_parameters(params, snapshot, dataset, "images",
+                                              reopened->references(), root);
+        };
+        adopt(project_path.parent_path());
+
+        // Headless adoption used to drop the background image and PPISP sidecar stored in REFS.
+        EXPECT_EQ(params.optimization.bg_image_path, background);
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, sidecar);
+        EXPECT_EQ(params.optimization.strategy, "mcmc");
+        EXPECT_TRUE(params.optimization.headless);
+
+        const auto relocated = temporary.path / "relocated";
+        fs::create_directories(relocated);
+        fs::copy_file(background, relocated / background.filename());
+        fs::copy_file(sidecar, relocated / sidecar.filename());
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, relocated / background.filename());
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, relocated / sidecar.filename());
+
+        write_file_bytes(relocated / background.filename(), lfs::test::licht::byte_vector("mismatch"));
+        fs::remove(relocated / sidecar.filename());
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, background);
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, sidecar);
+
+        fs::remove(background);
+        fs::remove(sidecar);
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, relocated / background.filename());
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, relocated / sidecar.filename());
+
+        params.overrides.optimization_json = R"({"bg_image_path":"cli-background.png","ppisp_sidecar_path":"cli.ppisp"})";
+        adopt(relocated);
+        EXPECT_EQ(params.optimization.bg_image_path, fs::path("cli-background.png"));
+        EXPECT_EQ(params.optimization.ppisp_sidecar_path, fs::path("cli.ppisp"));
+    }
 
     TEST(ProjectDocumentTest, EmbeddedDatasetRoundTripAndCompaction) {
         TemporaryDirectory temporary;

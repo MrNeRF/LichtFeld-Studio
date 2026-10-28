@@ -1,4 +1,6 @@
 #include "gs_pipeline.h"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "gs_renderer.h"
 #include "perf_timer.h"
 
@@ -50,7 +52,7 @@ namespace {
     }
 
     [[nodiscard]] std::string spirvDiagnosticName(const std::string& spirv_path) {
-        auto name = std::filesystem::path(spirv_path).stem().string();
+        auto name = lfs::core::path_to_utf8(lfs::core::utf8_to_path(spirv_path).stem());
         if (name.empty()) {
             return "unnamed";
         }
@@ -186,7 +188,7 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
             return *it->second;
     }
 
-    std::ifstream file(spirv_path, std::ios::binary | std::ios::ate);
+    std::ifstream file(lfs::core::native_fs::native_path(lfs::core::native_fs::from_utf8(spirv_path)), std::ios::binary | std::ios::ate);
     if (!file) {
         lfs::rendering::throw_vk_setup(
             lfs::ErrorCode::NotFound,
@@ -419,6 +421,12 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(pixel_state)
     _(pixel_depth)
     _(pixel_depth_weight)
+    _(outline_tiles)
+    _(outline_seeds)
+    _(outline_nearest)
+    _(outline_background)
+    _(pixel_outline_ids)
+    _(pixel_outline_scene_depth)
     _(n_contributors)
     _(_cumsum_blockSums)
     _(_cumsum_blockSums2)
@@ -552,6 +560,12 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(pixel_state)
     _(pixel_depth)
     _(pixel_depth_weight)
+    _(outline_tiles)
+    _(outline_seeds)
+    _(outline_nearest)
+    _(outline_background)
+    _(pixel_outline_ids)
+    _(pixel_outline_scene_depth)
     _(n_contributors)
     _(_cumsum_blockSums)
     _(_cumsum_blockSums2)
@@ -602,6 +616,9 @@ void VulkanGSPipeline::cleanup() {
         all_compute_pipelines.clear();
         pending_compute_pipelines.clear();
         banded_export_pipelines_.clear();
+        reveal_pipelines_.clear();
+        reveal_initialized_ = false;
+        reveal_active_ = false;
         banded_export_initialized_ = false;
         banded_export_active_ = false;
 
@@ -1998,9 +2015,85 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
     pending_compute_pipelines.push_back(&pipeline);
 }
 
+void VulkanGSPipeline::setRevealEffect(const bool enabled) {
+    if (enabled == reveal_active_)
+        return;
+    const bool banded = banded_export_active_;
+    if (reveal_active_) {
+        for (auto& [pipeline, variant] : reveal_pipelines_) {
+            std::swap(pipeline->shader, variant->shader);
+            std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
+            std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
+            std::swap(pipeline->pipeline, variant->pipeline);
+        }
+        reveal_active_ = false;
+    }
+    if (banded)
+        setBandedExport(false);
+    if (enabled && !reveal_initialized_) {
+        const size_t count = all_compute_pipelines.size();
+        const size_t pending_count = pending_compute_pipelines.size();
+        const size_t banded_count = banded_export_pipelines_.size();
+        try {
+            for (size_t i = 0; i < count; ++i) {
+                auto* const pipeline = all_compute_pipelines[i];
+                const std::filesystem::path path(pipeline->spirv_path);
+                const std::string name = lfs::core::path_to_utf8(path.stem());
+                if (name.ends_with("_banded") ||
+                    !(name.starts_with("projection_forward") || name == "cull_splats" ||
+                      name.starts_with("rasterize_forward_3dgut") || name.starts_with("rasterize_outline_gut")))
+                    continue;
+                auto variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
+                auto* const variant_ptr = variant.get();
+                reveal_pipelines_.emplace_back(pipeline, std::move(variant));
+                createComputePipeline(*variant_ptr, lfs::core::path_to_utf8(path.parent_path() / (name + "_reveal.spv")),
+                                      pipeline->compatible_subgroup_size, pipeline->expected_workgroup_size_x);
+                if (banded_export_initialized_ && (name.starts_with("projection_forward") || name.starts_with("rasterize_forward"))) {
+                    auto banded_variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
+                    auto* const banded_ptr = banded_variant.get();
+                    banded_export_pipelines_.emplace_back(variant_ptr, std::move(banded_variant));
+                    createComputePipeline(*banded_ptr, lfs::core::path_to_utf8(path.parent_path() / (name + "_reveal_banded.spv")),
+                                          pipeline->compatible_subgroup_size, pipeline->expected_workgroup_size_x);
+                }
+            }
+            createPendingComputePipelines();
+        } catch (...) {
+            for (size_t i = banded_count; i < banded_export_pipelines_.size(); ++i)
+                destroyComputePipeline(*banded_export_pipelines_[i].second);
+            for (auto& entry : reveal_pipelines_)
+                destroyComputePipeline(*entry.second);
+            all_compute_pipelines.resize(count);
+            pending_compute_pipelines.resize(pending_count);
+            banded_export_pipelines_.resize(banded_count);
+            reveal_pipelines_.clear();
+            if (banded)
+                setBandedExport(true);
+            throw;
+        }
+        reveal_initialized_ = true;
+    }
+    if (banded)
+        setBandedExport(true);
+    if (enabled) {
+        for (auto& [pipeline, variant] : reveal_pipelines_) {
+            std::swap(pipeline->shader, variant->shader);
+            std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
+            std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
+            std::swap(pipeline->pipeline, variant->pipeline);
+        }
+    }
+    reveal_active_ = enabled;
+}
+
 void VulkanGSPipeline::setBandedExport(const bool enabled) {
     if (enabled == banded_export_active_)
         return;
+    if (reveal_active_) {
+        setRevealEffect(false);
+        setBandedExport(enabled);
+        setRevealEffect(true);
+        return;
+    }
 
     if (enabled && !banded_export_initialized_) {
         const size_t count = all_compute_pipelines.size();
@@ -2009,7 +2102,7 @@ void VulkanGSPipeline::setBandedExport(const bool enabled) {
             for (size_t i = 0; i < count; ++i) {
                 auto* const pipeline = all_compute_pipelines[i];
                 const std::filesystem::path path(pipeline->spirv_path);
-                const std::string name = path.stem().string();
+                const std::string name = lfs::core::path_to_utf8(path.stem());
                 if (!name.starts_with("projection_forward") &&
                     !name.starts_with("rasterize_forward") &&
                     !name.starts_with("macro_raster") &&
@@ -2020,7 +2113,7 @@ void VulkanGSPipeline::setBandedExport(const bool enabled) {
                 auto* const variant_ptr = variant.get();
                 banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
                 createComputePipeline(*variant_ptr,
-                                      (path.parent_path() / (name + "_banded.spv")).string(),
+                                      lfs::core::path_to_utf8((path.parent_path() / (name + "_banded.spv"))),
                                       pipeline->compatible_subgroup_size,
                                       pipeline->expected_workgroup_size_x);
             }

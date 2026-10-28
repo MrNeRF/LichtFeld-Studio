@@ -56,6 +56,8 @@ namespace lfs::core::nn::kernels {
             }
             __syncthreads();
             const float mean = red[0] / static_cast<float>(cols);
+            // Every warp must read the mean before the scratch space holds squared sums.
+            __syncthreads();
 
             w = warp_sum(sumsq);
             if ((tid & 31) == 0) {

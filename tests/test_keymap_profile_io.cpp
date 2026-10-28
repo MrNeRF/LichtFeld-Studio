@@ -386,7 +386,8 @@ namespace lfs::vis::input {
                 R"({ "mode" : 0, "description" : "Missing action", "trigger_type" : "key", "key" : 53, "modifiers" : 0, "opaque" : [1, 2] })";
             {
                 std::ofstream output(invalid);
-                output << "{\"name\":\"Broken\",\"version\":32,\"bindings\":[],\"overrides\":{\"bindings\":["
+                output << "{\"name\":\"Broken\",\"version\":" << test::currentProfileVersion()
+                       << ",\"bindings\":[],\"overrides\":{\"bindings\":["
                        << R"({"mode":0,"action":62,"description":"Translate","trigger_type":"key","key":52,"modifiers":0},)"
                        << raw_invalid_entry << "],\"removed\":[],\"disabled\":[]}}";
             }
@@ -451,7 +452,8 @@ namespace lfs::vis::input {
                               "lfs_invalid_movement_keymap.json";
             {
                 std::ofstream output(path);
-                output << R"({"name":"Broken","version":32,"bindings":[],"overrides":{"bindings":[
+                output << R"({"name":"Broken","version":)" << test::currentProfileVersion()
+                       << R"(,"bindings":[],"overrides":{"bindings":[
                 {"mode":0,"action":64,"description":"Scale","trigger_type":"key","key":297,"modifiers":0},
                 {"mode":0,"action":5,"description":"Forward","trigger_type":"key","key":75,"modifiers":2}],
                 "removed":[],"disabled":[]}})";

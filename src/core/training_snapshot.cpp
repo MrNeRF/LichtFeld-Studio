@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/training_snapshot.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include <cuda_runtime.h>
 #include <fstream>

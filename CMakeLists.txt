@@ -141,6 +141,10 @@ endif()
 # cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "CUDA runtime linkage" FORCE)
 
+# Whole-program CUDA embeds a separate device program per translation unit.
+# Shared weak template stubs can otherwise select a program with different math flags.
+add_compile_options($<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:--static-global-template-stub=true>)
+
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
 # separated. Single-config generators (Ninja, NMake) use a flat binary dir —
@@ -353,6 +357,11 @@ if(MSVC)
             ${CMAKE_${_lfs_language}_COMPILER_LAUNCHER})
     endforeach()
     unset(_lfs_language)
+endif()
+
+# native_fs relies on MSVC's lexically_relative fix for \\?\ paths (LWG 3699, VS 2022 17.4).
+if(MSVC AND MSVC_VERSION LESS 1934)
+    message(FATAL_ERROR "LichtFeld Studio needs Visual Studio 2022 17.4 or newer, found MSVC ${MSVC_VERSION}")
 endif()
 
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
@@ -571,11 +580,14 @@ add_subdirectory(external EXCLUDE_FROM_ALL)
 # preprocessor and report the selected C++ language version accurately.
 # This is intentionally added after external/ so vendored targets keep their
 # upstream compiler settings.
+# Template-heavy C++ units can exceed the COFF section limit, especially in
+# Debug. Enable large objects consistently instead of maintaining a file allowlist.
 if(MSVC)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CXX>:/bigobj>
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
     )
 endif()
@@ -647,6 +659,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/compare.cpp
     src/app/converter.cpp
+    src/app/batch_trainer.cpp
     src/app/licht_command.cpp
     src/app/converter_output_paths.cpp
     src/app/converter_overwrite.cpp
@@ -1203,9 +1216,6 @@ elseif(WIN32)
             RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
         )
     endif()
-    if(MSVC)
-        target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
-    endif()
 endif()
 
 if(UNIX)
@@ -1572,3 +1582,79 @@ install(CODE "
     endif()
     file(INSTALL \"\${_lfs_notice_output}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
 " COMPONENT runtime)
+
+option(BUILD_SPLAT_TRANSFER_TESTS "Build splat drag export contract tests" ${BUILD_FORMAT_TESTS})
+option(BUILD_SELECTION_OUTLINE_TESTS "Build selection outline request and persistence contracts" ${BUILD_VISUALIZER_TESTS})
+if(BUILD_SELECTION_OUTLINE_TESTS)
+    add_executable(lfs_selection_outline_contract tools/selection_outline_test/main.cpp)
+    target_include_directories(lfs_selection_outline_contract PRIVATE
+        src src/visualizer src/rendering/include src/io/include)
+    # The visualizer references the driver API. Link its toolkit stub explicitly
+    # so Debug/hidden-symbol builds also link on GPU-less Linux CI runners.
+    target_link_libraries(lfs_selection_outline_contract PRIVATE lfs_visualizer lfs_core CUDA::cuda_driver)
+    target_compile_features(lfs_selection_outline_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME selection_outline_contract COMMAND lfs_selection_outline_contract)
+    set_tests_properties(selection_outline_contract PROPERTIES TIMEOUT 30
+        ENVIRONMENT "LFS_HOME=${CMAKE_BINARY_DIR}/outline-test-profile;LFS_PLUGIN_AUTOLOAD=0")
+endif()
+if(BUILD_SPLAT_TRANSFER_TESTS)
+    add_executable(lfs_splat_drag_axes_contract tools/splat_transfer_test/axes_contract.cpp)
+    target_include_directories(lfs_splat_drag_axes_contract PRIVATE src/visualizer)
+    target_link_libraries(lfs_splat_drag_axes_contract PRIVATE glm::glm)
+    target_compile_features(lfs_splat_drag_axes_contract PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME splat_drag_axes_contract COMMAND lfs_splat_drag_axes_contract)
+    add_executable(lfs_native_modal_frame_contract tools/splat_transfer_test/modal_frame_contract.cpp src/visualizer/core/main_loop.cpp)
+    target_include_directories(lfs_native_modal_frame_contract PRIVATE src/visualizer)
+    target_compile_definitions(lfs_native_modal_frame_contract PRIVATE LFS_VIS_EXPORTS)
+    target_compile_features(lfs_native_modal_frame_contract PRIVATE cxx_std_23)
+    target_link_libraries(lfs_native_modal_frame_contract PRIVATE lfs_core Threads::Threads)
+    add_executable(lfs_file_transfer_progress_contract tools/splat_transfer_test/progress_contract.cpp)
+    target_include_directories(lfs_file_transfer_progress_contract PRIVATE src/visualizer)
+    target_compile_features(lfs_file_transfer_progress_contract PRIVATE cxx_std_23)
+    target_link_libraries(lfs_file_transfer_progress_contract PRIVATE Threads::Threads)
+    enable_testing()
+    add_test(NAME file_transfer_progress_contract COMMAND lfs_file_transfer_progress_contract)
+    add_test(NAME native_modal_frame_contract COMMAND lfs_native_modal_frame_contract)
+    set_tests_properties(native_modal_frame_contract PROPERTIES TIMEOUT 30)
+    set_tests_properties(file_transfer_progress_contract PROPERTIES TIMEOUT 30)
+    add_executable(lfs_splat_transfer_test tools/splat_transfer_test/main.cpp src/visualizer/gui/utils/splat_transfer.cpp)
+    target_include_directories(lfs_splat_transfer_test PRIVATE src/visualizer src/io)
+    target_compile_definitions(lfs_splat_transfer_test PRIVATE LFS_VIS_EXPORTS)
+    target_link_libraries(lfs_splat_transfer_test PRIVATE lfs_core lfs_io CUDA::cudart)
+    target_compile_features(lfs_splat_transfer_test PRIVATE cxx_std_23)
+    enable_testing()
+    add_test(NAME splat_transfer_contract COMMAND lfs_splat_transfer_test)
+    # Snapshot hydration and SH storage require CUDA. Hosted CPU runners still
+    # run all native/progress contracts and report this integration test skipped.
+    set_tests_properties(splat_transfer_contract PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu")
+    if(WIN32)
+        add_executable(lfs_native_drag_contract resources/lichtfeld-studio.rc src/visualizer/gui/utils/drag_drop_native.cpp tools/splat_transfer_test/windows_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_native_drag_contract PRIVATE src/visualizer src/core/include)
+        target_compile_definitions(lfs_native_drag_contract PRIVATE LFS_NATIVE_DRAG_TESTS=1)
+        target_link_libraries(lfs_native_drag_contract PRIVATE lfs_core SDL3::SDL3 ole32 shell32 uuid psapi)
+        target_compile_features(lfs_native_drag_contract PRIVATE cxx_std_23)
+        add_test(NAME native_drag_contract COMMAND lfs_native_drag_contract)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        pkg_check_modules(LFS_DRAG_TEST_WAYLAND REQUIRED IMPORTED_TARGET wayland-client wayland-server)
+        add_executable(lfs_wayland_drag_contract tools/splat_transfer_test/wayland_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_wayland_drag_contract PRIVATE src src/visualizer src/core/include)
+        target_compile_definitions(lfs_wayland_drag_contract PRIVATE LFS_HAS_WAYLAND_DRAG=1)
+        target_link_libraries(lfs_wayland_drag_contract PRIVATE SDL3::Headers PkgConfig::LFS_GTK3 PkgConfig::LFS_DRAG_TEST_WAYLAND Threads::Threads X11)
+        target_compile_features(lfs_wayland_drag_contract PRIVATE cxx_std_23)
+        add_test(NAME wayland_drag_contract COMMAND lfs_wayland_drag_contract)
+        add_executable(lfs_x11_drag_contract tools/splat_transfer_test/x11_contract.cpp src/visualizer/gui/utils/native_file_drag.cpp src/visualizer/gui/utils/native_file_drag_wayland.cpp)
+        target_include_directories(lfs_x11_drag_contract PRIVATE src src/visualizer src/core/include)
+        target_compile_definitions(lfs_x11_drag_contract PRIVATE LFS_HAS_WAYLAND_DRAG=1 LFS_NATIVE_DRAG_TESTS=1)
+        target_link_libraries(lfs_x11_drag_contract PRIVATE SDL3::Headers PkgConfig::LFS_GTK3 PkgConfig::LFS_DRAG_TEST_WAYLAND Threads::Threads X11)
+        target_compile_features(lfs_x11_drag_contract PRIVATE cxx_std_23)
+        find_program(LFS_XVFB_RUN xvfb-run)
+        if(LFS_XVFB_RUN)
+            add_test(NAME x11_drag_contract COMMAND "${LFS_XVFB_RUN}" -a $<TARGET_FILE:lfs_x11_drag_contract>)
+        else()
+            add_test(NAME x11_drag_contract COMMAND lfs_x11_drag_contract)
+        endif()
+        set_tests_properties(x11_drag_contract PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "GDK_BACKEND=x11" TIMEOUT 30)
+    endif()
+endif()

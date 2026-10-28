@@ -243,6 +243,31 @@ namespace {
     }
 #endif
 
+    TEST(PythonConsoleInputTest, GrowingAWiderViewRestoresScrollbackWithoutHanging) {
+        // The docked console's first layout: 80x24 -> 89x16 pushes lines to scrollback, 89x25 pops
+        // them back into a wider view. Before the fix their padding cells had width 0 and the
+        // second resize never returned.
+        lfs::vis::terminal::TerminalWidget terminal(80, 24);
+        for (int i = 0; i < 40; ++i)
+            terminal.write("line " + std::to_string(i) + "\r\n");
+        terminal.resize(89, 16);
+        terminal.resize(89, 25);
+        const auto snapshot = terminal.snapshot();
+        EXPECT_EQ(snapshot.cols, 89);
+        EXPECT_EQ(snapshot.rows, 25);
+        EXPECT_NE(terminal.getAllText().find("line 39"), std::string::npos);
+        EXPECT_NE(terminal.getAllText().find("line 20"), std::string::npos);
+    }
+
+    TEST(PythonConsoleInputTest, AllTextJoinsRowsWrappedAtTheTerminalWidth) {
+        // MCP editor output parses this text, so a long line must not gain newlines at the console width.
+        lfs::vis::terminal::TerminalWidget terminal(6, 2);
+        terminal.write("hello world\r\nnext\r\n");
+        EXPECT_EQ(terminal.getAllText(), "hello world\nnext");
+        terminal.write("[0.123456789, 1.5]");
+        EXPECT_EQ(terminal.getAllText(), "hello world\nnext\n[0.123456789, 1.5]");
+    }
+
     TEST(PythonConsoleInputTest, ClearDoesNothingOnPackagesTab) {
         auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
         state.setEditorText("print(1)");

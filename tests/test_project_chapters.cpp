@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <format>
@@ -852,6 +853,86 @@ namespace {
         EXPECT_FALSE((*nodes)[2].camera->has_image);
     }
 
+    TEST(ProjectChapterTest, SceneGraphPointCloudSourceRoundTripsAndDefaultsFalse) {
+        const auto id = uuid_literal("53000000-0000-4000-8000-000000000011");
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = id,
+            .type = "splat",
+            .name = "Raw points",
+            .point_cloud_source = true,
+        }));
+        auto parsed = SceneGraphChapter::parse(chapter.dom().dump());
+        ASSERT_TRUE(parsed);
+        auto found = parsed->find(id);
+        ASSERT_TRUE(found && *found);
+        EXPECT_TRUE((*found)->point_cloud_source);
+        auto legacy = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        legacy["nodes"][0].erase("point_cloud_source");
+        auto old = SceneGraphChapter::parse(legacy.dump());
+        ASSERT_TRUE(old);
+        auto old_found = old->find(id);
+        ASSERT_TRUE(old_found && *old_found);
+        EXPECT_FALSE((*old_found)->point_cloud_source);
+        auto cleared = SceneNodeRecord{.uuid = id, .type = "splat", .name = "Ordinary splat"};
+        ASSERT_TRUE(chapter.upsert_node(cleared));
+        auto without_hint = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        EXPECT_FALSE(without_hint["nodes"][0].contains("point_cloud_source"));
+        legacy["nodes"][0]["point_cloud_source"] = "invalid";
+        auto invalid = SceneGraphChapter::parse(legacy.dump());
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectChapterTest, SceneGraphCropPolygonRoundTripsAndRejectsMalformedOutlines) {
+        const auto id = uuid_literal("53000000-0000-4000-8000-000000000012");
+        const CropPolygonRecord polygon{
+            .vertices = {{-2.0f, -1.0f}, {2.0f, -1.0f}, {2.0f, 0.5f}, {0.0f, 1.0f}, {-2.0f, 0.5f}},
+            .half_depth = 1.25f,
+            .inverse = true,
+            .enabled = false,
+            .color = {0.1f, 0.2f, 0.3f},
+            .line_width = 3.0f,
+        };
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = id,
+            .type = "crop_polygon",
+            .name = "Polygon region",
+            .crop_polygon = polygon,
+        }));
+        const auto json = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        auto parsed = SceneGraphChapter::parse(json.dump());
+        ASSERT_TRUE(parsed);
+        auto found = parsed->find(id);
+        ASSERT_TRUE(found && *found);
+        ASSERT_TRUE((*found)->crop_polygon);
+        EXPECT_EQ(*(*found)->crop_polygon, polygon);
+        EXPECT_FALSE((*found)->cropbox);
+        EXPECT_FALSE((*found)->ellipsoid);
+
+        using Json = lfs::io::JsonChapterDom::Json;
+        const auto expect_data_loss = [&](const auto& mutate) {
+            auto malformed = json;
+            mutate(malformed["nodes"][0]["crop_polygon"]);
+            auto result = SceneGraphChapter::parse(malformed.dump());
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::DataLoss);
+        };
+        expect_data_loss([](Json& value) {
+            Json vertices = Json::array();
+            for (int i = 0; i < 65; ++i) {
+                const float angle = 0.0966f * static_cast<float>(i);
+                vertices.push_back(Json::array({std::cos(angle), std::sin(angle)}));
+            }
+            value["vertices"] = std::move(vertices);
+        });
+        expect_data_loss([](Json& value) { value["vertices"][1][0] = nullptr; });
+        expect_data_loss([](Json& value) { value["vertices"] = Json::parse("[[0,0],[1,1],[2,2]]"); });
+        expect_data_loss([](Json& value) { value["half_depth"] = 0.0f; });
+        expect_data_loss([](Json& value) { value.erase("vertices"); });
+    }
+
     TEST(ProjectChapterTest, SceneGraphCameraHasImageDefaultsTrueWhenAbsent) {
         const auto node_id =
             uuid_literal("53000000-0000-4000-8000-000000000010");
@@ -910,7 +991,7 @@ namespace {
         params.dataset.output_path_explicit = true;
         params.overrides.dataset_json = R"({"images":"images","test_every":4})";
 
-        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4");
+        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4", {}, {});
 
         // Stored strategy, iterations and loading settings win over CLI defaults.
         EXPECT_EQ(params.optimization.strategy, "mcmc");

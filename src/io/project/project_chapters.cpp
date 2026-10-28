@@ -4,6 +4,8 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "core/crop_polygon.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/path_utils.hpp"
 
@@ -644,7 +646,7 @@ namespace lfs::io::project {
         lfs::Result<std::vector<std::byte>> read_file_window(
             const std::filesystem::path& path, const std::uint64_t offset,
             const std::size_t bytes) {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::NotFound, "The referenced file could not be opened.",
@@ -695,7 +697,7 @@ namespace lfs::io::project {
 
         lfs::Result<Hash128>
         hash_file_streaming(const std::filesystem::path& path) {
-            std::ifstream stream(path, std::ios::binary);
+            std::ifstream stream(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!stream) {
                 return fail<Hash128>(
                     lfs::ErrorCode::PermissionDenied,
@@ -750,8 +752,9 @@ namespace lfs::io::project {
             };
             std::vector<Entry> entries;
             std::error_code error;
+            const auto traversal_root = lfs::core::native_fs::traversal_path(root);
             std::filesystem::recursive_directory_iterator iterator(
-                root, std::filesystem::directory_options::skip_permission_denied, error);
+                lfs::core::native_fs::traversal_path(root), std::filesystem::directory_options::skip_permission_denied, error);
             if (error) {
                 return fail<std::vector<std::byte>>(
                     lfs::ErrorCode::Unavailable,
@@ -778,13 +781,13 @@ namespace lfs::io::project {
                                     lfs::core::path_to_utf8(root), MAX_DIRECTORY_ENTRIES),
                         "REFS", "fingerprint");
                 }
-                const auto relative = std::filesystem::relative(iterator->path(), root, error);
+                const auto relative = lfs::core::native_fs::relative(iterator->path(), traversal_root, error);
                 if (error) {
                     return fail<std::vector<std::byte>>(
                         lfs::ErrorCode::Unavailable,
                         "A referenced directory entry could not be identified.",
                         std::format("Cannot make '{}' relative to '{}': {}",
-                                    lfs::core::path_to_utf8(iterator->path()),
+                                    lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path())),
                                     lfs::core::path_to_utf8(root), error.message()),
                         "REFS", "fingerprint");
                 }
@@ -794,15 +797,15 @@ namespace lfs::io::project {
                         lfs::ErrorCode::Unavailable,
                         "A referenced directory entry could not be inspected.",
                         std::format("Cannot stat '{}': {}",
-                                    lfs::core::path_to_utf8(iterator->path()), error.message()),
+                                    lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path())), error.message()),
                         "REFS", "fingerprint");
                 }
                 Entry entry{
                     .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
-                    .kind = std::filesystem::is_directory(status)
+                    .kind = lfs::core::native_fs::is_directory(status)
                                 ? 'd'
-                                : (std::filesystem::is_regular_file(status) ? 'f' : 'o'),
+                                : (lfs::core::native_fs::is_regular_file(status) ? 'f' : 'o'),
                 };
                 if (entry.kind == 'f') {
                     entry.size = iterator->file_size(error);
@@ -812,12 +815,20 @@ namespace lfs::io::project {
                             lfs::ErrorCode::BoundsViolation,
                             "The referenced directory size cannot be represented.",
                             std::format("Cannot account for '{}'",
-                                        lfs::core::path_to_utf8(iterator->path())),
+                                        lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(root, iterator->path()))),
                             "REFS", "fingerprint");
                     }
                     total_size += entry.size;
                 }
                 entries.push_back(std::move(entry));
+            }
+            if (error) {
+                return fail<std::vector<std::byte>>(
+                    lfs::ErrorCode::Unavailable,
+                    "The referenced directory could not be enumerated.",
+                    std::format("Cannot enumerate '{}': {}",
+                                lfs::core::path_to_utf8(root), error.message()),
+                    "REFS", "fingerprint");
             }
             std::ranges::sort(entries, {}, &Entry::path);
 
@@ -945,14 +956,14 @@ namespace lfs::io::project {
     lfs::Result<ReferenceFingerprint> fingerprint_path(
         const std::filesystem::path& path, const bool include_full_hash) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        const auto status = lfs::core::native_fs::status(path, error);
+        if (error || !lfs::core::native_fs::exists(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::NotFound, "The referenced path is missing.",
                 std::format("'{}' does not exist", lfs::core::path_to_utf8(path)),
                 "REFS", "fingerprint");
         }
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::native_fs::last_write_time(path, error);
         if (error) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::Unavailable, "The referenced path could not be inspected.",
@@ -963,9 +974,9 @@ namespace lfs::io::project {
 
         ReferenceFingerprint result;
         result.mtime_unix_ns = file_time_ns(mtime);
-        if (std::filesystem::is_regular_file(status)) {
+        if (lfs::core::native_fs::is_regular_file(status)) {
             result.kind = FingerprintKind::File;
-            result.size = std::filesystem::file_size(path, error);
+            result.size = lfs::core::native_fs::file_size(path, error);
             if (error) {
                 return fail<ReferenceFingerprint>(
                     lfs::ErrorCode::Unavailable,
@@ -995,7 +1006,7 @@ namespace lfs::io::project {
             }
             return result;
         }
-        if (!std::filesystem::is_directory(status)) {
+        if (!lfs::core::native_fs::is_directory(status)) {
             return fail<ReferenceFingerprint>(
                 lfs::ErrorCode::InvalidArgument,
                 "The referenced path type is not supported.",
@@ -1025,8 +1036,8 @@ namespace lfs::io::project {
         const std::filesystem::path& path,
         const ReferenceFingerprint& expected) {
         std::error_code error;
-        const auto status = std::filesystem::status(path, error);
-        if (error || !std::filesystem::exists(status)) {
+        const auto status = lfs::core::native_fs::status(path, error);
+        if (error || !lfs::core::native_fs::exists(status)) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::Missing,
                 .observed = std::nullopt,
@@ -1035,10 +1046,10 @@ namespace lfs::io::project {
             };
         }
         const FingerprintKind observed_kind =
-            std::filesystem::is_regular_file(status) ? FingerprintKind::File
-                                                     : FingerprintKind::Directory;
-        if ((!std::filesystem::is_regular_file(status) &&
-             !std::filesystem::is_directory(status)) ||
+            lfs::core::native_fs::is_regular_file(status) ? FingerprintKind::File
+                                                          : FingerprintKind::Directory;
+        if ((!lfs::core::native_fs::is_regular_file(status) &&
+             !lfs::core::native_fs::is_directory(status)) ||
             observed_kind != expected.kind) {
             return FingerprintCheck{
                 .disposition = FingerprintDisposition::TypeMismatch,
@@ -1047,7 +1058,7 @@ namespace lfs::io::project {
             };
         }
 
-        const auto mtime = std::filesystem::last_write_time(path, error);
+        const auto mtime = lfs::core::native_fs::last_write_time(path, error);
         if (error) {
             return fail<FingerprintCheck>(
                 lfs::ErrorCode::Unavailable,
@@ -1059,7 +1070,7 @@ namespace lfs::io::project {
         const std::int64_t observed_mtime = file_time_ns(mtime);
         if (observed_kind == FingerprintKind::File) {
             const std::uint64_t observed_size =
-                std::filesystem::file_size(path, error);
+                lfs::core::native_fs::file_size(path, error);
             if (error) {
                 return fail<FingerprintCheck>(
                     lfs::ErrorCode::Unavailable,
@@ -1339,6 +1350,71 @@ namespace lfs::io::project {
         }
         return value ? dom_.set("dataset_reference_uuid", value->to_string())
                      : dom_.set_json("dataset_reference_uuid", nullptr);
+    }
+
+    lfs::Result<std::optional<ProjectTrainingInitialization>>
+    ProjectChapter::training_initialization() const {
+        const auto value = dom_.get_json("training_initialization");
+        if (!value || value->is_null()) {
+            return std::optional<ProjectTrainingInitialization>{};
+        }
+        if (auto valid = require_object(*value, "PROJ", "training_initialization"); !valid) {
+            return std::move(valid).error();
+        }
+        const auto origin_member = value->find("data_origin");
+        if (origin_member == value->end()) {
+            return fail<std::optional<ProjectTrainingInitialization>>(
+                lfs::ErrorCode::DataLoss, "The training data origin is missing.",
+                "PROJ.training_initialization.data_origin is missing", "PROJ",
+                "training_initialization.data_origin");
+        }
+        auto origin = fixed_array<float, 3>(*origin_member, "PROJ", "training_initialization.data_origin");
+        if (!origin) {
+            return std::move(origin).error();
+        }
+        auto reference = parse_optional_uuid(*value, "init_reference_uuid", "PROJ", "training_initialization");
+        if (!reference) {
+            return std::move(reference).error();
+        }
+        ProjectTrainingInitialization result{.init_reference_uuid = *reference, .data_origin = *origin, .scene_center = std::nullopt};
+        if (const auto center = value->find("scene_center"); center != value->end() && !center->is_null()) {
+            auto parsed = fixed_array<float, 3>(*center, "PROJ", "training_initialization.scene_center");
+            if (!parsed) {
+                return std::move(parsed).error();
+            }
+            result.scene_center = *parsed;
+        }
+        return std::optional{result};
+    }
+
+    lfs::Result<void> ProjectChapter::set_training_initialization(
+        const std::optional<ProjectTrainingInitialization>& value) {
+        if (!value) {
+            return dom_.set_json("training_initialization", nullptr);
+        }
+        if ((value->init_reference_uuid && value->init_reference_uuid->is_nil()) ||
+            std::ranges::any_of(value->data_origin, [](const float item) { return !std::isfinite(item); }) ||
+            (value->scene_center && std::ranges::any_of(*value->scene_center, [](const float item) { return !std::isfinite(item); }))) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "The training initialization is invalid.",
+                "Training initialization requires a non-null reference UUID and finite coordinates when present",
+                "PROJ", "training_initialization");
+        }
+        Json known{{"data_origin", json_array(value->data_origin)}};
+        if (value->init_reference_uuid) {
+            known["init_reference_uuid"] = value->init_reference_uuid->to_string();
+        }
+        if (value->scene_center) {
+            known["scene_center"] = json_array(*value->scene_center);
+        }
+        auto merged = merge_known(dom_.get_json("training_initialization").value_or(Json::object()), known);
+        if (!value->init_reference_uuid) {
+            merged.erase("init_reference_uuid");
+        }
+        if (!value->scene_center) {
+            merged.erase("scene_center");
+        }
+        return dom_.set_json("training_initialization", std::move(merged));
     }
 
     lfs::Result<std::vector<lfs::core::Uuid>>
@@ -2138,7 +2214,7 @@ namespace lfs::io::project {
         for (const auto& candidate :
              locator_candidates((*record)->locator, project_root)) {
             std::error_code error;
-            if (!std::filesystem::exists(candidate, error) || error) {
+            if (!lfs::core::native_fs::exists(candidate, error) || error) {
                 continue;
             }
             auto check =
@@ -2352,6 +2428,92 @@ namespace lfs::io::project {
         Json ellipsoid_json(const EllipsoidRecord& value) {
             return Json{
                 {"radii", json_array(value.radii)},
+                {"inverse", value.inverse},
+                {"enabled", value.enabled},
+                {"color", json_array(value.color)},
+                {"line_width", value.line_width},
+            };
+        }
+
+        lfs::Result<CropPolygonRecord> parse_crop_polygon(
+            const Json& value, const std::string_view field) {
+            if (auto valid = require_object(value, "SCNG", field); !valid) {
+                return std::move(valid).error();
+            }
+            const auto vertices_member = value.find("vertices");
+            const auto color_member = value.find("color");
+            if (vertices_member == value.end() || color_member == value.end() ||
+                !vertices_member->is_array()) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is incomplete.",
+                    std::format("SCNG.{} is missing vertices or color", field), "SCNG",
+                    field);
+            }
+            if (vertices_member->size() < lfs::core::crop_polygon::kMinVertices ||
+                vertices_member->size() > lfs::core::crop_polygon::kMaxVertices) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{}.vertices has {} entries, expected 3 to {}", field,
+                                vertices_member->size(), lfs::core::crop_polygon::kMaxVertices),
+                    "SCNG", field);
+            }
+            CropPolygonRecord result;
+            std::vector<glm::vec2> outline;
+            outline.reserve(vertices_member->size());
+            for (std::size_t i = 0; i < vertices_member->size(); ++i) {
+                auto vertex = fixed_array<float, 2>((*vertices_member)[i], "SCNG",
+                                                    std::format("{}.vertices[{}]", field, i));
+                if (!vertex) {
+                    return std::move(vertex).error();
+                }
+                result.vertices.push_back(*vertex);
+                outline.emplace_back((*vertex)[0], (*vertex)[1]);
+            }
+            auto color = fixed_array<float, 3>(*color_member, "SCNG",
+                                               std::format("{}.color", field));
+            auto half_depth = required<float>(value, "half_depth", "SCNG", field);
+            auto inverse = required<bool>(value, "inverse", "SCNG", field);
+            auto enabled = required<bool>(value, "enabled", "SCNG", field);
+            auto line_width = required<float>(value, "line_width", "SCNG", field);
+            if (!color) {
+                return std::move(color).error();
+            }
+            if (!half_depth) {
+                return std::move(half_depth).error();
+            }
+            if (!inverse) {
+                return std::move(inverse).error();
+            }
+            if (!enabled) {
+                return std::move(enabled).error();
+            }
+            if (!line_width) {
+                return std::move(line_width).error();
+            }
+            if (!std::isfinite(*line_width) || *line_width <= 0.0f ||
+                !lfs::core::crop_polygon::isValidHalfDepth(*half_depth) ||
+                !lfs::core::crop_polygon::isValidOutline(outline)) {
+                return fail<CropPolygonRecord>(
+                    lfs::ErrorCode::DataLoss, "A scene crop polygon is invalid.",
+                    std::format("SCNG.{} has a degenerate outline, depth, or line width", field),
+                    "SCNG", field);
+            }
+            result.half_depth = *half_depth;
+            result.inverse = *inverse;
+            result.enabled = *enabled;
+            result.color = *color;
+            result.line_width = *line_width;
+            return result;
+        }
+
+        Json crop_polygon_json(const CropPolygonRecord& value) {
+            Json vertices = Json::array();
+            for (const auto& vertex : value.vertices) {
+                vertices.push_back(json_array(vertex));
+            }
+            return Json{
+                {"vertices", std::move(vertices)},
+                {"half_depth", value.half_depth},
                 {"inverse", value.inverse},
                 {"enabled", value.enabled},
                 {"color", json_array(value.color)},
@@ -2575,12 +2737,22 @@ namespace lfs::io::project {
                 .locked = *locked,
                 .training_enabled = *training,
                 .payload_diverged = *diverged,
+                .point_cloud_source = false,
                 .georef_pose = std::nullopt,
                 .payload = std::nullopt,
                 .cropbox = std::nullopt,
                 .ellipsoid = std::nullopt,
                 .camera = std::nullopt,
+                .crop_polygon = std::nullopt,
             };
+            if (JsonChapterDom::read_json_ref(element, "point_cloud_source")) {
+                auto point_source = JsonChapterDom::read<bool>(element, "point_cloud_source");
+                if (!point_source)
+                    return fail<SceneNodeRecord>(
+                        lfs::ErrorCode::DataLoss, "A scene node source hint is invalid.",
+                        "point_cloud_source must be a boolean", "SCNG", "nodes.point_cloud_source");
+                result.point_cloud_source = *point_source;
+            }
 
             if (const Json* pose =
                     JsonChapterDom::read_json_ref(element, "georef_pose");
@@ -2646,6 +2818,21 @@ namespace lfs::io::project {
                     return std::move(parsed).error();
                 }
                 result.ellipsoid = std::move(*parsed);
+            }
+            if (const Json* crop_polygon =
+                    JsonChapterDom::read_json_ref(element, "crop_polygon");
+                crop_polygon) {
+                auto parsed = parse_crop_polygon(*crop_polygon, "nodes.crop_polygon");
+                if (!parsed) {
+                    return std::move(parsed).error();
+                }
+                result.crop_polygon = std::move(*parsed);
+            }
+            if (const Json* collision = JsonChapterDom::read_json_ref(element, "collision")) {
+                auto parsed = parse_uuid(*collision, "SCNG", "nodes.collision");
+                if (!parsed)
+                    return std::move(parsed).error();
+                result.collision = *parsed;
             }
             if (const Json* camera =
                     JsonChapterDom::read_json_ref(element, "camera");
@@ -2783,6 +2970,10 @@ namespace lfs::io::project {
                 "UUID/type/name/transform must be valid and generated keyframes are excluded",
                 "SCNG", "nodes");
         }
+        if (value.collision && (value.collision->is_nil() || value.type != "collision"))
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
+                "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
         if (value.payload &&
             (value.payload->fourcc.size() != 4 ||
              value.payload->instance_uuid.is_nil() ||
@@ -2831,6 +3022,10 @@ namespace lfs::io::project {
         element["locked"] = value.locked;
         element["training_enabled"] = value.training_enabled;
         element["payload_diverged"] = value.payload_diverged;
+        if (value.point_cloud_source)
+            element["point_cloud_source"] = true;
+        else
+            element.erase("point_cloud_source");
         if (pose) {
             element["georef_pose"] = std::move(*pose);
         } else {
@@ -2851,6 +3046,15 @@ namespace lfs::io::project {
         } else {
             element.erase("ellipsoid");
         }
+        if (value.crop_polygon) {
+            element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
+        } else {
+            element.erase("crop_polygon");
+        }
+        if (value.collision)
+            element["collision"] = value.collision->to_string();
+        else
+            element.erase("collision");
         if (value.camera) {
             element["camera"] = camera_json(*value.camera);
         } else {
@@ -3673,6 +3877,21 @@ namespace lfs::io::project {
                 return std::move(status).error();
             }
         }
+        auto initialization = project.training_initialization();
+        if (!initialization) {
+            return std::move(initialization).error();
+        }
+        if (*initialization && (*initialization)->init_reference_uuid) {
+            if (auto status = append(ReferenceOwnerBinding{
+                    .reference_uuid = *(*initialization)->init_reference_uuid,
+                    .chapter = "PROJ",
+                    .owner_uuid = std::nullopt,
+                    .field = "training_initialization.init_reference_uuid",
+                });
+                !status) {
+                return std::move(status).error();
+            }
+        }
         for (const SceneNodeRecord& node : nodes) {
             if (node.payload && node.payload->reference_uuid) {
                 if (auto status = append(ReferenceOwnerBinding{
@@ -3850,11 +4069,47 @@ namespace lfs::io::project {
             std::move(*result), parameters);
     }
 
+    void resolve_parameter_path_references(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        ParameterManagerSnapshot& snapshot) {
+        using Role = std::pair<
+            lfs::core::param::OptimizationParameters*,
+            const ParameterManagerSnapshot::ReferenceBindings*>;
+        const std::array roles{
+            Role{&snapshot.mcmc_session, &snapshot.mcmc_session_references},
+            Role{&snapshot.mrnf_session, &snapshot.mrnf_session_references},
+            Role{&snapshot.igs_session, &snapshot.igs_session_references},
+            Role{&snapshot.mcmc_current, &snapshot.mcmc_current_references},
+            Role{&snapshot.mrnf_current, &snapshot.mrnf_current_references},
+            Role{&snapshot.igs_current, &snapshot.igs_current_references},
+        };
+        for (const auto& [params, bindings] : roles) {
+            if (bindings->background_image_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->background_image_reference,
+                        params->bg_image_path)) {
+                    params->bg_image_path = *resolved;
+                }
+            }
+            if (bindings->ppisp_reference) {
+                if (auto resolved = resolve_path_reference(
+                        references, project_root, *bindings->ppisp_reference,
+                        params->ppisp_sidecar_path)) {
+                    params->ppisp_sidecar_path = *resolved;
+                }
+            }
+        }
+    }
+
     void adopt_project_training_parameters(
         lfs::core::param::TrainingParameters& params,
         ParameterManagerSnapshot snapshot,
         std::filesystem::path dataset_root,
-        std::string images_folder) {
+        std::string images_folder,
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root) {
+        resolve_parameter_path_references(references, project_root, snapshot);
 
         // Take the stored options and supply the resolved and command-line locations.
         auto dataset = std::move(snapshot.dataset);

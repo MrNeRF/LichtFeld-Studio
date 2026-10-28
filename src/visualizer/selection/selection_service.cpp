@@ -5,6 +5,8 @@
 #include "core/camera.hpp"
 #include "core/cuda/selection_ops.hpp"
 #include "core/cuda_error_typed.hpp"
+#include "core/error_bus.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
@@ -43,14 +45,42 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
-        constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
-        constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
         constexpr float INVALID_SCREEN_POSITION = -1.0e8f;
         constexpr float HOVER_PICK_RADIUS_PX = 12.0f;
         constexpr float RING_PICK_PADDING_PX = 4.0f;
         constexpr float MIN_VOLUME_SELECTION_RADIUS = 1.0e-3f;
+
+        [[nodiscard]] bool revealMovesSplats(const RenderingManager* rendering) {
+            if (const auto* gui = services().guiOrNull()) {
+                const auto& controller = gui->sequencer();
+                const auto& clip = controller.timeline().revealClip();
+                if (!clip || controller.playhead() >= clip->end)
+                    return false;
+                const int effect = static_cast<int>(clip->effect);
+                return effect <= 8 || effect == 10;
+            }
+            return rendering && rendering->revealMovesSplats();
+        }
+
+        [[nodiscard]] SelectionResult revealSelectionBlocked(const bool notify = false) {
+            const std::string message = LOC("selection.reveal_moving_blocked");
+            if (notify) {
+                auto error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::App,
+                    .user_message = message,
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = std::move(error),
+                    .surface = lfs::ErrorSurface::Toast,
+                    .actions = {},
+                    .operation_id = lfs::OperationId::generate(),
+                });
+            }
+            return {false, 0, message};
+        }
 
         [[nodiscard]] glm::vec2 screenToRender(const glm::vec2& screen, const SelectionService::ViewportInfo& info) {
             const float scale_x = static_cast<float>(info.render_width) / info.width;
@@ -1104,6 +1134,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectBrush(float x, float y, float radius, SelectionMode mode,
                                                   int camera_index) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         LOG_TIMER("SelectionService::selectBrush");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1139,6 +1171,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectRect(float x0, float y0, float x1, float y1, SelectionMode mode,
                                                  int camera_index) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         LOG_TIMER("SelectionService::selectRect");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1215,6 +1249,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectPolygon(const std::vector<glm::vec2>& vertices,
                                                     SelectionMode mode, int camera_index) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         LOG_TIMER("SelectionService::selectPolygon");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1271,6 +1307,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectRing(const float x, const float y, const SelectionMode mode,
                                                  const int camera_index) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1326,6 +1364,8 @@ namespace lfs::vis {
     SelectionResult SelectionService::selectByColorAt(const float x, const float y, const SelectionMode mode,
                                                       const SelectionFilterState filters,
                                                       const int camera_index) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(true);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1373,6 +1413,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectBoxVolume(const SelectionMode mode,
                                                       const SelectionCommitOptions options) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1410,6 +1452,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectSphereVolume(const SelectionMode mode,
                                                          const SelectionCommitOptions options) {
+        if (revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(false);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1455,6 +1499,8 @@ namespace lfs::vis {
         }
 
         const auto filters = defaultFilterState();
+        if ((filters.crop_filter || filters.depth_filter) && revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(true);
         auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         return commitSelection(selection,
                                SelectionMode::Replace,
@@ -1474,6 +1520,8 @@ namespace lfs::vis {
         }
 
         const auto filters = defaultFilterState();
+        if ((filters.crop_filter || filters.depth_filter) && revealMovesSplats(rendering_manager_))
+            return revealSelectionBlocked(true);
         const auto node_mask = effectiveNodeMask(filters.restrict_to_selected_nodes);
         auto filter_mask = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         applyFilters(filter_mask, filters, node_mask);
@@ -1871,6 +1919,10 @@ namespace lfs::vis {
     bool SelectionService::beginInteractiveSelection(const SelectionShape shape, const SelectionMode mode,
                                                      const glm::vec2 start_pos, const float brush_radius,
                                                      const SelectionFilterState filters) {
+        if (revealMovesSplats(rendering_manager_)) {
+            (void)revealSelectionBlocked(true);
+            return false;
+        }
         if (!scene_manager_ || !rendering_manager_) {
             return false;
         }
@@ -2108,6 +2160,10 @@ namespace lfs::vis {
     }
 
     SelectionResult SelectionService::finishInteractiveSelection() {
+        if (revealMovesSplats(rendering_manager_)) {
+            cancelInteractiveSelection();
+            return revealSelectionBlocked(true);
+        }
         auto& session = interactive_selection_;
         if (!session.active) {
             return {false, 0, "No active interactive selection"};
@@ -2248,11 +2304,17 @@ namespace lfs::vis {
 
         const auto render_cursor = screenToRender(cursor_pos, context->info);
         const bool add_mode = mode != SelectionMode::Remove;
+        auto* const preview = hit && picked_ring_id >= 0 ? &command_selection_buffer_ : nullptr;
+        // The render shows only the ring under the cursor. Moving within that
+        // ring or over empty space needs no new frame.
+        if (rendering_manager_->cursorPreviewShows(picked_ring_id, add_mode, context->panel, preview)) {
+            return;
+        }
         rendering_manager_->setCursorPreviewState(
             true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr, false, 0.0f,
             context->panel, picked_ring_id);
-        if (hit && picked_ring_id >= 0) {
-            rendering_manager_->setPreviewSelection(&command_selection_buffer_, add_mode);
+        if (preview) {
+            rendering_manager_->setPreviewSelection(preview, add_mode);
         } else {
             rendering_manager_->clearPreviewSelection();
         }
@@ -2308,12 +2370,21 @@ namespace lfs::vis {
         if (!session.preview_dirty && !continuous_refresh) {
             return;
         }
-        LOG_TIMER("SelectionService::refreshInteractivePreview");
-
         if (!session.viewport_context || !session.viewport_context->info.valid()) {
             return;
         }
         const auto& context = *session.viewport_context;
+        // Polygon and ring previews also follow the camera and the model. Refresh
+        // them when one of those changed, not on every frame.
+        std::optional<std::size_t> view_key;
+        if (continuous_refresh && context.viewport) {
+            view_key = interactivePreviewViewKey(context);
+            if (!session.preview_dirty && session.preview_view_key == view_key) {
+                return;
+            }
+        }
+        LOG_TIMER("SelectionService::refreshInteractivePreview");
+
         const auto& info = context.info;
         const bool add_mode = (session.mode != SelectionMode::Remove);
 
@@ -2400,6 +2471,37 @@ namespace lfs::vis {
 
         rendering_manager_->markDirty(DirtyFlag::SELECTION, lfs::vis::FrameReason::Selection);
         session.preview_dirty = false;
+        session.preview_view_key = view_key;
+    }
+
+    std::size_t SelectionService::interactivePreviewViewKey(const ViewerViewportContext& context) const {
+        auto hash_combine = [](std::size_t& seed, const auto& value) {
+            seed ^= std::hash<std::decay_t<decltype(value)>>{}(value) +
+                    static_cast<std::size_t>(0x9e3779b9) + (seed << 6) + (seed >> 2);
+        };
+        std::size_t key = 0;
+        hash_combine(key, scene_manager_ ? scene_manager_->getScene().renderGeneration() : 0);
+        hash_combine(key, scene_manager_ ? scene_manager_->getScene().selectionGeneration() : 0);
+        hash_combine(key, context.panel);
+        hash_combine(key, context.info.x);
+        hash_combine(key, context.info.y);
+        hash_combine(key, context.info.width);
+        hash_combine(key, context.info.height);
+        hash_combine(key, context.info.render_width);
+        hash_combine(key, context.info.render_height);
+        const auto& camera = context.viewport->camera;
+        for (int i = 0; i < 3; ++i) {
+            hash_combine(key, camera.t[i]);
+            for (int j = 0; j < 3; ++j) {
+                hash_combine(key, camera.R[i][j]);
+            }
+        }
+        const auto settings = rendering_manager_->getSettings();
+        hash_combine(key, settings.focal_length_mm);
+        hash_combine(key, settings.orthographic);
+        hash_combine(key, settings.ortho_scale);
+        hash_combine(key, settings.equirectangular);
+        return key;
     }
 
     SelectionResult SelectionService::commitSelection(const core::Tensor& selection, const SelectionMode mode,
@@ -3506,18 +3608,26 @@ namespace lfs::vis {
             !session.viewport_context->info.valid()) {
             return std::nullopt;
         }
-        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
-        if (rendered_size.x <= 0 || rendered_size.y <= 0) {
+        return resolveViewerWorldPoint(*rendering_manager_, *session.viewport_context->viewport,
+                                       session.viewport_context->panel, session.viewport_context->info, screen_point);
+    }
+
+    std::optional<glm::vec3> SelectionService::resolveViewerWorldPoint(const RenderingManager& rendering_manager,
+                                                                       const Viewport& viewport,
+                                                                       const SplitViewPanelId panel,
+                                                                       const ViewportInfo& info,
+                                                                       const glm::vec2 screen_point) {
+        const glm::ivec2 rendered_size = rendering_manager.getRenderedSize();
+        if (!info.valid() || rendered_size.x <= 0 || rendered_size.y <= 0) {
             return std::nullopt;
         }
 
-        const auto settings = rendering_manager_->getSettings();
-        const auto& info = session.viewport_context->info;
-        Viewport projection_viewport = *session.viewport_context->viewport;
+        const auto settings = rendering_manager.getSettings();
+        Viewport projection_viewport = viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto render_point = screenToRender(screen_point, info);
-        const float depth = rendering_manager_->getDepthAtPixel(
-            static_cast<int>(render_point.x), static_cast<int>(render_point.y), session.viewport_context->panel);
+        const float depth = rendering_manager.getDepthAtPixel(
+            static_cast<int>(render_point.x), static_cast<int>(render_point.y), panel);
         const float ortho_scale = projection_viewport.ortho_scale_override.value_or(settings.ortho_scale);
 
         if (depth > 0.0f) {
@@ -3705,7 +3815,32 @@ namespace lfs::vis {
             }
         }
 
-        if (!crop_t_ptr && !ellip_t_ptr) {
+        // Polygons only come from the scene; the selection volumes are boxes and spheres.
+        core::Tensor polygon_t;
+        core::Tensor polygon_vertices;
+        std::optional<rendering::SelectionCropPolygon> polygon;
+        if (use_scene_filters) {
+            if (const auto* const cp = findRenderableByNodeId(render_state.crop_polygons,
+                                                              scene_manager_->getActiveSelectionCropPolygonId());
+                cp && cp->data) {
+                const glm::mat4 inv_transform = glm::inverse(cp->world_transform);
+                const float* const t_ptr = glm::value_ptr(inv_transform);
+                polygon_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+                std::vector<float> outline;
+                outline.reserve(cp->data->vertices.size() * 2);
+                for (const glm::vec2& vertex : cp->data->vertices)
+                    outline.insert(outline.end(), {vertex.x, vertex.y});
+                polygon_vertices = core::Tensor::from_vector(outline, {cp->data->vertices.size(), size_t{2}});
+                polygon = rendering::SelectionCropPolygon{
+                    .transform = &polygon_t,
+                    .vertices = &polygon_vertices,
+                    .half_depth = cp->data->half_depth,
+                    .inverse = cp->data->inverse,
+                };
+            }
+        }
+
+        if (!crop_t_ptr && !ellip_t_ptr && !polygon) {
             return;
         }
 
@@ -3742,7 +3877,9 @@ namespace lfs::vis {
                 ellip_radii_ptr,
                 ellipsoid_inverse,
                 model_transforms_ptr,
-                transform_indices_ptr);
+                transform_indices_ptr,
+                -1,
+                polygon ? &*polygon : nullptr);
         }
     }
 

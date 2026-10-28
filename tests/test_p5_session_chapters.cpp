@@ -22,8 +22,10 @@
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
+#include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
+#include "sequencer/reveal_render_state.hpp"
 #include "sequencer/timeline.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/control/command_api.hpp"
@@ -38,6 +40,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -53,6 +56,10 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+namespace lfs::vis {
+    void installSessionTestInputController(VisualizerImpl& viewer);
+}
+
 namespace {
 
     namespace fs = std::filesystem;
@@ -65,6 +72,144 @@ namespace {
     using lfs::test::licht::rolled_panel_camera;
     using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
+
+    TEST(P5SessionChapterTest, RealProjectRevealRemovalSurvivesSaveAndReopen) {
+        const char* source = std::getenv("LFS_REVEAL_TEST_PROJECT");
+        if (!source || !fs::exists(source))
+            GTEST_SKIP() << "Set LFS_REVEAL_TEST_PROJECT to an existing .licht project";
+
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "reveal-removal.licht";
+        fs::copy_file(source, path);
+        auto document = require_result(ProjectDocument::open(path));
+        ProjectSessionChapters retained{
+            .gui_layout = document.gui_layout(),
+            .editor = document.editor(),
+            .view = document.view(),
+            .sequencer = document.sequencer(),
+            .metrics = document.metrics(),
+        };
+        ASSERT_TRUE(retained.sequencer.dom().set_json("timeline.review_extension", "preserve"));
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::installSessionTestInputController(viewer);
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        viewer.getGuiManager()->sequencer().setRevealClip(lfs::sequencer::RevealClip{});
+        auto with_reveal = require_result(captureGuiSession(viewer, retained, bookmarks));
+        ASSERT_TRUE(json_root(with_reveal.sequencer.dom())["timeline"].contains("reveal_clip"));
+        document.edit_sequencer() = with_reveal.sequencer;
+        ASSERT_TRUE(document.save(path));
+
+        auto reopened = require_result(ProjectDocument::open(path));
+        with_reveal.sequencer = reopened.sequencer();
+        viewer.getGuiManager()->sequencer().setRevealClip(std::nullopt);
+        auto removed = require_result(captureGuiSession(viewer, with_reveal, bookmarks));
+        document.edit_sequencer() = removed.sequencer;
+        ASSERT_TRUE(document.save(path));
+        auto final = require_result(ProjectDocument::open(path));
+        const auto timeline = json_root(final.sequencer().dom())["timeline"];
+        EXPECT_FALSE(timeline.contains("reveal_clip"));
+        EXPECT_EQ(timeline["review_extension"], "preserve");
+    }
+
+    TEST(P5SessionChapterTest, RevealControllerEditsAreUndoable) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        auto& controller = viewer.getGuiManager()->sequencer();
+        auto& history = lfs::vis::op::undoHistory();
+        history.clear();
+        const float original_duration = controller.clipDuration();
+        lfs::sequencer::RevealClip clip;
+        clip.end = original_duration + 5.0f;
+        controller.setRevealClip(clip);
+        ASSERT_TRUE(controller.timeline().revealClip());
+        EXPECT_FLOAT_EQ(controller.clipDuration(), clip.end);
+        ASSERT_TRUE(history.canUndo());
+        const auto undo = history.undo();
+        EXPECT_TRUE(undo.success);
+        EXPECT_TRUE(undo.changed);
+        EXPECT_FALSE(controller.timeline().revealClip());
+        EXPECT_FLOAT_EQ(controller.clipDuration(), original_duration);
+        const auto redo = history.redo();
+        EXPECT_TRUE(redo.success);
+        EXPECT_TRUE(redo.changed);
+        EXPECT_TRUE(controller.timeline().revealClip());
+        EXPECT_FLOAT_EQ(controller.clipDuration(), clip.end);
+        history.clear();
+        auto changed = clip;
+        changed.effect = lfs::sequencer::RevealEffect::Unveil;
+        changed.softness = 0.4f;
+        changed.end -= 1.0f;
+        controller.setRevealClip(changed);
+        ASSERT_EQ(history.undoCount(), 1u);
+        const auto undo_change = history.undo();
+        EXPECT_TRUE(undo_change.success);
+        EXPECT_TRUE(undo_change.changed);
+        ASSERT_TRUE(controller.timeline().revealClip());
+        EXPECT_EQ(controller.timeline().revealClip()->effect, clip.effect);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->softness, clip.softness);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->end, clip.end);
+        const auto redo_change = history.redo();
+        EXPECT_TRUE(redo_change.success);
+        EXPECT_TRUE(redo_change.changed);
+        ASSERT_TRUE(controller.timeline().revealClip());
+        EXPECT_EQ(controller.timeline().revealClip()->effect, changed.effect);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->softness, changed.softness);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->end, changed.end);
+        controller.setRevealClip(clip);
+        history.clear();
+        controller.beginRevealEdit();
+        clip.start = 1.0f;
+        controller.setRevealClip(clip);
+        clip.start = 2.0f;
+        controller.setRevealClip(clip);
+        controller.endRevealEdit();
+        EXPECT_EQ(history.undoCount(), 1u);
+        const auto grouped_undo = history.undo();
+        EXPECT_TRUE(grouped_undo.success);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->start, 0.0f);
+        const auto grouped_redo = history.redo();
+        EXPECT_TRUE(grouped_redo.success);
+        EXPECT_FLOAT_EQ(controller.timeline().revealClip()->start, 2.0f);
+        history.clear();
+        controller.setRevealClip(std::nullopt);
+        EXPECT_FALSE(controller.timeline().revealClip());
+        EXPECT_TRUE(history.undo().success);
+        EXPECT_TRUE(controller.timeline().revealClip());
+        history.clear();
+    }
+
+    TEST(P5SessionChapterTest, RealProjectRevealBoundsSurviveConsolidation) {
+        const char* source = std::getenv("LFS_REVEAL_TEST_PROJECT");
+        if (!source || !fs::exists(source))
+            GTEST_SKIP() << "Set LFS_REVEAL_TEST_PROJECT to an existing .licht project";
+        auto document = require_result(ProjectDocument::open(source));
+        lfs::core::Scene scene;
+        auto staged = document.stage_hydration(scene);
+        ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+        (void)ProjectDocument::commit_hydration(scene, std::move(*staged));
+        auto slots = scene.getVisibleSplatNodeSlots();
+        ASSERT_FALSE(slots.empty()) << "Project must contain a visible splat model";
+        ASSERT_NE(slots.front().node, nullptr);
+        ASSERT_NE(slots.front().node->model, nullptr);
+        const auto name = slots.front().node->name;
+        const auto duplicate = scene.duplicateNode(name);
+        ASSERT_FALSE(duplicate.empty());
+        slots = scene.getVisibleSplatNodeSlots();
+        ASSERT_GE(slots.size(), 2u);
+        glm::vec3 before_min, before_max;
+        ASSERT_TRUE(scene.getNodeRevealBounds(slots.front().node->id, before_min, before_max));
+        ASSERT_GE(scene.consolidateNodeModels(), 2u);
+        glm::vec3 after_min, after_max;
+        ASSERT_TRUE(scene.getNodeRevealBounds(slots.front().node->id, after_min, after_max));
+        EXPECT_EQ(after_min, before_min);
+        EXPECT_EQ(after_max, before_max);
+        EXPECT_TRUE(lfs::vis::makeRevealRenderState(scene, lfs::sequencer::RevealClip{}, 0.0f));
+        EXPECT_FALSE(lfs::vis::makeRevealRenderState(scene, lfs::sequencer::RevealClip{}, 3.0f));
+        EXPECT_FALSE(lfs::vis::makeRevealRenderState(scene, lfs::sequencer::RevealClip{}, 4.0f));
+    }
 
     void overwrite_f32_le(
         std::vector<std::byte>& bytes,
@@ -2677,10 +2822,8 @@ namespace {
 } // namespace
 
 namespace lfs::vis {
-    void installSessionTestInputController(VisualizerImpl& viewer) {
-        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
-    }
-} // namespace lfs::vis
+    void installSessionTestInputController(VisualizerImpl& viewer);
+}
 
 namespace {
 
@@ -2767,6 +2910,17 @@ namespace {
         EXPECT_EQ(test.viewer->getGuiManager()->sequencer().loopMode(), lfs::vis::LoopMode::ONCE);
         EXPECT_EQ(test.viewer->getGuiManager()->getSequencerUIState().preset, lfs::io::video::VideoPreset::CUSTOM);
         EXPECT_EQ(prepared.unsupported_settings.size(), 8u);
+    }
+
+    TEST(P5SessionChapterTest, PolygonCropShapeRestoresAndIsCapturedAgain) {
+        UnknownSessionValueFixture test;
+        auto prepared = test.restore("crop-polygon", [](Json& view, Json&, Json&) {
+            view["tools"]["crop_shape"] = "polygon";
+        });
+        EXPECT_TRUE(prepared.unsupported_settings.empty());
+        EXPECT_EQ(test.viewer->getGuiManager()->gizmo().cropToolShape(), "polygon");
+        auto captured = require_result(captureGuiSession(*test.viewer, ProjectSessionChapters{}, test.bookmarks));
+        EXPECT_EQ(json_root(captured.view.dom())["tools"]["crop_shape"], "polygon");
     }
 
     TEST(P5SessionChapterTest, UnknownNavigationAxisWarnsAndUsesLegacyY) {
@@ -2889,6 +3043,26 @@ namespace {
             scene, params, lfs::core::generate_uuid_v4(), 1, cpu);
         ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
         EXPECT_TRUE(cpu.parameters.dataset.data_path.is_absolute());
+    }
+
+    // A transient preview has no payload binding and is never saved, so a
+    // training snapshot leaves it out instead of failing on it.
+    TEST(P5SessionChapterTest, SnapshotLeavesTransientNodesOut) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = "data/bicycle";
+        params.optimization.strategy = std::string(lfs::core::param::kStrategyMCMC);
+        lfs::core::Scene scene;
+        const auto training = scene.addSplatPlaceholder("Train");
+        ASSERT_NE(training, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(scene.getNodeUuid(training));
+        ASSERT_NE(scene.addSplatPlaceholder("Preview"), lfs::core::NULL_NODE);
+        scene.getMutableNode("Preview")->transient = true;
+        lfs::training::ProjectSnapshotCpuState cpu;
+        auto captured = lfs::training::capture_project_snapshot_cpu_state(
+            scene, params, lfs::core::generate_uuid_v4(), 1, cpu);
+        ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+        EXPECT_TRUE(std::ranges::any_of(cpu.scene_graph.nodes, [](const auto& node) { return node.name == "Train"; }));
+        EXPECT_TRUE(std::ranges::none_of(cpu.scene_graph.nodes, [](const auto& node) { return node.name == "Preview"; }));
     }
 
 } // namespace

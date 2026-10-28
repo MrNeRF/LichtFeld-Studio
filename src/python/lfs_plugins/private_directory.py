@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from _lfs_path_io import Path
 
 
 def _windows_create(path: Path) -> None:

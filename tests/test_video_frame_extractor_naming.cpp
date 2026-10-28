@@ -367,6 +367,12 @@ namespace lfs::gui {
             dialog.custom_width_ = width;
             dialog.custom_height_ = height;
             dialog.hdr_to_sdr_ = hdr_to_sdr;
+            // Batch parameters re-read both sizes from their fields, as typing leaves them.
+            for (auto [element, value] : {std::pair{dialog.custom_width_input_el_, width},
+                                          std::pair{dialog.custom_height_input_el_, height}}) {
+                if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(element))
+                    input->SetValue(std::to_string(value));
+            }
         }
         static void selectBatch(VideoExtractorDialog& dialog, const std::size_t index) {
             dialog.selectBatchItem(index);
@@ -980,6 +986,40 @@ TEST(VideoEncoderTimingTest, EncodedFramesHaveRequestedDurationAndRate) {
             for (size_t i = 0; i < timestamps.size(); ++i)
                 EXPECT_NEAR(timestamps[i], static_cast<double>(i) / fps, 1e-6);
         }
+    }
+}
+
+// Fails when samples one keyframe apart seek again (6 seeks at 2 fps), when samples two keyframes apart stop seeking
+// (1 seek at 0.5 fps), or when decoding on selects another frame than a seek would.
+TEST(VideoFrameExtractorOutputNaming, SparseFpsSeeksOnlyAcrossWholeKeyframeIntervals) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC";
+
+    TempDir temp("sparse_seek");
+    const std::filesystem::path video_path = temp.path / "source.mp4";
+    std::string error;
+    // The encoder writes one keyframe per second.
+    ASSERT_TRUE(writeEncodedVideo(video_path, 90, 30, error, 160, 90)) << error;
+
+    for (const auto [fps, seeks, frames] : {std::tuple{2.0, 1, 6u}, std::tuple{0.5, 2, 2u}}) {
+        SCOPED_TRACE(::testing::Message() << "fps=" << fps);
+        const std::filesystem::path output_dir = temp.path / ("frames_" + std::to_string(seeks));
+        std::filesystem::create_directories(output_dir);
+        auto params = extractionParams(video_path, output_dir);
+        params.mode = ExtractionMode::FPS;
+        params.fps = fps;
+        params.end_time = -1.0;
+
+        VideoFrameExtractor extractor;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        const auto metadata = readMetadata(output_dir);
+        const auto& selection = metadata.at("processing").at("frame_selection");
+        ASSERT_EQ(selection.at("strategy"), "keyframe_seek");
+        EXPECT_EQ(selection.at("keyframe_seek_count"), seeks);
+        const auto& written = metadata.at("frames");
+        ASSERT_EQ(written.size(), frames);
+        for (std::size_t i = 0; i < written.size(); ++i)
+            EXPECT_NEAR(written[i].at("timestamp").get<double>(), static_cast<double>(i) / fps, 1e-6);
     }
 }
 
@@ -2154,6 +2194,138 @@ TEST(VideoFrameExtractorTrim, EndPastTheStreamExtractsToTheLastFrame) {
     late_start.end_time = -1.0;
     VideoFrameExtractor late_extractor;
     EXPECT_FALSE(late_extractor.extract(late_start, error));
+}
+
+namespace {
+    // Writes an MPEG-4 video of `video_frames` frames at 30 fps beside a silent PCM track of `audio_seconds`, so the
+    // movie ends after its video, as camera recordings with a longer audio track do.
+    bool writeVideoWithLongerAudio(const std::filesystem::path& path, const int video_frames,
+                                   const double audio_seconds) {
+        AVFormatContext* format = nullptr;
+        const std::string path_utf8 = path.string();
+        if (avformat_alloc_output_context2(&format, nullptr, "mov", path_utf8.c_str()) < 0 || !format)
+            return false;
+        const AVCodec* const video_codec = avcodec_find_encoder(AV_CODEC_ID_MPEG4);
+        const AVCodec* const audio_codec = avcodec_find_encoder(AV_CODEC_ID_PCM_S16LE);
+        AVStream* const video = video_codec ? avformat_new_stream(format, nullptr) : nullptr;
+        AVStream* const audio = audio_codec ? avformat_new_stream(format, nullptr) : nullptr;
+        AVCodecContext* video_encoder = video ? avcodec_alloc_context3(video_codec) : nullptr;
+        AVCodecContext* audio_encoder = audio ? avcodec_alloc_context3(audio_codec) : nullptr;
+        bool ok = video_encoder && audio_encoder;
+        if (ok) {
+            video_encoder->width = 64;
+            video_encoder->height = 48;
+            video_encoder->pix_fmt = AV_PIX_FMT_YUV420P;
+            video_encoder->time_base = AVRational{1, 30};
+            video_encoder->framerate = AVRational{30, 1};
+            video_encoder->gop_size = 10;
+            video_encoder->max_b_frames = 0;
+            audio_encoder->sample_fmt = AV_SAMPLE_FMT_S16;
+            audio_encoder->sample_rate = 8000;
+            audio_encoder->time_base = AVRational{1, 8000};
+            av_channel_layout_default(&audio_encoder->ch_layout, 1);
+            if (format->oformat->flags & AVFMT_GLOBALHEADER) {
+                video_encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+                audio_encoder->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+            }
+            ok = avcodec_open2(video_encoder, video_codec, nullptr) >= 0 &&
+                 avcodec_open2(audio_encoder, audio_codec, nullptr) >= 0 &&
+                 avcodec_parameters_from_context(video->codecpar, video_encoder) >= 0 &&
+                 avcodec_parameters_from_context(audio->codecpar, audio_encoder) >= 0;
+        }
+        if (ok) {
+            video->time_base = video_encoder->time_base;
+            audio->time_base = audio_encoder->time_base;
+            ok = avio_open(&format->pb, path_utf8.c_str(), AVIO_FLAG_WRITE) >= 0 &&
+                 avformat_write_header(format, nullptr) >= 0;
+        }
+        AVFrame* frame = av_frame_alloc();
+        AVPacket* packet = av_packet_alloc();
+        const auto drain = [&](AVCodecContext* const encoder, AVStream* const stream) {
+            while (avcodec_receive_packet(encoder, packet) == 0) {
+                if (encoder == video_encoder && packet->duration == 0)
+                    packet->duration = 1;
+                av_packet_rescale_ts(packet, encoder->time_base, stream->time_base);
+                packet->stream_index = stream->index;
+                ok = av_interleaved_write_frame(format, packet) >= 0 && ok;
+            }
+        };
+        if (ok) {
+            frame->format = video_encoder->pix_fmt;
+            frame->width = video_encoder->width;
+            frame->height = video_encoder->height;
+            ok = av_frame_get_buffer(frame, 0) >= 0;
+        }
+        for (int index = 0; ok && index < video_frames; ++index) {
+            ok = av_frame_make_writable(frame) >= 0;
+            for (int y = 0; y < frame->height; ++y)
+                for (int x = 0; x < frame->width; ++x)
+                    frame->data[0][y * frame->linesize[0] + x] = static_cast<uint8_t>((x + y + 3 * index) & 255);
+            for (int plane = 1; plane < 3; ++plane)
+                for (int y = 0; y < frame->height / 2; ++y)
+                    std::fill_n(frame->data[plane] + y * frame->linesize[plane], frame->width / 2, uint8_t{128});
+            frame->pts = index;
+            ok = ok && avcodec_send_frame(video_encoder, frame) >= 0;
+            drain(video_encoder, video);
+        }
+        if (ok) {
+            avcodec_send_frame(video_encoder, nullptr);
+            drain(video_encoder, video);
+        }
+        constexpr int kSamplesPerFrame = 800;
+        av_frame_unref(frame);
+        if (ok) {
+            frame->format = audio_encoder->sample_fmt;
+            frame->sample_rate = audio_encoder->sample_rate;
+            frame->nb_samples = kSamplesPerFrame;
+            ok = av_channel_layout_copy(&frame->ch_layout, &audio_encoder->ch_layout) >= 0 &&
+                 av_frame_get_buffer(frame, 0) >= 0;
+        }
+        const int audio_samples = static_cast<int>(audio_seconds * audio_encoder->sample_rate);
+        for (int first = 0; ok && first < audio_samples; first += kSamplesPerFrame) {
+            ok = av_frame_make_writable(frame) >= 0;
+            std::fill_n(frame->data[0], kSamplesPerFrame * sizeof(int16_t), uint8_t{0});
+            frame->pts = first;
+            ok = ok && avcodec_send_frame(audio_encoder, frame) >= 0;
+            drain(audio_encoder, audio);
+        }
+        if (ok) {
+            avcodec_send_frame(audio_encoder, nullptr);
+            drain(audio_encoder, audio);
+            ok = av_write_trailer(format) >= 0 && ok;
+        }
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        avcodec_free_context(&audio_encoder);
+        avcodec_free_context(&video_encoder);
+        if (format->pb)
+            avio_closep(&format->pb);
+        avformat_free_context(format);
+        return ok;
+    }
+} // namespace
+
+// Catches sampling to the movie's duration: a 4 s audio track beside 3 s of video made sparse FPS extraction ask the
+// decoder for frames past the video's end, so the whole extraction failed.
+TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheVideoWhenAudioOutlastsIt) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "CUDA device required for the hardware decoder that selects sparse seeking";
+
+    TempDir temp("audio_outlasts_video");
+    const auto source = temp.path / "source.mov";
+    ASSERT_TRUE(writeVideoWithLongerAudio(source, 90, 4.0));
+
+    auto params = extractionParams(source, temp.path / "frames");
+    params.mode = ExtractionMode::FPS;
+    params.fps = 3;
+    params.end_time = -1;
+    VideoFrameExtractor extractor;
+    std::string error;
+    ASSERT_TRUE(extractor.extract(params, error)) << error;
+    EXPECT_EQ(countPngFiles(params.output_dir), 9u);
+    const auto metadata = readMetadata(params.output_dir);
+    EXPECT_NEAR(metadata["source_duration"].get<double>(), 3.0, 1e-6);
+    EXPECT_EQ(metadata["frames"].size(), 9u);
 }
 
 TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {

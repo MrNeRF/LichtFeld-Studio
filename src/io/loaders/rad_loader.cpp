@@ -4,6 +4,7 @@
 
 #include "rad_loader.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/rad.hpp"
@@ -40,7 +41,7 @@ namespace lfs::io {
             options.progress(0.0f, "Loading RAD file...");
         }
 
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
                               "RAD file does not exist", path);
         }
@@ -162,15 +163,15 @@ namespace lfs::io {
     }
 
     bool RadLoader::canLoad(const std::filesystem::path& path) const {
-        if (!std::filesystem::exists(path)) {
+        if (!lfs::core::native_fs::exists(path)) {
             return false;
         }
 
-        if (std::filesystem::is_directory(path)) {
+        if (lfs::core::native_fs::is_directory(path)) {
             return false;
         }
 
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".rad";
     }

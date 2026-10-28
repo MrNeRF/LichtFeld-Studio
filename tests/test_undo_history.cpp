@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "combined_model_worker_fixture.hpp"
 #include "core/camera.hpp"
 #include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
@@ -302,7 +302,6 @@ class UndoHistoryTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
@@ -312,7 +311,6 @@ protected:
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
     }
 };
@@ -3317,6 +3315,115 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     EXPECT_EQ(scene.getNodeById(unrelated_id), nullptr);
 }
 
+TEST_F(UndoHistoryTest, TransientTrainingModelRemovalLeavesTrainerAndHistoryAlone) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto preview_id = scene.addSplat("Preview", make_test_splat({1.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("Preview")->transient = true;
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Preview");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    // A transient preview bound as the training model is not the trainer's
+    // model: removing it keeps the trainer, clears the binding, and leaves
+    // nothing to undo.
+    ASSERT_TRUE(scene_manager->removePLYWithResult("Preview"));
+    EXPECT_EQ(scene.getNodeById(preview_id), nullptr);
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    EXPECT_TRUE(trainer_manager->hasTrainer());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    // Nor does removing a node above it.
+    const auto group_id = scene.addGroup("Previews");
+    scene.addSplat("Nested preview", make_test_splat({2.0f, 0.0f, 0.0f}), group_id);
+    scene.getMutableNode("Nested preview")->transient = true;
+    scene.setTrainingModelNode("Nested preview");
+    ASSERT_TRUE(scene_manager->removePLYWithResult("Previews"));
+    EXPECT_EQ(scene.getNodeById(group_id), nullptr);
+    EXPECT_TRUE(trainer_manager->hasTrainer());
+
+    scene.setTrainingModelNode("Model");
+    EXPECT_FALSE(scene_manager->removePLYWithResult("Model"));
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, TransientNodeKeepsItsFlagThroughUndoOfItsParentsRemoval) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group_id = scene.addGroup("previews");
+    scene.addSplat("preview", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    scene.getMutableNode("preview")->transient = true;
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    // The group is part of the document, so removing it is recorded together
+    // with its transient child, which comes back still transient.
+    scene_manager->removePLY("previews");
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    lfs::vis::op::undoHistory().undo();
+    const auto* restored = scene.getNode("preview");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->transient);
+
+    // Removing the transient leaf on its own records nothing.
+    scene_manager->removePLY("preview");
+    EXPECT_EQ(scene.getNode("preview"), nullptr);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(UndoHistoryTest, TransientNodesStayOutOfOtherHistory) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    scene.addSplat("kept", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.addSplat("removed", make_test_splat({1.0f, 0.0f, 0.0f}));
+    scene.addSplat("deleted", make_test_splat({2.0f, 0.0f, 0.0f}));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    // A single removal checks the whole scene before it is undone, and a
+    // batch removal restores the whole root list.
+    scene_manager->removePLY("removed");
+    ASSERT_TRUE(scene_manager->removeNodesWithResult({"deleted"}, false));
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    // Previews come, get renamed and go (here through the scene panel's batch
+    // removal) without history, and the earlier entries still replay.
+    scene.addSplat("preview", make_test_splat({3.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("preview")->transient = true;
+    ASSERT_TRUE(scene_manager->renamePLY("preview", "renamed preview"));
+    scene.addSplat("old preview", make_test_splat({4.0f, 0.0f, 0.0f}));
+    scene.getMutableNode("old preview")->transient = true;
+    ASSERT_TRUE(scene_manager->removeNodesWithResult({"old preview"}, false));
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("deleted"), nullptr);
+    EXPECT_NE(scene.getNode("renamed preview"), nullptr);
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("removed"), nullptr);
+    EXPECT_NE(scene.getNode("renamed preview"), nullptr);
+}
+
 TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -4065,7 +4172,6 @@ TEST_F(UndoHistoryTest, SiblingReorderRestoresExactOrderBothWays) {
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
     }
 }
 
@@ -4218,4 +4324,174 @@ TEST_F(UndoHistoryTest, CropCommandsRespectTargetLocks) {
             }
         }
     }
+}
+
+namespace {
+    namespace combined = lfs::test::combined_model;
+
+    // Two visible nodes of this size exceed the combined-model worker threshold.
+    constexpr size_t kWorkerRows = 600'000;
+
+    // Applies a mutation while a combined-model build is held in flight, checks that the
+    // viewport's model query returns at once, then lets the builds land.
+    template <typename Mutation>
+    const lfs::core::SplatData* settleAfterMutationDuringBuild(lfs::core::Scene& scene,
+                                                               combined::HeldWorker& worker,
+                                                               Mutation&& mutate) {
+        worker.hold();
+        scene.requestCombinedModelBuild();
+        EXPECT_TRUE(worker.waitEntered());
+        mutate();
+        const auto step = combined::combinedModelWithin(scene, worker);
+        EXPECT_TRUE(step.prompt) << "getCombinedModel waited " << step.elapsed.count() << " ms for the worker";
+        worker.release();
+        return combined::settledCombinedModel(scene);
+    }
+} // namespace
+
+TEST_F(UndoHistoryTest, VisibilityUndoRedoNeverWaitsForCombinedBuild) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto first = scene.addSplat("first", make_linear_test_splat(kWorkerRows));
+    const auto second = scene.addSplat("second", make_linear_test_splat(kWorkerRows));
+    combined::HeldWorker worker;
+    scene.setCombinedModelAllocator(worker.allocator());
+    const auto* first_model = scene.getNodeById(first)->model.get();
+
+    // Hide, undo and redo while the two-node build is still held.
+    scene.requestCombinedModelBuild();
+    ASSERT_TRUE(worker.waitEntered());
+    scene_manager->setNodeVisibility(second, false);
+    auto step = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(step.prompt) << "hide waited " << step.elapsed.count() << " ms";
+    EXPECT_EQ(step.model, first_model);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_TRUE(scene.getNodeById(second)->visible);
+    step = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(step.prompt) << "undo waited " << step.elapsed.count() << " ms";
+    EXPECT_EQ(step.model, first_model) << "the visible alias stays until the two-node build lands";
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 1u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_FALSE(scene.getNodeById(second)->visible);
+    step = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(step.prompt) << "redo waited " << step.elapsed.count() << " ms";
+    EXPECT_EQ(step.model, first_model);
+
+    worker.release();
+    EXPECT_EQ(combined::settledCombinedModel(scene), first_model);
+    EXPECT_FALSE(scene.combinedModelBuildPending());
+    EXPECT_EQ(scene.getTransformIndices()->numel(), kWorkerRows);
+
+    // Undo shows the node again; its build starts held and lands with both nodes.
+    worker.hold();
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    step = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(step.prompt);
+    EXPECT_EQ(step.model, first_model);
+    ASSERT_TRUE(worker.waitEntered());
+    worker.release();
+    const auto* both = combined::settledCombinedModel(scene);
+    ASSERT_NE(both, nullptr);
+    EXPECT_EQ(static_cast<size_t>(both->size()), 2 * kWorkerRows);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 2u);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 2 * kWorkerRows);
+
+    // Redo hides it while a fresh two-node build is held.
+    const auto* hidden = settleAfterMutationDuringBuild(scene, worker, [] {
+        EXPECT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    });
+    EXPECT_EQ(hidden, first_model);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), kWorkerRows);
+    EXPECT_EQ(scene.getVisibleSelectionIndices()->numel(), kWorkerRows);
+}
+
+TEST_F(UndoHistoryTest, CropApplyUndoRedoFollowsCombinedBuildInFlight) {
+    constexpr size_t kept = 1000;
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    scene.addSplat("first", make_linear_test_splat(kWorkerRows));
+    scene.addSplat("second", make_linear_test_splat(kWorkerRows));
+    combined::HeldWorker worker;
+    scene.setCombinedModelAllocator(worker.allocator());
+
+    // Both visible nodes are cropped to their first `kept` rows (soft delete).
+    const auto* cropped = settleAfterMutationDuringBuild(scene, worker, [] {
+        lfs::geometry::BoundingBox box;
+        box.setBounds(glm::vec3(-0.5f), glm::vec3(static_cast<float>(kept) - 0.5f, 0.5f, 0.5f));
+        lfs::core::events::cmd::CropPLY{.crop_box = box, .inverse = false}.emit();
+    });
+    ASSERT_NE(cropped, nullptr);
+    EXPECT_EQ(static_cast<size_t>(cropped->size()), 2 * kWorkerRows);
+    EXPECT_EQ(cropped->visible_count(), 2 * kept);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 2 * kWorkerRows);
+    EXPECT_EQ(scene.getNode("first")->model->visible_count(), kept);
+    EXPECT_EQ(scene.getNode("second")->model->visible_count(), kept);
+
+    const auto* restored = settleAfterMutationDuringBuild(scene, worker, [] {
+        EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    });
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(static_cast<size_t>(restored->size()), 2 * kWorkerRows);
+    EXPECT_EQ(restored->visible_count(), 2 * kWorkerRows);
+
+    const auto* recropped = settleAfterMutationDuringBuild(scene, worker, [] {
+        EXPECT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    });
+    ASSERT_NE(recropped, nullptr);
+    EXPECT_EQ(static_cast<size_t>(recropped->size()), 2 * kWorkerRows);
+    EXPECT_EQ(recropped->visible_count(), 2 * kept);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 2 * kWorkerRows);
+}
+
+TEST_F(UndoHistoryTest, NodeDeleteAndDuplicateUndoFollowCombinedBuildInFlight) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    const auto first = scene.addSplat("first", make_linear_test_splat(kWorkerRows));
+    const auto second = scene.addSplat("second", make_linear_test_splat(kWorkerRows));
+    combined::HeldWorker worker;
+    scene.setCombinedModelAllocator(worker.allocator());
+    const auto* first_model = scene.getNodeById(first)->model.get();
+
+    const auto* after_delete = settleAfterMutationDuringBuild(scene, worker, [&] {
+        EXPECT_TRUE(scene_manager->removeNodeWithResult(second));
+    });
+    EXPECT_EQ(after_delete, first_model);
+    EXPECT_EQ(scene.getNode("second"), nullptr);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), kWorkerRows);
+
+    // Undo restores the node; its two-node build starts held.
+    worker.hold();
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    ASSERT_NE(scene.getNode("second"), nullptr);
+    const auto restored_step = combined::combinedModelWithin(scene, worker);
+    EXPECT_TRUE(restored_step.prompt);
+    ASSERT_TRUE(worker.waitEntered());
+    worker.release();
+    const auto* restored = combined::settledCombinedModel(scene);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(static_cast<size_t>(restored->size()), 2 * kWorkerRows);
+
+    std::string duplicate;
+    const auto* duplicated = settleAfterMutationDuringBuild(scene, worker, [&] {
+        duplicate = scene_manager->duplicateNodeTree(std::string("first"));
+    });
+    ASSERT_FALSE(duplicate.empty());
+    ASSERT_NE(duplicated, nullptr);
+    EXPECT_EQ(static_cast<size_t>(duplicated->size()), 3 * kWorkerRows);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 3u);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 3 * kWorkerRows);
+
+    const auto* undone = settleAfterMutationDuringBuild(scene, worker, [] {
+        EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    });
+    EXPECT_EQ(scene.getNode(duplicate), nullptr);
+    ASSERT_NE(undone, nullptr);
+    EXPECT_EQ(static_cast<size_t>(undone->size()), 2 * kWorkerRows);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 2u);
+    EXPECT_EQ(scene.getTransformIndices()->numel(), 2 * kWorkerRows);
 }

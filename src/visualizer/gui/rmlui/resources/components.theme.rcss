@@ -198,6 +198,7 @@ selectbox option:hover {
     border-color: @{border};
 }
 
+.scrub-field:focus-visible,
 .scrub-field:hover,
 .scrub-field.is-dragging,
 .scrub-field.is-editing {

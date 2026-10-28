@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Availability checks shared by Projects and the File menu."""
 
-from pathlib import Path
+from _lfs_path_io import Path
 
 import lichtfeld as lf
 

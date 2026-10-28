@@ -20,6 +20,28 @@ namespace lfs::sequencer {
     inline constexpr float DEFAULT_CLIP_DURATION_SECONDS = 30.0f;
     inline constexpr float MIN_CLIP_DURATION_SECONDS = 0.1f;
 
+    // A reveal is evaluated independently of camera keyframes. Its progress is
+    // shared by interactive playback and offline rendering.
+    enum class RevealEffect : int { Magic = 1,
+                                    Spread = 2,
+                                    Unroll = 3,
+                                    Twister = 4,
+                                    Rain = 5,
+                                    Unveil = 6,
+                                    LightEdge = 7,
+                                    Rainbow = 8,
+                                    DarkToLight = 9,
+                                    Distortion = 10,
+                                    CameraLight = 11 };
+    struct RevealClip {
+        float start = 0.0f;
+        float end = 3.0f;
+        float softness = 0.1f;
+        RevealEffect effect = RevealEffect::Spread;
+
+        [[nodiscard]] float progress(float time) const;
+    };
+
     class Timeline {
     public:
         // ========== Legacy Camera Keyframes ==========
@@ -75,9 +97,13 @@ namespace lfs::sequencer {
 
         [[nodiscard]] float totalDuration() const;
 
+        [[nodiscard]] const std::optional<RevealClip>& revealClip() const { return reveal_clip_; }
+        void setRevealClip(std::optional<RevealClip> clip);
+
     private:
         std::vector<Keyframe> keyframes_;
         std::unique_ptr<AnimationClip> clip_;
+        std::optional<RevealClip> reveal_clip_;
         KeyframeId next_keyframe_id_ = 1;
         float clip_duration_ = DEFAULT_CLIP_DURATION_SECONDS;
     };

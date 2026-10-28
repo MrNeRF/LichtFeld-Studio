@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/image_sharpen.hpp"
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -49,6 +50,8 @@ namespace lfs::io {
         // Keeps floating-point files (EXR, float TIFF) at float precision instead of an integer decode.
         bool decode_float = false;
         bool mask_grayscale = false;
+        // Applied by the pipelined loader after resize and undistortion, before caching.
+        lfs::core::SharpenParams sharpen;
         // Cold staging only; never stored in queued requests or cache entries.
         const MaskedImageFill* masked_fill = nullptr;
     };

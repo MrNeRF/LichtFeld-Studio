@@ -29,6 +29,9 @@ namespace PerfTimer {
         case PrepareTileSort: return "vksplat.shaders.slang.spirv.prepare_tile_sort";
         case CullSplats: return "vksplat.shaders.slang.spirv.cull_splats";
         case ProjectionSurvivors: return "vksplat.shaders.slang.spirv.projection_survivors";
+        case StochasticReuse: return "vksplat.shaders.slang.spirv.stochastic_reuse";
+        case StochasticResolve: return "vksplat.shaders.slang.spirv.stochastic_resolve";
+        case ViewportFrame: return "vksplat.viewport_frame";
         case END: break;
         }
         return nullptr;

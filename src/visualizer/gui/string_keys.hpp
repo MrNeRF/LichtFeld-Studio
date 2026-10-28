@@ -457,6 +457,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
     } // namespace Align
 
+    namespace ScaleDistance {
+        inline constexpr const char* CLICK_1ST = "scale_distance.click_1st";
+        inline constexpr const char* CLICK_2ND = "scale_distance.click_2nd";
+        inline constexpr const char* POINTS_COUNT = "scale_distance.points_count";
+        inline constexpr const char* HINT_PICKING = "scale_distance.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "scale_distance.hint_review";
+        inline constexpr const char* STATUS_INVALID_DISTANCE = "scale_distance.status_invalid_distance";
+        inline constexpr const char* STATUS_NO_SURFACE = "scale_distance.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "scale_distance.status_no_target";
+    } // namespace ScaleDistance
+
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";
@@ -611,9 +622,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* BG_IMAGE = "training_params.bg_image";
         inline constexpr const char* BG_IMAGE_BROWSE = "training_params.bg_image_browse";
         inline constexpr const char* BG_IMAGE_CLEAR = "training_params.bg_image_clear";
-        inline constexpr const char* SPARSIFY_STEPS = "training_params.sparsify_steps";
-        inline constexpr const char* INIT_RHO = "training_params.init_rho";
-        inline constexpr const char* PRUNE_RATIO = "training_params.prune_ratio";
         inline constexpr const char* PPISP = "training_params.ppisp";
         inline constexpr const char* PPISP_CONTROLLER = "training_params.ppisp_controller";
         inline constexpr const char* PPISP_LR = "training_params.ppisp_lr";
@@ -856,7 +864,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NOT_NOW = "file_association.not_now";
         inline constexpr const char* DONT_ASK = "file_association.dont_ask";
         inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
-        inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
     } // namespace FileAssociation
 
     namespace ErrorModal {

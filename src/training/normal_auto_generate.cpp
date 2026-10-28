@@ -88,7 +88,7 @@ namespace lfs::training {
             std::filesystem::path rel;
             if (!image_path.empty() && !images_dir.empty()) {
                 rel = image_path.lexically_relative(images_dir);
-                const auto generic = rel.generic_string();
+                const auto generic = lfs::core::path_to_generic_utf8(rel);
                 if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
                     rel.clear();
             }
@@ -114,7 +114,7 @@ namespace lfs::training {
             std::filesystem::path rel;
             if (!cam.image_path().empty() && !training_dir.empty()) {
                 rel = cam.image_path().lexically_relative(training_dir);
-                const auto generic = rel.generic_string();
+                const auto generic = lfs::core::path_to_generic_utf8(rel);
                 if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../"))
                     rel.clear();
             }
@@ -355,8 +355,8 @@ namespace lfs::training {
         const auto generated = estimator
                                    ? estimator(jobs, progress)
                                    : run_moge_estimator(params, source_folder,
-                                                        depth_dir.filename().string(),
-                                                        normal_dir.filename().string(), jobs, progress);
+                                                        lfs::core::path_to_utf8(depth_dir.filename()),
+                                                        lfs::core::path_to_utf8(normal_dir.filename()), jobs, progress);
         if (generate_depth)
             associate_depth_maps(cameras, dataset_root);
         if (generate_normal)

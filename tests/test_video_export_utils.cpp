@@ -15,6 +15,7 @@
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL.h>
@@ -253,13 +254,14 @@ TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVul
                 return image ? image->image->cpu().to_vector() : std::vector<float>{};
             }
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = {64, 64};
             request.sh_degree = 0;
             request.scene = {&transforms, indices, mask};
             request.raster_backend = backend == 1 ? lfs::rendering::GaussianRasterBackend::ThreeDgs
                                                   : lfs::rendering::GaussianRasterBackend::ThreeDgut;
             request.gut = backend == 2;
-            auto result = renderer.render(context, *model, request, false, slot, false, true);
+            auto result = renderer.render(context, *model, request, false, slot, false);
             EXPECT_TRUE(result) << (result ? "" : result.error());
             if (!result)
                 return {};
@@ -342,6 +344,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         for (size_t i = 0; i < ids.size(); ++i)
             scene.setNodeVisibility(ids[i], i == marker);
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.rotation = glm::mat3(-1.0f, 0.0f, 0.0f,
                                                 0.0f, 1.0f, 0.0f,
                                                 0.0f, 0.0f, -1.0f);
@@ -353,7 +356,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         request.sh_degree = 0;
         request.scene = {&transforms, indices, scene.getNodeVisibilityMask()};
         auto result = renderer.render(context, *model, request, false,
-                                      lfs::vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+                                      lfs::vis::VksplatViewportRenderer::OutputSlot::Preview, false);
         ASSERT_TRUE(result) << (result ? "" : result.error());
         auto image = renderer.readOutputImageRgb8(context, lfs::vis::VksplatViewportRenderer::OutputSlot::Preview);
         ASSERT_TRUE(image) << (image ? "" : image.error());
@@ -487,6 +490,7 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     lfs::vis::VksplatViewportRenderer renderer;
     const auto slot = lfs::vis::VksplatViewportRenderer::OutputSlot::Preview;
     lfs::rendering::ViewportRenderRequest request;
+    request.deterministic_export = true;
     request.frame_view.size = {64, 64};
     request.sh_degree = 0;
     request.scene.model_transforms = &snapshot->model_transforms;
@@ -495,7 +499,7 @@ TEST(VideoExportUtilsTest, HiddenDatasetSnapshotCullsImplicitNodeInPreview) {
     const auto render = [&](const std::vector<bool>& mask, const bool indexed) {
         request.scene.node_visibility_mask = mask;
         request.scene.transform_indices = indexed ? explicit_indices : nullptr;
-        auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false, true);
+        auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false);
         EXPECT_TRUE(rendered) << (rendered ? "" : rendered.error());
         if (!rendered)
             return std::vector<uint8_t>{};
@@ -588,6 +592,7 @@ namespace {
 
         std::vector<uint8_t> render(int y, int rows, bool banded, bool full_frame) {
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = {render_width_, rows};
             request.frame_view.subregion_origin = {0, y};
             if (banded)
@@ -598,7 +603,7 @@ namespace {
             request.equirectangular = std::get<0>(GetParam());
             const auto slot = full_frame ? lfs::vis::VksplatViewportRenderer::OutputSlot::Preview
                                          : lfs::vis::VksplatViewportRenderer::OutputSlot::Main;
-            auto result = renderer_->render(context_, *model_, request, false, slot, false, true);
+            auto result = renderer_->render(context_, *model_, request, false, slot, false);
             EXPECT_TRUE(result) << (result ? "" : result.error());
             if (!result)
                 return {};
@@ -747,6 +752,64 @@ TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudActiveEllipsoidWithoutS
     EXPECT_TRUE(snapshot.active_ellipsoid->data.enabled);
     EXPECT_TRUE(snapshot.active_ellipsoid->data.inverse);
     EXPECT_EQ(snapshot.active_ellipsoid->data.radii, glm::vec3(2.0f, 3.0f, 4.0f));
+}
+
+// Catches video export frames that drop a crop polygon the viewport shows: on a point cloud it must reach the
+// point-cloud filter, and on a splat the scene state the splat frames render with.
+TEST(VideoExportUtilsTest, CropPolygonsReachPointCloudAndSplatFrames) {
+    const std::vector<glm::vec2> outline{{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 1.0f}};
+    lfs::vis::RenderSettings settings;
+    settings.desaturate_cropping = true;
+    {
+        lfs::vis::SceneManager scene_manager;
+        auto& scene = scene_manager.getScene();
+        const auto cloud = scene.addPointCloud("points", make_test_point_cloud());
+        ASSERT_NE(cloud, lfs::core::NULL_NODE);
+        const auto polygon = lfs::vis::cap::createCropPolygon(
+            scene_manager, nullptr, cloud,
+            lfs::core::CropPolygonData{.vertices = outline, .half_depth = 0.5f, .inverse = true},
+            glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        ASSERT_TRUE(polygon) << polygon.error().user_message();
+        scene_manager.selectNode(*polygon);
+
+        const auto snapshot = lfs::vis::gui::captureVideoExportSceneSnapshot(scene_manager);
+        ASSERT_TRUE(snapshot.has_value()) << snapshot.error();
+        ASSERT_TRUE(snapshot->point_cloud);
+        ASSERT_EQ(snapshot->crop_polygons.size(), 1u);
+        EXPECT_EQ(snapshot->selected_crop_polygon_index, 0);
+        EXPECT_LT(snapshot->crop_polygons.front().parent_node_index, 0);
+
+        lfs::rendering::PointCloudFilterState filters;
+        lfs::vis::gui::applyVideoExportPointCloudFilters(filters, *snapshot, settings);
+        ASSERT_TRUE(filters.crop_polygon.has_value());
+        EXPECT_FALSE(filters.crop_box.has_value());
+        EXPECT_FALSE(filters.crop_ellipsoid.has_value());
+        EXPECT_EQ(filters.crop_polygon->vertices, outline);
+        EXPECT_FLOAT_EQ(filters.crop_polygon->half_depth, 0.5f);
+        EXPECT_EQ(filters.crop_polygon->transform, glm::inverse(snapshot->crop_polygons.front().world_transform));
+        EXPECT_TRUE(filters.crop_inverse);
+        EXPECT_TRUE(filters.crop_desaturate);
+    }
+    {
+        lfs::vis::SceneManager scene_manager;
+        auto& scene = scene_manager.getScene();
+        const auto splat = scene.addSplat("splat", make_test_splat({0.0f, 0.0f, 0.0f}));
+        ASSERT_TRUE(lfs::vis::cap::createCropPolygon(scene_manager, nullptr, splat,
+                                                     lfs::core::CropPolygonData{.vertices = outline, .half_depth = 0.5f},
+                                                     glm::mat4(1.0f)));
+
+        const auto snapshot = lfs::vis::gui::captureVideoExportSceneSnapshot(scene_manager);
+        ASSERT_TRUE(snapshot.has_value()) << snapshot.error();
+        ASSERT_EQ(snapshot->crop_polygons.size(), 1u);
+        EXPECT_EQ(snapshot->crop_polygons.front().parent_node_index, 0);
+        const auto state = lfs::vis::gui::makeVideoExportGaussianSceneState(*snapshot);
+        ASSERT_EQ(state.crop_polygons.size(), 1u);
+        EXPECT_EQ(state.crop_polygons.front().parent_node_index, 0);
+        ASSERT_NE(state.crop_polygons.front().data, nullptr);
+        EXPECT_EQ(state.crop_polygons.front().data->vertices, outline);
+        EXPECT_TRUE(state.crop_polygons.front().data->enabled);
+        EXPECT_EQ(state.crop_polygons.front().world_transform, snapshot->crop_polygons.front().world_transform);
+    }
 }
 
 TEST(VideoExportUtilsTest, CaptureSnapshotSupportsMeshOnlyScenes) {
@@ -1110,6 +1173,7 @@ namespace {
         // Establish the same context that the viewer passes to the export manager.
         manager.renderVulkanFrame({.viewport = viewport, .settings = settings, .vulkan_context = &context_});
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.size = {width, height};
         request.frame_view.focal_length_mm = 35.0f;
         request.sh_degree = 0;
@@ -1120,7 +1184,7 @@ namespace {
         for (int format = 0; format < 3; ++format) {
             SCOPED_TRACE(::testing::Message() << "format=" << format << " tiled=" << tiled);
             request.transparent_background = format == 2;
-            auto rendered = renderer_->render(context_, *model_, request, false, slot, false, true);
+            auto rendered = renderer_->render(context_, *model_, request, false, slot, false);
             ASSERT_TRUE(rendered) << rendered.error();
             auto reference = format == 2 ? renderer_->readOutputImageRgba8(context_, slot)
                                          : renderer_->readOutputImageRgb8(context_, slot);

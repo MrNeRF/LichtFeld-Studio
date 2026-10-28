@@ -153,7 +153,7 @@ namespace lfs::app {
             const auto& timeline = controller.timeline();
             const bool has_ply_sequence = controller.hasPlySequence();
             const bool has_any_timeline_state =
-                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || has_ply_sequence;
+                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || timeline.revealClip().has_value() || has_ply_sequence;
             json keyframe_list = json::array();
             int64_t visible_index = 0;
             for (const auto& keyframe : timeline.keyframes()) {
@@ -176,6 +176,11 @@ namespace lfs::app {
                 {"ply_sequence_frame_count", has_ply_sequence ? controller.plySequence()->frames.size() : 0},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
                 {"follow_playback", ui_state ? ui_state->follow_playback : false},
+                {"camera_width", ui_state ? ui_state->camera_width : 16},
+                {"camera_height", ui_state ? ui_state->camera_height : 9},
+                {"video_framerate_numerator", ui_state ? ui_state->framerate : 30},
+                {"video_framerate_denominator", ui_state ? ui_state->framerate_denominator : 1},
+                {"export_fit", ui_state ? ui_state->export_fit : 0},
                 {"keyframe_count", keyframe_list.size()},
                 {"keyframes", keyframe_list},
             };
@@ -231,6 +236,57 @@ namespace lfs::app {
                     if (!controller)
                         return json{{"error", controller.error()}};
                     return sequencer_state_json(backend, **controller);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.reveal_get",
+                .description = "Read the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller)
+                        return json{{"error", controller.error()}};
+                    const auto& clip = (*controller)->timeline().revealClip();
+                    return json{{"success", true}, {"reveal", clip ? json{{"start", clip->start}, {"end", clip->end}, {"softness", clip->softness}, {"effect", static_cast<int>(clip->effect)}} : json(nullptr)}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.reveal_set",
+                .description = "Set the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json{{"start", {{"type", "number"}}}, {"end", {{"type", "number"}}}, {"softness", {{"type", "number"}}}, {"effect", {{"type", "integer"}}}}, .required = {"start", "end", "softness", "effect"}}},
+            [viewer, backend](const json& args) -> json {
+                const sequencer::RevealClip clip{args.at("start").get<float>(), args.at("end").get<float>(),
+                                                 args.at("softness").get<float>(), static_cast<sequencer::RevealEffect>(args.at("effect").get<int>())};
+                return post_and_wait(viewer, [backend, clip]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller)
+                        return json{{"error", controller.error()}};
+                    try {
+                        (*controller)->setRevealClip(clip);
+                    } catch (const std::invalid_argument& e) {
+                        return mcp::invalid_argument_result(e.what(), "reveal");
+                    }
+                    return json{{"success", true}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.reveal_remove",
+                .description = "Remove the live sequencer reveal clip",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller)
+                        return json{{"error", controller.error()}};
+                    (*controller)->setRevealClip(std::nullopt);
+                    return json{{"success", true}};
                 });
             });
 
@@ -435,9 +491,6 @@ namespace lfs::app {
                     const auto keyframe_index = resolve_required_sequencer_keyframe_command_index(args, backend);
                     if (!keyframe_index)
                         return json{{"error", keyframe_index.error()}};
-
-                    if (*keyframe_index == 0)
-                        return mcp::invalid_argument_result("The first keyframe cannot be deleted", "keyframe_id");
 
                     if (backend.delete_keyframe)
                         backend.delete_keyframe(*keyframe_index);

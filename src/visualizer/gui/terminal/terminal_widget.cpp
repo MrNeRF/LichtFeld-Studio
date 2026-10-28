@@ -528,45 +528,41 @@ namespace lfs::vis::terminal {
         std::string result;
         result.reserve(scrollback_.size() * cols_ + rows_ * cols_);
 
-        for (auto it = scrollback_.rbegin(); it != scrollback_.rend(); ++it) {
-            const auto& line = *it;
-            std::string row_text;
-            for (size_t col = 0; col < line.cells.size(); ++col) {
-                const auto& cell = line.cells[col];
-                if (cell.chars[0]) {
-                    char utf8[4];
-                    const size_t len = encodeUtf8(cell.chars[0], utf8);
-                    if (len > 0)
-                        row_text.append(utf8, len);
-                } else {
-                    row_text += ' ';
-                }
+        // Rows libvterm wrapped at the terminal width form one line, so only real line ends become newlines.
+        bool first_row = true;
+        const auto begin_row = [&](const bool continuation) {
+            if (!first_row && !continuation) {
+                while (!result.empty() && result.back() == ' ')
+                    result.pop_back();
+                result += '\n';
             }
-            while (!row_text.empty() && row_text.back() == ' ')
-                row_text.pop_back();
-            result += row_text;
-            result += '\n';
+            first_row = false;
+        };
+        const auto append_cell = [&](const VTermScreenCell& cell) {
+            if (!cell.chars[0]) {
+                result += ' ';
+                return;
+            }
+            char utf8[4];
+            const size_t len = encodeUtf8(cell.chars[0], utf8);
+            if (len > 0)
+                result.append(utf8, len);
+        };
+
+        for (auto it = scrollback_.rbegin(); it != scrollback_.rend(); ++it) {
+            begin_row(it->continuation);
+            for (const auto& cell : it->cells)
+                append_cell(cell);
         }
 
+        const VTermState* const state = vterm_obtain_state(vt_);
         for (int row = 0; row < rows_; ++row) {
-            std::string row_text;
+            begin_row(vterm_state_get_lineinfo(state, row)->continuation);
             for (int col = 0; col < cols_; ++col) {
                 VTermScreenCell cell;
                 vterm_screen_get_cell(screen_, {row, col}, &cell);
-                if (cell.chars[0]) {
-                    char utf8[4];
-                    const size_t len = encodeUtf8(cell.chars[0], utf8);
-                    if (len > 0)
-                        row_text.append(utf8, len);
-                } else {
-                    row_text += ' ';
-                }
+                append_cell(cell);
             }
-            while (!row_text.empty() && row_text.back() == ' ')
-                row_text.pop_back();
-            result += row_text;
-            if (row < rows_ - 1)
-                result += '\n';
         }
 
         while (!result.empty() && (result.back() == '\n' || result.back() == ' '))
@@ -733,8 +729,14 @@ namespace lfs::vis::terminal {
         const int copy_cols = std::min(cols, static_cast<int>(line.cells.size()));
         std::memcpy(cells, line.cells.data(), copy_cols * sizeof(VTermScreenCell));
 
+        // libvterm walks popped cells by their width, so padding must be one column wide: a zeroed
+        // cell has width 0 and spins the resize forever when a line pushed while the view was
+        // narrower comes back into a wider one.
+        VTermScreenCell blank{};
+        blank.width = 1;
+        vterm_state_get_default_colors(vterm_obtain_state(self->vt_), &blank.fg, &blank.bg);
         for (int i = copy_cols; i < cols; ++i) {
-            std::memset(&cells[i], 0, sizeof(VTermScreenCell));
+            cells[i] = blank;
         }
 
         self->scrollback_.pop_front();

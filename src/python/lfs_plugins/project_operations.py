@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from pathlib import Path
+from _lfs_path_io import Path
 
 from .asset_storage import lichtfeld_home
 from .credential_storage import FileBackend

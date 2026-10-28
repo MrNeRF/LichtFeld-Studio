@@ -11,6 +11,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/resource_messages.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
@@ -19,6 +20,7 @@
 #include "gui/frustum_overlay_key.hpp"
 #include "gui/guide_segment_clipping.hpp"
 #include "gui/import_error.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/viewport_gizmo_geometry.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "gui/vram_hud_sample_policy.hpp"
@@ -65,6 +67,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
+#include "tools/scale_distance_tool.hpp"
 
 #include "core/events.hpp"
 #include "core/parameters.hpp"
@@ -168,6 +171,8 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
         void setCursorIfChanged(SDL_Cursor* const cursor) {
+            if (NativeDragScheduler::ownsNativeCursor())
+                return;
             if (SDL_GetCursor() != cursor)
                 SDL_SetCursor(cursor);
         }
@@ -3186,6 +3191,27 @@ namespace lfs::vis::gui {
             }
         }
 
+        // Prism outline: the polygon at both caps plus one edge per vertex.
+        void appendProjectedCropPolygon(VulkanViewportPassParams& params,
+                                        const VulkanGuidePanelTarget& panel,
+                                        const RenderSettings& settings,
+                                        const std::vector<glm::vec2>& vertices,
+                                        const float half_depth,
+                                        const glm::mat4& polygon_to_world,
+                                        const glm::vec4& color,
+                                        const float thickness) {
+            const auto point = [&](const glm::vec2& vertex, const float z) {
+                return glm::vec3(polygon_to_world * glm::vec4(vertex, z, 1.0f));
+            };
+            for (size_t i = 0; i < vertices.size(); ++i) {
+                const glm::vec2& a = vertices[i];
+                const glm::vec2& b = vertices[(i + 1) % vertices.size()];
+                addProjectedOverlayLine(params, panel, settings, point(a, -half_depth), point(b, -half_depth), color, thickness);
+                addProjectedOverlayLine(params, panel, settings, point(a, half_depth), point(b, half_depth), color, thickness);
+                addProjectedOverlayLine(params, panel, settings, point(a, -half_depth), point(a, half_depth), color, thickness);
+            }
+        }
+
         void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
                                          const VulkanGuidePanelTarget& panel,
                                          const RenderSettings& settings,
@@ -3244,6 +3270,30 @@ namespace lfs::vis::gui {
                                          2.0f);
             }
 
+            const auto selected_polygon_id = scene_manager ? scene_manager->getSelectedNodeCropPolygonId()
+                                                           : core::NULL_NODE;
+            if (gizmo.crop_polygon_active &&
+                (!scene_state || activeVolumeGuideVisible(gizmo.crop_polygon_affects_render, selected_polygon_id,
+                                                          scene_state->crop_polygons))) {
+                appendProjectedCropPolygon(params, panel, settings,
+                                           gizmo.crop_polygon_vertices,
+                                           gizmo.crop_polygon_half_depth,
+                                           gizmo.crop_polygon_transform,
+                                           cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f),
+                                           2.0f);
+            }
+
+            // Outline being drawn: placed vertices and a rubber band to the cursor on the plane.
+            if (!gizmo.crop_polygon_draft.empty()) {
+                const glm::vec4 draft_color = cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f);
+                const auto& draft = gizmo.crop_polygon_draft;
+                for (size_t i = 0; i + 1 < draft.size(); ++i)
+                    addProjectedOverlayLine(params, panel, settings, draft[i], draft[i + 1], draft_color, 2.0f);
+                if (gizmo.crop_polygon_draft_cursor)
+                    addProjectedOverlayLine(params, panel, settings, draft.back(), *gizmo.crop_polygon_draft_cursor,
+                                            glm::vec4(glm::vec3(draft_color), 0.6f), 1.5f);
+            }
+
             if (!scene_state || !scene_manager) {
                 return;
             }
@@ -3280,6 +3330,20 @@ namespace lfs::vis::gui {
                                          world_transform,
                                          cropGuideColor(el.data->color, el.data->inverse, flash),
                                          el.data->line_width + flash * 4.0f);
+            }
+
+            for (const auto& polygon : scene_state->crop_polygons) {
+                if (!polygon.data || !polygon.effectively_visible || polygon.node_id != selected_polygon_id) {
+                    continue;
+                }
+                const float flash = std::clamp(polygon.data->flash_intensity, 0.0f, 1.0f);
+                appendProjectedCropPolygon(params, panel, settings,
+                                           polygon.data->vertices,
+                                           polygon.data->half_depth,
+                                           gizmo.crop_polygon_active ? gizmo.crop_polygon_transform
+                                                                     : polygon.world_transform,
+                                           cropGuideColor(polygon.data->color, polygon.data->inverse, flash),
+                                           polygon.data->line_width + flash * 4.0f);
             }
         }
 
@@ -3605,7 +3669,7 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
             std::error_code filesystem_error;
-            if (!std::filesystem::is_regular_file(paths->windowStateFile(), filesystem_error)) {
+            if (!lfs::core::native_fs::is_regular_file(paths->windowStateFile(), filesystem_error)) {
                 if (filesystem_error == std::make_error_code(std::errc::no_such_file_or_directory))
                     LOG_DEBUG("Unable to inspect window state: {}", filesystem_error.message());
                 else if (filesystem_error)
@@ -3655,7 +3719,7 @@ namespace lfs::vis::gui {
             try {
                 const auto path = paths->windowStateFile();
                 std::error_code error;
-                if (std::filesystem::exists(path, error)) {
+                if (lfs::core::native_fs::exists(path, error)) {
                     std::optional<nlohmann::json> old;
                     try {
                         old = lfs::core::persisted_settings::readObject(path);
@@ -3750,6 +3814,7 @@ namespace lfs::vis::gui {
         state.load();
         if (state.file_association == "declined")
             return;
+        ensureProjectFileAssociation();
         if (areFileAssociationsRegistered())
             return;
 
@@ -4426,8 +4491,8 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto source_locale_dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(source_locale_dir) &&
-                std::filesystem::is_directory(source_locale_dir)) {
+            if (lfs::core::native_fs::exists(source_locale_dir) &&
+                lfs::core::native_fs::is_directory(source_locale_dir)) {
                 locale_dir = source_locale_dir;
             }
         }
@@ -4533,16 +4598,7 @@ namespace lfs::vis::gui {
             panel_layout_.setActiveTab(id);
         };
         rml_right_panel_.on_tab_closed = [this](const std::string& id) {
-            if (id.empty())
-                return;
-            if (viewer_) {
-                viewer_->projectMarkSessionChapterCommitted("GUIL");
-            }
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (panel_layout_.getActiveTab() == id)
-                panel_layout_.setActiveTab({});
-            if (focus_panel_name_ == id)
-                focus_panel_name_.clear();
+            closed_plugin_tab_ = id;
         };
         rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
             viewer_->getRenderingManager()->setViewportResizeActive(true);
@@ -4747,14 +4803,14 @@ namespace lfs::vis::gui {
 #ifdef LFS_DEV_RMLUI_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_RMLUI_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::native_fs::exists(dir) && lfs::core::native_fs::is_directory(dir))
                 dev_resource_watch_.rml_dir = dir;
         }
 #endif
 #ifdef LFS_DEV_LOCALE_SOURCE_DIR
         {
             const auto dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
-            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+            if (lfs::core::native_fs::exists(dir) && lfs::core::native_fs::is_directory(dir))
                 dev_resource_watch_.locale_dir = dir;
         }
 #endif
@@ -4786,16 +4842,15 @@ namespace lfs::vis::gui {
                     return;
 
                 std::error_code ec;
-                if (!std::filesystem::exists(dir, ec) || ec ||
-                    !std::filesystem::is_directory(dir, ec) || ec) {
+                if (!lfs::core::native_fs::exists(dir, ec) || ec ||
+                    !lfs::core::native_fs::is_directory(dir, ec) || ec) {
                     if (ec)
                         result.scan_failed = true;
                     return;
                 }
 
                 try {
-                    std::filesystem::recursive_directory_iterator it(
-                        dir, std::filesystem::directory_options::skip_permission_denied, ec);
+                    std::filesystem::recursive_directory_iterator it(lfs::core::native_fs::traversal_path(dir), std::filesystem::directory_options::skip_permission_denied, ec);
                     const std::filesystem::recursive_directory_iterator end;
                     if (ec) {
                         result.scan_failed = true;
@@ -4813,11 +4868,11 @@ namespace lfs::vis::gui {
                         if (!watched)
                             continue;
 
-                        const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
+                        const auto mtime = lfs::core::native_fs::last_write_time(it->path(), entry_ec);
                         if (entry_ec)
                             continue;
 
-                        const std::string key = lfs::core::path_to_utf8(it->path().lexically_normal());
+                        const std::string key = lfs::core::path_to_utf8(lfs::core::native_fs::entry_path(dir, it->path()).lexically_normal());
                         next_times[key] = mtime;
 
                         if (!detect_changes)
@@ -5262,6 +5317,7 @@ namespace lfs::vis::gui {
                     grid.projection = proj;
                     grid.view_projection = proj * view;
                     grid.view_position = panel.viewport->getTranslation();
+                    grid.pivot = panel.viewport->camera.getPivot();
                     grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
                     grid.opacity = params.grid_opacity;
                     grid.orthographic = settings.orthographic;
@@ -5274,6 +5330,7 @@ namespace lfs::vis::gui {
                     params.grid_projection = first_grid.projection;
                     params.grid_view_projection = first_grid.view_projection;
                     params.grid_view_position = first_grid.view_position;
+                    params.grid_pivot = first_grid.pivot;
                     params.grid_orthographic = first_grid.orthographic;
                 }
             }
@@ -5281,7 +5338,9 @@ namespace lfs::vis::gui {
             if (viewer_) {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
-                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
+                // Polygons have no render setting; their outline follows the selection.
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid ||
+                                      scene_manager->getSelectedNodeCropPolygonId() != core::NULL_NODE)) {
                     overlay_scene_state =
                         scene_manager->buildRenderState({.metadata_only = true});
                 }
@@ -6331,7 +6390,7 @@ namespace lfs::vis::gui {
             const float rpw = panel_layout_.getRightPanelWidth();
             const float ph = screen.work_size.y;
             const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
-            const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
+            const float tab_bar_w = PanelLayoutManager::RIGHT_TAB_BAR_W * current_ui_scale_;
             const float avail_h = ph - 16.0f;
             const float scene_h = panel_layout_.scenePanelHeight(avail_h, current_ui_scale_);
 
@@ -6365,7 +6424,8 @@ namespace lfs::vis::gui {
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
             const float content_w = rpw - 2.0f * RIGHT_PANEL_PAD;
-            const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+            const float tab_content_y = content_top + scene_h + splitter_h +
+                                        PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * current_ui_scale_;
             const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
             right_panel_pointer_over_scene_header =
                 !pointer_over_right_panel_edge &&
@@ -6375,8 +6435,8 @@ namespace lfs::vis::gui {
             right_panel_pointer_over_active_tab =
                 !pointer_over_right_panel_edge &&
                 pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            glm::vec2{content_x, tab_content_y},
-                            glm::vec2{content_w, tab_content_h});
+                            glm::vec2{content_x + tab_bar_w, tab_content_y},
+                            glm::vec2{std::max(0.0f, content_w - tab_bar_w), tab_content_h});
 
             if ((float_blocks_rp || viewport_pointer_captured) &&
                 !rml_right_panel_.isResizeInteractionActive()) {
@@ -6395,6 +6455,19 @@ namespace lfs::vis::gui {
                 rml_right_panel_.processInput(rp_layout, masked_input);
             } else {
                 rml_right_panel_.processInput(rp_layout, panel_input);
+            }
+
+            // Unload after the click dispatch returns: unloading unregisters the plugin's panels.
+            if (const auto id = std::exchange(closed_plugin_tab_, {}); !id.empty()) {
+                if (viewer_)
+                    viewer_->projectMarkSessionChapterCommitted("GUIL");
+                if (panel_layout_.getActiveTab() == id)
+                    panel_layout_.setActiveTab({});
+                if (focus_panel_name_ == id)
+                    focus_panel_name_.clear();
+                const auto unload = python::bridge().unload_panel_plugin;
+                if (!unload || !unload(id.c_str()))
+                    LOG_WARN("Closing sidebar tab '{}' did not unload its plugin", id);
             }
 
             if (rml_right_panel_.wantsInput() && !float_blocks_rp && !viewport_pointer_captured)
@@ -6766,6 +6839,18 @@ namespace lfs::vis::gui {
                 split_divider_state.y = content_bounds.y;
                 split_divider_state.width = divider_width;
                 split_divider_state.height = content_bounds.height;
+                const auto info = rendering->getSplitViewInfo();
+                if (splitViewUsesPLYComparison(rendering->getSettings().split_view_mode)) {
+                    const float inset = 10.0f * current_ui_scale_;
+                    split_divider_state.left_name = info.left_name;
+                    split_divider_state.right_name = info.right_name;
+                    split_divider_state.left_name_right = *divider_x - screen.work_pos.x - inset;
+                    split_divider_state.right_name_right = viewport_content_offset + content_bounds.x + content_bounds.width - inset;
+                    split_divider_state.name_bottom = content_bounds.y + content_bounds.height - inset;
+                    const float left_width = *divider_x - viewport_layout_.pos.x - content_bounds.x;
+                    const float right_width = content_bounds.width - left_width;
+                    split_divider_state.name_max_width = std::max(0.0f, std::min(left_width, right_width) - 2.0f * inset);
+                }
             }
         }
         rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);
@@ -7105,7 +7190,10 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager() &&
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
-            const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            if (const auto overlay_cursor = rml_viewport_overlay_.cursorRequest();
+                !block_underlay_input && overlay_cursor != RmlCursorRequest::None)
+                rml_cursor = overlay_cursor;
             const bool floating_resize_applied =
                 !floating_panel_cursor_hidden_ && has_floating_panels &&
                 reg.apply_floating_resize_cursor();
@@ -7816,6 +7904,10 @@ namespace lfs::vis::gui {
         if (align_tool && align_tool->isEnabled() && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
         }
+        auto* scale_distance_tool = ctx.viewer->getScaleDistanceTool();
+        if (scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
+            scale_distance_tool->renderUI(ctx, nullptr);
+        }
     }
 
     void GuiManager::renderViewportDecorations() {
@@ -8226,7 +8318,7 @@ namespace lfs::vis::gui {
             size_t available_bytes = e.available_bytes;
             if (project_save) {
                 std::error_code space_error;
-                const auto space = std::filesystem::space(path.parent_path(), space_error);
+                const auto space = lfs::core::native_fs::space(path.parent_path(), space_error);
                 if (!space_error)
                     available_bytes = static_cast<size_t>(space.available);
             }
@@ -8612,17 +8704,17 @@ namespace lfs::vis::gui {
 
         constexpr float kPanelPad = 8.0f;
         constexpr float kPreloadMaxHeight = 100000.0f;
-        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad;
+        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad -
+                                PanelLayoutManager::RIGHT_TAB_BAR_W * dpi;
         if (content_w <= 0.0f) {
             return;
         }
 
         const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
-        const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dpi;
         const float avail_h = panel_h - 2.0f * kPanelPad;
         const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
         const float content_top = kPanelPad;
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_y = content_top + scene_h + splitter_h + PanelLayoutManager::RIGHT_PANEL_SECTION_GAP * dpi;
         const float tab_content_h =
             std::max(0.0f, content_top + avail_h - tab_content_y);
         const float clip_y_min = tab_content_y;
@@ -8843,7 +8935,7 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isViewportExportLocked() const {
-        return async_tasks_.isExporting() || async_tasks_.isExportingVideo();
+        return (async_tasks_.isExporting() && !async_tasks_.isDragExport()) || async_tasks_.isExportingVideo();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,

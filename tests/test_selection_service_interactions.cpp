@@ -3,7 +3,6 @@
 
 #include "core/cuda/selection_ops.hpp"
 #include "core/event_bridge/event_bridge.hpp"
-#include "core/event_bus.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -19,8 +18,10 @@
 #include "tools/tool_base.hpp"
 
 #include <algorithm>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
+#include <optional>
 #include <vector>
 
 using lfs::core::DataType;
@@ -258,7 +259,6 @@ class SelectionServiceInteractionsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -292,7 +292,6 @@ protected:
 
     void TearDown() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         rendering_manager_.reset();
         scene_manager_.reset();
@@ -307,6 +306,57 @@ protected:
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     lfs::vis::SelectionService* service_ = nullptr;
 };
+
+TEST_F(SelectionServiceInteractionsTest, RevealBlocksRectangleSelectionForMovedOrShrunkSplats) {
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+    set_initial_selection({0, 1});
+
+    for (const int effect : {1, 2, 3, 4, 5, 6, 7, 8, 10}) {
+        SCOPED_TRACE(effect);
+        rendering_manager_->setSequencerReveal(lfs::rendering::GaussianRevealState{
+            .progress = 0.5f,
+            .effect = effect});
+
+        const auto result = service_->selectRect(
+            0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace);
+        EXPECT_FALSE(result.success);
+        EXPECT_EQ(result.affected_count, 0u);
+        EXPECT_FALSE(service_->beginInteractiveSelection(
+            lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace,
+            {0.0f, 0.0f}, 0.0f));
+        EXPECT_FALSE(service_->isInteractiveSelectionActive());
+        EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
+    }
+}
+
+TEST_F(SelectionServiceInteractionsTest, RevealAllowsRectangleSelectionForColorOnlyEffectsOrNoClip) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+    scene_manager_->selectNode("test");
+    service_->setTestingScreenPositions(make_screen_positions({10.0f, 10.0f, 80.0f, 80.0f}));
+
+    for (const int effect : {9, 11, 0}) {
+        SCOPED_TRACE(effect);
+        if (effect == 0) {
+            rendering_manager_->setSequencerReveal(std::nullopt);
+        } else {
+            rendering_manager_->setSequencerReveal(lfs::rendering::GaussianRevealState{
+                .progress = 0.5f,
+                .effect = effect});
+        }
+        set_initial_selection({0, 1});
+        const auto result = service_->selectRect(
+            0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace);
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+        ASSERT_TRUE(service_->beginInteractiveSelection(
+            lfs::vis::SelectionShape::Rectangle, lfs::vis::SelectionMode::Replace,
+            {0.0f, 0.0f}, 0.0f));
+        service_->cancelInteractiveSelection();
+    }
+}
 
 TEST_F(SelectionServiceInteractionsTest, DeleteInSelectionToolDoesNotRemoveNodeWithoutGaussianSelection) {
     const auto node_id = scene_manager_->getScene().getNodeIdByName("test");
@@ -1035,6 +1085,30 @@ TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillApplies
     EXPECT_TRUE(scene_manager_->getScene().hasPreparedCombinedModel());
 }
 
+TEST_F(SelectionServiceInteractionsTest, SelectAllFilteredKeepsGaussiansInsideTheCropPolygon) {
+    auto& scene = scene_manager_->getScene();
+    // Concave L; the frame puts the second point in its notch (1..2, 1..2).
+    lfs::core::CropPolygonData data;
+    data.vertices = {{-2.0f, -2.0f}, {2.0f, -2.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 2.0f}, {-2.0f, 2.0f}};
+    data.half_depth = 1.0f;
+    const auto polygon = scene.addCropPolygon("test_crop_polygon", scene.getNodeIdByName("test"), data,
+                                              glm::translate(glm::mat4(1.0f), glm::vec3(-0.5f, -1.5f, 0.0f)));
+    ASSERT_NE(polygon, lfs::core::NULL_NODE);
+
+    auto settings = rendering_manager_->getSettings();
+    settings.crop_filter_for_selection = true;
+    rendering_manager_->updateSettings(settings);
+
+    for (const bool inverse : {false, true}) {
+        SCOPED_TRACE(inverse ? "inverse" : "inside");
+        scene.getCropPolygonData(polygon)->inverse = inverse;
+        const auto result = service_->selectAllFiltered();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(selection_values(*scene_manager_),
+                  inverse ? (std::vector<uint8_t>{0, 1}) : (std::vector<uint8_t>{1, 0}));
+    }
+}
+
 TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {
     scene_manager_->getScene().addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
     auto settings = rendering_manager_->getSettings();
@@ -1195,4 +1269,43 @@ TEST_F(SelectionServiceInteractionsTest, DatasetCameraSelectionKeepsImagePixelCo
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
     ASSERT_TRUE(service_->selectBrush(20, 20, 15, SelectionMode::Replace, 3).success);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+// Selection previews are render queries. Repeating one without a change must not request a frame.
+TEST_F(SelectionServiceInteractionsTest, UnchangedSelectionPreviewsRequestNoFrames) {
+    auto& ledger = rendering_manager_->frameDemandLedger();
+    const auto requests_frame = [&] { return !ledger.plan(lfs::vis::FrameClock::now()).empty(); };
+
+    Viewport viewport(100, 100);
+    ToolContext context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    SelectionTool tool;
+    ASSERT_TRUE(tool.initialize(context));
+    tool.setEnabled(true);
+    tool.setDepthFilterEnabled(true);
+    tool.update(context);
+    ASSERT_TRUE(rendering_manager_->getSettings().depth_filter_enabled);
+    (void)requests_frame();
+    tool.update(context);
+    EXPECT_FALSE(requests_frame()) << "depth box";
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Polygon, lfs::vis::SelectionMode::Replace, {0.0f, 0.0f}, 0.0f));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
+    service_->refreshInteractivePreview();
+    (void)requests_frame();
+    service_->refreshInteractivePreview();
+    EXPECT_FALSE(requests_frame()) << "open polygon";
+    service_->updateInteractiveSelection({20.0f, 10.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(requests_frame()) << "open polygon after a cursor move";
+    service_->cancelInteractiveSelection();
+
+    // Away from the only splat, ring hover finds nothing at either position.
+    service_->updatePassiveRingHoverPreview({90.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    service_->updatePassiveRingHoverPreview({91.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    (void)requests_frame();
+    service_->updatePassiveRingHoverPreview({92.0f, 90.0f}, lfs::vis::SelectionMode::Replace);
+    EXPECT_FALSE(requests_frame()) << "ring hover over empty space";
 }

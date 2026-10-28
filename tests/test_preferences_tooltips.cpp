@@ -103,6 +103,27 @@ namespace {
         }
     }
 
+    TEST_F(PreferencesTooltipTest, LiteralResetTitleResolvesBeforeAncestorHelp) {
+        auto* row = document_->CreateElement("div").release();
+        row->SetClass("preferences-row", true);
+        row->SetAttribute("title", "Row help");
+        row->SetInnerRML("<span class=\"preferences-label\"><span>Label</span></span><input />");
+        document_->AppendChild(Rml::ElementPtr(row));
+        auto* label = row->GetChild(0);
+        auto* text = label->GetChild(0);
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(text), "Row help");
+        // Literal data-tooltip text is intentionally not a localization key.
+        label->SetAttribute("data-tooltip", "Row help\nDouble-click to restore the default: 1");
+        EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(text), "Row help");
+        label->RemoveAttribute("data-tooltip");
+        for (const auto* title : {"Row help\nDouble-click to restore the default: 1",
+                                  "Row help\nDouble-click to restore the default: 2"}) {
+            label->SetAttribute("title", title);
+            EXPECT_EQ(lfs::vis::gui::resolveRmlTooltip(text), title);
+            EXPECT_TRUE(lfs::vis::gui::resolveRmlTooltip(row->GetChild(1)).empty());
+        }
+    }
+
     TEST_F(PreferencesTooltipTest, NestedLabelTextRetainsHelpButControlChildrenDoNot) {
         auto* row = document_->CreateElement("div").release();
         row->SetClass("preferences-row", true);

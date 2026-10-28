@@ -749,7 +749,7 @@ namespace lfs::training::kernels {
             make_float3(aabb_hi[0], aabb_hi[1], aabb_hi[2]),
             pairs_dev, count_dev, pair_capacity, projection);
         if (const cudaError_t err = cudaGetLastError(); err != cudaSuccess) {
-            LOG_ERROR("depth_anchor_collect_kernel launch failed: {}", cudaGetErrorString(err));
+            LOG_ERROR("depth_anchor_collect_kernel launch failed: %s", cudaGetErrorString(err));
             cudaFreeAsync(pairs_dev, stream);
             cudaFreeAsync(count_dev, stream);
             return {};
@@ -760,7 +760,7 @@ namespace lfs::training::kernels {
         try {
             LFS_CUDA_AWAIT(anchor_ticket, cudaStreamSynchronize(stream), "training.depth.anchor_count_readback");
         } catch (const std::exception& e) {
-            LOG_ERROR("depth anchor count readback failed: {}", e.what());
+            LOG_ERROR("depth anchor count readback failed: %s", e.what());
             cudaFreeAsync(pairs_dev, stream);
             cudaFreeAsync(count_dev, stream);
             return {};
@@ -780,7 +780,7 @@ namespace lfs::training::kernels {
         try {
             LFS_CUDA_AWAIT(pairs_ticket, cudaStreamSynchronize(stream), "training.depth.anchor_pairs_readback");
         } catch (const std::exception& e) {
-            LOG_ERROR("depth anchor pairs readback failed: {}", e.what());
+            LOG_ERROR("depth anchor pairs readback failed: %s", e.what());
             cudaFreeAsync(pairs_dev, stream);
             cudaFreeAsync(count_dev, stream);
             return {};

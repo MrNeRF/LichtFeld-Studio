@@ -268,14 +268,15 @@ body {
     margin-bottom: 3dp;
 }
 
+/* Four 27dp buttons with 3dp gaps (117dp), centered under the 104dp axis widget. */
 .viewport-gizmo-controls {
     position: absolute;
     top: 117dp;
-    right: 10dp;
+    right: 3.5dp;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: 104dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: none;
     z-index: 8;
@@ -290,7 +291,7 @@ body {
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    width: 104dp;
+    width: 117dp;
     gap: 3dp;
     pointer-events: auto;
 }
@@ -1152,7 +1153,8 @@ body {
     text-align: center;
 }
 
-.viewport-transform-axis > .number-input {
+.viewport-transform-axis > .number-input,
+.transform-drag-field > .number-input {
     width: 64dp;
     min-width: 64dp;
     height: 22dp;
@@ -1179,7 +1181,8 @@ body {
     min-width: 8dp;
 }
 
-#transform-block .viewport-transform-axis > .number-input {
+#transform-block .viewport-transform-axis > .number-input,
+#transform-block .transform-drag-field > .number-input {
     width: 58dp;
     min-width: 58dp;
     height: 22dp;
@@ -1189,6 +1192,25 @@ body {
 #transform-block .viewport-transform-axis > .num-step-btn {
     width: 20dp;
     min-width: 20dp;
+}
+
+.transform-drag-field {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.transform-drag-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    cursor: ew-resize;
+}
+
+.transform-drag-handle.hidden,
+.transform-drag-field.is-editing > .transform-drag-handle {
+    display: none;
 }
 
 .viewport-transform-axis--split {
@@ -2182,14 +2204,16 @@ body {
 }
 
 /* Leave room for the tool strip and corner axis control in each pane. */
-.toolbar-hcenter.align-active {
+.toolbar-hcenter.align-active,
+.toolbar-hcenter.scale-distance-active {
     padding-left: 44dp;
     padding-right: 121dp;
     box-sizing: border-box;
 }
 
 /* Keep labeled alignment options inside narrow viewport panes. */
-.toolbar-hcenter .align-toolbar {
+.toolbar-hcenter .align-toolbar,
+.toolbar-hcenter .scale-distance-toolbar {
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: center;
@@ -2208,6 +2232,42 @@ body {
     font-size: 13dp;
 }
 
+/* Scale distance toolbar styling */
+.toolbar-hcenter .scale-distance-toolbar {
+    gap: 6dp;
+    padding: 4dp 10dp;
+}
+
+.scale-distance-title,
+.scale-distance-label,
+.scale-distance-value {
+    font-size: 13dp;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.scale-distance-title,
+.scale-distance-value {
+    font-weight: bold;
+}
+
+.scale-distance-value {
+    min-width: 44dp;
+}
+
+/* Outranks the global input[type="text"] size, like the depth field. */
+.scale-distance-toolbar > .number-input.scale-distance-input {
+    width: 68dp;
+    min-width: 68dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    line-height: 18dp;
+    font-size: 13dp;
+    box-sizing: border-box;
+    text-align: right;
+}
+
 /* Depth keeps its controls inside the reserved span, including narrow views. */
 #depth-view-block .viewport-depth-header {
     flex-wrap: wrap;
@@ -2221,3 +2281,35 @@ body {
     justify-content: center;
     row-gap: 4dp;
 }
+
+.comparison-name {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 4dp 8dp;
+    border-radius: 4dp;
+    background-color: rgba(20, 23, 28, 160);
+    color: rgba(255, 255, 255, 210);
+    font-size: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+
+.gamepad-navigation-indicator {
+    left: 12dp;
+    bottom: 12dp;
+    max-width: 320dp;
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    white-space: normal;
+}
+.gamepad-indicator-heading { display: flex; align-items: center; gap: 7dp; }
+.gamepad-indicator-dot { width: 6dp; height: 6dp; border-radius: 3dp; flex-shrink: 0; }
+.gamepad-indicator-label { font-size: 11dp; }
+.gamepad-indicator-mode { font-weight: bold; font-size: 12dp; }
+.gamepad-indicator-panel { font-size: 11dp; }
+.gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
+
+.gamepad-navigation-indicator.hidden { display: none; }

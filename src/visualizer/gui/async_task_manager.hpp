@@ -7,21 +7,28 @@
 #include <condition_variable>
 #include <cstdint>
 
+#include "core/collision.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "core/splat_simplify.hpp"
 #include "core/uuid.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
+#include "training/training_cropbox_mask.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <expected>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
@@ -42,6 +49,7 @@ namespace lfs::vis {
 
     namespace gui {
 
+        class CollisionJobsTest;
         struct VideoExportEnvironmentState;
         struct VideoExportMeshRendererState;
 
@@ -53,8 +61,33 @@ namespace lfs::vis {
             void shutdown();
 
             void setupEvents();
+            void startCollision(core::CollisionSettings settings);
+            void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
+            void cancelCollision();
+            [[nodiscard]] bool collisionWorkerActive() const;
+            void dropSceneReplacement();
+            bool deferSceneReplacement(std::move_only_function<void()> replacement);
+            [[nodiscard]] bool sceneReplacementRequired() const { return collision_worker_.valid() || collision_replacement_; }
+            [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
+            [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
+            [[nodiscard]] float collisionResolvedSize() const;
+            [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }
             void pollImportCompletion();
             [[nodiscard]] bool hasPendingMainThreadCompletions() const;
+
+            struct AprilTagScanRequest {
+                JobHandle job;
+                std::shared_future<AprilTagSceneApplyResult> completion;
+            };
+            [[nodiscard]] std::expected<AprilTagScanRequest, std::string> startAprilTagScan(AprilTagSceneScaleOptions options,
+                                                                                            std::vector<geometry::apriltag::TagDistanceConstraint> constraints = {},
+                                                                                            std::vector<std::string> targets = {},
+                                                                                            bool solve_scale = false, bool apply_to_scene = false);
+            void cancelAprilTagScan();
+            void shutdownAprilTagScan();
+            void pollAprilTagScanCompletion();
+            [[nodiscard]] std::optional<JobSnapshot> aprilTagScanStatus() const { return jobs_.peek(apriltag_state_.job); }
+            [[nodiscard]] const AprilTagSceneApplyResult& aprilTagScanResult() const { return apriltag_state_.result; }
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -94,6 +127,11 @@ namespace lfs::vis {
             }
             void startGalleryProjectExport(const GalleryProjectExportRequest& request);
             void cancelExport();
+            bool beginDragExport(lfs::core::ExportFormat format, std::function<void()> cancel);
+            std::function<void()> dragExportWorkerStart() const;
+            void reportDragExport(float progress, std::string stage = {});
+            void finishDragExport(bool cancelled, std::string error = {});
+            [[nodiscard]] bool isDragExport() const { return bool(drag_export_cancel_); }
 
             // Import
             [[nodiscard]] bool isImporting() const {
@@ -220,12 +258,15 @@ namespace lfs::vis {
             void cancelSplatSimplify();
 
         private:
+            friend class CollisionJobsTest;
             bool import_cancel_pending_ = false;
             bool importWorkersFinished() const;
             friend class lfs::vis::VisualizerImplResetTest_ImportWorkerFailureSettlesFailed_Test;
             struct ExportSplatSource {
                 const lfs::core::SplatData* data = nullptr;
                 glm::mat4 transform{1.0f};
+                // The training model with "Crop to ROI at end" on: exported cropped to its crop box.
+                std::optional<lfs::training::TrainingCropBoxGeometry> crop;
             };
 
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -237,7 +278,8 @@ namespace lfs::vis {
                                   bool rad_streamable,
                                   int spz_version,
                                   lfs::core::ProvenanceStamp provenance,
-                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
+                                  int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations,
+                                  std::optional<glm::vec3> background_color = std::nullopt);
             void startColmapExport(const std::filesystem::path& path);
             void startGalleryPublicationExport(GalleryScenePublishRequest publication,
                                                std::optional<GalleryProjectExportRequest> source = std::nullopt);
@@ -273,6 +315,8 @@ namespace lfs::vis {
                 std::vector<SplatLoadRequest> requests;
                 size_t loaded_count = 0;
                 size_t failed_count = 0;
+                // Attached nodes; the completion overlay counts those still in the scene.
+                std::vector<core::Uuid> imported_nodes;
                 bool consolidation_pending = false;
                 std::optional<SplatLoadRequest> pending_render_request;
                 core::Uuid pending_render_node;
@@ -316,9 +360,33 @@ namespace lfs::vis {
             beginJob(JobHandle& handle, JobType type,
                      std::string stage);
             void settlePendingJobs();
+            void settleAprilTagScan() noexcept;
 
             VisualizerImpl* viewer_;
+            struct AprilTagScanState {
+                JobHandle job;
+                AprilTagSceneSnapshot snapshot;
+                AprilTagSceneScaleReport report;
+                AprilTagSceneApplyResult result;
+                std::optional<std::promise<AprilTagSceneApplyResult>> completion;
+                std::vector<std::string> targets;
+                bool apply_to_scene = false;
+                std::optional<std::jthread> thread;
+            };
+            AprilTagScanState apriltag_state_;
+
             JobRegistry& jobs_;
+            JobHandle collision_job_;
+            std::future<void> collision_worker_;
+            std::stop_source collision_stop_;
+            std::move_only_function<void()> collision_replacement_;
+            std::shared_ptr<const core::CollisionVolume> collision_result_;
+            uint64_t collision_epoch_ = 0;
+            std::optional<core::Scene::CollisionSourceIdentity> collision_source_;
+            core::CollisionSettings collision_settings_;
+            std::atomic<float> collision_resolved_size_{0};
+            void pollCollision();
+            void launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work);
 
             struct ExportState {
                 std::string commit_uuid;
@@ -329,6 +397,7 @@ namespace lfs::vis {
                 std::optional<std::jthread> thread;
             };
             ExportState export_state_;
+            std::function<void()> drag_export_cancel_;
 
             struct VideoExportState {
                 JobHandle job;

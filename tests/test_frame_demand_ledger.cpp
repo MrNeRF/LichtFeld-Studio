@@ -187,6 +187,21 @@ namespace {
         EXPECT_EQ(plan.view_flags[1], DirtyFlag::CAMERA);
     }
 
+    TEST(FrameDemandLedger, PendingRefinementIsOneShotAndEndsWhenConsumed) {
+        FrameDemandLedger ledger;
+        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
+        ledger.request(FrameRequest{.reason = FrameReason::StochasticAccumulation,
+                                    .scope = FrameScope::View,
+                                    .views = 1,
+                                    .flags = DirtyFlag::CAMERA});
+        EXPECT_TRUE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
+        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::GuiAnimation));
+        const auto plan = ledger.plan(t0());
+        EXPECT_TRUE(plan.reasons.test(static_cast<std::size_t>(FrameReason::StochasticAccumulation)));
+        EXPECT_FALSE(ledger.hasPendingRequest(FrameReason::StochasticAccumulation));
+        EXPECT_TRUE(ledger.plan(t0() + 1ms).empty());
+    }
+
     TEST(FrameDemandLedger, PresentWithoutReasonIsCounted) {
         FrameDemandLedger ledger;
         lfs::vis::FramePlan empty;

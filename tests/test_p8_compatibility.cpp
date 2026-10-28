@@ -205,11 +205,9 @@ namespace {
             ProjectReader::classify(supported, v1);
         EXPECT_EQ(classification.state, OpenState::Open);
 
-        for (const bool capability_gate : {false, true}) {
-            const auto newer = temporary.path /
-                               (capability_gate
-                                    ? "newer-capability.licht"
-                                    : "newer-version.licht");
+        for (const int capability_gate : {0, 9, 10}) {
+            const auto reader_options = capability_gate == 10 ? ReaderOptions{} : v1;
+            const auto newer = temporary.path / std::format("newer-{}.licht", capability_gate);
             CommitOptions options{
                 .kind = CommitKind::Explicit,
                 .commit_uuid = fixed_uuid(
@@ -221,22 +219,26 @@ namespace {
                     (capability_gate ? 81'110 : 81'210),
             };
             if (capability_gate) {
-                // Unassigned core bit (9+); bit 8 is CHUNK_BYTESHUFFLE_ZSTD_V1.
-                options.extra_reader_capabilities.set(9);
+                options.extra_reader_capabilities.set(capability_gate);
+                options.extra_writer_capabilities.set(capability_gate);
             } else {
                 options.min_reader_version = Version{1, 1};
             }
             create_raw_fixture(
                 newer, capability_gate ? 81'100 : 81'200,
                 options);
-            EXPECT_EQ(ProjectReader::classify(newer, v1).state,
+            EXPECT_EQ(ProjectReader::classify(newer, reader_options).state,
                       OpenState::UnsupportedNewer);
-            auto semantic = ProjectReader::open(newer, v1);
+            auto semantic = ProjectReader::open(newer, reader_options);
             ASSERT_FALSE(semantic);
             EXPECT_EQ(semantic.error().code(),
                       lfs::ErrorCode::Unsupported);
 
-            auto inspect_options = v1;
+            EXPECT_NE(semantic.error().user_message().find("newer LichtFeld"), std::string_view::npos);
+            if (capability_gate)
+                EXPECT_NE(lfs::format_for_developer(semantic.error()).find("unsupported bits"), std::string::npos);
+
+            auto inspect_options = reader_options;
             inspect_options.allow_unsupported_inspection = true;
             auto inspection = ProjectReader::open(
                 newer, inspect_options);
@@ -244,6 +246,10 @@ namespace {
                 << lfs::format_for_developer(inspection.error());
             EXPECT_EQ(inspection->open_state(),
                       OpenState::UnsupportedNewer);
+            if (capability_gate) {
+                EXPECT_TRUE(inspection->commit().required_reader_capabilities.contains(capability_gate));
+                EXPECT_TRUE(inspection->commit().required_writer_capabilities.contains(capability_gate));
+            }
             auto verified = inspection->verify_all();
             ASSERT_FALSE(verified);
             EXPECT_EQ(verified.error().code(),
@@ -256,7 +262,7 @@ namespace {
                       lfs::ErrorCode::Unsupported);
             auto hydrated = ProjectDocument::open(
                 newer,
-                ProjectDocumentOpenOptions{.reader = v1});
+                ProjectDocumentOpenOptions{.reader = reader_options});
             ASSERT_FALSE(hydrated);
             EXPECT_EQ(hydrated.error().code(),
                       lfs::ErrorCode::Unsupported);
@@ -1316,6 +1322,62 @@ namespace {
         result.dataset.centralize_dataset = "cameras";
         result.dataset.timelapse_images = {"frame-a.png", "frame-b.png"};
         return result;
+    }
+
+    // Catches PROJ ignoring the init reference, its ownership, and malformed initialization metadata.
+    TEST(ProjectChapterTest, TrainingInitReferenceRoundTripAndValidation) {
+        TemporaryDirectory temporary;
+        const auto init_path = temporary.path / "init points.ply";
+        write_file_bytes(init_path, byte_vector("synthetic init"));
+        auto document = create_document(86'000, "training-init");
+        const auto uuid = require_result(upsert_path_reference(
+            document.edit_references(), temporary.path, init_path, "training_init", "training_init"));
+        EXPECT_EQ(require_result(upsert_path_reference(
+                      document.edit_references(), temporary.path, init_path, "training_init", "training_init", uuid)),
+                  uuid);
+        const Json initialization{
+            {"init_reference_uuid", uuid.to_string()},
+            {"data_origin", {2.0f, 3.0f, 4.0f}},
+            {"scene_center", {0.5f, 0.0f, 0.0f}}};
+        require_status(document.edit_project().dom().set_json("training_initialization", initialization));
+        const auto path = temporary.path / "init.licht";
+        static_cast<void>(require_result(document.save(path, save_options(86'010))));
+        auto reopened = require_result(ProjectDocument::open(path));
+        EXPECT_EQ(reopened.project().dom().get_json("training_initialization"), initialization);
+        EXPECT_EQ(resolve_path_reference(reopened.references(), temporary.path, uuid), init_path);
+        const auto record = require_result(reopened.references().find(uuid));
+        ASSERT_TRUE(record);
+        EXPECT_EQ(record->locator.base, LocatorBase::Project);
+        EXPECT_EQ(record->locator.preferred, "init points.ply");
+        EXPECT_EQ(record->locator.absolute_fallback, init_path.string());
+        EXPECT_EQ(record->fingerprint.kind, FingerprintKind::File);
+        EXPECT_EQ(reopened.project().dom().dump().find(init_path.string()), std::string::npos);
+        EXPECT_EQ(reopened.parameters().dom().dump().find(init_path.string()), std::string::npos);
+        const auto owners = require_result(reopened.reverse_reference_index());
+        EXPECT_EQ(owners.at(uuid), (std::vector<ReferenceOwnerBinding>{{.reference_uuid = uuid,
+                                                                        .chapter = "PROJ",
+                                                                        .owner_uuid = std::nullopt,
+                                                                        .field = "training_initialization.init_reference_uuid"}}));
+
+        for (const auto& invalid : std::vector<Json>{
+                 Json::array(),
+                 Json::object(),
+                 Json{{"data_origin", {1.0f, 2.0f}}},
+                 Json{{"data_origin", {1.0f, "bad", 3.0f}}},
+                 Json{{"data_origin", {1e100, 0.0, 0.0}}},
+                 Json{{"data_origin", {0, 0, 0}}, {"scene_center", {1, 2}}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", "bad"}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", lfs::core::Uuid{}.to_string()}},
+                 Json{{"data_origin", {0, 0, 0}}, {"init_reference_uuid", fixed_uuid(86'099).to_string()}}}) {
+            SCOPED_TRACE(invalid.dump());
+            require_status(reopened.edit_project().dom().set_json("training_initialization", invalid));
+            EXPECT_FALSE(reopened.reverse_reference_index());
+            EXPECT_FALSE(reopened.save(path, save_options(86'020)));
+        }
+        require_status(reopened.edit_project().dom().set_json("training_initialization", nullptr));
+        EXPECT_TRUE(reopened.reverse_reference_index());
+        static_cast<void>(require_result(reopened.save(path, save_options(86'030))));
+        EXPECT_TRUE(ProjectDocument::open(path));
     }
 
     TEST(ProjectChapterTest,

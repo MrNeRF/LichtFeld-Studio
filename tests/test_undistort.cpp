@@ -2,11 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/camera_distortion_layout.hpp"
+#include "core/cuda/undistort/distortion_model.cuh"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "gut_camera_model_cuda.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -187,6 +190,20 @@ namespace {
         return {dx, dy};
     }
 
+    void forward_point(const UndistortParams& params, const float x, const float y, float& dx, float& dy) {
+        detail::apply_distortion(x, y, params.model_type, params.distortion, params.num_distortion, dx, dy);
+    }
+
+    bool sample_image_point(UndistortParams params, const float x, const float y, float& ux, float& uy) {
+        params.src_cx -= x - 0.5f;
+        params.src_cy -= y - 0.5f;
+        params.src_width = params.src_height = 1;
+        const auto sample = inverse_distortion_sample_map(params, nullptr).cpu().contiguous();
+        ux = sample.ptr<float>()[0];
+        uy = sample.ptr<float>()[1];
+        return std::isfinite(ux) && std::isfinite(uy);
+    }
+
     constexpr std::array<float, 4> FULL_THIN_PRISM_RADIAL = {0.1f, -0.02f, 0.003f, -0.001f};
     constexpr std::array<float, 4> FULL_THIN_PRISM_TANGENTIAL = {0.002f, -0.0015f, 0.003f, -0.002f};
 
@@ -222,7 +239,7 @@ namespace {
 
     int source_column_at_angle(const UndistortParams& params, const float theta) {
         float dx, dy;
-        distort_normalized_point(params, std::tan(theta), 0.0f, dx, dy);
+        forward_point(params, std::tan(theta), 0.0f, dx, dy);
         return static_cast<int>(std::floor(dx * params.src_fx + params.src_cx));
     }
 
@@ -279,7 +296,7 @@ namespace {
             const float ux = (mapped_x[i] + 0.5f - params.dst_cx) / params.dst_fx;
             const float uy = (mapped_y[i] + 0.5f - params.dst_cy) / params.dst_fy;
             float dx, dy;
-            distort_normalized_point(params, ux, uy, dx, dy);
+            forward_point(params, ux, uy, dx, dy);
             EXPECT_NEAR(dx * params.src_fx + params.src_cx, x + 0.5f, 1.0e-2f) << "column " << x;
             EXPECT_NEAR(dy * params.src_fy + params.src_cy, row + 0.5f, 1.0e-2f) << "column " << x;
             if (x == last_column)
@@ -666,6 +683,37 @@ TEST(GutThinPrismFisheye, ProjectsLikeColmapAndInvertsItself) {
     }
 }
 
+// Catches a fisheye inverse whose Newton start assumes the lens reaches its widest angle at half the image width.
+// This calibrated 3840x2880 lens keeps widening to 79 deg at r = 2349 px; the inverse lost every pixel past
+// r = 1920 px, and GUT rendered and trained that rim black.
+TEST(GutOpenCvFisheye, InvertsTheWholeCalibratedRim) {
+    const gut_camera_model_test::OpenCvFisheyeCamera camera{.focal = {1454.0f, 1454.0f},
+                                                            .principal = {1920.0f, 1440.0f},
+                                                            .resolution = {3840, 2880},
+                                                            .radial = {0.159f, 0.134f, -0.087f, -0.0013f}};
+    const float diagonal_x = 0.8f, diagonal_y = 0.6f;
+    std::vector<float> points;
+    for (const float radius : {300.0f, 1200.0f, 1900.0f, 1920.0f, 2100.0f, 2300.0f, 2340.0f})
+        points.insert(points.end(), {camera.principal[0] + diagonal_x * radius, camera.principal[1] + diagonal_y * radius});
+    const auto rays = gut_camera_model_test::unproject(camera, points);
+    std::vector<float> forward;
+    for (size_t i = 0; i < points.size() / 2; ++i) {
+        ASSERT_EQ(rays[4 * i + 3], 1.0f) << "radius index " << i;
+        forward.insert(forward.end(), {rays[4 * i], rays[4 * i + 1], rays[4 * i + 2]});
+    }
+    const auto back = gut_camera_model_test::project(camera, forward);
+    for (size_t i = 0; i < points.size() / 2; ++i) {
+        EXPECT_EQ(back[3 * i + 2], 1.0f) << i;
+        EXPECT_NEAR(back[3 * i], points[2 * i], 0.05f) << i;
+        EXPECT_NEAR(back[3 * i + 1], points[2 * i + 1], 0.05f) << i;
+    }
+
+    // Past the radius of the widest angle the polynomial folds back: no ray.
+    const auto beyond = gut_camera_model_test::unproject(
+        camera, {camera.principal[0] + diagonal_x * 2395.0f, camera.principal[1] + diagonal_y * 2395.0f});
+    EXPECT_EQ(beyond[3], 0.0f);
+}
+
 TEST(UndistortInverse, ThinPrismFisheyeRoundTrip) {
     expect_inverse_round_trip(CameraModelType::THIN_PRISM_FISHEYE);
 }
@@ -683,21 +731,21 @@ TEST(UndistortInverse, ThinPrismFullCoefficientsWideAngleRoundTrip) {
     expect_thin_prism_wide_angle_round_trip({k[0], k[1], k[2], k[3], t[0], t[1], t[2], 0.0f, t[3], 0.0f});
 }
 
-// Catches a CPU inverse (used by the crop solve) that rejects or mis-solves wide thin-prism rays.
-TEST(UndistortInverse, CpuThinPrismWideRaysRoundTrip) {
+// Catches the shared GPU inverse rejecting or mis-solving wide thin-prism rays.
+TEST(UndistortInverse, ThinPrismWideRaysRoundTrip) {
     const auto params = make_full_thin_prism_params(1000.0f, 1000.0f, 2000.0f, 2000.0f, 4000, 4000);
     for (const float theta : {1.0f, 1.3f, 1.45f, 1.5f, 1.54f}) {
         for (const float azimuth : {0.0f, 1.1f, 2.5f, 4.2f}) {
             const float r = std::tan(theta);
             float dx, dy;
-            distort_normalized_point(params, r * std::cos(azimuth), r * std::sin(azimuth), dx, dy);
+            forward_point(params, r * std::cos(azimuth), r * std::sin(azimuth), dx, dy);
             const float image_x = dx * params.src_fx + params.src_cx;
             const float image_y = dy * params.src_fy + params.src_cy;
             float nx, ny;
-            ASSERT_TRUE(undistort_image_point(params, image_x, image_y, nx, ny))
+            ASSERT_TRUE(sample_image_point(params, image_x, image_y, nx, ny))
                 << "theta " << theta << " azimuth " << azimuth;
             float rx, ry;
-            distort_normalized_point(params, nx, ny, rx, ry);
+            forward_point(params, nx, ny, rx, ry);
             EXPECT_NEAR(rx * params.src_fx + params.src_cx, image_x, 1.0e-2f)
                 << "theta " << theta << " azimuth " << azimuth;
             EXPECT_NEAR(ry * params.src_fy + params.src_cy, image_y, 1.0e-2f)
@@ -869,7 +917,103 @@ TEST(UndistortInverse, WideAngleFisheyeRaysAreInverted) {
     }
 }
 
+namespace {
+    void expect_crop_border_inside(const UndistortParams& params) {
+        ASSERT_FALSE(params.crop_solve_failed);
+        for (int edge = 0; edge < 4; ++edge) {
+            const int count = edge < 2 ? params.dst_height : params.dst_width;
+            for (int i = 0; i < count; ++i) {
+                const float px = edge < 2 ? (edge == 0 ? 0.5f : params.dst_width - 0.5f) : i + 0.5f;
+                const float py = edge >= 2 ? (edge == 2 ? 0.5f : params.dst_height - 0.5f) : i + 0.5f;
+                const float x = (px - params.dst_cx) / params.dst_fx;
+                const float y = (py - params.dst_cy) / params.dst_fy;
+                const auto [dx, dy] = distort_test_coordinate(x, y, params);
+                const auto [ex, ey] = distort_test_coordinate(x * 1.0001f, y * 1.0001f, params);
+                const float sx = dx * params.src_fx + params.src_cx;
+                const float sy = dy * params.src_fy + params.src_cy;
+                ASSERT_TRUE(std::isfinite(sx) && std::isfinite(sy) &&
+                            sx >= 0.0f && sx <= params.src_width && sy >= 0.0f && sy <= params.src_height &&
+                            (ex - dx) * x + (ey - dy) * y > 0.0f)
+                    << "edge " << edge << " pixel " << i << " source " << sx << ", " << sy;
+            }
+        }
+    }
+} // namespace
+
+// Catches a fisheye crop collapsing when its frame corners lie beyond the first radial fold.
+TEST(UndistortCrop, FisheyeFoldKeepsClimbingFieldOfView) {
+    const auto params = compute_undistort_params(
+        1453.56848f, 1452.57385f, 1920.0f, 1440.0f, 3840, 2880,
+        Tensor::from_vector({0.159315839f, 0.134339839f, -0.0869080648f, -0.00134019367f}, {4}, Device::CPU),
+        Tensor(), CameraModelType::FISHEYE);
+    EXPECT_EQ(params.dst_width, 5388);
+    EXPECT_EQ(params.dst_height, 3360);
+    expect_crop_border_inside(params);
+    // --max-width caps the grown crop; 0 keeps COLMAP's growth.
+    const auto capped = compute_undistort_grid(params, 1, 3840);
+    EXPECT_EQ(capped.width, 3840);
+    EXPECT_EQ(capped.height, 2395);
+    const auto uncapped = compute_undistort_grid(params, 1, 0);
+    EXPECT_EQ(uncapped.width, 5388);
+    EXPECT_EQ(uncapped.height, 3360);
+    const auto [dx, dy] = distort_test_coordinate(std::tan(1.35f), 0.0f, params);
+    float ux, uy;
+    ASSERT_TRUE(sample_image_point(params, dx * params.src_fx + params.src_cx,
+                                   dy * params.src_fy + params.src_cy, ux, uy));
+    EXPECT_NEAR(std::atan(std::hypot(ux, uy)), 1.35f, 1e-4f);
+    EXPECT_FALSE(sample_image_point(params, params.src_cx + 1.63f * params.src_fx, params.src_cy, ux, uy));
+}
+
+// Catches the folded OPENCV inverse inflating c0148 to the maximum clamp with blank borders.
+TEST(UndistortCrop, PinholeFoldKeepsBorderInsideSource) {
+    const auto params = compute_undistort_params(
+        2051.9519f, 2052.85376f, 341.5f, 513.0f, 683, 1026,
+        Tensor::from_vector({0.476160347f, -15.2258253f}, {2}, Device::CPU),
+        Tensor::from_vector({0.0117965238f, -0.0146329654f}, {2}, Device::CPU), CameraModelType::PINHOLE);
+    expect_crop_border_inside(params);
+}
+
+// Catches c0250 retaining scale one when the valid near-180-degree lens lies inside the frame.
+TEST(UndistortCrop, ThinPrismWithoutFrameBorderRaysReachesClamp) {
+    const auto params = compute_undistort_params(
+        1188.64233f, 1188.78235f, 1920.0f, 1920.0f, 3840, 3840,
+        Tensor::from_vector({-0.00961296912f, -0.00112110213f, -0.00146211369f, -0.000204068245f}, {4}, Device::CPU),
+        Tensor::from_vector({0.000781554671f, 0.000780893257f, -0.0034037116f, -0.00189556787f}, {4}, Device::CPU),
+        CameraModelType::THIN_PRISM_FISHEYE);
+    EXPECT_EQ(params.dst_width, 7680);
+    EXPECT_EQ(params.dst_height, 7680);
+    expect_crop_border_inside(params);
+}
+
 // ====================== Coefficient packing tests ======================
+
+TEST(UndistortPacking, CalibrationAndUndistortShareCoefficientLayouts) {
+    const auto check = [](CameraModelType model, std::vector<float> radial, std::vector<float> tangential,
+                          std::array<float, 12> expected, int count) {
+        const auto r = Tensor::from_vector(radial, TensorShape({radial.size()}), Device::CPU);
+        const auto t = tangential.empty() ? Tensor() : Tensor::from_vector(tangential, TensorShape({tangential.size()}), Device::CPU);
+        Camera camera(Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                      TEST_FX, TEST_FY, TEST_CX, TEST_CY, r, t, model, "camera", {}, {}, TEST_W, TEST_H, 1);
+        const auto view = lfs::vis::buildCameraObservationView(camera);
+        const auto params = compute_undistort_params(TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H, r, t, model);
+        std::array<float, 12> packed{};
+        EXPECT_EQ(packCameraDistortion(model, radial, tangential, std::span(packed)), count);
+        EXPECT_EQ(params.num_distortion, count);
+        EXPECT_EQ(view.intrinsics.num_distortion, count);
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+            EXPECT_FLOAT_EQ(packed[i], expected[i]) << i;
+            EXPECT_FLOAT_EQ(params.distortion[i], expected[i]) << i;
+            EXPECT_DOUBLE_EQ(view.intrinsics.distortion[i], static_cast<double>(expected[i])) << i;
+        }
+    };
+    check(CameraModelType::PINHOLE, {.01f, .02f}, {.03f, .04f}, {.01f, .02f, 0, .03f, .04f}, 5);
+    check(CameraModelType::PINHOLE, {.01f, .02f, .03f, .04f, .05f, .06f}, {.07f, .08f},
+          {.01f, .02f, .03f, .04f, .05f, .06f, .07f, .08f}, 8);
+    check(CameraModelType::PINHOLE, {.01f, .02f, .03f, 0, 0, 0}, {.04f, .05f}, {.01f, .02f, .03f, .04f, .05f}, 5);
+    check(CameraModelType::FISHEYE, {.01f, .02f, .03f, .04f}, {}, {.01f, .02f, .03f, .04f}, 4);
+    check(CameraModelType::THIN_PRISM_FISHEYE, {.01f, .02f, .03f, .04f}, {.05f, .06f, .07f, .08f, .09f, .10f},
+          {.01f, .02f, .03f, .04f, .05f, .06f, .07f, .09f, .08f, .10f}, 10);
+}
 
 TEST(UndistortPacking, PinholeRadialOnly) {
     // COLMAP SIMPLE_RADIAL / RADIAL: 1-2 radial, no tangential
@@ -952,7 +1096,7 @@ TEST(UndistortFullOpenCV, ForwardMatchesDirectColmapFormula) {
                 direct_full_opencv_distortion(x, y, radial, tangential);
             float actual_x = 0.0f;
             float actual_y = 0.0f;
-            distort_normalized_point(params, x, y, actual_x, actual_y);
+            forward_point(params, x, y, actual_x, actual_y);
             EXPECT_NEAR(actual_x, expected_x, 1.0e-7f);
             EXPECT_NEAR(actual_y, expected_y, 1.0e-7f);
         }
@@ -977,12 +1121,12 @@ TEST(UndistortFullOpenCV, InverseRoundTripsWithinOneThousandthPixel) {
             const float y = static_cast<float>(yi) * 0.065f;
             float distorted_x = 0.0f;
             float distorted_y = 0.0f;
-            distort_normalized_point(
+            forward_point(
                 params, x, y, distorted_x, distorted_y);
 
             float recovered_x = 0.0f;
             float recovered_y = 0.0f;
-            ASSERT_TRUE(undistort_image_point(
+            ASSERT_TRUE(sample_image_point(
                 params,
                 distorted_x * TEST_FX + TEST_CX,
                 distorted_y * TEST_FY + TEST_CY,
@@ -1023,9 +1167,9 @@ TEST(UndistortFullOpenCV, ThreeCoefficientCaseIsBitIdentical) {
             float polynomial_y = 0.0f;
             float rational_x = 0.0f;
             float rational_y = 0.0f;
-            distort_normalized_point(
+            forward_point(
                 polynomial, x, y, polynomial_x, polynomial_y);
-            distort_normalized_point(
+            forward_point(
                 rational, x, y, rational_x, rational_y);
             EXPECT_EQ(std::bit_cast<std::uint32_t>(polynomial_x),
                       std::bit_cast<std::uint32_t>(rational_x));
@@ -1118,14 +1262,14 @@ TEST(UndistortPacking, ThinPrismPureSy1MatchesColmapReference) {
 
     for (const auto [x, y] : {std::pair{0.5f, 0.0f}, std::pair{0.0f, 0.4f}, std::pair{-0.3f, 0.25f}}) {
         float dx, dy;
-        distort_normalized_point(params, x, y, dx, dy);
+        forward_point(params, x, y, dx, dy);
         const auto [rx, ry] = colmap_thin_prism_fisheye_reference(x, y, colmap_extra);
         EXPECT_NEAR(dx, rx, 1.0e-6) << "(" << x << ", " << y << ")";
         EXPECT_NEAR(dy, ry, 1.0e-6) << "(" << x << ", " << y << ")";
     }
 
     float dx, dy;
-    distort_normalized_point(params, 0.5f, 0.0f, dx, dy);
+    forward_point(params, 0.5f, 0.0f, dx, dy);
     const double theta = std::atan(0.5);
     EXPECT_NEAR(dx, theta, 1.0e-6);
     EXPECT_NEAR(dy, sy1 * theta * theta, 1.0e-6);
@@ -1140,7 +1284,7 @@ TEST(UndistortThinPrism, FullCoefficientsMatchColmapReference) {
     const auto colmap_extra = full_thin_prism_colmap_extra();
     for (const auto [x, y] : wide_angle_sample_points()) {
         float dx, dy;
-        distort_normalized_point(params, x, y, dx, dy);
+        forward_point(params, x, y, dx, dy);
         const auto [rx, ry] = colmap_thin_prism_fisheye_reference(x, y, colmap_extra);
         EXPECT_NEAR(dx, rx, 5.0e-6) << "(" << x << ", " << y << ")";
         EXPECT_NEAR(dy, ry, 5.0e-6) << "(" << x << ", " << y << ")";

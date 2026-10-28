@@ -31,11 +31,6 @@
     image-color: @{text};
 }
 
-.training-subsection-title {
-    color: @{text_dim};
-    border-top-color: @{panel.primary_border_faint};
-}
-
 .loss-graph-wrap {
     background-color: @{background};
 }
@@ -44,7 +39,8 @@
     color: @{text_dim};
 }
 
-.mask-settings-group {
+.mask-settings-group,
+.sharpen-settings-group {
     border-left-color: @{panel.primary_accent};
 }
 

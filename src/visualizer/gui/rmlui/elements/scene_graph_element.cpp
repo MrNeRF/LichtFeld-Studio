@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "core/native_fs.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_graph_context_actions.hpp"
@@ -20,9 +21,17 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/utils/file_transfer_progress.hpp"
+#include "gui/utils/native_drag_scheduler.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/utils/native_file_drag.hpp"
+#include "gui/utils/splat_drag_selection.hpp"
+#include "gui/utils/splat_export_request.hpp"
+#include "gui/utils/splat_transfer.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "operator/operator_registry.hpp"
+#include "preferences.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -30,6 +39,8 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "window/window_manager.hpp"
+#include <SDL3/SDL.h>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -50,6 +61,7 @@
 #include <glm/mat4x4.hpp>
 #include <optional>
 #include <ranges>
+#include <shared_mutex>
 #include <sstream>
 
 namespace lfs::vis::gui {
@@ -125,9 +137,9 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::string_view colmapExportExtension(const std::filesystem::path& source_path) {
             std::error_code ec;
-            const bool has_binary_cameras = std::filesystem::exists(source_path / "cameras.bin", ec);
+            const bool has_binary_cameras = lfs::core::native_fs::exists(source_path / "cameras.bin", ec);
             ec.clear();
-            const bool has_binary_images = std::filesystem::exists(source_path / "images.bin", ec);
+            const bool has_binary_images = lfs::core::native_fs::exists(source_path / "images.bin", ec);
             const bool has_binary_metadata = has_binary_cameras && has_binary_images;
             return has_binary_metadata ? "bin" : "txt";
         }
@@ -143,7 +155,7 @@ namespace lfs::vis::gui {
             };
             for (const std::string_view file_name : file_names) {
                 std::error_code ec;
-                if (std::filesystem::exists(output_path / std::string(file_name), ec)) {
+                if (lfs::core::native_fs::exists(output_path / std::string(file_name), ec)) {
                     return true;
                 }
             }
@@ -258,8 +270,10 @@ namespace lfs::vis::gui {
             case core::NodeType::CAMERA_GROUP: return "camera_group";
             case core::NodeType::CROPBOX: return "cropbox";
             case core::NodeType::ELLIPSOID: return "ellipsoid";
+            case core::NodeType::CROP_POLYGON: return "crop_polygon";
             case core::NodeType::POINTCLOUD: return "pointcloud";
             case core::NodeType::MESH: return "mesh";
+            case core::NodeType::COLLISION: return "collision";
             case core::NodeType::KEYFRAME_GROUP: return "keyframe_group";
             case core::NodeType::KEYFRAME: return "keyframe";
             case core::NodeType::IMAGE_GROUP: return "group";
@@ -277,9 +291,11 @@ namespace lfs::vis::gui {
             case core::NodeType::DATASET: return "icon-dataset";
             case core::NodeType::CAMERA:
             case core::NodeType::CAMERA_GROUP: return "icon-camera";
-            case core::NodeType::CROPBOX: return "icon-cropbox";
+            case core::NodeType::CROPBOX:
+            case core::NodeType::CROP_POLYGON: return "icon-cropbox";
             case core::NodeType::ELLIPSOID: return "icon-ellipsoid";
             case core::NodeType::MESH: return "icon-mesh";
+            case core::NodeType::COLLISION: return "icon-cropbox";
             case core::NodeType::KEYFRAME_GROUP:
             case core::NodeType::KEYFRAME:
             case core::NodeType::IMAGE_GROUP:
@@ -304,6 +320,7 @@ namespace lfs::vis::gui {
                    type != core::NodeType::KEYFRAME_GROUP &&
                    type != core::NodeType::CROPBOX &&
                    type != core::NodeType::ELLIPSOID &&
+                   type != core::NodeType::CROP_POLYGON &&
                    !parent_is_dataset;
         }
 
@@ -314,6 +331,7 @@ namespace lfs::vis::gui {
                    type != core::NodeType::KEYFRAME_GROUP &&
                    type != core::NodeType::CROPBOX &&
                    type != core::NodeType::ELLIPSOID &&
+                   type != core::NodeType::CROP_POLYGON &&
                    !parent_is_dataset;
         }
 
@@ -328,6 +346,7 @@ namespace lfs::vis::gui {
             case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::POINTCLOUD:
             case core::NodeType::MESH:
+            case core::NodeType::COLLISION:
                 return true;
             default:
                 return false;
@@ -552,8 +571,14 @@ namespace lfs::vis::gui {
     void SceneGraphElement::OnResize() { dom_dirty_ = true; }
 
     void SceneGraphElement::OnUpdate() {
+        external_context_ = nullptr;
+        if (auto* window = services().windowOrNull()) {
+            external_context_ = &window->nativeFileDragContext();
+            external_context_->pump();
+        }
         claimRenameTextInputFocus();
         ensureDom();
+        updateExternalTransfer();
         const auto now = std::chrono::steady_clock::now();
         if (ghost_fade_pending_ && drag_ghost_) {
             drag_ghost_->SetProperty("opacity", "1");
@@ -619,6 +644,238 @@ namespace lfs::vis::gui {
                 event.StopPropagation();
             }
         }
+    }
+
+    SceneGraphElement::~SceneGraphElement() = default;
+
+    void SceneGraphElement::beginExternalTransfer(const core::NodeId id, const bool outside_only, std::vector<core::NodeId> ids) {
+#if defined(_WIN32) || defined(__linux__)
+        if (external_native_active_ || !external_context_)
+            return;
+        external_armed_ = false;
+        external_provider_ = {};
+        external_progress_.reset();
+        auto* manager = services().sceneOrNull();
+        if (!manager)
+            return;
+        const auto& scene = manager->getScene();
+        if (const auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning()) {
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = tr("preferences.drag_pause")});
+            return;
+        }
+        if (ids.empty())
+            ids.push_back(id);
+        const auto selected = collectSplatDragSelection<core::NodeId>(ids, [&scene](core::NodeId candidate) -> std::optional<SplatDragNode<core::NodeId>> {
+            const auto* node = scene.getNodeById(candidate);
+            if (!node)
+                return std::nullopt;
+            return SplatDragNode<core::NodeId>{node->type == core::NodeType::SPLAT ? SplatDragKind::Splat : node->type == core::NodeType::GROUP ? SplatDragKind::Group
+                                                                                                                                                : SplatDragKind::Other,
+                                               bool(node->model), node->children};
+        });
+        if (selected.error != SplatDragError::None || selected.splats.empty()) {
+            LOG_INFO("[splat-transfer] source hierarchy rejected: reason={} splats={}", static_cast<int>(selected.error), selected.splats.size());
+            if (const auto* rejected = scene.getNodeById(selected.failed_node.value_or(id))) {
+                external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
+                external_progress_->error_message = LOCF("preferences.drag_rejected_node", rejected->name);
+            }
+            // Delay user-visible rejection until the gesture actually leaves
+            // the app; ordinary internal moves must not show export errors.
+        }
+        std::vector<std::pair<core::NodeId, core::Uuid>> identity;
+        std::vector<std::string> labels;
+        for (const auto candidate_id : selected.splats) {
+            const auto* node = scene.getNodeById(candidate_id);
+            if (!node || node->type != core::NodeType::SPLAT || !node->model)
+                return;
+            identity.emplace_back(candidate_id, node->uuid);
+            labels.push_back(node->name);
+        }
+        auto* window = SDL_GetMouseFocus();
+        if (!window)
+            window = SDL_GetKeyboardFocus();
+        int width = 0, height = 0, wx = 0, wy = 0;
+        if (!window || !SDL_GetWindowSize(window, &width, &height))
+            return;
+        external_window_ = window;
+        SDL_GetWindowPosition(window, &wx, &wy);
+        external_window_bounds_ = {wx, wy, wx + width, wy + height};
+        float x = 0, y = 0;
+        SDL_GetGlobalMouseState(&x, &y);
+        if (const auto pointer = external_context_->pointer(window)) {
+            x = pointer->x;
+            y = pointer->y;
+        }
+        external_origin_ = {x, y};
+        if (identity.empty()) {
+            external_outside_only_ = outside_only;
+            external_armed_ = true;
+            return; // No provider: updateExternalTransfer rejects outside only.
+        }
+        const auto prefs = UserPreferences::instance().splatDrag();
+        // No scene/model pointer or Element is retained by a receiver's data
+        // object. Resolve identities again on the UI thread when data is read.
+        external_progress_ = std::make_shared<FileTransferProgressState>(std::make_shared<std::atomic<bool>>(false));
+        external_provider_ = [identity = std::move(identity), labels = std::move(labels), revision = scene.renderGeneration(), prefs, progress = external_progress_](FileDragTarget target) {
+            const auto cancelled = progress->cancelled;
+            if (cancelled->load())
+                throw std::runtime_error("Transfer already cancelled");
+            progress->completed.store(0);
+            progress->current_item.store(0);
+            progress->error_message.clear();
+            bool job_started = false;
+            try {
+                auto* gui = services().guiOrNull();
+                auto* window = services().windowOrNull();
+                if (!gui || !window)
+                    throw std::runtime_error("Transfer UI unavailable");
+                const auto format = prefs.format == "spz" ? core::ExportFormat::SPZ : core::ExportFormat::PLY;
+                job_started = gui->asyncTasks().beginDragExport(format, [progress] { progress->requestCancel(); });
+                if (!job_started)
+                    throw std::runtime_error("Another export is active");
+                gui->asyncTasks().reportDragExport(0, LOCF("preferences.drag_item", 1, labels.size(), labels.front()));
+                const auto worker_start = gui->asyncTasks().dragExportWorkerStart();
+                auto* live = services().sceneOrNull();
+                if (!live || live->getScene().renderGeneration() != revision)
+                    throw std::runtime_error("Scene changed before transfer");
+                const auto* trainer = services().trainerOrNull();
+                if (trainer && trainer->isRunning())
+                    throw std::runtime_error("Training resumed before transfer");
+                auto& scene = live->getScene();
+                std::optional<std::shared_lock<std::shared_mutex>> lock;
+                if (auto* mutex = scene.liveModelMutex())
+                    lock.emplace(*mutex);
+                std::vector<SplatTransferSource> sources;
+                for (const auto& [id, uuid] : identity) {
+                    const auto* node = scene.getNodeById(id);
+                    if (!node || node->uuid != uuid || !node->model)
+                        throw SplatTransferError(sources.size(), "Transfer source no longer exists");
+                    const auto axes = prefs.format != "ply"               ? SplatDragAxes{}
+                                      : target == FileDragTarget::Blender ? SplatDragAxes::blender()
+                                                                          : prefs.axes;
+                    sources.push_back({node->model.get(), scene.getWorldTransform(id), {.format = prefs.format, .name = identity.size() > 1 ? node->name + "-" + uuid.to_string() : node->name, .sh_degree = prefs.sh_degree, .axes = axes}});
+                    // Read the iteration beside the paused model snapshot, not
+                    // when the drag is armed or after the export has finished.
+                    if (trainer && trainer->getState() == TrainingState::Paused &&
+                        node->name == scene.getTrainingModelNodeName())
+                        sources.back().options.training_step = trainer->getCurrentIteration();
+                    sources.back().options.progress = [progress, worker_start, index = sources.size() - 1, count = identity.size()](float fraction) {
+                        worker_start();
+                        return progress->report(index, count, fraction);
+                    };
+                }
+                auto future = prepareSplatTransferBatch(sources, cancelled);
+                lock.reset(); // Owned CPU snapshot, no live model lock during IO.
+                auto files = waitForFileTransfer(future, *progress, [gui, window, progress, labels, started = std::chrono::steady_clock::now(), shown = false](int value) mutable {
+                    const auto index = std::min(progress->current_item.load(), labels.size() - 1);
+                    gui->asyncTasks().reportDragExport(value / 1000.0f, LOCF("preferences.drag_item", index + 1, labels.size(), labels[index]));
+                    if (!shown && mayShowTransferProgress(&window->nativeFileDragContext()) && std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(250)) {
+                        shown = true;
+                        PanelRegistry::instance().set_panel_enabled("lfs.export", true);
+                    }
+                    if (!window->advanceNativeTransferFrame())
+                        progress->requestCancel(); }, std::chrono::milliseconds(1));
+                gui->asyncTasks().finishDragExport(false);
+                return files;
+            } catch (const std::exception& error) {
+                progress->error_message = tr("preferences.drag_failed");
+                if (const auto* item = dynamic_cast<const SplatTransferError*>(&error); item && item->item_index < labels.size())
+                    progress->error_message = LOCF("preferences.drag_failed_item", item->item_index + 1, labels.size(), labels[item->item_index]);
+                if (job_started)
+                    if (auto* gui = services().guiOrNull())
+                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), progress->error_message);
+                if (progress->user_cancelled.load())
+                    LOG_INFO("[splat-transfer] deferred export cancelled");
+                else
+                    LOG_ERROR("[splat-transfer] deferred export failed: {}", error.what());
+                throw;
+            } catch (...) {
+                progress->error_message = tr("preferences.drag_failed");
+                if (job_started)
+                    if (auto* gui = services().guiOrNull())
+                        gui->asyncTasks().finishDragExport(progress->user_cancelled.load(), progress->error_message);
+                LOG_ERROR("[splat-transfer] unknown deferred export failure");
+                throw std::runtime_error("Unknown deferred export failure");
+            }
+        };
+        external_outside_only_ = outside_only;
+        external_armed_ = true;
+#endif
+    }
+
+    void SceneGraphElement::updateExternalTransfer() {
+#if defined(_WIN32) || defined(__linux__)
+        if (external_result_.valid() && external_result_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            external_result_.get();
+            external_native_active_ = false;
+            external_progress_.reset();
+            markStateDirty();
+        }
+        if (external_native_active_ || !external_armed_ || !external_context_)
+            return;
+        float x = 0, y = 0;
+        auto buttons = SDL_GetGlobalMouseState(&x, &y);
+        const auto native_pointer = external_context_->pointer(external_window_);
+        if (native_pointer) {
+            x = native_pointer->x;
+            y = native_pointer->y;
+            buttons = native_pointer->held ? SDL_BUTTON_LMASK : 0;
+        }
+        const auto* keyboard = SDL_GetKeyboardState(nullptr);
+        if (!(buttons & SDL_BUTTON_LMASK) || keyboard[SDL_SCANCODE_ESCAPE]) {
+            external_armed_ = false;
+            external_provider_ = {};
+            external_progress_.reset();
+            return;
+        }
+        bool outside = x < external_window_bounds_.x || y < external_window_bounds_.y || x >= external_window_bounds_.z || y >= external_window_bounds_.w;
+        if (native_pointer)
+            outside = native_pointer->outside;
+        else if (const auto native_outside = pointerOutsideApplication(external_window_))
+            outside = *native_outside;
+        if (glm::length(glm::vec2(x, y) - external_origin_) < 6.0f || (external_outside_only_ && !outside))
+            return;
+        if (!external_provider_) {
+            external_armed_ = false;
+            if (auto* gui = services().guiOrNull())
+                gui->enqueueToast({.title = tr("preferences.drag_title"), .message = external_progress_ && !external_progress_->error_message.empty() ? external_progress_->error_message : tr("preferences.drag_failed")});
+            external_progress_.reset();
+            return;
+        }
+        auto* window_manager = services().windowOrNull();
+        if (!window_manager || window_manager->nativeDragScheduler().busy())
+            return;
+        external_armed_ = false;
+        external_native_active_ = true;
+        cancelDrag();
+        if (auto* context = GetContext())
+            context->ProcessMouseButtonCancel(0, 0);
+        SDL_CaptureMouse(false);
+        const auto window_id = SDL_GetWindowID(external_window_);
+        external_result_ = window_manager->nativeDragScheduler().enqueue([provider = std::move(external_provider_), progress = external_progress_, window_id]() mutable {
+            FileDragResult result;
+            try {
+                auto* window = SDL_GetWindowFromID(window_id);
+                auto* manager = services().windowOrNull();
+                if (!window || !manager)
+                    return FileDragResult{FileDragStatus::Cancelled, {}};
+                LOG_INFO("[splat-transfer] native drag started at completed frame");
+                result = dragFiles(std::move(provider), window, &manager->nativeFileDragContext());
+            } catch (const std::exception& error) {
+                LOG_ERROR("[splat-transfer] native drag failed: {}", error.what());
+                result = {FileDragStatus::Failed, error.what()};
+            }
+            if (progress->user_cancelled.load())
+                result = {FileDragStatus::Cancelled, {}};
+            LOG_INFO("[splat-transfer] native drag finished: {} {}", static_cast<int>(result.status), result.error);
+            if (result.status == FileDragStatus::Failed || result.status == FileDragStatus::Unsupported)
+                if (auto* gui = services().guiOrNull())
+                    gui->enqueueToast({.title = tr("preferences.drag_title"), .message = progress->error_message.empty() ? tr("preferences.drag_failed") : progress->error_message});
+            return result;
+        });
+        markStateDirty();
+#endif
     }
 
     void SceneGraphElement::ensureDom() {
@@ -1013,7 +1270,8 @@ namespace lfs::vis::gui {
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
-            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked);
+            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked) ||
+                                 snapshot.type == core::NodeType::SPLAT || snapshot.type == core::NodeType::GROUP;
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
             snapshot.delete_enabled = snapshot.can_delete &&
                                       !snapshot.locked &&
@@ -2225,6 +2483,12 @@ namespace lfs::vis::gui {
                 return false;
         }
         for (const core::NodeId source_id : drag_node_ids_) {
+            const auto source = node_snapshots_.find(source_id);
+            if (source == node_snapshots_.end() || source->second.locked)
+                return false;
+            const auto parent = node_snapshots_.find(source->second.parent_id);
+            if (parent != node_snapshots_.end() && parent->second.type == core::NodeType::DATASET)
+                return false;
             core::NodeId walk = container_id;
             while (walk != core::NULL_NODE) {
                 if (walk == source_id)
@@ -2241,7 +2505,7 @@ namespace lfs::vis::gui {
     std::vector<core::NodeId> SceneGraphElement::selectedDraggableNodeIds() const {
         std::vector<core::NodeId> result;
         for (const auto& row : flat_rows_) {
-            if (!selected_ids_.contains(row.id) || !row.draggable)
+            if (!selected_ids_.contains(row.id) || !row.draggable || node_snapshots_.at(row.id).locked)
                 continue;
             bool covered_by_selected_ancestor = false;
             for (core::NodeId parent = node_snapshots_.at(row.id).parent_id;
@@ -2262,6 +2526,28 @@ namespace lfs::vis::gui {
     }
 
     std::vector<core::NodeId> SceneGraphElement::draggedNodeIds() const {
+        const auto source = node_snapshots_.find(drag_source_id_);
+        if (source != node_snapshots_.end() && source->second.type == core::NodeType::GROUP && source->second.locked)
+            return {drag_source_id_};
+        if (source != node_snapshots_.end() && source->second.type == core::NodeType::SPLAT) {
+            if (selected_ids_.contains(drag_source_id_)) {
+                std::vector<core::NodeId> splats;
+                bool all_splats = true;
+                for (const auto& row : flat_rows_) {
+                    if (!selected_ids_.contains(row.id))
+                        continue;
+                    if (row.type != core::NodeType::SPLAT) {
+                        all_splats = false;
+                        break;
+                    }
+                    splats.push_back(row.id);
+                }
+                if (all_splats && !splats.empty())
+                    return splats;
+            }
+            if (source->second.locked)
+                return {drag_source_id_};
+        }
         if (drag_source_id_ == core::NULL_NODE)
             return {};
         if (selected_ids_.contains(drag_source_id_)) {
@@ -2831,6 +3117,12 @@ namespace lfs::vis::gui {
                    });
         };
 
+        if (node->collision)
+            items.push_back(makeAction(tr("export.export"), prefixedAction(std::format("export_collision:{}", node_id))));
+        if (node->type == core::NodeType::SPLAT) {
+            items.push_back(makeAction(tr("export.export") + "...",
+                                       prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));
+        }
         if (selected_ids_.size() > 1) {
             items.push_back(makeAction(tr("scene.select_hierarchy"),
                                        prefixedAction("select_hierarchy")));
@@ -2974,7 +3266,7 @@ namespace lfs::vis::gui {
                     prefixedAction(std::format("ungroup:{}", node_id)), true));
             }
 
-            if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
+            if (node->type == core::NodeType::POINTCLOUD) {
                 items.push_back(makeAction(
                     tr("scene.save_to_disk"),
                     prefixedAction(std::format("save_node:{}", node_id)),
@@ -2992,6 +3284,7 @@ namespace lfs::vis::gui {
                 node->type != core::NodeType::CAMERA_GROUP &&
                 node->type != core::NodeType::CROPBOX &&
                 node->type != core::NodeType::ELLIPSOID &&
+                node->type != core::NodeType::CROP_POLYGON &&
                 !node_snapshots_.at(node_id).locked) {
                 items.push_back(makeAction(
                     tr("scene.duplicate"),
@@ -3048,7 +3341,7 @@ namespace lfs::vis::gui {
         core::NodeId parent_id = core::NULL_NODE;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it == node_snapshots_.end() || !it->second.draggable)
+            if (it == node_snapshots_.end() || !it->second.draggable || it->second.locked)
                 return;
             if (ids.empty())
                 parent_id = it->second.parent_id;
@@ -3265,6 +3558,37 @@ namespace lfs::vis::gui {
                 }
             };
             gui->enqueueModal(std::move(request));
+        } else if (kind == "export_collision" && parts.size() >= 2) {
+            core::NodeId id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], id))
+                return;
+            const auto* node = scene->getNodeById(id);
+            if (!node || !node->collision)
+                return;
+            scene_manager->selectNode(node->name);
+            op::operators().invoke("lfs_plugins.file_menu.CollisionOperator");
+        } else if (kind == "export_splat" && parts.size() >= 2) {
+            core::NodeId id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], id))
+                return;
+            const auto* node = scene->getNodeById(id);
+            if (!node || node->type != core::NodeType::SPLAT)
+                return;
+            if (!selected_ids_.contains(id)) {
+                scene_manager->clearSelection();
+                scene_manager->selectNode(node->name);
+            }
+            std::vector<std::string> names{node->name};
+            if (selected_ids_.contains(id) && selected_ids_.size() > 1) {
+                names.clear();
+                for (const auto selected : selected_ids_) {
+                    const auto* candidate = scene->getNodeById(selected);
+                    if (candidate && candidate->type == core::NodeType::SPLAT && candidate->model)
+                        names.push_back(candidate->name);
+                }
+            }
+            requestSplatExport(std::move(names));
+            PanelRegistry::instance().set_panel_enabled("lfs.export", true);
         } else if (kind == "save_node" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
@@ -3484,6 +3808,16 @@ namespace lfs::vis::gui {
                 return;
             }
             drag_node_ids_ = draggedNodeIds();
+            if (source_it->second.type == core::NodeType::SPLAT || source_it->second.type == core::NodeType::GROUP) {
+                // External copies include the full selected hierarchy, even when
+                // rows are collapsed or locked. Keep internal reparenting rules.
+                std::vector<core::NodeId> roots{drag_source_id_};
+                if (selected_ids_.contains(drag_source_id_)) {
+                    roots.assign(selected_ids_.begin(), selected_ids_.end());
+                    std::ranges::sort(roots);
+                }
+                beginExternalTransfer(drag_source_id_, true, std::move(roots));
+            }
             auto_expanded_group_id_ = core::NULL_NODE;
             auto_expand_hovered_group_id_ = core::NULL_NODE;
             dropped_into_auto_expanded_group_id_ = core::NULL_NODE;
@@ -3496,6 +3830,11 @@ namespace lfs::vis::gui {
                           event.GetParameter("mouse_y", 0.0f));
             markStateDirty();
         } else if (type == "dragend") {
+            external_armed_ = false;
+            if (!external_native_active_) {
+                external_provider_ = {};
+                external_progress_.reset();
+            }
             if (auto_expanded_group_id_ != core::NULL_NODE &&
                 dropped_into_auto_expanded_group_id_ != auto_expanded_group_id_) {
                 collapsed_ids_.insert(auto_expanded_group_id_);

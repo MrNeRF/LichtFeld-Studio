@@ -12,7 +12,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Callable, Iterator, Mapping, Optional
 
 from .private_directory import mkdir_private

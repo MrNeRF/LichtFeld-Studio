@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared presentation helpers for Portal connection controls."""
+from _lfs_path_io import native_path
 
 import os
 import struct
 import zlib
-from pathlib import Path
+from _lfs_path_io import Path
 
 from ._qrcodegen import QrCode
 
@@ -58,5 +59,5 @@ def qr_image_path(payload, directory):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_bytes(png)
-    os.replace(temporary, path)
+    os.replace(native_path(temporary), native_path(path))
     return str(path.resolve())

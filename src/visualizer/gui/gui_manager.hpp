@@ -56,6 +56,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class OrthographicZoomTest;
     class WindowInputDispatchTest;
+    class SidebarInputDispatchTest;
     class VisualizerImpl;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     class WindowManager;
@@ -151,8 +152,12 @@ namespace lfs::vis {
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
+            // Runs the overlay's Python document sync on the next frame even when no
+            // store change or UI event would trigger it.
+            void requestViewportOverlaySync() { rml_viewport_overlay_.requestDocumentSync(); }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+            [[nodiscard]] bool isSequencerVisible() const { return !ui_hidden_ && panel_layout_.isShowSequencer(); }
             void focusMainPanelTab(std::string panel_id) { focus_panel_name_ = std::move(panel_id); }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
@@ -261,6 +266,7 @@ namespace lfs::vis {
             std::string import_render_error_;
             std::unique_ptr<VulkanImportErrorScope> import_error_capture_;
             friend class lfs::vis::WindowInputDispatchTest;
+            friend class lfs::vis::SidebarInputDispatchTest;
             friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
@@ -446,6 +452,7 @@ namespace lfs::vis {
             GizmoManager gizmo_manager_;
 
             std::string focus_panel_name_;
+            std::string closed_plugin_tab_;
             bool ui_hidden_ = false;
 
             // Font storage

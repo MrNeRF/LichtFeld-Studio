@@ -61,6 +61,9 @@ namespace lfs::vis::input::test {
         std::optional<std::string> previous_;
         bool enabled_;
     };
+    // The version this build saves: the newest recorded history is always the previous one.
+    inline constexpr int currentProfileVersion() { return kLatestHistoricalProfileVersion + 1; }
+
     inline void writeProfile(const std::filesystem::path& path, const nlohmann::json& profile) {
         std::ofstream output(path, std::ios::binary);
         output << profile.dump(2);

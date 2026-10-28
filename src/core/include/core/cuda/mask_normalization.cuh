@@ -23,6 +23,7 @@ namespace lfs::core::cuda {
 #endif
     }
 
+#if defined(__CUDACC__)
     // Explicit non-FTZ comparison: a positive subnormal cutoff excludes zero.
     __device__ __forceinline__ bool mask_value_at_least(const float value, const float threshold) {
         unsigned result;
@@ -30,4 +31,5 @@ namespace lfs::core::cuda {
             : "=r"(result) : "f"(value), "f"(threshold));
         return result != 0;
     }
+#endif
 } // namespace lfs::core::cuda

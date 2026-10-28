@@ -265,8 +265,14 @@ struct VulkanGSPipelineBuffers {
     Buffer<int32_t> tile_batch_n_contributors; // (num_batches, TILE_SIZE)
     Buffer<float> pixel_state;                 // (H, W, 4)
     Buffer<float> pixel_depth;                 // (H, W, 1), median view-space depth
-    Buffer<float> pixel_depth_weight;          // (H, W, 1), expected-depth denominator
-    Buffer<int32_t> n_contributors;            // (H, W, 1)
+    Buffer<uint32_t> outline_tiles;            // Tile selected-rank bounds followed by inverse visible-slot depth ranks
+    Buffer<uint32_t> outline_seeds;
+    Buffer<uint32_t> outline_nearest;
+    Buffer<uint32_t> outline_background;     // Optional exterior background disjoint-set forest
+    Buffer<uint32_t> pixel_outline_ids;      // Optional [H,W]: node+2, bit 30 below coverage threshold, bit 31 occluded
+    Buffer<float> pixel_outline_scene_depth; // Optional [H,W,4]: scene/selected depths and accumulated coverage
+    Buffer<float> pixel_depth_weight;        // (H, W, 1), expected-depth denominator
+    Buffer<int32_t> n_contributors;          // (H, W, 1)
 
     // intermediate buffers
     Buffer<int32_t> _cumsum_blockSums;

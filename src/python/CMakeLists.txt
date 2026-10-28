@@ -219,6 +219,7 @@ nanobind_add_module(
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
     lfs/py_mesh2splat.cpp
+    lfs/py_apriltag.cpp
     lfs/py_splat_simplify.cpp
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
@@ -538,6 +539,7 @@ add_custom_target(lfs_python_support_copy ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:lfs_py>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py
         ${CMAKE_CURRENT_SOURCE_DIR}/lfs_splat_lod_hierarchy.py
         $<TARGET_FILE_DIR:lfs_py>
     COMMENT "Copying internal Python support modules"
@@ -585,17 +587,19 @@ install(TARGETS lfs_python_runtime
 if(BUILD_PORTABLE)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
-        FILES_MATCHING PATTERN "*.py"
+        FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
     )
 else()
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${PYTHON_INSTALL_DIR}"
-        FILES_MATCHING PATTERN "*.py"
+        FILES_MATCHING PATTERN "*.py" PATTERN "*.pem"
     )
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_path_io.py"
         DESTINATION "${PYTHON_INSTALL_DIR}"
     )
 endif()

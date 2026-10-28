@@ -6,6 +6,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
@@ -205,21 +206,21 @@ namespace lfs::vis {
 
     bool DataLoadingService::isSOGFile(const std::filesystem::path& path) const {
         // Check for .sog extension
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if (ext == ".sog") {
             return true;
         }
 
         // Check for SOG directory (with meta.json and WebP files)
-        if (std::filesystem::is_directory(path)) {
-            if (std::filesystem::exists(path / "meta.json")) {
+        if (lfs::core::native_fs::is_directory(path)) {
+            if (lfs::core::native_fs::exists(path / "meta.json")) {
                 // Check for SOG-specific files
-                if (std::filesystem::exists(path / "means_l.webp") ||
-                    std::filesystem::exists(path / "means_u.webp") ||
-                    std::filesystem::exists(path / "quats.webp") ||
-                    std::filesystem::exists(path / "scales.webp") ||
-                    std::filesystem::exists(path / "sh0.webp")) {
+                if (lfs::core::native_fs::exists(path / "means_l.webp") ||
+                    lfs::core::native_fs::exists(path / "means_u.webp") ||
+                    lfs::core::native_fs::exists(path / "quats.webp") ||
+                    lfs::core::native_fs::exists(path / "scales.webp") ||
+                    lfs::core::native_fs::exists(path / "sh0.webp")) {
                     return true;
                 }
             }
@@ -228,11 +229,11 @@ namespace lfs::vis {
         // Check if it's a meta.json file that's part of a SOG dataset
         if (path.filename() == "meta.json") {
             auto parent = path.parent_path();
-            if (std::filesystem::exists(parent / "means_l.webp") ||
-                std::filesystem::exists(parent / "means_u.webp") ||
-                std::filesystem::exists(parent / "quats.webp") ||
-                std::filesystem::exists(parent / "scales.webp") ||
-                std::filesystem::exists(parent / "sh0.webp")) {
+            if (lfs::core::native_fs::exists(parent / "means_l.webp") ||
+                lfs::core::native_fs::exists(parent / "means_u.webp") ||
+                lfs::core::native_fs::exists(parent / "quats.webp") ||
+                lfs::core::native_fs::exists(parent / "scales.webp") ||
+                lfs::core::native_fs::exists(parent / "sh0.webp")) {
                 return true;
             }
         }
@@ -241,13 +242,13 @@ namespace lfs::vis {
     }
 
     bool DataLoadingService::isPLYFile(const std::filesystem::path& path) const {
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".ply";
     }
 
     bool DataLoadingService::isCheckpointFile(const std::filesystem::path& path) const {
-        auto ext = path.extension().string();
+        auto ext = lfs::core::path_to_utf8(path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         return ext == ".resume";
     }

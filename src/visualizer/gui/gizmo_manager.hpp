@@ -23,6 +23,7 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
 
     namespace gui {
 
@@ -49,26 +50,26 @@ namespace lfs::vis {
         public:
             LFS_VIS_API explicit GizmoManager(VisualizerImpl* viewer);
 
-            void setupEvents();
+            LFS_VIS_API void setupEvents();
             LFS_VIS_API void updateToolState(const UIContext& ctx, bool ui_hidden);
 
-            void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderViewportGizmo(const ViewportLayout& viewport);
+            LFS_VIS_API void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
+            LFS_VIS_API void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
-            void deactivateAllTools();
+            LFS_VIS_API void deactivateAllTools();
             bool cancelActiveNodeTransformDrag();
             bool cancelActiveGizmoDrag();
-            void setSelectionSubMode(SelectionSubMode mode);
-            void setSelectionVolumeFromDrag(SelectionSubMode mode,
-                                            SelectionMode apply_mode,
-                                            uint64_t source_generation,
-                                            const glm::vec3& center_world,
-                                            float radius);
+            LFS_VIS_API void setSelectionSubMode(SelectionSubMode mode);
+            LFS_VIS_API void setSelectionVolumeFromDrag(SelectionSubMode mode,
+                                                        SelectionMode apply_mode,
+                                                        uint64_t source_generation,
+                                                        const glm::vec3& center_world,
+                                                        float radius);
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
-            void setTransformSpace(TransformSpace space);
+            LFS_VIS_API void setTransformSpace(TransformSpace space);
             [[nodiscard]] GizmoOperation getOperation() const {
                 return current_operation_;
             }
@@ -77,13 +78,14 @@ namespace lfs::vis {
                 node_gizmo_operation_ = operation;
             }
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
-            void setPivotMode(PivotMode mode);
+            LFS_VIS_API void setPivotMode(PivotMode mode);
             [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }
             void setMultiTransformMode(MultiTransformMode mode);
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
 
             [[nodiscard]] bool isCropboxGizmoActive() const;
             [[nodiscard]] bool isEllipsoidGizmoActive() const;
+            [[nodiscard]] bool isCropPolygonGizmoActive() const;
             LFS_VIS_API void setCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
             LFS_VIS_API void setCropToolOperation(const std::string& operation);
@@ -93,6 +95,15 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
+            // Polygon button: edit the selected splat's or point cloud's polygon, or start drawing one.
+            LFS_VIS_API void activateCropPolygonTool();
+            // Fit or reset the selected crop polygon, or the selected splat's or point cloud's.
+            LFS_VIS_API void fitSelectedCropPolygon(bool use_percentile);
+            LFS_VIS_API void resetSelectedCropPolygon();
+            // Invert the selected crop polygon, else crop box, else ellipsoid, in one undo step.
+            LFS_VIS_API void toggleSelectedCropInverse();
+            // Whether that crop volume is inverted; empty without one.
+            [[nodiscard]] LFS_VIS_API std::optional<bool> selectedCropInverse() const;
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             // The panel whose axis widget is pressed or dragged, and the pressed marker (-1 for the sphere).
             struct ViewportGizmoPress {
@@ -102,26 +113,28 @@ namespace lfs::vis {
             [[nodiscard]] std::optional<ViewportGizmoPress> viewportGizmoPress() const;
             // What the axis widget shows under the pointer: -1 off every sphere,
             // otherwise the panel and hovered marker, so a change needs a redraw.
-            [[nodiscard]] int viewportGizmoHover(double x, double y) const;
+            [[nodiscard]] LFS_VIS_API int viewportGizmoHover(double x, double y) const;
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
             // Pie menu
-            void openPieMenu(glm::vec2 cursor_pos);
+            LFS_VIS_API void openPieMenu(glm::vec2 cursor_pos);
             void closePieMenu();
             void renderPieMenu();
             void onPieMenuKeyRelease();
-            void onPieMenuMouseMove(glm::vec2 pos);
-            void onPieMenuClick(glm::vec2 pos);
+            LFS_VIS_API void onPieMenuMouseMove(glm::vec2 pos);
+            LFS_VIS_API void onPieMenuClick(glm::vec2 pos);
             [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:
+            friend class lfs::vis::CropVolumeSourceTest_GizmoEditsAreSavedAsSceneState_Test;
             struct ToolStateStamp {
                 bool valid = false;
                 bool ui_hidden = false;
                 bool has_scene_manager = false;
                 bool has_selected_node = false;
                 const void* align_tool = nullptr;
+                const void* scale_distance_tool = nullptr;
                 const void* selection_tool = nullptr;
                 const void* rendering_manager = nullptr;
                 std::string active_tool_id;
@@ -172,6 +185,7 @@ namespace lfs::vis {
             enum class CropToolShape {
                 Box,
                 Ellipsoid,
+                Polygon,
             };
 
             CropToolShape crop_tool_shape_ = CropToolShape::Box;
@@ -188,6 +202,21 @@ namespace lfs::vis {
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
             glm::mat4 crop_tool_visualizer_transform_{1.0f};
+            // The polygon's gizmos edit the transform; its vertex handles edit the outline.
+            std::vector<glm::vec2> crop_tool_polygon_vertices_;
+            float crop_tool_polygon_half_depth_ = 1.0f;
+            glm::vec3 crop_tool_polygon_half_extents_{1.0f};
+            // A vertex dragged on the cap plane z = plane_z. Vertices are node-local
+            // as at drag start; the node changes once, on release.
+            struct CropPolygonVertexDrag {
+                size_t index = 0;
+                float plane_z = 0.0f;
+                glm::mat4 polygon_to_world{1.0f};
+                std::vector<glm::vec2> vertices;
+                bool moved = false;
+            };
+            std::optional<CropPolygonVertexDrag> crop_polygon_vertex_drag_;
+            std::optional<glm::mat4> crop_tool_scale_start_;
             SelectionMode selection_volume_apply_mode_ = SelectionMode::Replace;
             uint64_t selection_volume_source_generation_ = 0;
             std::shared_ptr<core::Tensor> selection_volume_base_mask_;
@@ -249,13 +278,27 @@ namespace lfs::vis {
 
             void handlePieMenuSelection();
             void handleCropAction(const std::string& action_id);
+
+            // Vertex handles of the polygon crop tool, on the cap facing the camera.
+            struct CropPolygonHandles {
+                std::vector<std::optional<glm::vec2>> screen;
+                int hot = -1; // hovered or dragged vertex
+                bool owns_pointer = false;
+            };
+            // Drags, inserts and removes outline vertices from this frame's pointer input.
+            [[nodiscard]] CropPolygonHandles updateCropPolygonVertexEdit(glm::vec2 panel_pos, glm::vec2 panel_size,
+                                                                         const glm::mat4& view,
+                                                                         const glm::mat4& projection);
+            void previewCropPolygonOutline(const std::vector<glm::vec2>& vertices, const glm::mat4& polygon_to_world);
+            bool commitCropPolygonOutline(std::vector<glm::vec2> vertices);
             [[nodiscard]] bool isCropToolActive() const;
             [[nodiscard]] bool isSelectionVolumeMode() const;
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
-            [[nodiscard]] bool ensureCropToolState();
+            [[nodiscard]] LFS_VIS_API bool ensureCropToolState();
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
-            [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
+            [[nodiscard]] LFS_VIS_API bool persistActiveCropToolToNode(bool enable);
+            void scaleCropToolTransform(const glm::vec3& total_scale);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
             void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);

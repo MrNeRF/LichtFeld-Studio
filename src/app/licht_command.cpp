@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/licht_command.hpp"
+#include "core/native_fs.hpp"
 
 #include "app/terminal_progress_bar.hpp"
 #include "core/path_utils.hpp"
@@ -76,12 +77,12 @@ namespace lfs::app {
             const std::filesystem::path& dataset,
             const lfs::io::project::EmbeddedDatasetManifest& manifest) {
             for (const auto& entry : manifest.entries) {
-                const auto source = dataset / std::filesystem::path(entry.rel_path);
+                const auto source = dataset / lfs::core::utf8_to_path(entry.rel_path);
                 std::error_code error;
-                if (!std::filesystem::is_regular_file(source, error) || error) {
+                if (!lfs::core::native_fs::is_regular_file(source, error) || error) {
                     return false;
                 }
-                const auto size = std::filesystem::file_size(source, error);
+                const auto size = lfs::core::native_fs::file_size(source, error);
                 if (error || size != entry.bytes) {
                     return false;
                 }
@@ -135,7 +136,7 @@ namespace lfs::app {
             }
             auto resolved = lfs::io::project::resolve_path_reference(
                 document->references(), project.parent_path(), **existing_reference);
-            if (!resolved || !std::filesystem::is_directory(*resolved)) {
+            if (!resolved || !lfs::core::native_fs::is_directory(*resolved)) {
                 return print_error(
                     "The referenced dataset folder is unavailable. Specify --embed <dataset>.");
             }
@@ -143,15 +144,15 @@ namespace lfs::app {
         }
 
         if (!dataset.is_absolute()) {
-            dataset = std::filesystem::current_path() / dataset;
+            dataset = lfs::core::native_fs::current_path() / dataset;
         }
         dataset = std::filesystem::absolute(dataset).lexically_normal();
         std::error_code equivalence_error;
         const bool same_dataset = previous_dataset &&
-                                  std::filesystem::equivalent(
+                                  lfs::core::native_fs::equivalent(
                                       *previous_dataset, dataset, equivalence_error) &&
                                   !equivalence_error;
-        if (!std::filesystem::is_directory(dataset)) {
+        if (!lfs::core::native_fs::is_directory(dataset)) {
             return print_error(std::format("Dataset folder not found: {}",
                                            lfs::core::path_to_utf8(dataset)));
         }

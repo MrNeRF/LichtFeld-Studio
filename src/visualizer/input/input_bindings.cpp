@@ -6,6 +6,7 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
 #include "core/user_paths.hpp"
@@ -77,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 32; // Store changes to individual defaults.
+        constexpr int PROFILE_VERSION = 38; // Add scale distance tool shortcut.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -138,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::TOGGLE_PYTHON_CONSOLE;
+        constexpr Action LAST_ACTION = Action::TOOL_SCALE_DISTANCE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -633,7 +634,7 @@ namespace lfs::vis::input {
             std::string selected = "Default";
             std::ifstream marker;
             const auto marker_path = *config_dir / ".active-profile";
-            if (std::filesystem::exists(marker_path) &&
+            if (lfs::core::native_fs::exists(marker_path) &&
                 lfs::core::open_file_for_read(marker_path, marker)) {
                 std::getline(marker, selected);
                 if (!isValidProfileName(selected))
@@ -641,8 +642,8 @@ namespace lfs::vis::input {
             }
             for (const auto& name : {selected, std::string("Default")}) {
                 const auto saved_path = *config_dir / (name + ".json");
-                if (!std::filesystem::is_symlink(saved_path) &&
-                    std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+                if (!lfs::core::native_fs::is_symlink(saved_path) &&
+                    lfs::core::native_fs::exists(saved_path) && loadProfileFromFile(saved_path)) {
                     current_profile_name_ = name;
                     return;
                 }
@@ -674,7 +675,7 @@ namespace lfs::vis::input {
         const auto path = profilePath(name);
         if (!path)
             return;
-        if (std::filesystem::exists(*path) && loadProfileFromFile(*path)) {
+        if (lfs::core::native_fs::exists(*path) && loadProfileFromFile(*path)) {
             const bool corrected_name = current_profile_name_ != name;
             current_profile_name_ = name;
             persistActiveProfileName();
@@ -728,7 +729,7 @@ namespace lfs::vis::input {
             return std::nullopt;
         }
         auto path = *config_dir / (std::string(name) + ".json");
-        if (std::filesystem::is_symlink(path)) {
+        if (lfs::core::native_fs::is_symlink(path)) {
             LOG_WARN("Refusing symbolic link input profile '{}': file is outside the keymap directory", name);
             return std::nullopt;
         }
@@ -828,8 +829,8 @@ namespace lfs::vis::input {
         using json = nlohmann::json;
 
         std::error_code file_error;
-        if (std::filesystem::exists(path, file_error)) {
-            if (std::filesystem::is_symlink(path, file_error) || file_error) {
+        if (lfs::core::native_fs::exists(path, file_error)) {
+            if (lfs::core::native_fs::is_symlink(path, file_error) || file_error) {
                 LOG_WARN("Refusing to overwrite symbolic link input profile '{}': file is unchanged",
                          lfs::core::path_to_utf8(path));
                 return false;
@@ -852,7 +853,7 @@ namespace lfs::vis::input {
                 const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
                 auto backup = path;
                 backup += ".damaged-" + std::to_string(stamp) + ".bak";
-                const bool backed_up = std::filesystem::copy_file(
+                const bool backed_up = lfs::core::native_fs::copy_file(
                     path, backup, std::filesystem::copy_options::none, file_error);
                 if (!backed_up || file_error) {
                     LOG_ERROR("Could not preserve damaged input profile '{}'; file is unchanged",
@@ -1246,7 +1247,7 @@ namespace lfs::vis::input {
                                                 ? std::optional<std::filesystem::path>(*config_dir / "Default.json")
                                                 : std::nullopt;
                 if (g_persistence_enabled.load(std::memory_order_acquire) &&
-                    config_default && std::filesystem::equivalent(path, *config_default, ec)) {
+                    config_default && lfs::core::native_fs::equivalent(path, *config_default, ec)) {
                     saveProfileToFile(*config_default);
                 }
             }
@@ -1285,6 +1286,7 @@ namespace lfs::vis::input {
                 def.action == Action::SELECT_MODE_BOX ||
                 def.action == Action::SELECT_MODE_SPHERE;
             const bool should_add =
+                (version < 37 && def.action == Action::EXIT_WALK) ||
                 (version < 6 && def.action == Action::CAMERA_ROLL) ||
                 (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
                 (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
@@ -1423,8 +1425,8 @@ namespace lfs::vis::input {
             return profiles;
 
         const auto config_dir = getConfigDir();
-        if (config_dir && std::filesystem::exists(*config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
+        if (config_dir && lfs::core::native_fs::exists(*config_dir)) {
+            for (const auto& entry : lfs::core::native_fs::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default" && isValidProfileName(name)) {
@@ -1437,7 +1439,9 @@ namespace lfs::vis::input {
         return profiles;
     }
 
-    Action InputBindings::getActionForKey(ToolMode mode, int key, int modifiers) const {
+    Action InputBindings::getActionForKey(ToolMode mode, int key, int modifiers, bool* const on_repeat) const {
+        if (on_repeat)
+            *on_repeat = false;
         // AltGr is event-only and never stored on a shortcut. Masking it off would
         // match the bare digit or letter (German AltGr+4 is U+00BC, still key 4).
         if ((modifiers & KEYMOD_ALTGR) != 0)
@@ -1445,14 +1449,19 @@ namespace lfs::vis::input {
 
         const int mods = modifiers & MODIFIER_MASK;
         const auto find_in_mode = [&](ToolMode query_mode, bool allow_extra) -> Action {
+            const auto matched = [&](const KeyMapEntry& entry) {
+                if (on_repeat)
+                    *on_repeat = entry.on_repeat;
+                return entry.action;
+            };
             if (auto it = key_map_.find({query_mode, key, mods}); it != key_map_.end()) {
-                return it->second;
+                return matched(it->second);
             }
             if (allow_extra && mods != MODIFIER_NONE) {
                 if (auto it = key_map_.find({query_mode, key, MODIFIER_NONE});
                     it != key_map_.end() &&
-                    describe(it->second).allows_extra_modifiers) {
-                    return it->second;
+                    describe(it->second.action).allows_extra_modifiers) {
+                    return matched(it->second);
                 }
             }
             return Action::NONE;
@@ -1502,17 +1511,17 @@ namespace lfs::vis::input {
     Action InputBindings::getActionForShortcut(const ToolMode mode, const int physical_key,
                                                const int logical_key, const int modifiers,
                                                const int printed_punctuation,
-                                               const bool shift_needed_for_printed_key) const {
+                                               const bool shift_needed_for_printed_key,
+                                               bool* const on_repeat) const {
         // Try the exact printed chord before a number-row position. When Shift
         // changes the produced symbol, retry without that layout-only Shift if
         // no exact printed chord is bound (for example, Ctrl+4 on AZERTY).
         if (printed_punctuation != KEY_UNKNOWN) {
-            if (const auto action = getActionForKey(mode, printed_punctuation, modifiers);
+            if (const auto action = getActionForKey(mode, printed_punctuation, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
             if (shift_needed_for_printed_key) {
-                if (const auto action = getActionForKey(
-                        mode, printed_punctuation, modifiers & ~MODIFIER_SHIFT);
+                if (const auto action = getActionForKey(mode, printed_punctuation, modifiers & ~MODIFIER_SHIFT, on_repeat);
                     action != Action::NONE)
                     return action;
             }
@@ -1523,17 +1532,17 @@ namespace lfs::vis::input {
         if (physical_key != KEY_UNKNOWN && physical_key != logical_key &&
             logical_key >= KEY_0 && logical_key <= KEY_9 &&
             !(physical_key >= KEY_0 && physical_key <= KEY_9)) {
-            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+            if (const auto action = getActionForKey(mode, physical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
         if (logical_key != KEY_UNKNOWN) {
-            if (const auto action = getActionForKey(mode, logical_key, modifiers);
+            if (const auto action = getActionForKey(mode, logical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
         if (physical_key != KEY_UNKNOWN && physical_key != logical_key) {
-            if (const auto action = getActionForKey(mode, physical_key, modifiers);
+            if (const auto action = getActionForKey(mode, physical_key, modifiers, on_repeat);
                 action != Action::NONE)
                 return action;
         }
@@ -1766,6 +1775,7 @@ namespace lfs::vis::input {
             Action::TOOL_SCALE,
             Action::TOOL_MIRROR,
             Action::TOOL_ALIGN,
+            Action::TOOL_SCALE_DISTANCE,
             Action::CANCEL_POLYGON,
         };
         const auto defaults = createDefaultProfile().bindings;
@@ -1951,7 +1961,7 @@ namespace lfs::vis::input {
                 using T = std::decay_t<decltype(t)>;
 
                 if constexpr (std::is_same_v<T, KeyTrigger>) {
-                    key_map_[{binding.mode, t.key, t.modifiers}] = binding.action;
+                    key_map_[{binding.mode, t.key, t.modifiers}] = {binding.action, t.on_repeat};
                 } else if constexpr (std::is_same_v<T, MouseButtonTrigger>) {
                     mouse_button_map_[{binding.mode, t.button, t.modifiers, t.double_click}] = binding.action;
                 } else if constexpr (std::is_same_v<T, MouseScrollTrigger>) {
@@ -1999,6 +2009,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_E, MODIFIER_NONE, true}, Action::CAMERA_MOVE_DOWN, "Down"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
             {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
+            {KeyTrigger{KEY_H, MODIFIER_CTRL}, Action::CAMERA_RESTORE_HOME, "Reset home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -2041,6 +2052,10 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_8, MODIFIER_CTRL}, Action::SELECT_MODE_SPHERE, "Sphere"},
             {KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::CANCEL_POLYGON, "Cancel"},
             // UI
+            {KeyTrigger{KEY_TAB, MODIFIER_CTRL}, Action::NEXT_SIDEBAR_CATEGORY,
+             getActionName(Action::NEXT_SIDEBAR_CATEGORY)},
+            {KeyTrigger{KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::PREVIOUS_SIDEBAR_CATEGORY,
+             getActionName(Action::PREVIOUS_SIDEBAR_CATEGORY)},
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
@@ -2073,6 +2088,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_4}, Action::TOOL_SCALE, "Scale"},
             {KeyTrigger{KEY_5}, Action::TOOL_MIRROR, "Mirror"},
             {KeyTrigger{KEY_6}, Action::TOOL_ALIGN, "Align"},
+            {KeyTrigger{KEY_7}, Action::TOOL_SCALE_DISTANCE, "Scale Distance"},
             {KeyTrigger{KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"},
         };
 
@@ -2118,6 +2134,7 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_ALT},
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
+        profile.bindings.push_back({ToolMode::WALK, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_WALK, "Exit Walk"});
         profile.bindings.push_back({ToolMode::CROP_BOX,
                                     KeyTrigger{KEY_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
@@ -2126,6 +2143,27 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_KP_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
                                     "Apply/confirm"});
+        // Closed crop polygon editing, as on the closed selection polygon.
+        profile.bindings.push_back({ToolMode::CROP_BOX,
+                                    MouseButtonTrigger{MouseButton::LEFT, MODIFIER_SHIFT},
+                                    Action::INSERT_CROP_POLYGON_VERTEX,
+                                    "Insert polygon vertex"});
+        profile.bindings.push_back({ToolMode::CROP_BOX,
+                                    MouseButtonTrigger{MouseButton::LEFT, MODIFIER_CTRL},
+                                    Action::REMOVE_CROP_POLYGON_VERTEX,
+                                    "Remove polygon vertex"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_BACKSPACE, MODIFIER_NONE},
+                                    Action::REMOVE_LAST_POINT,
+                                    "Remove last point"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_ENTER, MODIFIER_NONE},
+                                    Action::APPLY_ALIGNMENT,
+                                    "Apply alignment"});
+        profile.bindings.push_back({ToolMode::ALIGN,
+                                    KeyTrigger{KEY_KP_ENTER, MODIFIER_NONE},
+                                    Action::APPLY_ALIGNMENT,
+                                    "Apply alignment"});
 
         // Node picking only for transform modes (not selection/cropbox/align)
         for (const auto mode : NODE_PICK_MODES) {
@@ -2160,6 +2198,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
         case Action::CAMERA_SET_HOME: return "Set Home";
+        case Action::CAMERA_RESTORE_HOME: return "Reset Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -2219,8 +2258,16 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "Scale Tool";
         case Action::TOOL_MIRROR: return "Mirror Tool";
         case Action::TOOL_ALIGN: return "Align Tool";
+        case Action::TOOL_SCALE_DISTANCE: return "Scale Distance Tool";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
+        case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
+        case Action::PREVIOUS_SIDEBAR_CATEGORY: return "Previous Sidebar Category";
+        case Action::REMOVE_LAST_POINT: return "Remove Last Point";
+        case Action::APPLY_ALIGNMENT: return "Apply Alignment";
+        case Action::INSERT_CROP_POLYGON_VERTEX: return "Insert Crop Polygon Vertex";
+        case Action::REMOVE_CROP_POLYGON_VERTEX: return "Remove Crop Polygon Vertex";
+        case Action::EXIT_WALK: return "Exit Walk";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
@@ -2254,6 +2301,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_DOWN: return "camera_move_down";
         case Action::CAMERA_RESET_HOME: return "camera_reset_home";
         case Action::CAMERA_SET_HOME: return "camera_set_home";
+        case Action::CAMERA_RESTORE_HOME: return "camera_restore_home";
         case Action::CAMERA_FOCUS_SELECTION: return "camera_focus_selection";
         case Action::CAMERA_SET_PIVOT: return "camera_set_pivot";
         case Action::CAMERA_NEXT_VIEW: return "camera_next_view";
@@ -2314,8 +2362,16 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "tool_scale";
         case Action::TOOL_MIRROR: return "tool_mirror";
         case Action::TOOL_ALIGN: return "tool_align";
+        case Action::TOOL_SCALE_DISTANCE: return "tool_scale_distance";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
+        case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
+        case Action::PREVIOUS_SIDEBAR_CATEGORY: return "previous_sidebar_category";
+        case Action::REMOVE_LAST_POINT: return "remove_last_point";
+        case Action::APPLY_ALIGNMENT: return "apply_alignment";
+        case Action::INSERT_CROP_POLYGON_VERTEX: return "insert_crop_polygon_vertex";
+        case Action::REMOVE_CROP_POLYGON_VERTEX: return "remove_crop_polygon_vertex";
+        case Action::EXIT_WALK: return "exit_walk";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
@@ -2358,6 +2414,7 @@ namespace lfs::vis::input {
             {ToolMode::SCALE, "scale", "Scale"},
             {ToolMode::ALIGN, "align", "Align"},
             {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
+            {ToolMode::WALK, "walk", "Walk"},
         };
     } // namespace
 
@@ -2400,6 +2457,8 @@ namespace lfs::vis::input {
     }
 
     std::string getLocalizedToolModeName(const ToolMode mode) {
+        if (mode == ToolMode::WALK)
+            return lookupLocale("collision.walk", "Walk");
         for (const auto& [m, suffix, english] : kToolModeEntries) {
             if (m == mode)
                 return lookupLocale(std::string("input_settings.mode.").append(suffix), english);
@@ -2617,7 +2676,8 @@ namespace lfs::vis::input {
             return;
 
         // Escape cancels capture except when capturing its own Cancel action.
-        if (key == KEY_ESCAPE && capture_state_.action != Action::CANCEL_POLYGON) {
+        if (key == KEY_ESCAPE && capture_state_.action != Action::CANCEL_POLYGON &&
+            capture_state_.action != Action::EXIT_WALK) {
             cancelCapture();
             return;
         }
@@ -2865,6 +2925,7 @@ namespace lfs::vis::input {
         static constexpr ActionDescriptor d_camera_key{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .inherits_from_global = true,
+            .repeats_on_hold = true,
             .ui_section = ActionSection::Navigation,
         };
         static constexpr ActionDescriptor d_camera_global_key{
@@ -2935,6 +2996,15 @@ namespace lfs::vis::input {
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .ui_section = ActionSection::CropBox,
         };
+        static constexpr ActionDescriptor d_crop_box_click{
+            .allowed_kinds = K::TRIGGER_KIND_MOUSE_BUTTON,
+            .prefers_single_click = true,
+            .ui_section = ActionSection::CropBox,
+        };
+        static constexpr ActionDescriptor d_align_key{
+            .allowed_kinds = K::TRIGGER_KIND_KEY,
+            .ui_section = ActionSection::Align,
+        };
 
         static constexpr ActionDescriptor d_view_global_key{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
@@ -2996,6 +3066,8 @@ namespace lfs::vis::input {
 
         case Action::CAMERA_RESET_HOME:
         case Action::CAMERA_SET_HOME:
+        case Action::CAMERA_RESTORE_HOME:
+        case Action::EXIT_WALK:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -3064,6 +3136,12 @@ namespace lfs::vis::input {
 
         case Action::APPLY_CROP_BOX:
             return d_crop_box_key;
+        case Action::INSERT_CROP_POLYGON_VERTEX:
+        case Action::REMOVE_CROP_POLYGON_VERTEX:
+            return d_crop_box_click;
+        case Action::REMOVE_LAST_POINT:
+        case Action::APPLY_ALIGNMENT:
+            return d_align_key;
 
         case Action::NODE_PICK:
             return d_node_pick;
@@ -3071,6 +3149,8 @@ namespace lfs::vis::input {
             return d_node_rect;
 
         case Action::TOGGLE_UI:
+        case Action::NEXT_SIDEBAR_CATEGORY:
+        case Action::PREVIOUS_SIDEBAR_CATEGORY:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
         case Action::OPEN_PREFERENCES:
@@ -3100,6 +3180,7 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE:
         case Action::TOOL_MIRROR:
         case Action::TOOL_ALIGN:
+        case Action::TOOL_SCALE_DISTANCE:
             return d_tools_key;
 
         case Action::PIE_MENU:
@@ -3114,24 +3195,16 @@ namespace lfs::vis::input {
         case Action::TOGGLE_MCP_BINDING:
             return ShortcutScope::Global;
 
-        case Action::CAMERA_MOVE_FORWARD:
-        case Action::CAMERA_MOVE_BACKWARD:
-        case Action::CAMERA_MOVE_LEFT:
-        case Action::CAMERA_MOVE_RIGHT:
-        case Action::CAMERA_MOVE_UP:
-        case Action::CAMERA_MOVE_DOWN:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
-        case Action::CAMERA_SPEED_UP:
-        case Action::CAMERA_SPEED_DOWN:
-        case Action::ZOOM_SPEED_UP:
-        case Action::ZOOM_SPEED_DOWN:
         case Action::PIE_MENU:
+        case Action::EXIT_WALK:
             return ShortcutScope::Viewport;
 
         default:
-            // Scene, tool, edit, framing and home shortcuts yield to a focused text widget.
+            // Scene, tool, edit, framing, home and camera navigation shortcuts
+            // yield to a focused text widget.
             return ShortcutScope::GlobalWhenNotTextEditing;
         }
     }

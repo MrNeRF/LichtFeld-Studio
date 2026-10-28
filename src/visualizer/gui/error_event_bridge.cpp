@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/error_event_bridge.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/error.hpp"
 #include "core/error_bus.hpp"
@@ -185,7 +186,7 @@ namespace lfs::vis::gui {
         file_list.reserve(display_count * 64);
         for (std::size_t i = 0; i < display_count; ++i) {
             const std::filesystem::path p(e.files[i]);
-            const bool is_dir = std::filesystem::is_directory(p);
+            const bool is_dir = lfs::core::native_fs::is_directory(p);
             file_list += std::format("  - {} ({})\n", lfs::core::path_to_utf8(p.filename()),
                                      is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
         }
@@ -193,7 +194,7 @@ namespace lfs::vis::gui {
             file_list += std::format("  {}\n", LOCF("notification.and_more_in_log", count - MAX_DISPLAY));
         }
 
-        const bool single_dir = count == 1 && std::filesystem::is_directory(e.files[0]);
+        const bool single_dir = count == 1 && lfs::core::native_fs::is_directory(e.files[0]);
         const char* item_type = count == 1 ? (single_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE))
                                            : LOC(Notif::ITEMS);
 

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/crash_handler.hpp"
+#include "core/native_fs.hpp"
 
 #ifndef LFS_UNICODE_TEST_STANDALONE
 #include "core/cuda/memory_arena.hpp"
@@ -144,10 +145,12 @@ namespace lfs::core {
         std::mutex g_crash_log_mutex;
 
 #ifdef _WIN32
+        std::filesystem::path g_crash_log_native_path;
+
         HANDLE open_crash_log() noexcept {
             if (g_crash_log_path.empty())
                 return INVALID_HANDLE_VALUE;
-            return CreateFileW(g_crash_log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            return CreateFileW(g_crash_log_native_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         }
 
@@ -360,7 +363,7 @@ namespace lfs::core {
             const auto paths = UserPaths::resolve();
             if (paths) {
                 std::error_code error;
-                std::filesystem::create_directories(paths->logDir(), error);
+                lfs::core::native_fs::create_directories(paths->logDir(), error);
                 if (!error) {
                     const auto date = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
 #ifdef _WIN32
@@ -370,6 +373,9 @@ namespace lfs::core {
 #endif
                     g_crash_log_path = paths->logDir() /
                                        std::format("lichtfeld-studio-crash-{:%Y-%m-%d-%H%M%S}-{}.log", date, pid);
+#ifdef _WIN32
+                    g_crash_log_native_path = lfs::core::native_fs::native_path(g_crash_log_path);
+#endif
                 } else {
                     std::fprintf(stderr, "Could not create crash log directory: %s\n", error.message().c_str());
                 }

@@ -133,6 +133,7 @@ select,
 textarea,
 .btn,
 .context-menu-item,
+.scrub-field,
 .section-header {
     tab-index: auto;
     nav: auto;
@@ -573,6 +574,7 @@ progress fill {
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
 }
 
+.scrub-field:focus-visible,
 .scrub-field:hover,
 .scrub-field.is-dragging,
 .scrub-field.is-editing {

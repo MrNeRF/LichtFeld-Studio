@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/collision.hpp"
 
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/services.hpp"
+#include "input/camera_browse_repeat.hpp"
+#include "input/gamepad_navigation.hpp"
 #include "input/input_bindings.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
@@ -32,6 +35,7 @@ namespace lfs::vis {
     // Forward declarations
     namespace tools {
         class AlignTool;
+        class ScaleDistanceTool;
         class SelectionTool;
     } // namespace tools
     class ToolContext;
@@ -43,7 +47,8 @@ namespace lfs::vis {
             Orbit,
             Trackball,
             FPV,
-            Drone
+            Drone,
+            Walk
         };
 
         // Single source of truth for the mode <-> name mapping used by the
@@ -62,6 +67,11 @@ namespace lfs::vis {
         // Set align tool
         void setAlignTool(std::shared_ptr<tools::AlignTool> tool) {
             align_tool_ = tool;
+        }
+
+        // Set scale distance tool
+        void setScaleDistanceTool(std::shared_ptr<tools::ScaleDistanceTool> tool) {
+            scale_distance_tool_ = tool;
         }
 
         // Set selection tool
@@ -89,6 +99,21 @@ namespace lfs::vis {
 
         void toggleIndependentSplitView();
 
+        // A UI value drag hides and locks the pointer, so dragging never stops at a
+        // screen edge; the pointer returns to where the drag started.
+        bool beginValueDrag();
+        // Horizontal pointer motion in window points since the previous call; motion
+        // from before a left-button release stays readable after the drag ends.
+        float takeValueDragDelta();
+        void endValueDrag();
+        [[nodiscard]] bool isValueDragActive() const;
+        // Escape, the right button or focus loss ended the last drag; the UI restores the value.
+        [[nodiscard]] bool isValueDragCancelled() const { return value_drag_cancelled_; }
+        // Grab point in window points for each frame of a value drag, including the
+        // frame of its release, so the UI sees a still pointer.
+        std::optional<glm::vec2> takeValueDragPin();
+        [[nodiscard]] std::optional<glm::vec2> valueDragAnchor() const { return value_drag_restore_; }
+
         // Set special input modes
         void setPointCloudMode(bool enabled) {
             point_cloud_mode_ = enabled;
@@ -99,7 +124,10 @@ namespace lfs::vis {
         const input::InputBindings& getBindings() const { return bindings_; }
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
-        void setCameraNavigationMode(CameraNavigationMode mode);
+        bool setCameraNavigationMode(CameraNavigationMode mode);
+        core::WalkSettings walk_settings;
+        void setWalkSettings(core::WalkSettings settings);
+        std::string walk_error;
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         NavigationUpAxis navigationUpAxis() const { return viewport_.camera.navigationUpAxis(); }
         void setNavigationUpAxis(NavigationUpAxis axis, bool align_grid = false);
@@ -111,7 +139,7 @@ namespace lfs::vis {
             bool view_snap_enabled,
             NavigationUpAxis up_axis = NavigationUpAxis::LegacyY) {
             setNavigationUpAxis(up_axis);
-            setCameraNavigationMode(mode);
+            setCameraNavigationMode(mode == CameraNavigationMode::Walk ? CameraNavigationMode::Orbit : mode);
             camera_view_snap_enabled_ =
                 view_snap_enabled;
             viewport_.camera.clearTransientMotion();
@@ -123,6 +151,15 @@ namespace lfs::vis {
 
         // Update function for continuous input (WASD movement and inertia)
         void update(float delta_time);
+        bool configureGamepadNavigation(input::GamepadNavigationSettings settings, SDL_JoystickID device);
+        [[nodiscard]] const std::string& gamepadConfigurationError() const { return gamepad_configuration_error_; }
+        void suspendGamepadNavigation();
+        bool configureGamepadProfiles(const std::string& serialized, bool disable = false, const std::string& expected = {});
+        [[nodiscard]] const input::GamepadNavigationSettings& gamepadNavigationSettings() const { return gamepad_settings_; }
+        [[nodiscard]] const char* gamepadNavigationStatus() const { return gamepad_settings_.enabled ? gamepad_session_.status() : "disabled"; }
+        [[nodiscard]] bool gamepadNavigationNeedsNeutral() const { return gamepad_settings_.enabled && gamepad_session_.needsNeutral(); }
+        [[nodiscard]] SDL_JoystickID gamepadNavigationDevice() const;
+        [[nodiscard]] SplitViewPanelId gamepadNavigationPanel() const;
 
         // Check if continuous input is active (WASD keys or camera drag)
         [[nodiscard]] bool isContinuousInputActive() const {
@@ -150,7 +187,7 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return movement_active || orbit_coasting || pan_coasting ||
+            return gamepad_frame_demand_ || camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -179,11 +216,37 @@ namespace lfs::vis {
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
+        // Moves the active viewport to its home.
+        void goHome();
+        // Makes the active viewport's current view its home.
+        void setHome();
         // Restores the default home of the active viewport and moves there.
         void resetHome();
 
     private:
         bool vr_viewing_ = false;
+        bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure, Viewport* target = nullptr);
+        void pauseGamepadNavigation();
+        Viewport& gamepadViewport() const;
+        bool updateGamepadNavigation(float delta_time);
+        void stopGamepadMotion();
+        input::GamepadNavigationSettings gamepad_settings_;
+        std::string gamepad_configuration_error_;
+        input::GamepadNavigationSession gamepad_session_;
+        uint64_t gamepad_click_epoch_ = 0;
+        uint64_t gamepad_dialog_epoch_ = 0;
+        SDL_JoystickID gamepad_profile_device_ = 0;
+        uint64_t gamepad_profile_generation_ = 0;
+        SplitViewPanelId gamepad_panel_ = SplitViewPanelId::Left;
+        Viewport* gamepad_motion_viewport_ = nullptr; // same lifetime as the existing WASD/coast viewport references
+        bool gamepad_owned_ = false;
+        bool gamepad_frame_demand_ = false;
+        bool gamepad_click_candidate_ = false;
+        glm::dvec2 gamepad_press_pos_{0};
+        core::WalkState walk_state_;
+        Viewport* walk_viewport_ = nullptr;
+        void ensureWalkViewport(Viewport& target);
+        core::CapsuleQuery walkQuery() const;
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
             Viewport* viewport = nullptr;
@@ -239,6 +302,8 @@ namespace lfs::vis {
         // never stops at a screen edge; the pointer returns to where it started.
         void lockLookPointer(double x, double y);
         void syncLookPointerLock(bool restore_position = true);
+        void cancelValueDrag(bool restore_pointer);
+        void releaseValueDrag(bool restore_pointer);
         void clearWasdMomentumViewport();
         void clearSelectedCameraContextMenuGesture();
         void beginPanDrag(const PanelInteractionState& interaction, int button, double x, double y);
@@ -262,6 +327,7 @@ namespace lfs::vis {
 
         // Tool support
         std::shared_ptr<tools::AlignTool> align_tool_;
+        std::shared_ptr<tools::ScaleDistanceTool> scale_distance_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         ToolContext* tool_context_ = nullptr;
         Visualizer* viewer_ = nullptr;
@@ -287,6 +353,10 @@ namespace lfs::vis {
         glm::dvec2 last_mouse_pos_{0, 0};
         glm::dvec2 look_pos_{0, 0};
         std::optional<glm::vec2> look_pointer_restore_;
+        std::optional<glm::vec2> value_drag_restore_;
+        std::optional<glm::vec2> value_drag_pin_;
+        float value_drag_dx_ = 0.0f;
+        bool value_drag_cancelled_ = false;
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;
@@ -331,6 +401,11 @@ namespace lfs::vis {
         } pending_camera_context_menu_;
 
         // Key states
+        input::CameraBrowseRepeat camera_browse_repeat_;
+        int camera_browse_repeat_modifiers_ = 0;
+        bool advanceCameraView(int delta);
+        void updateCameraBrowseRepeat();
+
         bool key_ctrl_pressed_ = false;
         bool key_alt_pressed_ = false;
         // Non-modifier keys currently held in press order (logical keycodes).

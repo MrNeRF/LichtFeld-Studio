@@ -31,6 +31,8 @@ class Action(enum.Enum):
 
     CAMERA_SET_HOME = 11
 
+    CAMERA_RESTORE_HOME = 91
+
     CAMERA_FOCUS_SELECTION = 12
 
     CAMERA_SET_PIVOT = 13
@@ -149,6 +151,8 @@ class Action(enum.Enum):
 
     TOOL_ALIGN = 67
 
+    TOOL_SCALE_DISTANCE = 99
+
     PIE_MENU = 68
 
     DEPTH_ADJUST_NEAR = 69
@@ -181,7 +185,21 @@ class Action(enum.Enum):
 
     TOGGLE_PYTHON_CONSOLE = 90
 
+    NEXT_SIDEBAR_CATEGORY = 92
+
+    PREVIOUS_SIDEBAR_CATEGORY = 93
+
+    REMOVE_LAST_POINT = 94
+
+    APPLY_ALIGNMENT = 95
+
+    INSERT_CROP_POLYGON_VERTEX = 96
+
+    REMOVE_CROP_POLYGON_VERTEX = 97
+
     UNGROUP_SELECTED_SCENE_NODE = 86
+
+    EXIT_WALK = 98
 
 class ToolMode(enum.Enum):
     GLOBAL = 0
@@ -197,6 +215,8 @@ class ToolMode(enum.Enum):
     ALIGN = 6
 
     CROP_BOX = 7
+
+    WALK = 8
 
 class Modifier(enum.Enum):
     NONE = 0

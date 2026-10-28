@@ -77,6 +77,13 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
+    // Extruded polygon: outline in local XY, local z within +-half_depth.
+    struct CropPolygon {
+        std::vector<glm::vec2> vertices;
+        float half_depth = 1.0f;
+        glm::mat4 transform{1.0f}; // world -> local
+    };
+
     struct GaussianSceneState {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
@@ -98,16 +105,42 @@ namespace lfs::rendering {
         int parent_node_index = -1;
     };
 
+    struct GaussianScopedCropPolygonFilter {
+        CropPolygon bounds;
+        bool inverse = false;
+        bool desaturate = false;
+        int parent_node_index = -1;
+    };
+
     struct GaussianFilterState {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
         std::vector<GaussianScopedBoxFilter> crop_regions;
         std::vector<GaussianScopedEllipsoidFilter> ellipsoid_regions;
+        std::vector<GaussianScopedCropPolygonFilter> crop_polygon_regions;
         std::optional<BoundingBox> view_volume;
         bool cull_outside_view_volume = false;
     };
 
+    struct GaussianRevealState {
+        float progress = 0.0f;
+        float softness = 0.1f;
+        float center_x = 0.0f;
+        float center_z = 0.0f;
+        float radius = 1.0f;
+        int effect = 2;
+        float min_y = 0.0f;
+        float max_y = 0.0f;
+        bool operator==(const GaussianRevealState&) const = default;
+    };
+
     struct GaussianMarkerOverlayState {
+        bool show_object_outline = false;
+        glm::vec3 outline_color{0.0f, 0.604f, 0.733f};
+        float outline_opacity = 1.0f;
+        float outline_width = 2.0f;
+        float outline_threshold = 0.5f;
+        bool outline_holes = true;
         bool show_rings = false;
         float ring_width = 0.002f;
         bool show_center_markers = false;
@@ -196,10 +229,15 @@ namespace lfs::rendering {
 
     struct ViewportRenderRequest {
         FrameView frame_view;
+        // Offline pixels use stable model-id depth ties and alpha blending.
+        // Live views leave this false, retaining the fast HiGS path.
+        bool deterministic_export = false;
         // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
+        GaussianTransparencyMode transparency_mode = GaussianTransparencyMode::AlphaBlend;
+        int stochastic_max_frames = DEFAULT_STOCHASTIC_REFINEMENT_FRAMES;
 
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
@@ -210,6 +248,7 @@ namespace lfs::rendering {
         bool equirectangular = false;
         GaussianSceneState scene;
         GaussianFilterState filters;
+        std::optional<GaussianRevealState> reveal;
         GaussianOverlayState overlay;
         bool transparent_background = false;
         bool depth_view = false;
@@ -245,6 +284,7 @@ namespace lfs::rendering {
     struct PointCloudFilterState {
         std::optional<BoundingBox> crop_box;
         std::optional<Ellipsoid> crop_ellipsoid;
+        std::optional<CropPolygon> crop_polygon;
         bool crop_inverse = false;
         bool crop_desaturate = false;
     };

@@ -314,6 +314,9 @@ namespace lfs::python {
         void (*draw_modals)() = nullptr;
         bool (*has_modals)() = nullptr;
 
+        // Panels: unloads the plugin that registered a panel; false if no plugin owns it.
+        bool (*unload_panel_plugin)(const char* panel_id) = nullptr;
+
         // Toolbar
 
         // Lifecycle
@@ -513,7 +516,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void toggle_system_console();
 
     // Sequencer UI state access (for Python modification)
-    // Must match layout of vis::gui::panels::SequencerUIState
+    // Mirrored explicitly by VisualizerImpl; this is not a layout alias.
     struct SequencerUIStateData {
         bool show_camera_path = true;
         bool snap_to_grid = false;
@@ -531,6 +534,10 @@ namespace lfs::python {
         int framerate = 30;
         int quality = 18;
         int selected_keyframe = -1;
+        int camera_width = 16;
+        int camera_height = 9;
+        int framerate_denominator = 1;
+        int export_fit = 0;
     };
 
     using GetSequencerUIStateCallback = std::function<SequencerUIStateData*()>;

@@ -26,7 +26,12 @@ namespace {
             int count = 0;
             if (cudaGetDeviceCount(&count) != cudaSuccess || !count)
                 GTEST_SKIP() << "CUDA unavailable";
-            lfs::io::CacheLoader::getInstance(false);
+            // The loader is a process singleton that an earlier test's trainer may have switched to CPU
+            // caching; its cache would keep serving the first mask.png after this test rewrites it.
+            auto& cache = lfs::io::CacheLoader::getInstance(false);
+            cache.reset_cache();
+            cache.update_cache_params(false, 0, lfs::io::DEFAULT_MIN_FREE_GB, lfs::io::DEFAULT_MIN_FREE_MEMORY_RATIO,
+                                      true, lfs::io::DEFAULT_PRINT_STATUS_FREQ);
             set_image_loader([](const ImageLoadParams& p) {
                 return lfs::io::CacheLoader::getInstance().load_cached_image(p.path,
                                                                              {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream, .output_uint8 = p.output_uint8, .mask_grayscale = p.mask_grayscale});

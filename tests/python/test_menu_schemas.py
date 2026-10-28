@@ -141,6 +141,9 @@ def _install_lichtfeld_stub(monkeypatch):
             TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
             TOGGLE_UI="toggle_ui",
             TOGGLE_PYTHON_CONSOLE="toggle_python_console",
+            CAMERA_RESET_HOME="camera_reset_home",
+            CAMERA_SET_HOME="camera_set_home",
+            CAMERA_RESTORE_HOME="camera_restore_home",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -156,6 +159,9 @@ def _install_lichtfeld_stub(monkeypatch):
             "open_preferences": "Ctrl+,",
             "toggle_performance_hud": "F10",
             "toggle_python_console": "Ctrl+`",
+            "camera_reset_home": "H",
+            "camera_set_home": "Shift+H",
+            "camera_restore_home": "Ctrl+H",
         }.get(action, "Unbound"),
     )
 
@@ -163,6 +169,9 @@ def _install_lichtfeld_stub(monkeypatch):
     lf_stub.ui = ui
     lf_stub.keymap = keymap
     lf_stub.reset_camera = lambda: None
+    lf_stub.go_home = lambda: state.setdefault("home_calls", []).append("go")
+    lf_stub.set_home = lambda: state.setdefault("home_calls", []).append("set")
+    lf_stub.reset_home = lambda: state.setdefault("home_calls", []).append("reset")
     lf_stub.toggle_ui = lambda: state.__setitem__("ui_toggled", True)
     lf_stub.toggle_independent_split_view = lambda: state.__setitem__("split_toggled", True)
     lf_stub.undo = SimpleNamespace(
@@ -254,7 +263,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < view_mod.ViewMenu.order < tools_mod.ToolsMenu.order
 
     tools_items = tools_mod.ToolsMenu().menu_items()
-    python_console = tools_items[4]["items"][0]
+    python_console = tools_items[5]["items"][0]
     assert python_console["shortcut"] == "Ctrl+`"
     python_console["callback"]()
     assert state["python_console_shown"] == 1
@@ -337,14 +346,21 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert appearance[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
-    assert view_items[5]["label"] == "tr:menu.view.performance_hud"
-    assert view_items[5]["shortcut"] == "F10"
-    view_items[5]["callback"]()
+    assert view_items[7]["label"] == "tr:menu.view.performance_hud"
+    assert view_items[7]["shortcut"] == "F10"
+    view_items[7]["callback"]()
     assert state.get("vram_hud_toggled") is True
-    assert view_items[0]["label"] == "tr:image_preview.reset_view"
-    assert view_items[2]["selected"]
-    view_items[2]["callback"]()
-    view_items[3]["callback"]()
+    assert [(item["label"], item["shortcut"]) for item in view_items[:3]] == [
+        ("tr:menu.view.home_view", "H"),
+        ("tr:input_settings.action.camera_set_home", "Shift+H"),
+        ("tr:toolbar.reset_home", "Ctrl+H"),
+    ]
+    for item in view_items[:3]:
+        item["callback"]()
+    assert state["home_calls"] == ["go", "set", "reset"]
+    assert view_items[4]["selected"]
+    view_items[4]["callback"]()
+    view_items[5]["callback"]()
     assert state["split_toggled"] and state["ui_toggled"]
 
     keymap = sys.modules["lichtfeld"].keymap
@@ -353,11 +369,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
         "open_preferences": "Alt+P",
         "copy_selection": "Alt+C",
     }.get(action, "")
-    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == "Ctrl+F10"
+    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == "Ctrl+F10"
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == "Alt+P"
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == "Alt+C"
     keymap.is_bound = lambda _action, _mode: False
-    assert view_mod.ViewMenu().menu_items()[5]["shortcut"] == ""
+    assert view_mod.ViewMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[7]["shortcut"] == ""
     assert edit_mod.EditMenu().menu_items()[4]["shortcut"] == ""
 
@@ -382,9 +398,12 @@ def test_tools_menu_contains_processing_and_python_tools(monkeypatch):
     items = tools_mod.ToolsMenu().menu_items()
     labels = [item.get("label") for item in items]
     assert labels == ["tr:menu.file.mesh_to_splat", "tr:menu.file.extract_video_frames",
-                      "tr:rendering_panel.section_simplify", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
-    items[4]["items"][0]["callback"]()
+                      "tr:rendering_panel.section_simplify", "tr:collision.title", None, "tr:menu.tools.developer", "tr:menu.tools.plugin_marketplace"]
+    items[5]["items"][0]["callback"]()
     items[2]["callback"]()
+    state["panels"]["lfs.collision"] = SimpleNamespace(show=lambda export=False: state.__setitem__("collision_export", export))
+    items[3]["callback"]()
+    assert state["collision_export"] is False
 
     assert state["python_console_shown"] == 1
 
@@ -394,7 +413,7 @@ def test_developer_system_console_is_windows_only(monkeypatch, platform):
     state = _install_lichtfeld_stub(monkeypatch)
     monkeypatch.setattr(sys, "platform", platform)
     tools_mod = _import_tools_menu(monkeypatch)
-    items = tools_mod.ToolsMenu().menu_items()[4]["items"]
+    items = tools_mod.ToolsMenu().menu_items()[5]["items"]
     assert items[0]["label"] == "tr:menu.tools.python_console"
     assert len(items) == (2 if platform == "win32" else 1)
     if platform == "win32":

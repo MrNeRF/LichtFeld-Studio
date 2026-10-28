@@ -18,11 +18,12 @@
 namespace Rml {
     class Context;
     class ElementDocument;
-    class ElementFormControlSelect;
     class Element;
 } // namespace Rml
 
 namespace lfs::vis {
+    class WindowInputDispatchTest;
+    class SidebarInputDispatchTest;
     class SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
     struct Theme;
 } // namespace lfs::vis
@@ -61,12 +62,12 @@ namespace lfs::vis::gui {
         void blurFocus();
 
         bool wantsInput() const { return wants_input_; }
-        bool isResizeInteractionActive() const { return resize_dragging_ || splitter_dragging_; }
+        bool isResizeInteractionActive() const { return resize_dragging_ || splitter_dragging_ || tab_scroll_dragging_; }
         bool wantsKeyboard() const { return wants_keyboard_; }
         bool needsAnimationFrame() const;
         [[nodiscard]] std::string animationDemandDescription() const;
         CursorRequest getCursorRequest() const;
-        [[nodiscard]] float tabStripScroll() const { return tab_scroll_left_; }
+        [[nodiscard]] float tabStripScroll() const { return tab_scroll_top_; }
         void setTabStripScroll(float value);
 
         std::function<void(const std::string&)> on_tab_changed;
@@ -78,38 +79,52 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlRightPanelTestAccess;
+        friend class lfs::vis::WindowInputDispatchTest;
+        friend class lfs::vis::SidebarInputDispatchTest;
         void bindTabModel();
-        void updateTabModel();
+        bool interceptCategoryInput(const RightPanelLayout& layout, const PanelInputState& input);
+        bool inputOccluded(float x, float y) const;
+        void updateTabs();
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
         bool updateTheme();
         bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
         bool syncTabScrollState();
         void syncTabNavigation();
         void scrollTabs(float delta);
+        void cycleTab(int direction);
+        void selectTab(std::string id);
+        bool layoutTabs();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
         Rml::Element* resize_handle_el_ = nullptr;
-        Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
-        Rml::ElementFormControlSelect* tab_picker_el_ = nullptr;
         RmlTooltipController tooltip_;
-        Rml::String selected_tab_;
-        bool syncing_tab_picker_ = false;
         Rml::Element* tab_strip_viewport_el_ = nullptr;
-        Rml::Element* tab_separator_el_ = nullptr;
 
         Rml::DataModelHandle tab_model_;
         std::vector<TabSnapshot> tabs_;
-        Rml::String active_tab_;
-        float tab_scroll_left_ = 0.0f;
-        std::string revealed_tab_;
+        struct TabTextMetrics {
+            Rml::FontFaceHandle font{};
+            float dp = 0.0f;
+            float width = 0.0f;
+        };
+        std::vector<TabTextMetrics> tab_text_metrics_;
+        bool tab_scroll_pending_ = false;
+        bool tab_layout_dirty_ = true;
+        bool tab_navigation_dirty_ = true;
         bool tabs_overflow_ = false;
-        bool can_scroll_tabs_left_ = false;
-        bool can_scroll_tabs_right_ = false;
+        bool can_scroll_tabs_up_ = false;
+        bool can_scroll_tabs_down_ = false;
+        Rml::String active_tab_;
+        float tab_scroll_top_ = 0.0f;
+        bool reveal_active_tab_ = true;
+        bool tab_scroll_dragging_ = false;
+        float tab_drag_start_y_ = 0.0f;
+        float tab_drag_start_scroll_ = 0.0f;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

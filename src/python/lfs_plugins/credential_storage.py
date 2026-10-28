@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """User-scoped portal credential storage. Backend failures never downgrade encryption."""
 from __future__ import annotations
+from _lfs_path_io import native_path
 
 import base64
 import hashlib
 import os
-from pathlib import Path
+from _lfs_path_io import Path
 import platform
 import shutil
 import subprocess
@@ -43,12 +44,12 @@ class FileBackend:
         mkdir_private(self.path.parent, parents=True, exist_ok=True)
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=self.path.parent, delete=False) as output:
+            with tempfile.NamedTemporaryFile(dir=native_path(self.path.parent), delete=False) as output:
                 temporary = Path(output.name)
                 output.write(value)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self.path)
+            os.replace(native_path(temporary), native_path(self.path))
         finally:
             if temporary:
                 temporary.unlink(missing_ok=True)

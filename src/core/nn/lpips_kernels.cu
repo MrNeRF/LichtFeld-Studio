@@ -50,8 +50,8 @@ namespace lfs::core::nn::kernels {
             const int tid = static_cast<int>(threadIdx.x);
             const int ni = static_cast<int>(blockIdx.z);
             const int tiles_w = (w + kRgbTileW - 1) / kRgbTileW;
-            const int oh0 = (static_cast<int>(blockIdx.y) / tiles_w) * kRgbTileH;
-            const int ow0 = (static_cast<int>(blockIdx.y) % tiles_w) * kRgbTileW;
+            const int oh0 = (static_cast<int>(blockIdx.x) / tiles_w) * kRgbTileH;
+            const int ow0 = (static_cast<int>(blockIdx.x) % tiles_w) * kRgbTileW;
             const long long plane = static_cast<long long>(h) * w;
             const float* Xn = X + static_cast<long long>(ni) * 3 * plane;
 
@@ -157,8 +157,8 @@ namespace lfs::core::nn::kernels {
             const int tid = static_cast<int>(threadIdx.x);
             const int ni = static_cast<int>(blockIdx.z);
             const int tiles_w = (w + kRgbTileW - 1) / kRgbTileW;
-            const int oh0 = (static_cast<int>(blockIdx.y) / tiles_w) * kRgbTileH;
-            const int ow0 = (static_cast<int>(blockIdx.y) % tiles_w) * kRgbTileW;
+            const int oh0 = (static_cast<int>(blockIdx.x) / tiles_w) * kRgbTileH;
+            const int ow0 = (static_cast<int>(blockIdx.x) % tiles_w) * kRgbTileW;
             const long long plane = static_cast<long long>(h) * w;
             const float* Xn = X + static_cast<long long>(ni) * 3 * plane;
             __half* Yn = Y + static_cast<long long>(ni) * kRgbCout * plane;
@@ -339,7 +339,7 @@ namespace lfs::core::nn::kernels {
             return;
         }
         const int tiles = ((w + kRgbTileW - 1) / kRgbTileW) * ((h + kRgbTileH - 1) / kRgbTileH);
-        dim3 grid(1, tiles, n);
+        dim3 grid(tiles, 1, n);
         lpips_rgb_conv3x3_kernel<<<grid, kRgbThreads, 0, stream>>>(
             input, static_cast<const __half*>(weight), static_cast<const __half*>(bias),
             static_cast<__half*>(output), make_float3(shift[0], shift[1], shift[2]),

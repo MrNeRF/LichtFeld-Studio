@@ -570,8 +570,7 @@ namespace {
             params,
             &source_bilateral,
             &source_ppisp,
-            &source_controller,
-            nullptr);
+            &source_controller);
         ASSERT_TRUE(saved.has_value()) << saved.error();
 
         const auto checkpoint = lfs::test::checkpoint_fixture_path(temp_dir.path());
@@ -591,8 +590,7 @@ namespace {
             loaded_params,
             &target_bilateral,
             &target_ppisp,
-            &target_controller,
-            nullptr);
+            &target_controller);
         ASSERT_TRUE(loaded.has_value()) << loaded.error();
         EXPECT_EQ(*loaded, 17);
         expect_optimizer_config_eq(bilateral, target_bilateral.get_config());
@@ -658,7 +656,6 @@ namespace {
             params,
             &source_bilateral,
             nullptr,
-            nullptr,
             nullptr);
         ASSERT_TRUE(saved.has_value()) << saved.error();
 
@@ -673,7 +670,6 @@ namespace {
             target_strategy,
             loaded_params,
             &target_bilateral,
-            nullptr,
             nullptr,
             nullptr);
         ASSERT_FALSE(loaded.has_value());

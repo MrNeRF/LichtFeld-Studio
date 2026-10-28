@@ -10,6 +10,7 @@
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -727,7 +728,7 @@ namespace lfs::core {
                 if (_source_image_width <= 0 || _source_image_height <= 0) {
                     if (_has_image && !_image_path.empty()) {
                         std::error_code error;
-                        if (std::filesystem::exists(_image_path, error) && !error) {
+                        if (lfs::core::native_fs::exists(_image_path, error) && !error) {
                             try {
                                 const auto [width, height, channels] = get_image_info(_image_path);
                                 if (width > 0 && height > 0) {
@@ -753,7 +754,7 @@ namespace lfs::core {
                         mask = lanczos_resize_grayscale(mask, target_height, target_width, 2, _stream);
                 }
             }
-        } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
+        } else if (!_mask_path.empty() && lfs::core::native_fs::exists(_mask_path)) {
             mask = read_mask_image(_mask_path, resize_factor, max_width, apply_undistortion);
         } else {
             return Tensor();
@@ -782,7 +783,7 @@ namespace lfs::core {
         // Loading stays on this camera's stream so uploads, intermediates and their reuse are ordered.
         const CUDAStreamGuard stream_guard(_stream);
 
-        if (_depth_path.empty() || !std::filesystem::exists(_depth_path)) {
+        if (_depth_path.empty() || !lfs::core::native_fs::exists(_depth_path)) {
             return Tensor();
         }
 
@@ -864,7 +865,7 @@ namespace lfs::core {
         // Loading stays on this camera's stream so uploads, intermediates and their reuse are ordered.
         const CUDAStreamGuard stream_guard(_stream);
 
-        if (_normal_path.empty() || !std::filesystem::exists(_normal_path)) {
+        if (_normal_path.empty() || !lfs::core::native_fs::exists(_normal_path)) {
             return Tensor();
         }
 
@@ -1019,7 +1020,7 @@ namespace lfs::core {
         // Keep the source calibration intact, but size the shared destination grid
         // at the file's resolution before applying the training resize and cap.
         if (_undistort_destination == UndistortDestination::Calibration &&
-            _has_image && std::filesystem::exists(_image_path)) {
+            _has_image && lfs::core::native_fs::exists(_image_path)) {
             const auto [width, height, channels] = get_image_info(_image_path);
             auto& params = _undistort_params;
             if (width < params.src_width || height < params.src_height) {

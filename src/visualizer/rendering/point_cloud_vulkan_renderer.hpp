@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -58,6 +59,16 @@ namespace lfs::vis {
             bool desaturate = false;
         };
 
+        // Extruded polygon: the outline in local XY over |z| <= half_depth.
+        // The vertices must outlive the render call.
+        struct CropPolygon {
+            glm::mat4 to_local{1.0f};
+            std::span<const glm::vec2> vertices;
+            float half_depth = 1.0f;
+            bool inverse = false;
+            bool desaturate = false;
+        };
+
         struct RenderRequest {
             // Positions/colors are float [N, 3] tensors. Either CUDA or CPU; we
             // copy to Vulkan device-local on first use and cache by pointer plus
@@ -92,6 +103,7 @@ namespace lfs::vis {
             // dropped (default) or rendered desaturated.
             std::optional<CropBox> crop;
             std::optional<CropEllipsoid> crop_ellipsoid;
+            std::optional<CropPolygon> crop_polygon;
 
             glm::mat4 view{1.0f};
             glm::mat4 view_projection{1.0f};

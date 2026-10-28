@@ -165,7 +165,7 @@ TEST(DualRepOptimizer, CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
 
     ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
                     temp_dir, past_warmup, strategy, params,
-                    nullptr, nullptr, nullptr, nullptr)
+                    nullptr, nullptr, nullptr)
                     .has_value());
 
     auto target_model = std::make_unique<SplatData>(make_sh_splat(1, sh_degree));
@@ -174,7 +174,7 @@ TEST(DualRepOptimizer, CheckpointRoundtripAfterFusedPrepareWithQuantOn) {
     auto load_params = params;
     const auto loaded = load_checkpoint(
         lfs::test::checkpoint_fixture_path(temp_dir), target,
-        load_params, nullptr, nullptr, nullptr, nullptr);
+        load_params, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
                                     << " — save→load after fused prepare must not throw "
                                        "'state size does not match model'";
@@ -622,7 +622,7 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
 
     ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
                     temp_dir, mid_iter, strategy, params,
-                    nullptr, nullptr, nullptr, nullptr)
+                    nullptr, nullptr, nullptr)
                     .has_value());
 
     auto target_model = std::make_unique<SplatData>(make_sh_splat(1, sh_degree));
@@ -631,7 +631,7 @@ TEST(DualRepOptimizer, MCMC_QuantOn_MidRunSaveLoadResume) {
     auto load_params = params;
     const auto loaded = load_checkpoint(
         lfs::test::checkpoint_fixture_path(temp_dir), target,
-        load_params, nullptr, nullptr, nullptr, nullptr);
+        load_params, nullptr, nullptr, nullptr);
     ASSERT_TRUE(loaded.has_value()) << loaded.error()
                                     << " — quantized mid-run resume must load";
     EXPECT_EQ(*loaded, mid_iter);

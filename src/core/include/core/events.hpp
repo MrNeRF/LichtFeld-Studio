@@ -132,8 +132,11 @@ namespace lfs::core {
             EVENT(SetNodeLocked, std::string name; bool locked;);            // Lock/unlock node for editing
             EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
             EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);
+            // world_transform maps the polygon's local frame to data world space.
+            EVENT(CropPLYPolygon, glm::mat4 world_transform; std::vector<glm::vec2> vertices; float half_depth; bool inverse; int32_t target_node_id = -1;);
             EVENT(ApplyCropBox, );
             EVENT(ApplyEllipsoid, );
+            EVENT(ApplyCropPolygon, );
             EVENT(AddCropBox, std::string node_name;);       // Add cropbox to splat node
             EVENT(AddCropEllipsoid, std::string node_name;); // Add ellipsoid to splat node
             EVENT(ResetCropBox, );                           // Reset selected cropbox
@@ -171,7 +174,7 @@ namespace lfs::core {
             EVENT(SequencerPlayPause, );
             // Empty path opens the save dialog; a path set by a script exports straight
             // to it, since a modal dialog cannot be answered from an automation client.
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {}; bool include_provenance = true;);
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {}; bool include_provenance = true; int framerate_denominator = 1; int camera_width = 0; int camera_height = 0; int framing = 0;);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);

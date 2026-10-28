@@ -1208,7 +1208,7 @@ namespace lfs::core::tensor_ops {
             int min_blocks = (num_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
             const auto& gpu = GPUConfig::get();
             int grid_size = std::max(min_blocks, gpu.optimal_grid_size(BLOCK_SIZE));
-            LOG_DEBUG("[REDUCE] Medium kernel: segments={} segment_size={} grid={}", num_segments, segment_size, grid_size);
+            LOG_DEBUG("[REDUCE] Medium kernel: segments=%zu segment_size=%zu grid=%d", num_segments, segment_size, grid_size);
 
             switch (op) {
             case ReduceOp::Sum:

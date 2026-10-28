@@ -5,7 +5,6 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/mesh_data.hpp"
@@ -108,7 +107,6 @@ class SceneGraphIdentityTest : public ::testing::Test {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
-        lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
@@ -121,7 +119,6 @@ protected:
     void TearDown() override {
         lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
-        lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
         rendering_manager_.reset();
         scene_manager_.reset();
@@ -902,6 +899,29 @@ TEST_F(SceneGraphIdentityTest, NodeIdsAreNotRecycledAcrossSceneClear) {
     for (const auto new_id : new_ids) {
         EXPECT_EQ(std::find(old_ids.begin(), old_ids.end(), new_id), old_ids.end());
     }
+}
+
+// Catches a destroyed SceneManager leaving handlers that capture it; the next event called into freed memory.
+TEST_F(SceneGraphIdentityTest, DestroyedSceneManagerUnregistersItsEventHandlers) {
+    using namespace lfs::core::events;
+    const auto node_selected = lfs::event::subscriber_count<ui::NodeSelected>();
+    const auto add_group = lfs::event::subscriber_count<cmd::AddGroup>();
+    const auto selection_changed = lfs::event::subscriber_count<state::SelectionChanged>();
+    {
+        lfs::vis::SceneManager destroyed;
+        EXPECT_EQ(lfs::event::subscriber_count<ui::NodeSelected>(), node_selected + 1);
+    }
+    ASSERT_EQ(lfs::event::subscriber_count<ui::NodeSelected>(), node_selected);
+    ASSERT_EQ(lfs::event::subscriber_count<cmd::AddGroup>(), add_group);
+    ASSERT_EQ(lfs::event::subscriber_count<state::SelectionChanged>(), selection_changed);
+
+    cmd::AddGroup{.name = "after_destroy", .parent_name = ""}.emit();
+    auto& scene = scene_manager_->getScene();
+    EXPECT_EQ(scene.getNodeCount(), 1u);
+    const auto group = scene.getNodeIdByName("after_destroy");
+    ASSERT_NE(group, lfs::core::NULL_NODE);
+    scene_manager_->selectNode(group);
+    EXPECT_EQ(scene_manager_->getSelectedNodeName(), "after_destroy");
 }
 
 // Catches source-path selection following lexicographic node names instead of node creation order.

@@ -348,6 +348,47 @@ class TestExportHTML:
         content = output_path.read_text()
         assert "<!DOCTYPE html>" in content or "<html" in content
 
+    @pytest.mark.slow
+    def test_export_html_invalid_background_color(self, lf, benchmark_ply, tmp_output):
+        """Test invalid background_color inputs raise appropriate exceptions."""
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "viewer_invalid.html"
+
+        with pytest.raises(TypeError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color="red")
+
+        with pytest.raises(ValueError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color=(0.1, 0.2))
+
+        with pytest.raises(ValueError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color=(0.1, 0.2, 0.3, 1.0))
+
+        with pytest.raises(ValueError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color=(float("nan"), 0.0, 0.0))
+
+        with pytest.raises(ValueError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color=(float("inf"), 0.0, 0.0))
+
+        with pytest.raises(TypeError):
+            lf.io.export_html(result.splat_data, str(output_path), kmeans_iterations=1, background_color=("r", "g", "b"))
+
+    @pytest.mark.slow
+    def test_export_html_custom_background_color(self, lf, benchmark_ply, tmp_output):
+        """Test export_html embeds custom background color."""
+        result = lf.io.load(str(benchmark_ply))
+        output_path = tmp_output / "viewer_custom_bg.html"
+
+        lf.io.export_html(
+            result.splat_data,
+            str(output_path),
+            kmeans_iterations=1,
+            background_color=(0.2, 0.4, 0.6),
+        )
+
+        assert output_path.exists()
+        content = output_path.read_text()
+        assert '"background":{"color":[0.200000,0.400000,0.600000]}' in content
+
 
 class TestSaveProgress:
     """Tests for progress callbacks during saving."""

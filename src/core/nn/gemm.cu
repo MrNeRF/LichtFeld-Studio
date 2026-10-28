@@ -122,8 +122,8 @@ namespace lfs::core::nn::kernels {
             const int tid = ty * static_cast<int>(blockDim.x) + tx;
             const int num_threads = static_cast<int>(blockDim.x * blockDim.y);
 
-            const int block_row = static_cast<int>(blockIdx.y) * BM;
-            const int block_col = static_cast<int>(blockIdx.x) * BN;
+            const int block_row = static_cast<int>(blockIdx.x) * BM;
+            const int block_col = static_cast<int>(blockIdx.y) * BN;
             const int thread_row = ty * TM;
             const int thread_col = tx * TN;
 
@@ -192,8 +192,8 @@ namespace lfs::core::nn::kernels {
             C += batch * stride_c;
 
             const int tid = static_cast<int>(threadIdx.x);
-            const int block_row = static_cast<int>(blockIdx.y) * 64;
-            const int block_col = static_cast<int>(blockIdx.x) * 64;
+            const int block_row = static_cast<int>(blockIdx.x) * 64;
+            const int block_col = static_cast<int>(blockIdx.y) * 64;
 
 #if __CUDA_ARCH__ >= 700
             using namespace nvcuda::wmma;
@@ -327,7 +327,7 @@ namespace lfs::core::nn::kernels {
             dim3 block(BN / TN, BM / TM);
             // trans_a / trans_c use the full M as the leading dimension, so the
             // whole M is launched in one grid (65535 * 64 covers > 4M rows).
-            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+            dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
             sgemm_epilogue_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(
                 a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, trans_b,
                 activation, trans_c, residual, scale);
@@ -352,8 +352,8 @@ namespace lfs::core::nn::kernels {
             C += batch * stride_c;
 
             const int tid = static_cast<int>(threadIdx.x);
-            const int block_row = static_cast<int>(blockIdx.y) * 128;
-            const int block_col = static_cast<int>(blockIdx.x) * 64;
+            const int block_row = static_cast<int>(blockIdx.x) * 128;
+            const int block_col = static_cast<int>(blockIdx.y) * 64;
 
 #if __CUDA_ARCH__ >= 700
             using namespace nvcuda::wmma;
@@ -619,8 +619,8 @@ namespace lfs::core::nn::kernels {
             }
 
             const int tid = static_cast<int>(threadIdx.x);
-            const int block_row = static_cast<int>(blockIdx.y) * BM;
-            const int block_col = static_cast<int>(blockIdx.x) * BN;
+            const int block_row = static_cast<int>(blockIdx.x) * BM;
+            const int block_col = static_cast<int>(blockIdx.y) * BN;
 
 #if __CUDA_ARCH__ >= 700
             using namespace nvcuda::wmma;
@@ -796,7 +796,7 @@ namespace lfs::core::nn::kernels {
                 const bool k32 = (k % 32 == 0) && k >= 32;
                 if (tile_128) {
                     constexpr int BM = 128, BN = 128;
-                    dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+                    dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
                     if (k32) {
                         hgemm_nt_aligned_kernel<BM, BN, 32><<<grid, block, 0, stream>>>(
                             a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, activation,
@@ -810,7 +810,7 @@ namespace lfs::core::nn::kernels {
                     }
                 } else {
                     constexpr int BM = 128, BN = 64;
-                    dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+                    dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
                     if (k32) {
                         hgemm_nt_aligned_kernel<BM, BN, 32><<<grid, block, 0, stream>>>(
                             a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, activation,
@@ -830,7 +830,7 @@ namespace lfs::core::nn::kernels {
             if (large) {
                 constexpr int BM = 128, BN = 64;
                 dim3 block(256);
-                dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+                dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
                 if (trans_b) {
                     hgemm_wmma_128x64_kernel<true><<<grid, block, 0, stream>>>(
                         a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,
@@ -846,7 +846,7 @@ namespace lfs::core::nn::kernels {
             }
             constexpr int BM = 64, BN = 64;
             dim3 block(128);
-            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM, batch);
+            dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
             if (trans_b) {
                 hgemm_wmma_kernel<true><<<grid, block, 0, stream>>>(
                     a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, trans_a, activation,

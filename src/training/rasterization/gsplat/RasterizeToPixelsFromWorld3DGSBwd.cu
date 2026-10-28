@@ -10,6 +10,7 @@
 #include "FromWorldRay.cuh"
 #include "Rasterization.h"
 #include "Utils.cuh"
+#include "core/cuda/sigmoid.cuh"
 
 // Use standard CUDA atomic add
 #ifndef gpuAtomicAdd
@@ -269,7 +270,7 @@ namespace gsplat_lfs {
         const float dens_w,
         const float dens_e,
         const vec3 scale_act,
-        const float opac_act,
+        const float opacity_raw,
         vec3* v_means,
         vec4* v_quats,
         vec3* v_scales,
@@ -293,7 +294,7 @@ namespace gsplat_lfs {
         gpuAtomicAdd(v_quat_ptr + 1, v_quat.y);
         gpuAtomicAdd(v_quat_ptr + 2, v_quat.z);
         gpuAtomicAdd(v_quat_ptr + 3, v_quat.w);
-        gpuAtomicAdd(v_opacities + g, v_opacity * opac_act * (1.0f - opac_act));
+        gpuAtomicAdd(v_opacities + g, v_opacity * lfs::core::sigmoid_derivative_from_logit(opacity_raw));
         if (do_dens) {
             gpuAtomicAdd(densification_info + g, dens_w);
             gpuAtomicAdd(densification_info + N + g, dens_e);
@@ -515,7 +516,7 @@ namespace gsplat_lfs {
                         flush_splat_grads(
                             id_batch[t], N, do_dens, v_rgb_local, v_mean_local, v_scale_local,
                             v_quat_local, v_opacity_local, densification_weight_local,
-                            densification_error_weighted_local, scale_act, xyz_opac[3],
+                            densification_error_weighted_local, scale_act, opacities[id_batch[t]],
                             v_means, v_quats, v_scales, v_colors, v_opacities, densification_info);
                     }
                 }
@@ -878,8 +879,8 @@ namespace gsplat_lfs {
                         gpuAtomicAdd(v_quat_ptr + 2, v_quat_local.z);
                         gpuAtomicAdd(v_quat_ptr + 3, v_quat_local.w);
 
-                        const float opac_act = xyz_opacity_batch[t][3];
-                        gpuAtomicAdd(v_opacities + g, v_opacity_local * opac_act * (1.0f - opac_act));
+                        const float derivative = lfs::core::sigmoid_derivative_from_logit(opacities[g]);
+                        gpuAtomicAdd(v_opacities + g, v_opacity_local * derivative);
                         if (do_dens) {
                             gpuAtomicAdd(densification_info + g, densification_weight_local);
                             gpuAtomicAdd(densification_info + N + g, densification_error_weighted_local);

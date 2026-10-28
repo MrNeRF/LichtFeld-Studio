@@ -367,6 +367,44 @@ TEST_F(PipelinedLoaderLedger, ClearCancelsOldGenerationBeforeSequenceReuse) {
               stats.succeeded_sequences + stats.failed_sequences + stats.cancelled_sequences);
 }
 
+TEST_F(PipelinedLoaderLedger, ClearWithFullOutputQueueKeepsServingNewRequests) {
+    std::uint64_t next_sequence = 0;
+    for (int round = 0; round < 8; ++round) {
+        auto cfg = config();
+        cfg.output_queue_size = 2;
+        cfg.prefetch_count = 4;
+        PipelinedImageLoader loader(cfg);
+        std::vector<ImageRequest> stale;
+        for (int i = 0; i < 16; ++i) {
+            stale.push_back(request(next_sequence++));
+        }
+        loader.prefetch(stale);
+        // A full output queue parks workers in push(); clear() then wakes them.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (loader.ready_count() < cfg.output_queue_size && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        ASSERT_EQ(loader.ready_count(), cfg.output_queue_size);
+        // Give the remaining in-flight decodes time to finish and block on the full queue.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20 + 5 * (round % 4)));
+        loader.clear();
+
+        std::set<std::uint64_t> expected;
+        std::vector<ImageRequest> fresh;
+        for (int i = 0; i < 4; ++i) {
+            expected.insert(next_sequence);
+            fresh.push_back(request(next_sequence++));
+        }
+        loader.prefetch(fresh);
+        for (int i = 0; i < 4; ++i) {
+            auto completion = get_completion(loader);
+            EXPECT_EQ(expected.erase(completion.sequence), 1u) << "round=" << round;
+            retire_events(completion);
+        }
+        EXPECT_TRUE(expected.empty()) << "round=" << round;
+    }
+}
+
 TEST_F(PipelinedLoaderLedger, ShutdownRacesReconcileEveryQueueStage) {
     for (const auto delay : std::array{
              std::chrono::milliseconds(0), std::chrono::milliseconds(1),

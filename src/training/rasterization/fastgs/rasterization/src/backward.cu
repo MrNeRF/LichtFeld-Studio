@@ -76,7 +76,10 @@ void fast_lfs::rasterization::backward(
     const uint shN_value_bits,
     const float* edge_weight_map,
     float* edge_score_out,
-    cudaStream_t stream) {
+    float* impact_sum_out,
+    float* impact_peak_out,
+    cudaStream_t stream,
+    const ColorVarianceLoss& color_variance) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
@@ -101,8 +104,8 @@ void fast_lfs::rasterization::backward(
         // DensificationType::None and no normal channel, so those two stay off the
         // production nest.
         auto launch_blend_backward_typed =
-            [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, int WARP_CULL_MODE>() {
-                kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, WARP_CULL_MODE>
+            [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE, bool COLOR_VARIANCE>() {
+                kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, COLOR_VARIANCE>
                     <<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
                         per_tile_buffers.instance_ranges,
                         sorted_primitive_indices,
@@ -130,6 +133,8 @@ void fast_lfs::rasterization::backward(
                         densification_error_map,
                         edge_weight_map,
                         edge_score_out,
+                        impact_sum_out,
+                        impact_peak_out,
                         fastgs_status,
                         static_cast<uint>(n_instances),
                         n_primitives,
@@ -137,20 +142,40 @@ void fast_lfs::rasterization::backward(
                         width,
                         height,
                         grid.x,
-                        blend_batch_override);
+                        blend_batch_override,
+                        color_variance);
                 LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
             };
+        auto launch_blend = [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE>() {
+            if (color_variance.weight > 0.0f)
+                launch_blend_backward_typed.template operator()<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, true>();
+            else
+                launch_blend_backward_typed.template operator()<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, false>();
+        };
         auto launch_production = [&]<DensificationType DENS_TYPE>() {
+            const bool impact_score = impact_sum_out != nullptr;
             if (grad_normal != nullptr && grad_normal_helper != nullptr) {
-                launch_blend_backward_typed.template operator()<DENS_TYPE, true, 0>();
+                if (impact_score)
+                    launch_blend.template operator()<DENS_TYPE, true, true, 0>();
+                else
+                    launch_blend.template operator()<DENS_TYPE, true, false, 0>();
             } else {
-                launch_blend_backward_typed.template operator()<DENS_TYPE, false, 0>();
+                if (impact_score)
+                    launch_blend.template operator()<DENS_TYPE, false, true, 0>();
+                else
+                    launch_blend.template operator()<DENS_TYPE, false, false, 0>();
             }
         };
         if (warp_cull_mode == 1) {
-            launch_blend_backward_typed.template operator()<DensificationType::None, false, 1>();
+            if (impact_sum_out != nullptr)
+                launch_blend.template operator()<DensificationType::None, false, true, 1>();
+            else
+                launch_blend.template operator()<DensificationType::None, false, false, 1>();
         } else if (warp_cull_mode == 2) {
-            launch_blend_backward_typed.template operator()<DensificationType::None, false, 2>();
+            if (impact_sum_out != nullptr)
+                launch_blend.template operator()<DensificationType::None, false, true, 2>();
+            else
+                launch_blend.template operator()<DensificationType::None, false, false, 2>();
         } else if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
             launch_production.template operator()<DensificationType::MRNF>();
         } else if (densification_info != nullptr && densification_error_map != nullptr) {

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python_lsp_client.hpp"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 
 #include "stdio_process.hpp"
 
@@ -42,7 +44,7 @@ namespace lfs::vis::editor {
     namespace {
 
         using json = nlohmann::json;
-        namespace fs = std::filesystem;
+        namespace fs = lfs::core::native_fs;
 
         constexpr auto WORKER_IDLE_WAIT = std::chrono::milliseconds(16);
         constexpr auto WORKER_ACTIVE_WAIT = std::chrono::milliseconds(2);
@@ -288,7 +290,7 @@ namespace lfs::vis::editor {
                 }
 
                 const bool is_basedpyright =
-                    candidate.filename().string().find("basedpyright") != std::string::npos;
+                    lfs::core::path_to_utf8(candidate.filename()).find("basedpyright") != std::string::npos;
                 append_candidate(commands, seen,
                                  {.program = lfs::core::path_to_utf8(candidate),
                                   .args = {"--stdio"},
@@ -414,7 +416,7 @@ namespace lfs::vis::editor {
             std::string rendered = config.dump(4);
             rendered.push_back('\n');
 
-            std::ofstream output(config_path, std::ios::binary | std::ios::trunc);
+            std::ofstream output(lfs::core::native_fs::native_path(config_path), std::ios::binary | std::ios::trunc);
             if (!output) {
                 LOG_WARN("PythonLspClient: failed to open '{}'",
                          lfs::core::path_to_utf8(config_path));

@@ -34,27 +34,129 @@ body {
     cursor: resize-vertical;
 }
 
-#tab-bar.with-scroll #tab-strip-viewport { right: 60dp; }
-#tab-bar.with-scroll #tab-scroll-right { right: 30dp; }
-#tab-picker {
+#splitter-grip {
+    position: absolute;
+    top: 2dp;
+    left: 50%;
+    margin-left: -12dp;
+    width: 24dp;
+    height: 2dp;
+    border-radius: 1dp;
+    pointer-events: none;
+}
+
+/* Categories sit beside the content, with an open edge on the active tab. */
+#tab-bar {
+    position: absolute;
+    left: 8px;
+    width: 28dp;
+}
+
+#tab-strip-viewport {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 6dp;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3dp;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#tab-strip-viewport scrollbarvertical {
+    width: 0;
+}
+
+#tab-bar.with-scroll #tab-strip-viewport {
+    top: 26dp;
+    bottom: 20dp;
+}
+
+.tab-nav {
+    position: absolute;
+    left: 0;
+    width: 28dp;
+    height: 20dp;
+    padding: 0;
+    margin: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    line-height: 20dp;
+    font-size: 10dp;
+    text-align: center;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+}
+
+.tab-nav.hidden { display: none; }
+.tab-nav:disabled { cursor: default; }
+#tab-scroll-up { top: 6dp; }
+#tab-scroll-down { bottom: 0; }
+
+.tab {
+    position: relative;
+    display: block;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    width: 25dp;
+    min-height: 28dp;
+    margin: 0 0 0 3dp;
+    padding: 0;
+    border-width: 1dp;
+    border-radius: 6dp 0 0 6dp;
+    white-space: nowrap;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+}
+
+.tab.active {
+    width: 28dp;
+    margin-left: 0;
+    border-right-width: 0;
+    font-weight: 600;
+}
+
+.tab-label {
+    position: absolute;
+    display: block;
+    top: 9dp;
+    height: 20dp;
+    line-height: 20dp;
+    white-space: nowrap;
+    transform-origin: 0 0;
+    transform: rotate(-90deg);
+    pointer-events: none;
+}
+
+.tab-close {
+    position: absolute;
+    bottom: 2dp;
+    left: 50%;
+    margin: 0 0 0 -8dp;
+    width: 16dp;
+    height: 16dp;
+    padding: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    background-color: transparent;
+    line-height: 16dp;
+    text-align: center;
+    font-size: 13dp;
+    font-weight: bold;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+}
+
+.tab-edge {
     position: absolute;
     right: 0;
     top: 0;
-    width: 28dp;
-    min-width: 28dp;
-    height: 28dp;
-    z-index: 3;
-}
-#tab-picker selectvalue { visibility: hidden; }
-#tab-picker selectarrow { margin-right: 4dp; }
-#tab-picker selectbox { right: 0; min-width: 200dp; max-height: 400dp; overflow-y: auto; }
-
-/* The shared panel_tabs stylesheet owns the common geometry. These right-panel
-   overrides preserve the immediate selection feedback required by its cached
-   context and leave the new bottom dock's transition behavior untouched. */
-.tab {
-    box-sizing: border-box;
-    border-width: 1dp;
-    border-bottom-width: 2dp;
-    transition: none;
+    width: 1dp;
+    pointer-events: none;
 }

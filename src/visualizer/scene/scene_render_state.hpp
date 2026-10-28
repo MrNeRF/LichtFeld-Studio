@@ -8,6 +8,7 @@
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "rendering/rendering.hpp"
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -44,9 +45,11 @@ namespace lfs::vis {
         std::string selected_node_name;
         std::vector<core::Scene::RenderableCropBox> cropboxes;
         std::vector<core::Scene::RenderableEllipsoid> ellipsoids;
+        std::vector<core::Scene::RenderableCropPolygon> crop_polygons;
         int selected_cropbox_index = -1;
         bool has_selection = false;
         size_t visible_splat_count = 0;
+        std::optional<lfs::rendering::GaussianRevealState> reveal;
     };
 
 } // namespace lfs::vis

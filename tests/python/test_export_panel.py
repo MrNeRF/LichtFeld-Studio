@@ -38,6 +38,7 @@ def _install_lf_stub(monkeypatch):
     state = SimpleNamespace(
         language=["en"],
         nodes=[],
+        splat_export_requests=[],
         content_type="splat_files",
         active_camera_count=0,
         export_state={"active": False},
@@ -59,6 +60,7 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=lambda key: key,
         get_current_language=lambda: state.language[0],
+        take_splat_export_request=lambda: state.splat_export_requests.pop(0) if state.splat_export_requests else [],
         get_export_state=lambda: dict(state.export_state),
         set_panel_enabled=lambda panel_id, enabled: state.set_panel_enabled_calls.append((panel_id, enabled)),
         cancel_export=lambda: setattr(state, "cancel_calls", state.cancel_calls + 1),
@@ -279,6 +281,28 @@ def test_export_panel_progress_prefers_native_store(export_panel_module, monkeyp
     assert panel._cached_export_state["format"] == "SPZ"
 
 
+def test_export_panel_discovers_drag_job_and_uses_existing_cancel(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    state.export_state = {"active": True, "progress": 0.25, "stage": "writing", "format": "SOG"}
+
+    assert panel._exporting is False
+    assert panel.on_update(None) is True
+    assert panel._exporting is True
+    assert panel._progress_value == "0.25"
+    assert "show_form" in panel._handle.dirty_fields
+    assert "show_progress" in panel._handle.dirty_fields
+    assert state.folder_dialog_calls == []
+    assert state.export_calls == []
+
+    panel._on_cancel_export(None, None, None)
+    assert state.cancel_calls == 1
+    state.export_state = {"active": False}
+    assert panel.on_update(None) is True
+    assert state.set_panel_enabled_calls == [("lfs.export", False)]
+
+
 def test_export_panel_closes_when_export_finishes(export_panel_module):
     module, state = export_panel_module
     panel = module.ExportPanel()
@@ -379,7 +403,7 @@ def test_export_panel_uses_colmap_folder_picker_without_selected_models(export_p
     assert state.export_calls == [
         (int(module.ExportFormat.COLMAP), str(tmp_path), (), 3),
     ]
-    assert state.folder_dialog_calls == ["/datasets/source/sparse"]
+    assert state.folder_dialog_calls == [str(Path("/datasets/source/sparse"))]
     assert state.confirm_calls == []
 
 
@@ -652,3 +676,69 @@ def test_export_panel_group_selects_nested_models(export_panel_module):
     loose.parent_id, outer.children = 1, [2, 3, 6]
     panel.on_update(None)
     assert writes == ["models", "models"]
+
+
+@pytest.mark.parametrize("requested", [("B",), ("A", "B")])
+def test_tree_export_request_selects_only_requested_splats(export_panel_module, requested):
+    module, state = export_panel_module
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, name, 64) for name in ("A", "B", "Other")]
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    panel._selected_nodes = {"Other"}
+    panel._selection_seeded = True
+    state.splat_export_requests.append(list(requested))
+    panel.on_update(None)
+    assert panel._format == module.ExportFormat.PLY
+    assert panel._selected_nodes == set(requested)
+    assert {row["name"] for row in panel._handle.records["models"] if row["selected"]} == set(requested)
+    panel.on_update(None)
+    assert panel._selected_nodes == set(requested)
+    assert not state.splat_export_requests
+
+
+def test_drag_progress_updates_node_name_without_resetting_total(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    for progress, stage in [(0.25, "Esportazione 1/2: Foresta"),
+                            (0.5, "Esportazione 1/2: Foresta"),
+                            (0.5, "Esportazione 2/2: Edificio <è>")]:
+        state.export_state = {"active": True, "progress": progress, "stage": stage, "format": "PLY"}
+        assert panel._update_export_progress()
+        assert panel._get_progress_stage() == stage
+        assert panel._progress_value == str(progress)
+        assert "progress_stage" in panel._handle.dirty_fields
+    assert state.export_calls == []
+
+
+def test_drag_progress_translations_have_identical_parameters():
+    import json
+    import string
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    paths = list(locales.glob("*.json"))
+    assert paths
+    for path in paths:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key, count in (("preferences.drag_item", 3), ("preferences.drag_failed_item", 3),
+                           ("preferences.drag_rejected_node", 1)):
+            text = data[key]
+            parameters = [field for _literal, field, _spec, _conversion in string.Formatter().parse(text)
+                          if field is not None]
+            assert parameters == [""] * count, (path.name, key)
+            assert text.format(*((2, 5, "Scena <è>") if count == 3 else ("Scena <è>",)))
+
+
+def test_label_reset_export_uses_available_sh_and_respects_export_lock(export_panel_module):
+    module = export_panel_module
+    if isinstance(module, tuple):
+        module = module[0]
+    panel = module.ExportPanel()
+    panel._max_export_sh_degree = 1
+    panel._export_sh_degree = 0
+    assert panel._reset_default("sh_degree") == 1
+    assert panel._apply_reset("sh_degree", 1)
+    assert panel._export_sh_degree == 1 and panel._pinned_sh_degree
+    panel._exporting = True
+    assert panel._reset_default("sh_degree") is None
+    assert not panel._apply_reset("spz_version", 4)

@@ -63,7 +63,7 @@ namespace lfs::io {
                 }
 
                 // Check other file extensions
-                auto ext = path.extension().string();
+                auto ext = lfs::core::path_to_utf8(path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
                 // Check common extensions
@@ -150,7 +150,7 @@ namespace lfs::io {
         }
 
         if (!safe_is_directory(path)) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             // JSON files might be datasets (transforms.json)
@@ -241,7 +241,7 @@ namespace lfs::io {
         }
 
         if (!safe_is_directory(path)) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".json") {
                 return DatasetType::Transforms;

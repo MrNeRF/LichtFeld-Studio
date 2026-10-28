@@ -491,8 +491,40 @@ def test_immediate_python_controls_request_one_followup_frame_without_polling():
     assert 'append_reason("immediate_input")' in adapter_source
 
 
+def test_collision_error_keys_cover_native_producers_and_all_locales():
+    native = [
+        "src/core/collision_volume.cpp", "src/core/collision_walk.cpp", "src/core/collision_voxelization.cpp",
+        "src/core/include/core/collision.hpp", "src/core/include/core/collision_volume.hpp",
+        "src/core/scene.cpp",
+        "src/io/collision_export.cpp", "src/io/project/collision_serialization.hpp",
+        "src/io/project/project_document.cpp", "src/python/lfs/py_scene.cpp",
+        "src/python/lfs/py_io.cpp", "src/visualizer/gui/async_task_manager.cpp",
+        "src/visualizer/input/input_controller.cpp",
+    ]
+    keys = set()
+    for name in native:
+        source = (ROOT / name).read_text(encoding="utf-8")
+        keys.update(re.findall(r'(?:collisionError|exportError)\(\s*"([a-z0-9_.]+)"', source))
+        keys.update(re.findall(r'"message_key",\s*(?:std::string_view\()?"([a-z0-9_.]+)"', source))
+        if Path(name).name == "project_document.cpp":
+            keys.update(re.findall(r'"(collision\.[a-z_]+)"', source))
+        if Path(name).name in {"collision_volume.cpp", "collision_walk.cpp", "collision_voxelization.cpp", "collision_export.cpp", "collision_serialization.hpp"}:
+            assert not re.search(r'throw\s+std::\w*error|throw\s+std::invalid_argument', source), name
+    assert {"collision.source_unsupported", "collision.source_load_failed", "collision.geometry_invalid",
+            "collision.data_invalid", "collision.gui_required", "collision.replace_required"} <= keys
+    english = dict(_flatten(_load("en")))
+    for path in sorted(LOCALES.glob("*.json")):
+        localized = dict(_flatten(json.loads(path.read_text(encoding="utf-8"))))
+        for key in keys:
+            assert key in localized and localized[key].strip(), f"{path.name}: {key}"
+            assert _fields(localized[key]) == _fields(english[key]), f"{path.name}: {key}"
+            if path.stem != "en":
+                assert localized[key] != english[key], f"{path.name}: untranslated {key}"
+
+
 if __name__ == "__main__":
     contracts = [
+        test_collision_error_keys_cover_native_producers_and_all_locales,
         test_shipped_locales_match_english_keys_and_placeholders,
         test_locale_json_uses_one_key_per_line,
         test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,

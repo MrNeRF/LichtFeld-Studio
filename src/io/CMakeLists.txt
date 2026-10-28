@@ -12,6 +12,7 @@ add_library(lfs_io_cuda STATIC
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
         cuda/masked_image_fill.cu
+        cuda/image_sharpen.cu
 )
 
 target_include_directories(lfs_io_cuda
@@ -124,6 +125,8 @@ pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
+        include/io/video/video_frame_rate.hpp
+        include/io/video/video_frame_geometry.hpp
         include/io/video/video_extensions.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp
@@ -239,6 +242,7 @@ else()
 endif()
 
 add_library(lfs_io STATIC
+    collision_export.cpp
         # Implementation file only (header is in include/io/)
         loader.cpp
         splat_decimate.cpp

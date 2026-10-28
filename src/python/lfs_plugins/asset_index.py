@@ -3,6 +3,7 @@
 """Minimal, UUID-based persistence for Asset Manager .licht projects."""
 
 from __future__ import annotations
+from _lfs_path_io import bounded_sibling_path, native_path, temporary_prefix
 
 import json
 import logging
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from copy import copy
 from dataclasses import dataclass, field
 from functools import wraps
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from .asset_storage import prune_previews
@@ -163,7 +164,7 @@ def _stat_identity_from_stat(stat: os.stat_result) -> Dict[str, int]:
 
 def _stat_identity(path: str) -> Optional[Dict[str, int]]:
     try:
-        return _stat_identity_from_stat(os.stat(path))
+        return _stat_identity_from_stat(os.stat(native_path(path)))
     except OSError:
         return None
 
@@ -186,7 +187,7 @@ def _filesystem_is_case_sensitive(path: str) -> bool:
     probe: Optional[Path] = None
     try:
         with tempfile.NamedTemporaryFile(
-            prefix=".lfsCaseProbe", dir=str(directory), delete=False
+            prefix=".lfsCaseProbe", dir=native_path(str(directory)), delete=False
         ) as handle:
             probe = Path(handle.name)
         result = not probe.with_name(probe.name.swapcase()).exists()
@@ -1682,14 +1683,14 @@ class AssetIndex:
             if not obsolete.exists():
                 continue
             try:
-                shutil.rmtree(obsolete)
+                shutil.rmtree(native_path(obsolete, force_extended=True))
                 _log.info("Removed obsolete Asset Manager storage: %s", obsolete)
             except OSError as exc:
                 _log.warning("Could not remove obsolete Asset Manager storage %s: %s", obsolete, exc)
 
     @contextmanager
     def _catalog_write_lock(self):
-        lock_path = self._library_path.with_name(self._library_path.name + ".lock")
+        lock_path = bounded_sibling_path(self._library_path, ".lock")
         handle = None
         try:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1704,25 +1705,25 @@ class AssetIndex:
                 handle.close()
 
     def _preserve_legacy_backup(self, source_path: Path) -> None:
-        backup = self._library_path.with_name(self._library_path.name + ".legacy.bak")
-        backup_temp = backup.with_suffix(backup.suffix + ".tmp")
+        backup = bounded_sibling_path(self._library_path, ".legacy.bak")
+        backup_temp = bounded_sibling_path(backup, ".tmp")
         try:
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, backup_temp)
-            os.replace(backup_temp, backup)
+            shutil.copy2(native_path(source_path), native_path(backup_temp))
+            os.replace(native_path(backup_temp), native_path(backup))
         finally:
             backup_temp.unlink(missing_ok=True)
 
     def _preserve_v5_backup(self, source_path: Path) -> None:
         """Keep the exact v5 input once; the rolling .bak is not a migration backup."""
-        backup = self._library_path.with_name(self._library_path.name + ".v5.bak")
+        backup = bounded_sibling_path(self._library_path, ".v5.bak")
         if backup.exists():
             return
-        backup_temp = backup.with_suffix(backup.suffix + ".tmp")
+        backup_temp = bounded_sibling_path(backup, ".tmp")
         try:
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, backup_temp)
-            os.replace(backup_temp, backup)
+            shutil.copy2(native_path(source_path), native_path(backup_temp))
+            os.replace(native_path(backup_temp), native_path(backup))
         finally:
             backup_temp.unlink(missing_ok=True)
 
@@ -1802,9 +1803,9 @@ class AssetIndex:
             with self._catalog_write_lock():
                 self._library_path.parent.mkdir(parents=True, exist_ok=True)
                 fd, temp_name = tempfile.mkstemp(
-                    prefix=f"{self._library_path.stem}.",
+                    prefix=temporary_prefix(self._library_path),
                     suffix=".tmp",
-                    dir=str(self._library_path.parent),
+                    dir=native_path(str(self._library_path.parent)),
                 )
                 temp_path = Path(temp_name)
                 with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -1814,15 +1815,15 @@ class AssetIndex:
                     os.fsync(stream.fileno())
 
                 if self._library_path.exists():
-                    backup = self._library_path.with_suffix(".json.bak")
-                    backup_temp = backup.with_suffix(backup.suffix + ".tmp")
+                    backup = bounded_sibling_path(self._library_path.with_suffix(".json"), ".bak")
+                    backup_temp = bounded_sibling_path(backup, ".tmp")
                     try:
-                        shutil.copy2(self._library_path, backup_temp)
-                        os.replace(backup_temp, backup)
+                        shutil.copy2(native_path(self._library_path), native_path(backup_temp))
+                        os.replace(native_path(backup_temp), native_path(backup))
                     finally:
                         backup_temp.unlink(missing_ok=True)
                 self._check_write_identities()
-                os.replace(temp_path, self._library_path)
+                os.replace(native_path(temp_path), native_path(self._library_path))
             self._write_checks.clear()
             self.last_error = ""
             self._touch_catalog()

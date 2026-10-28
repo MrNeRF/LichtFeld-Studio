@@ -324,10 +324,20 @@ namespace lfs::vis::gui {
             scene.invalidateCache();
         }
 
+        void clampVolumeAxisScale(glm::mat4& transform) {
+            for (int axis = 0; axis < 3; ++axis) {
+                const float length = glm::length(glm::vec3(transform[axis]));
+                // A zero or non-finite axis has no direction to scale; leave it as is.
+                if (length > 0.0f && length < MIN_VOLUME_AXIS_SCALE)
+                    transform[axis] *= MIN_VOLUME_AXIS_SCALE / length;
+            }
+        }
+
         void applyBoundsScale(
             GizmoTransformContext& ctx,
             core::Scene& scene,
-            const glm::vec3& new_size) {
+            const glm::vec3& new_size,
+            const glm::vec3& new_pivot_world) {
 
             assert(ctx.targets.size() == 1);
             const auto& target = ctx.targets[0];
@@ -336,19 +346,21 @@ namespace lfs::vis::gui {
             if (!node)
                 return;
 
-            if (ctx.type == GizmoTargetType::CropBox && node->cropbox) {
-                const glm::vec3 original_size = target.bounds_max - target.bounds_min;
-                ctx.cumulative_scale = new_size / original_size;
-
-                const glm::vec3 original_center = (target.bounds_min + target.bounds_max) * 0.5f;
-                const glm::vec3 half_size = new_size * 0.5f;
-                node->cropbox->min = original_center - half_size;
-                node->cropbox->max = original_center + half_size;
-            } else if (ctx.type == GizmoTargetType::Ellipsoid && node->ellipsoid) {
-                ctx.cumulative_scale = new_size / target.radii;
-
-                node->ellipsoid->radii = new_size;
-            }
+            const glm::vec3 original_size = ctx.type == GizmoTargetType::CropBox
+                                                ? target.bounds_max - target.bounds_min
+                                                : target.radii;
+            ctx.cumulative_scale = new_size / glm::max(original_size, glm::vec3(1e-6f));
+            ctx.cumulative_translation = new_pivot_world - ctx.pivot_world;
+            const glm::vec3 local_center = ctx.type == GizmoTargetType::CropBox
+                                               ? (target.bounds_min + target.bounds_max) * 0.5f
+                                               : glm::vec3(0.0f);
+            auto transform = target.visualizer_world_transform;
+            transform[0] *= ctx.cumulative_scale.x;
+            transform[1] *= ctx.cumulative_scale.y;
+            transform[2] *= ctx.cumulative_scale.z;
+            clampVolumeAxisScale(transform);
+            transform[3] = glm::vec4(new_pivot_world - glm::mat3(transform) * local_center, 1.0f);
+            setNodeVisualizerWorldTransform(scene, target.name, transform);
 
             scene.invalidateCache();
         }

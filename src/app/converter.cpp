@@ -5,14 +5,19 @@
 #include "app/converter.hpp"
 #include "app/converter_output_paths.hpp"
 #include "app/converter_overwrite.hpp"
+#include "app/headless_run_coordinator.hpp"
 #include "app/terminal_progress_bar.hpp"
+#include "core/argument_parser.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "io/atomic_output.hpp"
+#include "io/collision_export.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/rad.hpp"
 #include "io/formats/ssog.hpp"
@@ -55,21 +60,21 @@ namespace lfs::app {
             std::vector<std::filesystem::path> files;
             if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(path))
                 return {path};
-            if (std::filesystem::is_directory(path)) {
-                for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            if (lfs::core::native_fs::is_directory(path)) {
+                for (const auto& entry : lfs::core::native_fs::directory_iterator(path)) {
                     if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_ssog_path(entry.path())) {
-                        files.push_back(entry.path());
+                        files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                         continue;
                     }
-                    if (!entry.is_regular_file())
+                    if (!lfs::core::native_fs::entry_is_regular_file(path, entry))
                         continue;
-                    auto ext = entry.path().extension().string();
+                    auto ext = lfs::core::path_to_utf8(entry.path().extension());
                     std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                         return static_cast<char>(std::tolower(c));
                     });
                     for (const auto* valid : valid_extensions) {
                         if (ext == valid) {
-                            files.push_back(entry.path());
+                            files.push_back(lfs::core::native_fs::entry_path(path, entry.path()));
                             break;
                         }
                     }
@@ -157,7 +162,7 @@ namespace lfs::app {
         }
 
         bool isPlyExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -165,7 +170,7 @@ namespace lfs::app {
         }
 
         bool isRadExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -173,7 +178,7 @@ namespace lfs::app {
         }
 
         bool isResumeExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -181,7 +186,7 @@ namespace lfs::app {
         }
 
         bool isLichtExtension(const std::filesystem::path& path) {
-            auto ext = path.extension().string();
+            auto ext = lfs::core::path_to_utf8(path.extension());
             std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
@@ -378,7 +383,7 @@ namespace lfs::app {
             const std::uint64_t estimated = info->vertex_count * per_splat;
             std::uint64_t budget = 8ull << 30;
 #ifndef _WIN32
-            std::ifstream meminfo("/proc/meminfo");
+            std::ifstream meminfo(lfs::core::native_fs::native_path("/proc/meminfo"));
             std::string line;
             while (std::getline(meminfo, line)) {
                 if (line.starts_with("MemAvailable:")) {
@@ -590,7 +595,7 @@ namespace lfs::app {
             }
             const auto output = generate_converter_output_path(input, output_template, params.format, "_converted");
 
-            if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
+            if (lfs::core::native_fs::exists(output) && !overwrite_all && !params.overwrite) {
                 const auto choice = ask_overwrite(output, std::cin, std::cout);
                 if (choice == OverwriteChoice::NO) {
                     std::println("  Skipped");
@@ -631,7 +636,7 @@ namespace lfs::app {
 
             bool skip = false;
             for (const auto& output : outputs) {
-                if (std::filesystem::exists(output.path) && !overwrite_all && !params.overwrite) {
+                if (lfs::core::native_fs::exists(output.path) && !overwrite_all && !params.overwrite) {
                     const auto choice = ask_overwrite(output.path, std::cin, std::cout);
                     if (choice == OverwriteChoice::NO) {
                         skip = true;
@@ -659,4 +664,43 @@ namespace lfs::app {
         return failed > 0 ? 1 : 0;
     }
 
+    int run_voxelizer(const core::args::VoxelizeMode& options) {
+        HeadlessRunCoordinator run;
+        try {
+            options.settings.validate();
+            const auto binary = std::filesystem::path(options.output_path).replace_extension(".bin");
+            std::filesystem::path existing;
+            for (const auto& target : {options.output_path, binary}) {
+                std::error_code ec;
+                if (target == options.input_path || core::native_fs::equivalent(target, options.input_path, ec))
+                    throw std::invalid_argument("Voxel output must not replace the input splat file");
+                if (core::native_fs::exists(target)) {
+                    if (!core::native_fs::is_regular_file(target))
+                        throw std::invalid_argument("Not a regular output file: " + core::path_to_utf8(target));
+                    existing = target;
+                }
+            }
+            if (!options.overwrite && !existing.empty()) {
+                std::println("Both {} and {} will be replaced.", core::path_to_utf8(options.output_path),
+                             core::path_to_utf8(binary));
+                if (ask_overwrite(existing, std::cin, std::cout) == OverwriteChoice::NO)
+                    return 0;
+            }
+            TerminalProgressBar bar("Voxelize");
+            const auto stop = run.stop_token();
+            const auto progress = std::bind_front(&TerminalProgressBar::report, &bar);
+            auto source = io::loadCollisionSource(options.input_path, stop, io::scale_export_progress(progress, 0, .2f));
+            auto volume = core::generateCollision(source, options.settings, stop, io::scale_export_progress(progress, .2f, .8f), {}, io::checkCollisionExportMixedBlocks);
+            source = {};
+            io::exportCollision(volume, options.output_path, glm::mat4(1), stop, io::scale_export_progress(progress, .8f, 1));
+            bar.complete();
+            std::println("Saved {} occupied voxels, cell size {} scene units: {}", volume.occupied_count,
+                         volume.settings.voxel_size, core::path_to_utf8(options.output_path));
+            return 0;
+        } catch (const std::exception& error) {
+            LOG_ERROR("Voxelization failed: {}", error.what());
+            std::println(stderr, "Voxelization failed: {}", error.what());
+            return run.interrupted() ? run.interrupted_exit_code() : 1;
+        }
+    }
 } // namespace lfs::app

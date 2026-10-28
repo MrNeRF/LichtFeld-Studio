@@ -94,6 +94,26 @@ namespace lfs::vis {
             // Scripted handles never reach Vulkan teardown.
             renderer.ring_.reset();
         }
+
+        // Catches GT compare showing another camera's ground truth beside the selected camera's render
+        // while its own image loads, which reads as a misaligned frame.
+        static void checkGTStandInIsSameCamera() {
+            RenderingManager manager;
+            const auto previous = std::make_shared<lfs::core::Tensor>(
+                lfs::core::Tensor::zeros({3, 4, 4}, lfs::core::Device::CPU));
+            manager.gt_comparison_image_cache_.push_back({.camera_uid = 1,
+                                                          .image_path = "frame_1.jpg",
+                                                          .image_size = {4, 4},
+                                                          .image = previous,
+                                                          .last_used = std::chrono::steady_clock::now()});
+            const auto other = manager.getOrQueueGTComparisonImage(
+                {.camera_uid = 2, .image_path = "frame_2.jpg", .image_size = {4, 4}});
+            EXPECT_EQ(other.status, RenderingManager::GTComparisonImageStatus::Loading);
+            EXPECT_EQ(other.stale_image, nullptr);
+            const auto resized = manager.getOrQueueGTComparisonImage(
+                {.camera_uid = 1, .image_path = "frame_1.jpg", .image_size = {8, 8}});
+            EXPECT_EQ(resized.stale_image, previous);
+        }
     };
 } // namespace lfs::vis
 
@@ -103,4 +123,8 @@ TEST(SplitOutputLifetimeTest, RetainsLeftImageWhenRightPanelDefers) {
 
 TEST(SplitOutputLifetimeTest, RetainsRightImageWhenLeftPanelDefers) {
     lfs::vis::SplitOutputLifetimeTestAccess::checkRetainedPair(false);
+}
+
+TEST(SplitOutputLifetimeTest, GTStandInWhileLoadingIsTheSameCamera) {
+    lfs::vis::SplitOutputLifetimeTestAccess::checkGTStandInIsSameCamera();
 }

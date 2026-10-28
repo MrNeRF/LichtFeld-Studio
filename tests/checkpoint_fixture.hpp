@@ -29,8 +29,7 @@ namespace lfs::test {
         const lfs::core::param::TrainingParameters& params,
         const lfs::training::BilateralGrid* bilateral_grid,
         const lfs::training::PPISP* ppisp,
-        const lfs::training::PPISPControllerPool* controller_pool,
-        const lfs::training::ADMMSparsityOptimizer* sparsity_optimizer) {
+        const lfs::training::PPISPControllerPool* controller_pool) {
         const auto path = checkpoint_fixture_path(output_directory);
         std::error_code error;
         std::filesystem::create_directories(
@@ -54,8 +53,7 @@ namespace lfs::test {
             lfs::training::serialize_checkpoint(
                 output, iteration, strategy, params,
                 bilateral_grid, ppisp,
-                controller_pool,
-                sparsity_optimizer);
+                controller_pool);
         if (!serialized) {
             return std::unexpected(
                 lfs::format_for_developer(

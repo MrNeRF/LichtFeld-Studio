@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "stdio_process.hpp"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 
 #include <core/logger.hpp>
 
@@ -341,9 +343,11 @@ namespace lfs::vis::editor {
             command_line += quote_arg(arg);
         }
 
+        const auto program_path = lfs::core::utf8_to_path(program);
+        const auto native_program = lfs::core::native_fs::native_path(program_path);
         PROCESS_INFORMATION info = {};
         const BOOL started = CreateProcessW(
-            nullptr,
+            program_path.has_parent_path() ? native_program.c_str() : nullptr,
             command_line.data(),
             nullptr,
             nullptr,

@@ -26,6 +26,9 @@ namespace lfs::core {
         std::string button_label;
         std::string input_value;
         std::unordered_map<std::string, std::string> form_values;
+        // Native form callbacks can identify the changed control or action.
+        std::string changed_field;
+        std::string form_action;
     };
 
     struct ModalRequest {
@@ -42,6 +45,8 @@ namespace lfs::core {
         // a dismissed dialog or disturbing an unrelated modal.
         std::string key;
         std::function<void(const ModalResult&)> on_change;
+        // Empty keeps the legacy first-enabled-button behavior.
+        std::string submit_button_label;
     };
 
 } // namespace lfs::core

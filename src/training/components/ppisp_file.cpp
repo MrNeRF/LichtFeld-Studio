@@ -3,6 +3,7 @@
 
 #include "ppisp_file.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "ppisp.hpp"
 #include "ppisp_controller_pool.hpp"
@@ -146,7 +147,7 @@ namespace lfs::training {
 
     std::filesystem::path find_ppisp_companion(const std::filesystem::path& splat_path) {
         auto companion = get_ppisp_companion_path(splat_path);
-        if (std::filesystem::exists(companion)) {
+        if (lfs::core::native_fs::exists(companion)) {
             return companion;
         }
         return {};

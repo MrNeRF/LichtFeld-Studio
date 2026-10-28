@@ -64,8 +64,12 @@ namespace {
             }
             python(R"PY(
 import lichtfeld as _vr_lf
-from types import SimpleNamespace as _VrSettings
+from types import SimpleNamespace
 from lfs_plugins.rendering_panel import RenderingPanel as _VrPanel
+class _VrSettings(SimpleNamespace):
+    # The panel writes view settings through the binding's session-neutral setter.
+    def _set_without_session_dirty(self, name, value):
+        setattr(self, name, value)
 _vr_original_settings = _vr_lf.get_render_settings
 _vr_settings = _VrSettings(environment_mode="EQUIRECTANGULAR", environment_map_path="")
 _vr_lf.get_render_settings = lambda: _vr_settings

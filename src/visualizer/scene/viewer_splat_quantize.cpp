@@ -21,7 +21,7 @@ namespace lfs::vis {
     namespace {
 
         [[nodiscard]] bool isPlyPath(const std::filesystem::path& path) {
-            auto extension = path.extension().string();
+            auto extension = lfs::core::path_to_utf8(path.extension());
             std::transform(extension.begin(), extension.end(), extension.begin(),
                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return extension == ".ply";

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_context.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -3650,6 +3651,9 @@ namespace lfs::vis {
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (buffer_device_address_enabled_) {
+            buffer_info.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        }
         // Same concurrent-queue rationale as createExternalImage.
         std::array<uint32_t, 2> external_buffer_families{
             graphics_queue_family_,
@@ -3755,9 +3759,17 @@ namespace lfs::vis {
         import_info.fd = dup_fd;
 #endif
 
+        VkMemoryAllocateFlagsInfo alloc_flags{};
+        alloc_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        if (buffer_device_address_enabled_) {
+            alloc_flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+            alloc_flags.pNext = &import_info;
+        }
+
         VkMemoryAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocate_info.pNext = &import_info;
+        allocate_info.pNext = buffer_device_address_enabled_ ? static_cast<void*>(&alloc_flags)
+                                                             : static_cast<void*>(&import_info);
         // Import the exact physical payload size recorded by the exporter, not
         // either the logical buffer view or Vulkan's memory-requirements size.
         allocate_info.allocationSize = exported_allocation_size;
@@ -3805,6 +3817,13 @@ namespace lfs::vis {
             return setVkFailure(std::format("vkBindBufferMemory(import) failed: {}", vkResultToString(result)), result);
         }
 
+        if (buffer_device_address_enabled_ && out.buffer != VK_NULL_HANDLE) {
+            VkBufferDeviceAddressInfo address_info{};
+            address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            address_info.buffer = out.buffer;
+            out.device_address = vkGetBufferDeviceAddress(device_, &address_info);
+        }
+
         // We do NOT own the handle; the exporter retains it. Leave native_handle invalid.
         out.native_handle = kInvalidExternalNativeHandle;
         LOG_DEBUG(
@@ -3836,7 +3855,12 @@ namespace lfs::vis {
             return fail("Imported exportable block has no committed chunks");
         }
 
-        if (!sparse_binding_enabled_) {
+        const bool is_single_full_chunk =
+            block.chunks.size() == 1 &&
+            block.chunks[0].offset == 0 &&
+            block.chunks[0].bytes >= block.reserved_bytes;
+
+        if (!sparse_binding_enabled_ || is_single_full_chunk) {
             if (block.chunks.size() != 1 || block.chunks[0].offset != 0 ||
                 block.chunks[0].bytes < block.reserved_bytes) {
                 const auto violation = lfs::core::shareable_allocation_violation(
@@ -3845,13 +3869,18 @@ namespace lfs::vis {
                     "sparseBinding is required to import a multi-chunk or partially-committed "
                     "exportable CUDA block"));
             }
-            return importExternalBuffer(block.chunks[0].handle.native,
-                                        static_cast<VkDeviceSize>(block.reserved_bytes),
-                                        static_cast<VkDeviceSize>(block.chunks[0].bytes),
-                                        usage,
-                                        out,
-                                        diagnostic_scope,
-                                        diagnostic_label);
+            if (!importExternalBuffer(block.chunks[0].handle.native,
+                                      static_cast<VkDeviceSize>(block.reserved_bytes),
+                                      static_cast<VkDeviceSize>(block.chunks[0].bytes),
+                                      usage,
+                                      out,
+                                      diagnostic_scope,
+                                      diagnostic_label)) {
+                return false;
+            }
+            out.bound_chunk_offsets.push_back(0);
+            out.bound_chunks = 1;
+            return true;
         }
 
         VkExternalMemoryBufferCreateInfo external_buffer_info{};
@@ -3921,6 +3950,9 @@ namespace lfs::vis {
         if (unbound.empty()) {
             imported.bound_chunks = imported.bound_chunk_offsets.size();
             return true;
+        }
+        if (!imported.sparse) {
+            return fail("bindNewChunks requires a sparse imported VkBuffer");
         }
 
         VkMemoryRequirements memory_requirements{};
@@ -5202,7 +5234,7 @@ namespace lfs::vis {
                 }
                 std::error_code ec;
                 if (path) {
-                    std::filesystem::create_directories(path->parent_path(), ec);
+                    lfs::core::native_fs::create_directories(path->parent_path(), ec);
                 }
                 if (path && !ec) {
                     const auto temporary = *path;
@@ -5216,14 +5248,14 @@ namespace lfs::vis {
                         file.close();
                         if (file) {
                             std::error_code rename_ec;
-                            std::filesystem::rename(temporary_path, *path, rename_ec);
+                            lfs::core::native_fs::rename(temporary_path, *path, rename_ec);
                             if (rename_ec) {
                                 // Windows does not replace an existing file
                                 // with rename(). The fallback still ensures
                                 // readers never see a partially written cache.
-                                std::filesystem::remove(*path, rename_ec);
+                                lfs::core::native_fs::remove(*path, rename_ec);
                                 rename_ec.clear();
-                                std::filesystem::rename(temporary_path, *path, rename_ec);
+                                lfs::core::native_fs::rename(temporary_path, *path, rename_ec);
                             }
                             if (!rename_ec) {
                                 saved_pipeline_cache_hash_ = cache_hash;

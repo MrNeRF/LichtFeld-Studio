@@ -6,6 +6,7 @@
 #pragma once
 
 #include "core/checkpoint_format.hpp"
+#include "core/collision.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/geometry_payload.hpp"
@@ -96,6 +97,8 @@ namespace lfs::io::project {
         // Skip Impl::validate after the chapter scan. Hydration re-opens a
         // path the shell already validated; identity is checked by the caller.
         bool skip_validation = false;
+        // Optional validated source: retain its file handle, path and exact commit. Borrowed only during open().
+        const ProjectReader* retained_source = nullptr;
     };
 
     struct ProjectDocumentSaveOptions {
@@ -377,7 +380,10 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_mesh(const lfs::core::Uuid& node_uuid, MeshPayload payload);
         [[nodiscard]] bool remove_mesh(const lfs::core::Uuid& node_uuid);
-        // Drop SPLT/PCLD/MESH payloads the current scene graph no longer binds.
+        [[nodiscard]] lfs::Result<void>
+        set_collision(const lfs::core::Uuid& instance_uuid,
+                      std::shared_ptr<const lfs::core::CollisionVolume> volume);
+        // Drop SPLT/PCLD/MESH/COLV payloads the current scene graph no longer binds.
         void remove_geometry_payloads_not_bound_by_scene();
 
         [[nodiscard]] std::vector<lfs::core::Uuid> splat_uuids() const;

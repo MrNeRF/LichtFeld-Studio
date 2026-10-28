@@ -11,6 +11,7 @@
 #include "core/path_utils.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/environment_image.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
@@ -22,6 +23,7 @@
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/visualizer.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
@@ -583,6 +585,21 @@ namespace lfs::vis {
         updateSettings(settings);
     }
 
+    bool RenderingManager::setViewportRenderMode(std::string_view mode) {
+        if (mode != "splats" && mode != "points" && mode != "rings" && mode != "centers")
+            return false;
+        auto settings = getSettings();
+        const bool points = mode == "points";
+        const bool changed = settings.point_cloud_mode != points;
+        settings.point_cloud_mode = points;
+        settings.show_rings = mode == "rings";
+        settings.show_center_markers = mode == "centers";
+        updateSettings(settings, changed && points ? DirtyFlag::ALL : DirtyFlag::SELECTION);
+        if (auto* viewer = python::get_visualizer())
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        return true;
+    }
+
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
         updateSettings(new_settings, DirtyFlag::ALL);
     }
@@ -661,6 +678,9 @@ namespace lfs::vis {
                                            : lfs::rendering::normalizeViewerRasterBackend(
                                                  settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
+            settings_.transparency_mode = static_cast<lfs::rendering::GaussianTransparencyMode>(
+                std::clamp(static_cast<int>(settings_.transparency_mode), 0, 2));
+            settings_.stochastic_max_frames = std::clamp(settings_.stochastic_max_frames, 1, 1024);
             enforceProjectionBackend(settings_, true);
             sanitizeDepthViewSettings(settings_);
             sanitizeGTComparisonSettings(settings_);

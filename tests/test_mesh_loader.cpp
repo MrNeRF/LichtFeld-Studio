@@ -412,6 +412,44 @@ TEST_F(MeshLoaderTest, MeshToSplatPreservesCoordinatesThroughPlyExport) {
     }
 }
 
+// Catches vertex colors taken as linear for formats that store display values (a PLY red of 200 left
+// Mesh2Splat as 228), and glTF's already linear COLOR_0 being converted a second time.
+TEST_F(MeshLoaderTest, VertexColorsLoadLinearAndLeaveMesh2SplatAsStored) {
+    const auto ply = temp_dir_ / "colored.ply";
+    std::ofstream(ply) << "ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\n"
+                          "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+                          "element face 1\nproperty list uchar int vertex_indices\nend_header\n"
+                          "0 0 0 200 100 50\n1 0 0 200 100 50\n0 1 0 200 100 50\n3 0 1 2\n";
+    const auto loaded = loader_.load(ply);
+    ASSERT_TRUE(loaded.has_value());
+    const auto mesh = std::get<std::shared_ptr<MeshData>>(loaded->data);
+    ASSERT_TRUE(mesh->has_colors());
+    const std::array<float, 3> stored{200 / 255.0f, 100 / 255.0f, 50 / 255.0f};
+    auto colors = mesh->colors.accessor<float, 2>();
+    for (int c = 0; c < 3; ++c)
+        EXPECT_NEAR(colors(0, c), std::pow(stored[c], 2.2f), 1e-5f);
+
+    Mesh2SplatOptions options;
+    options.resolution_target = 32;
+    const auto converted = lfs::rendering::mesh_to_splat(*mesh, options);
+    ASSERT_TRUE(converted.has_value()) << converted.error();
+    const auto sh0 = (*converted)->sh0().cpu().contiguous();
+    for (int c = 0; c < 3; ++c)
+        EXPECT_NEAR(sh0.ptr<float>()[c] * 0.28209479177387814f + 0.5f, stored[c], 1.0f / 255.0f);
+
+    const auto gltf = write_scene(nlohmann::json::parse(R"([{"mesh":0}])"));
+    const std::array<float, 12> half_grey{0.5f, 0.5f, 0.5f, 1, 0.5f, 0.5f, 0.5f, 1, 0.5f, 0.5f, 0.5f, 1};
+    std::fstream binary(temp_dir_ / "scene.bin", std::ios::in | std::ios::out | std::ios::binary);
+    binary.seekp(96);
+    binary.write(reinterpret_cast<const char*>(half_grey.data()), sizeof(half_grey));
+    binary.close();
+    const auto gltf_loaded = loader_.load(gltf);
+    ASSERT_TRUE(gltf_loaded.has_value());
+    const auto gltf_mesh = std::get<std::shared_ptr<MeshData>>(gltf_loaded->data);
+    auto gltf_colors = gltf_mesh->colors.accessor<float, 2>();
+    EXPECT_FLOAT_EQ(gltf_colors(0, 0), 0.5f);
+}
+
 TEST_F(MeshLoaderTest, ImportsNestedInstancesWithParentTransform) {
     const auto path = write_scene(nlohmann::json::parse(R"([
         {"translation":[0,2,0],"children":[1,2]},

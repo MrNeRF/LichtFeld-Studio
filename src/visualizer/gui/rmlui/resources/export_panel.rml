@@ -55,7 +55,7 @@
       <!-- SH Degree -->
       <div class="ep-section" data-if="show_sh_degree">
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.sh_degree</span>
+          <span class="setting-row__label-col" data-reset-prop="sh_degree">@tr:export_dialog.sh_degree</span>
           <div class="setting-row__control-col setting-row__control-col--slider">
             <input type="range" class="setting-slider" data-value="sh_degree" min="0" max="3" step="1" />
             <span class="slider-value">{{sh_degree}}</span>
@@ -76,7 +76,7 @@
       <!-- SPZ version - only shown for SPZ format -->
       <div class="ep-section" data-if="show_spz_version">
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.spz_version</span>
+          <span class="setting-row__label-col" data-reset-prop="spz_version">@tr:export_dialog.spz_version</span>
           <div class="setting-row__control-col setting-row__control-col--fill">
             <select data-value="spz_version">
               <option value="4">@tr:export_dialog.spz_version_v4</option>
@@ -97,27 +97,27 @@
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="ssog_folder_name" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.lod_levels</span>
+          <span class="setting-row__label-col" data-reset-prop="lod_levels">@tr:export_dialog.lod_levels</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_levels" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.lod_ratio</span>
+          <span class="setting-row__label-col" data-reset-prop="lod_ratio">@tr:export_dialog.lod_ratio</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="lod_ratio" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.chunk_count_k</span>
+          <span class="setting-row__label-col" data-reset-prop="chunk_count_k">@tr:export_dialog.chunk_count_k</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_count_k" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.chunk_extent</span>
+          <span class="setting-row__label-col" data-reset-prop="chunk_extent">@tr:export_dialog.chunk_extent</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_extent" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.chunk_min_k</span>
+          <span class="setting-row__label-col" data-reset-prop="chunk_min_k">@tr:export_dialog.chunk_min_k</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="chunk_min_k" /></div>
         </div>
         <div class="setting-row setting-row--aligned">
-          <span class="setting-row__label-col">@tr:export_dialog.kmeans_iterations</span>
+          <span class="setting-row__label-col" data-reset-prop="kmeans_iterations">@tr:export_dialog.kmeans_iterations</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="kmeans_iterations" /></div>
         </div>
       </div>

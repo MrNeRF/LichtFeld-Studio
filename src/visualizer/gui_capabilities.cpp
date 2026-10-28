@@ -6,10 +6,13 @@
 
 #include "visualizer/gui_capabilities.hpp"
 
+#include "core/crop_polygon.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
@@ -27,6 +30,7 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <unordered_set>
 
 namespace lfs::vis::cap {
@@ -38,7 +42,9 @@ namespace lfs::vis::cap {
                type == core::NodeType::POINTCLOUD ||
                type == core::NodeType::CROPBOX ||
                type == core::NodeType::ELLIPSOID ||
-               type == core::NodeType::MESH;
+               type == core::NodeType::CROP_POLYGON ||
+               type == core::NodeType::MESH ||
+               type == core::NodeType::COLLISION;
     }
 
     bool isAlignTransformTargetType(const core::NodeType type) {
@@ -206,7 +212,8 @@ namespace lfs::vis::cap {
                 node->ellipsoid = std::move(data);
             }
 
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            // The volume is replaced by one of the other shape; no Gaussian changes.
+            scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
             if (rendering_manager)
                 rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
             sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
@@ -241,7 +248,6 @@ namespace lfs::vis::cap {
                 vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name, remove_name}, history_options);
 
             scene.removeNode(remove_name, false);
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)
                 rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
 
@@ -253,6 +259,93 @@ namespace lfs::vis::cap {
                 "Remove Duplicate Crop Volume",
                 std::move(history_before),
                 vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name}, history_options)));
+        }
+
+        // One crop volume per splat: a new box or ellipsoid replaces a drawn polygon
+        // inside the same history entry, and a new polygon replaces either shape.
+        [[nodiscard]] std::vector<std::string> replace_crop_polygon_names(const core::Scene& scene,
+                                                                          const core::NodeId parent_id) {
+            const auto* const polygon = scene.getNodeById(scene.getCropPolygonForSplat(parent_id));
+            return polygon ? std::vector<std::string>{polygon->name} : std::vector<std::string>{};
+        }
+
+        [[nodiscard]] lfs::Error crop_polygon_error(const lfs::ErrorCode code, std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
+
+        void remove_crop_volumes(core::Scene& scene,
+                                 RenderingManager* rendering_manager,
+                                 const std::vector<std::string>& names) {
+            for (const auto& name : names)
+                scene.removeNode(name, false);
+            if (!names.empty() && rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+        }
+
+        [[nodiscard]] lfs::Result<void> crop_polygon_failure(const lfs::ErrorCode code, std::string message) {
+            return lfs::Result<void>::failure(crop_polygon_error(code, std::move(message)));
+        }
+
+        [[nodiscard]] const core::SceneNode* find_crop_polygon(const core::Scene& scene, const core::NodeId polygon_id) {
+            const auto* const node = scene.getNodeById(polygon_id);
+            return node && node->type == core::NodeType::CROP_POLYGON && node->crop_polygon ? node : nullptr;
+        }
+
+        // The polygon node's transform without its scale: the frame its outline was drawn in.
+        [[nodiscard]] std::optional<glm::mat4> unscaled_crop_polygon_frame(const glm::mat4& transform) {
+            glm::mat4 frame = transform;
+            for (int axis = 0; axis < 3; ++axis) {
+                const float length = glm::length(glm::vec3(frame[axis]));
+                if (!std::isfinite(length) || !(length > 0.0f))
+                    return std::nullopt;
+                frame[axis] /= length;
+            }
+            return frame;
+        }
+
+        // A crop polygon edit as one history entry: its data and node transform change together.
+        [[nodiscard]] lfs::Result<void> commit_crop_polygon_edit(SceneManager& scene_manager,
+                                                                 RenderingManager* rendering_manager,
+                                                                 const core::SceneNode& node,
+                                                                 const core::CropPolygonData& data,
+                                                                 const glm::mat4& transform) {
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    if (!std::isfinite(transform[column][row]))
+                        return crop_polygon_failure(lfs::ErrorCode::InvalidArgument,
+                                                    "The crop polygon transform is not finite");
+                }
+            }
+
+            auto& scene = scene_manager.getScene();
+            const std::string name = node.name;
+            const auto before_data = *node.crop_polygon;
+            const glm::mat4 before_transform = scene_manager.getNodeTransform(name);
+            const bool show_before = node.visible;
+            if (!scene.setCropPolygonData(node.id, data))
+                return crop_polygon_failure(lfs::ErrorCode::InvalidArgument,
+                                            "The crop polygon outline or depth is degenerate");
+            scene_manager.setNodeTransform(name, transform);
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+            auto entry = std::make_unique<vis::op::CropPolygonUndoEntry>(
+                scene_manager, name, before_data, before_transform, show_before);
+            if (entry->hasChanges())
+                vis::op::undoHistory().push(std::move(entry));
+            return {};
         }
 
         [[nodiscard]] bool is_float_nx3(const core::Tensor& tensor) {
@@ -1065,6 +1158,47 @@ namespace lfs::vis::cap {
         return {};
     }
 
+    std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
+        SceneManager& scene_manager,
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
+        const std::string_view undo_label) {
+        const auto& scene = scene_manager.getScene();
+        const auto transform_targets = top_level_transform_targets(scene, targets);
+        if (transform_targets.empty())
+            return std::unexpected("No unlocked transformable scene nodes found");
+
+        for (const auto& name : transform_targets) {
+            const auto* const node = scene.getNode(name);
+            if (!node)
+                return std::unexpected("Node not found: " + name);
+            if (scene.isNodeEffectivelyLocked(node->id))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
+        }
+
+        std::vector<glm::mat4> local_transforms;
+        local_transforms.reserve(transform_targets.size());
+        for (const auto& name : transform_targets) {
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene, name);
+            const auto local = scene_coords::nodeLocalTransformFromVisualizerWorld(
+                scene, name, delta * *world_transform);
+            if (!local)
+                return std::unexpected("Cannot transform '" + name + "': parent transform cannot preserve a finite world transform");
+            local_transforms.push_back(*local);
+        }
+
+        auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
+        entry->captureTransforms(transform_targets);
+        // All targets are validated before this synchronous scene-owner-thread batch.
+        for (std::size_t i = 0; i < transform_targets.size(); ++i)
+            scene_manager.setNodeTransform(transform_targets[i], local_transforms[i]);
+
+        entry->captureAfter();
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+
+        return transform_targets;
+    }
+
     std::expected<size_t, std::string> bakeNodeTransforms(SceneManager& scene_manager,
                                                           const std::vector<std::string>& targets,
                                                           const std::string_view undo_label) {
@@ -1111,8 +1245,11 @@ namespace lfs::vis::cap {
 
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
-                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
+                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result) {
+                    // Earlier nodes, or part of this one, may already hold baked values.
+                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                     return std::unexpected(std::string(result.error().user_message()));
+                }
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);
             } else if (node->mesh) {
@@ -1302,7 +1439,8 @@ namespace lfs::vis::cap {
         const auto resolve = [&scene, &find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
+            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID ||
+                node->type == core::NodeType::CROP_POLYGON)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
@@ -1369,6 +1507,8 @@ namespace lfs::vis::cap {
         if (const core::NodeId existing = scene.getCropBoxForSplat(parent_id); existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
                 scene_manager, rendering_manager, existing, scene.getEllipsoidForSplat(parent_id), CropVolumeShape::Box);
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getCropPolygonForSplat(parent_id), CropVolumeShape::Box);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
                 if (const auto* node = scene.getNodeById(existing)) {
@@ -1384,6 +1524,9 @@ namespace lfs::vis::cap {
 
         if (const core::NodeId existing_ellipsoid = scene.getEllipsoidForSplat(parent_id);
             existing_ellipsoid != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing_ellipsoid, scene.getCropPolygonForSplat(parent_id),
+                CropVolumeShape::Ellipsoid);
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_ellipsoid, CropVolumeShape::Box);
         }
 
@@ -1392,7 +1535,9 @@ namespace lfs::vis::cap {
             .include_selected_nodes = false,
             .include_scene_context = false,
         };
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {}, history_options);
+        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id);
+        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        remove_crop_volumes(scene, rendering_manager, replaced_polygon);
         const std::string cropbox_name = parent->name + "_cropbox";
         const core::NodeId cropbox_id = scene.addCropBox(cropbox_name, parent_id);
         if (cropbox_id == core::NULL_NODE)
@@ -1495,6 +1640,9 @@ namespace lfs::vis::cap {
             scene.setCropBoxData(cropbox_id, updated_data);
         if (transform_changed)
             scene_manager.setNodeTransform(cropbox_node->name, composeTransform(updated_components));
+        // Crop box data is scene-graph state; a data-only edit must still mark the project modified.
+        if (cropbox_changed)
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager && (cropbox_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
@@ -1562,6 +1710,7 @@ namespace lfs::vis::cap {
         updated_data.max = half_size;
         scene.setCropBoxData(cropbox_id, updated_data);
         scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), center));
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
@@ -1598,6 +1747,7 @@ namespace lfs::vis::cap {
         reset_data.enabled = before_data.enabled;
         scene.setCropBoxData(cropbox_id, reset_data);
         scene.setNodeTransform(cropbox_node->name, glm::mat4(1.0f));
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
@@ -1637,7 +1787,8 @@ namespace lfs::vis::cap {
         const auto resolve = [&find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::ELLIPSOID || node->type == core::NodeType::CROPBOX)
+            if (node->type == core::NodeType::ELLIPSOID || node->type == core::NodeType::CROPBOX ||
+                node->type == core::NodeType::CROP_POLYGON)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
@@ -1707,6 +1858,8 @@ namespace lfs::vis::cap {
         if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
                 scene_manager, rendering_manager, existing, scene.getCropBoxForSplat(parent_id), CropVolumeShape::Ellipsoid);
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getCropPolygonForSplat(parent_id), CropVolumeShape::Ellipsoid);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
                 if (const auto* node = scene.getNodeById(existing)) {
@@ -1722,6 +1875,9 @@ namespace lfs::vis::cap {
 
         if (const core::NodeId existing_cropbox = scene.getCropBoxForSplat(parent_id);
             existing_cropbox != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing_cropbox, scene.getCropPolygonForSplat(parent_id),
+                CropVolumeShape::Box);
             return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_cropbox, CropVolumeShape::Ellipsoid);
         }
 
@@ -1730,7 +1886,9 @@ namespace lfs::vis::cap {
             .include_selected_nodes = false,
             .include_scene_context = false,
         };
-        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {}, history_options);
+        const auto replaced_polygon = replace_crop_polygon_names(scene, parent_id);
+        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced_polygon, history_options);
+        remove_crop_volumes(scene, rendering_manager, replaced_polygon);
         const std::string ellipsoid_name = parent->name + "_ellipsoid";
         const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id);
         if (ellipsoid_id == core::NULL_NODE)
@@ -1773,7 +1931,8 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        // Announce the new volume again now that its radii and transform are set.
+        scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
         vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
             scene_manager,
             "Add Ellipsoid",
@@ -1855,7 +2014,7 @@ namespace lfs::vis::cap {
         }
 
         if (ellipsoid_changed)
-            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         if (ellipsoid_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
@@ -1912,7 +2071,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
             scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,
@@ -1949,7 +2108,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
-        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
 
         auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
             scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,
@@ -1957,6 +2116,220 @@ namespace lfs::vis::cap {
         if (entry->hasChanges())
             vis::op::undoHistory().push(std::move(entry));
 
+        return {};
+    }
+
+    lfs::Result<void> fitCropPolygonToParent(SceneManager& scene_manager,
+                                             RenderingManager* rendering_manager,
+                                             const core::NodeId polygon_id,
+                                             const bool use_percentile) {
+        auto& scene = scene_manager.getScene();
+        const auto* const polygon_node = find_crop_polygon(scene, polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        const auto* const parent = scene.getNodeById(polygon_node->parent_id);
+        if (!parent)
+            return crop_polygon_failure(lfs::ErrorCode::NotFound, "Crop polygon parent not found");
+
+        glm::vec3 min_bounds, max_bounds;
+        bool bounds_valid = false;
+        if (parent->type == core::NodeType::SPLAT && parent->model && parent->model->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->model, min_bounds, max_bounds, 0.0f, use_percentile);
+        } else if (parent->type == core::NodeType::POINTCLOUD && parent->point_cloud && parent->point_cloud->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->point_cloud, min_bounds, max_bounds, 0.0f, use_percentile);
+        }
+        if (!bounds_valid)
+            return crop_polygon_failure(lfs::ErrorCode::FailedPrecondition, "Cannot compute bounds for node: " + parent->name);
+
+        const auto frame = unscaled_crop_polygon_frame(scene_manager.getNodeTransform(polygon_node->name));
+        if (!frame)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The crop polygon transform is singular");
+
+        // The parent's bounds corners seen from the unscaled polygon frame; their box is the new prism box.
+        const glm::mat4 frame_from_parent = glm::inverse(*frame);
+        glm::vec3 lo(std::numeric_limits<float>::max());
+        glm::vec3 hi(std::numeric_limits<float>::lowest());
+        for (int corner = 0; corner < 8; ++corner) {
+            const glm::vec3 point((corner & 1) ? max_bounds.x : min_bounds.x,
+                                  (corner & 2) ? max_bounds.y : min_bounds.y,
+                                  (corner & 4) ? max_bounds.z : min_bounds.z);
+            const glm::vec3 local(frame_from_parent * glm::vec4(point, 1.0f));
+            lo = glm::min(lo, local);
+            hi = glm::max(hi, local);
+        }
+
+        const auto& polygon = *polygon_node->crop_polygon;
+        const glm::vec3 prism_half_extents(core::crop_polygon::outlineHalfExtents(polygon.vertices), polygon.half_depth);
+        const glm::vec3 fitted_half_extents =
+            glm::max((hi - lo) * 0.5f, glm::vec3(core::crop_polygon::kMinHalfDepth));
+        glm::mat4 fitted = *frame;
+        fitted[3] = *frame * glm::vec4((lo + hi) * 0.5f, 1.0f);
+        for (int axis = 0; axis < 3; ++axis)
+            fitted[axis] *= fitted_half_extents[axis] / prism_half_extents[axis];
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, polygon, fitted);
+    }
+
+    lfs::Result<void> resetCropPolygon(SceneManager& scene_manager,
+                                       RenderingManager* rendering_manager,
+                                       const core::NodeId polygon_id) {
+        const auto* const polygon_node = find_crop_polygon(scene_manager.getScene(), polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        const auto frame = unscaled_crop_polygon_frame(scene_manager.getNodeTransform(polygon_node->name));
+        if (!frame)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "The crop polygon transform is singular");
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, *polygon_node->crop_polygon,
+                                        *frame);
+    }
+
+    lfs::Result<void> setCropPolygonOutline(SceneManager& scene_manager,
+                                            RenderingManager* rendering_manager,
+                                            const core::NodeId polygon_id,
+                                            std::vector<glm::vec2> vertices) {
+        const auto* const polygon_node = find_crop_polygon(scene_manager.getScene(), polygon_id);
+        if (!polygon_node)
+            return crop_polygon_failure(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon target");
+
+        // Scene::setCropPolygonData rejects an invalid outline before anything changes.
+        glm::vec2 lo(std::numeric_limits<float>::max());
+        glm::vec2 hi(std::numeric_limits<float>::lowest());
+        for (const glm::vec2& vertex : vertices) {
+            lo = glm::min(lo, vertex);
+            hi = glm::max(hi, vertex);
+        }
+        const glm::vec2 centre = (lo + hi) * 0.5f;
+        for (glm::vec2& vertex : vertices)
+            vertex -= centre;
+
+        auto data = *polygon_node->crop_polygon;
+        data.vertices = std::move(vertices);
+        const glm::mat4 transform =
+            glm::translate(scene_manager.getNodeTransform(polygon_node->name), glm::vec3(centre, 0.0f));
+        return commit_crop_polygon_edit(scene_manager, rendering_manager, *polygon_node, data, transform);
+    }
+
+    lfs::Result<core::NodeId> createCropPolygon(SceneManager& scene_manager,
+                                                RenderingManager* rendering_manager,
+                                                const core::NodeId parent_id,
+                                                core::CropPolygonData data,
+                                                const glm::mat4& local_transform) {
+        auto& scene = scene_manager.getScene();
+        const auto* const parent = scene.getNodeById(parent_id);
+        if (!parent)
+            return crop_polygon_error(lfs::ErrorCode::NotFound, "Target node not found");
+        if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
+            return crop_polygon_error(lfs::ErrorCode::InvalidArgument,
+                                      "Crop polygons can only be attached to splat or point cloud nodes");
+        if (!core::crop_polygon::isValidOutline(data.vertices) ||
+            !core::crop_polygon::isValidHalfDepth(data.half_depth))
+            return crop_polygon_error(lfs::ErrorCode::InvalidArgument,
+                                      "The crop polygon outline or depth is degenerate");
+
+        std::vector<std::string> replaced;
+        for (const core::NodeId volume_id : {scene.getCropBoxForSplat(parent_id),
+                                             scene.getEllipsoidForSplat(parent_id),
+                                             scene.getCropPolygonForSplat(parent_id)}) {
+            if (const auto* const volume = scene.getNodeById(volume_id))
+                replaced.push_back(volume->name);
+        }
+
+        const vis::op::SceneGraphCaptureOptions history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, replaced, history_options);
+        remove_crop_volumes(scene, rendering_manager, replaced);
+
+        const std::string parent_name = parent->name;
+        data.enabled = true;
+        const core::NodeId polygon_id =
+            scene.addCropPolygon(parent_name + "_crop_polygon", parent_id, std::move(data), local_transform);
+        const auto* const polygon_node = scene.getNodeById(polygon_id);
+        if (!polygon_node)
+            return crop_polygon_error(lfs::ErrorCode::Internal, "Failed to create crop polygon for node: " + parent_name);
+        const std::string polygon_name = polygon_node->name;
+
+        core::events::state::PLYAdded{
+            .name = polygon_name,
+            .uuid = polygon_node->uuid,
+            .node_gaussians = 0,
+            .total_gaussians = scene.getTotalGaussianCount(),
+            .is_visible = polygon_node->visible,
+            .parent_name = parent_name,
+            .is_group = false,
+            .node_type = static_cast<int>(core::NodeType::CROP_POLYGON)}
+            .emit();
+
+        if (rendering_manager)
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
+
+        vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+            scene_manager,
+            "Add Crop Polygon",
+            std::move(history_before),
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {polygon_name}, history_options)));
+        return polygon_id;
+    }
+
+    lfs::Result<core::NodeId> resolveCropPolygonId(const SceneManager& scene_manager,
+                                                   const std::optional<std::string>& requested_node) {
+        const auto& scene = scene_manager.getScene();
+        if (!requested_node) {
+            const core::NodeId polygon_id = scene_manager.getSelectedNodeCropPolygonId();
+            if (polygon_id == core::NULL_NODE)
+                return crop_polygon_error(lfs::ErrorCode::NotFound,
+                                          "No crop polygon specified and no crop polygon selected");
+            return polygon_id;
+        }
+
+        const auto* const node = scene.getNode(*requested_node);
+        if (!node)
+            return crop_polygon_error(lfs::ErrorCode::NotFound, "Node not found: " + *requested_node);
+        if (node->type == core::NodeType::CROP_POLYGON && node->crop_polygon)
+            return node->id;
+        if (const core::NodeId polygon_id = scene.getCropPolygonForSplat(node->id); polygon_id != core::NULL_NODE)
+            return polygon_id;
+        return crop_polygon_error(lfs::ErrorCode::NotFound, "Node has no crop polygon: " + *requested_node);
+    }
+
+    lfs::Status updateCropPolygon(SceneManager& scene_manager,
+                                  RenderingManager* rendering_manager,
+                                  const core::NodeId polygon_id,
+                                  const CropPolygonUpdate& update) {
+        auto& scene = scene_manager.getScene();
+        const auto* const polygon_node = scene.getNodeById(polygon_id);
+        if (!polygon_node || polygon_node->type != core::NodeType::CROP_POLYGON || !polygon_node->crop_polygon)
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::NotFound, "Invalid crop polygon target"));
+
+        const auto before = *polygon_node->crop_polygon;
+        auto updated = before;
+        if (update.half_depth)
+            updated.half_depth = *update.half_depth;
+        if (update.has_inverse)
+            updated.inverse = update.inverse;
+        if (update.has_enabled)
+            updated.enabled = update.enabled;
+        if (!core::crop_polygon::isValidHalfDepth(updated.half_depth))
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::InvalidArgument,
+                                                           "Crop polygon half depth must be positive and finite"));
+
+        const std::string name = polygon_node->name;
+        const glm::mat4 transform = scene_manager.getNodeTransform(name);
+        const bool show = polygon_node->visible;
+        if (!scene.setCropPolygonData(polygon_id, updated))
+            return lfs::Status::failure(crop_polygon_error(lfs::ErrorCode::InvalidArgument, "Invalid crop polygon data"));
+        // Crop polygon data is scene-graph state; a data-only edit must still mark the project modified.
+        scene.notifyMutation(core::Scene::MutationType::TRANSFORM_CHANGED);
+        if (rendering_manager)
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY,
+                                         lfs::vis::FrameReason::SceneChange);
+
+        auto entry = std::make_unique<vis::op::CropPolygonUndoEntry>(scene_manager, name, before, transform, show);
+        if (entry->hasChanges())
+            vis::op::undoHistory().push(std::move(entry));
         return {};
     }
 

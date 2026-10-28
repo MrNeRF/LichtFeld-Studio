@@ -39,6 +39,7 @@ tests/data/nn/*
 !scripts/verify_video_orientation.py
 !tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
+!src/python/_lfs_path_io.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py
 !src/python/scripts/manage_stubs.py

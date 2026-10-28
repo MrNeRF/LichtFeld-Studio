@@ -42,6 +42,7 @@ namespace lfs::vis::gui {
             SET_ROTATE,
             SET_EASING,
             DELETE_KEYFRAME,
+            REMOVE_REVEAL,
             CLOSE_EDIT_PANEL,
             APPLY_EDIT,
             REVERT_EDIT
@@ -68,7 +69,8 @@ namespace lfs::vis::gui {
         void showContextMenu(float screen_x, float screen_y,
                              std::optional<size_t> keyframe_index,
                              float time,
-                             SequencerViewportEditMode edit_mode);
+                             SequencerViewportEditMode edit_mode,
+                             bool reveal = false);
         void hideContextMenu();
 
         void showTimeEdit(size_t index, float current_time);

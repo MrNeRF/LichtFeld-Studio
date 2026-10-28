@@ -24,6 +24,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
     struct Theme;
     struct ProjectDisplayInfo;
 } // namespace lfs::vis
@@ -66,9 +67,11 @@ namespace lfs::vis::gui {
         std::string label;
         bool active = false;
         AccessKeyLabel access;
+        bool logo = false;
     };
 
     struct MenuToolbarButtonView {
+        bool enabled = true;
         std::string button_id;
         std::string action;
         std::string value;
@@ -187,6 +190,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
+        friend class lfs::vis::InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
         void bindModel();
         bool updateTheme();
         void rebuildLabels();
@@ -238,10 +242,11 @@ namespace lfs::vis::gui {
         std::vector<MenuToolbarButtonView> camera_buttons_;
         std::vector<MenuToolbarButtonView> render_buttons_;
         std::vector<MenuToolbarButtonView> projection_buttons_;
-        std::array<std::string, 4> navigation_tooltips_;
+        std::array<std::string, 5> navigation_tooltips_;
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
+        std::string brand_logo_src_;
         std::string portal_connection_label_;
         std::string portal_connection_tooltip_;
         std::string portal_connection_icon_;
@@ -261,7 +266,6 @@ namespace lfs::vis::gui {
         Rml::Element* dropdown_container_ = nullptr;
         Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
-        Rml::Element* brand_logo_ = nullptr;
         Rml::Element* project_title_container_ = nullptr;
         Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;

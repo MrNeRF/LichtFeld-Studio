@@ -87,6 +87,7 @@ def new_project_module(monkeypatch, tmp_path):
         confirm_dialog=confirm,
         open_dataset_folder_dialog=lambda: str(dataset),
         open_ply_file_dialog=lambda _start="": str(splat),
+        open_init_file_dialog=lambda _start="": str(splat),
         get_embed_dataset_by_default=lambda: state.embed_default,
         schedule_on_ui_thread=schedule_on_ui_thread,
         get_panel_object=lambda panel_id: state.registered_panels.get(panel_id),
@@ -587,3 +588,64 @@ def test_failed_creation_keeps_requested_dialog_after_unmount(new_project_module
     assert panel.poll(None)
     assert state.enabled[-1] == (panel.id, True)
     assert panel._can_create()
+
+
+def _colmap_model(state):
+    state.info.sparse_path.mkdir()
+    (state.info.sparse_path / "cameras.bin").write_bytes(b"")
+
+
+def test_dataset_without_images_asks_for_the_images_folder(new_project_module):
+    module, state = new_project_module
+    _colmap_model(state)
+    state.info.image_count = 0
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+
+    assert panel._advanced_expanded is True
+    assert panel._can_create() is False
+    assert panel._create_hint() == "new_project.no_images"
+
+
+@pytest.mark.parametrize("outside", [True, False])
+def test_chosen_images_folder_is_detected_and_loaded(new_project_module, tmp_path, outside):
+    module, state = new_project_module
+    _colmap_model(state)
+    state.info.image_count = 0
+    photos = tmp_path / "photos" if outside else state.dataset / "frames"
+    photos.mkdir()
+    probed = []
+
+    def detect(path, images_path=None):
+        probed.append(images_path)
+        if images_path is None:
+            return state.info
+        return SimpleNamespace(**{**vars(state.info), "images_path": Path(images_path), "image_count": 3})
+
+    state.lf.detect_dataset_info = detect
+    state.lf.ui.open_folder_dialog = lambda *_: str(photos)
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._on_browse_images()
+    panel._start_source_probe()
+    _run_scheduled(state)
+
+    assert probed[-1] == str(photos)
+    assert panel._shown_images_path() == str(photos)
+    assert panel._can_create() is True
+    panel._on_do_create()
+    assert [call[0] for call in state.calls] == ["create", "load"]
+    assert state.calls[1][2]["images_folder"] == (str(photos) if outside else "frames")
+
+
+def test_dataset_without_colmap_model_is_not_held_for_images(new_project_module):
+    module, state = new_project_module
+    state.info.image_count = 0
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+
+    assert panel._can_create() is True
+    assert panel._create_hint() == ""

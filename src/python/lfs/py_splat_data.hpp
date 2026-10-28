@@ -12,11 +12,20 @@
 
 namespace nb = nanobind;
 
+namespace lfs::core {
+    class Scene;
+}
+
 namespace lfs::python {
 
     class PySplatData {
     public:
         explicit PySplatData(core::SplatData* data) : data_(data) {
+            assert(data_ != nullptr);
+        }
+
+        // A scene node's own model: edits through this object report a payload change.
+        PySplatData(core::SplatData* data, core::Scene* scene) : data_(data), scene_(scene) {
             assert(data_ != nullptr);
         }
 
@@ -55,13 +64,29 @@ namespace lfs::python {
         size_t visible_count() const { return data_->visible_count(); }
         PyTensor soft_delete(const PyTensor& mask);
         void undelete(const PyTensor& mask);
-        void clear_deleted() { data_->clear_deleted(); }
-        size_t apply_deleted() { return data_->apply_deleted(); }
+        void clear_deleted() {
+            data_->clear_deleted();
+            notify_changed();
+        }
+        size_t apply_deleted() {
+            const size_t removed = data_->apply_deleted();
+            notify_changed();
+            return removed;
+        }
 
         // SH degree management
-        void increment_sh_degree() { data_->increment_sh_degree(); }
-        void set_active_sh_degree(int degree) { data_->set_active_sh_degree(degree); }
-        void set_max_sh_degree(int degree) { data_->set_max_sh_degree(degree); }
+        void increment_sh_degree() {
+            data_->increment_sh_degree();
+            notify_changed();
+        }
+        void set_active_sh_degree(int degree) {
+            data_->set_active_sh_degree(degree);
+            notify_changed();
+        }
+        void set_max_sh_degree(int degree) {
+            data_->set_max_sh_degree(degree);
+            notify_changed();
+        }
 
         // Capacity management
         void reserve_capacity(size_t capacity);
@@ -71,8 +96,11 @@ namespace lfs::python {
         const core::SplatData* data() const { return data_; }
 
     private:
+        void notify_changed() const;
+
         std::shared_ptr<core::SplatData> owner_;
         core::SplatData* data_;
+        core::Scene* scene_ = nullptr;
     };
 
     // Register PySplatData with nanobind module

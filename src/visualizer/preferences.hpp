@@ -5,6 +5,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gui/utils/splat_drag_preferences.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -37,6 +38,10 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::Status setRenderingDefaults(std::string_view serialized);
         [[nodiscard]] std::string renderingDefaults();
+        [[nodiscard]] lfs::Status setGamepadNavigation(std::string_view serialized);
+        [[nodiscard]] std::string gamepadNavigation();
+        [[nodiscard]] std::string gamepadProfiles();
+        [[nodiscard]] lfs::Status setGamepadProfiles(std::string_view serialized, bool enabled, std::string_view expected = {});
         [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
         [[nodiscard]] std::string viewportVignette();
         void setSidebarDefaults(float width, float scene_ratio, const std::string& active_tab);
@@ -63,6 +68,11 @@ namespace lfs::vis {
         [[nodiscard]] float zoomSpeed();
         void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
+
+        void setCameraBrowseRepeat(bool enabled);
+        [[nodiscard]] bool cameraBrowseRepeat();
+        void setCameraBrowseRepeatRate(float value, bool persist = true);
+        [[nodiscard]] float cameraBrowseRepeatRate();
 
         void setLanguage(const std::string& value);
         [[nodiscard]] std::string language();
@@ -106,6 +116,9 @@ namespace lfs::vis {
         void setProjectManagerState(std::string_view serialized_state);
         [[nodiscard]] std::string projectManagerState();
         void resetProjectManagerPreferences();
+
+        void setSplatDrag(const SplatDragPreferenceState& state);
+        [[nodiscard]] SplatDragPreferenceState splatDrag();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -169,6 +182,14 @@ namespace lfs::vis {
     loadProjectLocationPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path
     projectLocationPreferenceRaw();
+    // The configured project location as an absolute path, resolved without disk
+    // access. An empty path when none is configured.
+    [[nodiscard]] LFS_VIS_API std::filesystem::path
+    resolvedProjectLocationPreference();
+    // The create-and-write probe that setProjectLocationPreference applies. It touches
+    // the disk, so keep it off the UI thread.
+    [[nodiscard]] LFS_VIS_API lfs::Status
+    probeProjectLocation(const std::filesystem::path& path);
     LFS_VIS_API void clearProjectLocationPreference();
     [[nodiscard]] LFS_VIS_API std::filesystem::path defaultProjectLocation();
 

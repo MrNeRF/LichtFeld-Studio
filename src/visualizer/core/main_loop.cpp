@@ -10,6 +10,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
 #include <thread>
 
 #ifdef _WIN32
@@ -187,29 +188,8 @@ namespace lfs::vis {
                 break;
             }
 
-            try {
-                if (update_callback_) {
-                    update_callback_();
-                }
-
-                if (should_close_callback_ && should_close_callback_()) {
-                    LOG_DEBUG("Should close callback requested exit after update");
-                    break;
-                }
-
-                if (render_callback_) {
-                    render_callback_();
-                }
-
-                if (frame_completed_callback_) {
-                    frame_completed_callback_();
-                }
-            } catch (...) {
-                if (!frame_error_callback_) {
-                    throw;
-                }
-                frame_error_callback_(std::current_exception());
-            }
+            if (!runModalFrame())
+                break;
         }
 
         LOG_DEBUG("Exiting main render loop");
@@ -230,6 +210,42 @@ namespace lfs::vis {
     void MainLoop::installInterruptHandlers() {
         std::signal(SIGINT, signal_handler);
         std::signal(SIGTERM, signal_handler);
+    }
+
+    bool MainLoop::runModalFrame() {
+        if (frame_active_)
+            throw std::logic_error("Cannot reenter an active application frame");
+        if (g_interrupt_requested.exchange(false, std::memory_order_acq_rel)) {
+            if (!interrupt_callback_)
+                return false;
+            interrupt_callback_();
+        }
+        if (should_close_callback_ && should_close_callback_())
+            return false;
+        try {
+            struct FrameScope {
+                bool& active;
+                explicit FrameScope(bool& value) : active(value) { active = true; }
+                ~FrameScope() { active = false; }
+            };
+            {
+                FrameScope scope(frame_active_);
+                if (update_callback_)
+                    update_callback_();
+                if (should_close_callback_ && should_close_callback_())
+                    return false;
+                if (render_callback_)
+                    render_callback_();
+            }
+            if (frame_completed_callback_)
+                frame_completed_callback_();
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): reuse the application's frame-fault boundary.
+            if (!frame_error_callback_)
+                throw;
+            frame_error_callback_(std::current_exception());
+        }
+        return true;
     }
 
     void (*MainLoop::interruptHandlerForTest())(int) {

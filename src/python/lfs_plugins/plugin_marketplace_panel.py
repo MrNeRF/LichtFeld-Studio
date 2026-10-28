@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from _lfs_path_io import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import lichtfeld as lf
@@ -498,18 +498,23 @@ class PluginMarketplacePanel(Panel):
         status_text = ""
         status_class = "status-muted"
         if is_installed:
-            state_keys = {
-                PluginState.UNLOADED: "plugin_manager.status_not_loaded",
-                PluginState.INSTALLING: "plugin_manager.status_installing",
-                PluginState.LOADING: "plugin_manager.status_loading",
-                PluginState.ACTIVE: "plugin_manager.status_active",
-                PluginState.ERROR: "plugin_manager.status_error",
-                PluginState.DISABLED: "plugin_manager.status_disabled",
-            }
-            state_str = tr(state_keys.get(plugin_state, "plugin_manager.status_not_loaded"))
-            status_text = f"{tr('plugin_manager.status')}: {state_str}"
-            if plugin_state == PluginState.ACTIVE:
-                status_class = "status-success"
+            if mgr.is_restart_required(plugin_name):
+                state_str = tr("plugin_manager.status_restart_required")
+                status_text = f"{tr('plugin_manager.status')}: {state_str}"
+                status_class = "status-warning"
+            else:
+                state_keys = {
+                    PluginState.UNLOADED: "plugin_manager.status_not_loaded",
+                    PluginState.INSTALLING: "plugin_manager.status_installing",
+                    PluginState.LOADING: "plugin_manager.status_loading",
+                    PluginState.ACTIVE: "plugin_manager.status_active",
+                    PluginState.ERROR: "plugin_manager.status_error",
+                    PluginState.DISABLED: "plugin_manager.status_disabled",
+                }
+                state_str = tr(state_keys.get(plugin_state, "plugin_manager.status_not_loaded"))
+                status_text = f"{tr('plugin_manager.status')}: {state_str}"
+                if plugin_state == PluginState.ACTIVE:
+                    status_class = "status-success"
 
         is_remote_installed = is_installed and not is_local
         is_local_with_github = is_installed and is_local and has_github

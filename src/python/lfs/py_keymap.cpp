@@ -4,6 +4,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/input/input_bindings.hpp"
@@ -118,6 +119,7 @@ namespace lfs::python {
             .value("CAMERA_MOVE_DOWN", Action::CAMERA_MOVE_DOWN)
             .value("CAMERA_RESET_HOME", Action::CAMERA_RESET_HOME)
             .value("CAMERA_SET_HOME", Action::CAMERA_SET_HOME)
+            .value("CAMERA_RESTORE_HOME", Action::CAMERA_RESTORE_HOME)
             .value("CAMERA_FOCUS_SELECTION", Action::CAMERA_FOCUS_SELECTION)
             .value("CAMERA_SET_PIVOT", Action::CAMERA_SET_PIVOT)
             .value("CAMERA_NEXT_VIEW", Action::CAMERA_NEXT_VIEW)
@@ -177,6 +179,7 @@ namespace lfs::python {
             .value("TOOL_SCALE", Action::TOOL_SCALE)
             .value("TOOL_MIRROR", Action::TOOL_MIRROR)
             .value("TOOL_ALIGN", Action::TOOL_ALIGN)
+            .value("TOOL_SCALE_DISTANCE", Action::TOOL_SCALE_DISTANCE)
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)
@@ -193,7 +196,14 @@ namespace lfs::python {
             .value("ASSET_GALLERY_COPY_LINK", Action::ASSET_GALLERY_COPY_LINK)
             .value("ASSET_REFRESH", Action::ASSET_REFRESH)
             .value("TOGGLE_PYTHON_CONSOLE", Action::TOGGLE_PYTHON_CONSOLE)
-            .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE);
+            .value("NEXT_SIDEBAR_CATEGORY", Action::NEXT_SIDEBAR_CATEGORY)
+            .value("PREVIOUS_SIDEBAR_CATEGORY", Action::PREVIOUS_SIDEBAR_CATEGORY)
+            .value("REMOVE_LAST_POINT", Action::REMOVE_LAST_POINT)
+            .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT)
+            .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
+            .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX)
+            .value("UNGROUP_SELECTED_SCENE_NODE", Action::UNGROUP_SELECTED_SCENE_NODE)
+            .value("EXIT_WALK", Action::EXIT_WALK);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
@@ -203,7 +213,8 @@ namespace lfs::python {
             .value("ROTATE", ToolMode::ROTATE)
             .value("SCALE", ToolMode::SCALE)
             .value("ALIGN", ToolMode::ALIGN)
-            .value("CROP_BOX", ToolMode::CROP_BOX);
+            .value("CROP_BOX", ToolMode::CROP_BOX)
+            .value("WALK", ToolMode::WALK);
 
         // Expose Modifier enum
         nb::enum_<Modifier>(keymap, "Modifier")
@@ -566,8 +577,8 @@ namespace lfs::python {
                     return;
                 if (const auto config_dir = InputBindings::getConfigDir()) {
                     const auto saved_path = *config_dir / "Default.json";
-                    if (std::filesystem::exists(saved_path)) {
-                        std::filesystem::remove(saved_path);
+                    if (lfs::core::native_fs::exists(saved_path)) {
+                        lfs::core::native_fs::remove(saved_path);
                     }
                 }
                 get_keymap_bindings()->loadProfile("Default");

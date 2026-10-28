@@ -6,6 +6,7 @@ import inspect
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock
 import json
 import sys
 
@@ -17,6 +18,7 @@ def _install_stub_modules(monkeypatch):
     remove_calls = []
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.get_collision_state = lambda: {"has_collision": False}
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
@@ -274,6 +276,11 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
     assert "show_align_toolbar" in model.bound_funcs
+    assert "show_scale_distance_toolbar" in model.bound_funcs
+    assert "scale_distance_can_apply" in model.bound_funcs
+    assert "scale_distance_can_reset" in model.bound_funcs
+    assert "scale_distance_measured_str" in model.bound_funcs
+    assert "scale_distance_target_str" in model.bound_binds
     assert "show_crop_toolbar" in model.bound_funcs
     assert "show_crop_edit_controls" in model.bound_funcs
     assert "show_crop_enable_separator" in model.bound_funcs
@@ -284,6 +291,11 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "label_cropbox_loss_weight" in model.bound_funcs
     assert "cropbox_lr_scale" in model.bound_binds
     assert "cropbox_loss_weight" in model.bound_binds
+    assert "label_cropbox_growth_inside" in model.bound_funcs
+    assert "cropbox_growth_inside_percent" in model.bound_funcs
+    assert "cropbox_growth_inside" in model.bound_binds
+    assert "label_crop_to_cropbox" in model.bound_funcs
+    assert "crop_to_cropbox" in model.bound_binds
     assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
@@ -793,6 +805,14 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
+    state.crop_inverse = False
+
+    def toggle_crop_tool_inverse():
+        state.calls.append(("toggle_crop_tool_inverse",))
+        state.crop_inverse = not state.crop_inverse
+
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: state.crop_inverse, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "toggle_crop_tool_inverse", toggle_crop_tool_inverse, raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -806,12 +826,13 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
 
     assert snapshot["show_crop_toolbar"] is True
     assert snapshot["crop_group_buttons"][0]["selected"] is True
-    assert [button["value"] for button in snapshot["crop_object_buttons"]] == ["box", "ellipsoid"]
+    assert [button["value"] for button in snapshot["crop_object_buttons"]] == ["box", "ellipsoid", "polygon"]
     assert [button["value"] for button in snapshot["crop_transform_buttons"]] == ["translate", "rotate", "scale"]
     assert [button["action"] for button in snapshot["crop_action_buttons"]] == [
         "crop_fit",
         "crop_trim",
         "crop_reset",
+        "crop_toggle_inverse",
         "crop_apply",
         "crop_delete",
     ]
@@ -820,6 +841,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "../icon/arrows-maximize.png",
         "../icon/arrows-minimize.png",
         "../icon/reset.png",
+        "../icon/select-invert.png",
         "../icon/check.png",
         "../icon/scene/trash.png",
     ]
@@ -827,6 +849,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "scene.fit_to_scene",
         "scene.fit_to_scene_trimmed",
         "scene.reset_crop",
+        "toolbar.invert_crop",
         "common.apply",
         "scene.delete",
     ]
@@ -865,6 +888,127 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     controller.dispatch("crop_delete", "")
 
     assert state.calls[-1] == ("delete_crop_tool_volume",)
+
+    # Invert shows the crop volume's state and toggles it like the pie menu's Invert.
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is True
+    assert invert["selected"] is False
+    controller.dispatch("crop_toggle_inverse", "")
+    assert state.calls[-1] == ("toggle_crop_tool_inverse",)
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["selected"] is True
+    # Without a crop volume to invert, the button is disabled.
+    state.crop_inverse = None
+    invert = next(button for button in controller.snapshot()["crop_action_buttons"] if button["action"] == "crop_toggle_inverse")
+    assert invert["enabled"] is False
+
+
+def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(active_tool="builtin.cropbox", gizmo_type="translate", calls=[], crop_shape="box")
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+    splat = SimpleNamespace(id=1, name="Model", type=SimpleNamespace(name="SPLAT"), children=())
+    scene = SimpleNamespace(
+        get_node=lambda name: splat if name == splat.name else None,
+        get_node_by_id=lambda node_id: splat if node_id == splat.id else None,
+    )
+
+    def set_active_operator(tool_id, gizmo_type=""):
+        state.calls.append(("set_active_operator", tool_id, gizmo_type))
+        state.active_tool = tool_id
+        state.gizmo_type = gizmo_type
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: [splat.name], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: state.gizmo_type, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_active_operator", set_active_operator, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: state.crop_shape, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_shape",
+        lambda shape: (state.calls.append(("set_crop_tool_shape", shape)), setattr(state, "crop_shape", shape)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "start_crop_polygon", lambda: state.calls.append(("start_crop_polygon",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui, "fit_crop_tool", lambda trimmed: state.calls.append(("fit_crop_tool", trimmed)), raising=False
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_inverse", lambda: False, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    polygon_button = next(button for button in controller.snapshot()["crop_object_buttons"] if button["value"] == "polygon")
+    # The selection tool's polygon icon is reused; the label is localized.
+    assert polygon_button["icon_src"] == "../icon/polygon.png"
+    assert polygon_button["tooltip_key"] == "toolbar.crop_polygon"
+    assert polygon_button["enabled"] is True
+    assert polygon_button["selected"] is False
+
+    controller.dispatch("crop_object", "polygon")
+
+    assert state.calls == [
+        ("set_crop_tool_shape", "polygon"),
+        ("start_crop_polygon",),
+        ("set_active_operator", "builtin.cropbox", "translate"),
+    ]
+    snapshot = controller.snapshot()
+    assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "polygon")["selected"] is True
+    actions = {button["action"]: button["enabled"] for button in snapshot["crop_action_buttons"]}
+    assert actions == {
+        "crop_fit": True,
+        "crop_trim": True,
+        "crop_reset": True,
+        "crop_toggle_inverse": True,
+        "crop_apply": True,
+        "crop_delete": True,
+    }
+
+    controller.dispatch("crop_fit", "")
+    controller.dispatch("crop_trim", "")
+    controller.dispatch("crop_reset", "")
+    controller.dispatch("crop_apply", "")
+    controller.dispatch("crop_delete", "")
+    assert state.calls[-5:] == [
+        ("fit_crop_tool", False),
+        ("fit_crop_tool", True),
+        ("reset_crop_tool",),
+        ("apply_crop_tool",),
+        ("delete_crop_tool_volume",),
+    ]
+
+    # A selected polygon node reopens the tool on the polygon shape.
+    polygon_node = SimpleNamespace(id=2, name="Model_crop_polygon", type=SimpleNamespace(name="CROP_POLYGON"), children=())
+    splat.children = (polygon_node.id,)
+    scene.get_node_by_id = lambda node_id: {1: splat, 2: polygon_node}.get(node_id)
+    state.crop_shape = "box"
+    state.calls.clear()
+    state.active_tool = ""
+    controller.dispatch("tool", "builtin.cropbox")
+    assert ("set_crop_tool_shape", "polygon") in state.calls
+    assert ("start_crop_polygon",) in state.calls
+    assert ("add_cropbox", "Model") not in state.calls
 
 
 def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
@@ -939,9 +1083,20 @@ def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
     controller = module._GizmoToolbarController()
     snapshot = controller.snapshot()
 
-    assert snapshot["show_crop_toolbar"] is True
-    assert snapshot["show_crop_edit_controls"] is True
-    assert snapshot["show_crop_enable_separator"] is True
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["show_crop_numeric_controls"] is True
+    assert snapshot["show_crop_edit_controls"] is False
+    assert snapshot["show_crop_enable_separator"] is False
+    fallback = controller.snapshot(numeric_overlay_available=False)
+    assert fallback["show_crop_toolbar"] is True
+    assert fallback["show_crop_edit_controls"] is True
+    assert fallback["show_crop_numeric_controls"] is False
+    # Parent selection still needs the ordinary crop toolbar; numeric inputs
+    # only take its place when a matching crop volume itself is selected.
+    crop_node.type = SimpleNamespace(name="POINTCLOUD")
+    parent_snapshot = controller.snapshot()
+    assert parent_snapshot["show_crop_edit_controls"] is True
+    crop_node.type = SimpleNamespace(name="CROPBOX")
     assert snapshot["crop_enable_buttons"] == [
         {
             "button_id": "crop-enabled",
@@ -1016,10 +1171,15 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
     class Params:
         cropbox_lr_scale = 0.1
         cropbox_loss_weight = 0.1
+        cropbox_growth_inside = 0.8
+        crop_to_cropbox = False
 
         @staticmethod
         def has_params():
             return True
+
+        def get(self, name):
+            return getattr(self, name)
 
         def set(self, name, value):
             set_calls.append((name, value))
@@ -1055,6 +1215,8 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
 
     lr_getter, lr_setter = model.bound_binds["cropbox_lr_scale"]
     loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
+    growth_getter, growth_setter = model.bound_binds["cropbox_growth_inside"]
+    growth_percent = model.bound_funcs["cropbox_growth_inside_percent"]
 
     assert controller._gizmo.cropbox_toolbar_signature() == (
         "bicycle_cropbox",
@@ -1062,47 +1224,125 @@ def test_crop_roi_settings_write_live_params_and_track_external_values(
         True,
         0.1,
         0.1,
+        0.8,
+        False,
     )
     assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
 
     lr_setter("0.35")
     loss_setter("0.65")
+    growth_setter("0.5")
 
     assert set_calls == [
         ("cropbox_lr_scale", 0.35),
         ("cropbox_loss_weight", 0.65),
+        ("cropbox_growth_inside", 0.5),
     ]
     assert lr_getter() == "0.350"
     assert loss_getter() == "0.650"
-    assert model.handle.request_update_calls == 2
+    assert growth_getter() == "0.50"
+    assert growth_percent() == "50%"
+    assert model.handle.request_update_calls == 3
+
+    crop_getter, crop_setter = model.bound_binds["crop_to_cropbox"]
+    crop_setter(True)
+    assert set_calls[-1] == ("crop_to_cropbox", True)
+    assert crop_getter() is True
+    assert model.handle.request_update_calls == 4
 
     params.cropbox_lr_scale = 0.42
     params.cropbox_loss_weight = 0.73
+    params.cropbox_growth_inside = 1.0
+    params.crop_to_cropbox = False
     signature = controller._gizmo.cropbox_toolbar_signature()
-    assert signature[-2:] == (0.42, 0.73)
+    assert signature[3:] == (0.42, 0.73, 1.0, False)
 
     controller._sync_crop_roi_params(signature)
 
     assert lr_getter() == "0.420"
     assert loss_getter() == "0.730"
+    assert growth_percent() == "100%"
     assert "cropbox_lr_scale" in model.handle.dirty_calls
     assert "cropbox_loss_weight" in model.handle.dirty_calls
+    assert "cropbox_growth_inside_percent" in model.handle.dirty_calls
+    assert crop_getter() is False
+    assert "crop_to_cropbox" in model.handle.dirty_calls
+
+    # 0 is Auto: growth follows the error, no fixed share.
+    params.cropbox_growth_inside = 0.0
+    controller._sync_crop_roi_params(controller._gizmo.cropbox_toolbar_signature())
+    assert growth_percent() == "Auto"
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+def test_crop_roi_controls_and_enable_toggle_serve_a_crop_polygon(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    operator_calls = []
+    polygon = SimpleNamespace(enabled=True)
+    polygon_node = SimpleNamespace(
+        id=8,
+        name="Model_crop_polygon",
+        type=SimpleNamespace(name="CROP_POLYGON"),
+        children=(),
+        crop_polygon=lambda: polygon,
+    )
+    model_node = SimpleNamespace(id=7, name="Model", type=SimpleNamespace(name="SPLAT"), children=(8,))
+    nodes = {7: model_node, 8: polygon_node}
+    scene = SimpleNamespace(
+        get_node=lambda name: next((node for node in nodes.values() if node.name == name), None),
+        get_node_by_id=nodes.get,
+    )
+    params = SimpleNamespace(
+        cropbox_lr_scale=0.2,
+        cropbox_loss_weight=0.3,
+        cropbox_growth_inside=0.5,
+        has_params=lambda: True,
+        get=lambda name: False,
+    )
+
+    def invoke(operator_id, **kwargs):
+        operator_calls.append((operator_id, kwargs))
+        polygon.enabled = kwargs["enabled"]
+
+    monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["Model"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_content_type", lambda: "dataset", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
+
+    controller = module._GizmoToolbarController()
+    # The selected training model's polygon is its region of interest, like a crop box.
+    assert controller.cropbox_toolbar_signature() == ("Model_crop_polygon", True, True, 0.2, 0.3, 0.5, False)
+    assert controller._build_crop_settings_records(False)[0]["button_id"] == "crop-roi-settings"
+    enable = controller._build_crop_enable_records()[0]
+    assert (enable["tooltip_key"], enable["tooltip_text"], enable["selected"]) == (
+        "toolbar.enable_crop_polygon",
+        "Enable Crop Polygon",
+        True,
+    )
+
+    controller.dispatch("crop_toggle_enabled", "")
+
+    assert operator_calls == [("crop_polygon.set", {"node": "Model_crop_polygon", "enabled": False})]
+    assert controller._build_crop_enable_records()[0]["selected"] is False
+
+
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
 def test_crop_roi_unavailable_state_preserves_last_display_values(toolbar_module, signature):
     module, *_ = toolbar_module
     controller = module._ViewportToolbarController()
-    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37))
+    controller._sync_crop_roi_params(("crop", True, True, 0.0, 0.37, 0.6, True))
 
     controller._sync_crop_roi_params(signature)
 
     assert not controller._crop_roi_params_available
     assert controller._cropbox_lr_scale == 0.0
     assert controller._cropbox_loss_weight == 0.37
+    assert controller._cropbox_growth_inside == 0.6
+    assert controller._crop_to_cropbox is True
 
 
-@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1)])
+@pytest.mark.parametrize("signature", [None, ("crop", True, False, 0.1, 0.1, 0.8, False)])
 def test_crop_roi_stale_slider_events_do_not_write_live_params(
     toolbar_module, monkeypatch, signature
 ):
@@ -1117,6 +1357,7 @@ def test_crop_roi_stale_slider_events_do_not_write_live_params(
 
     controller._set_crop_roi_param("cropbox_lr_scale", "0.1")
     controller._set_crop_roi_param("cropbox_loss_weight", "0.1")
+    controller._set_crop_to_cropbox(True)
 
     assert writes == []
 
@@ -1457,17 +1698,17 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
-    assert rml.count('data-for="button : crop_enable_buttons"') == 2
-    assert rml.count('data-for="button : crop_settings_buttons"') == 2
-    assert rml.count('data-for="button : crop_object_buttons"') == 2
-    assert rml.count('data-for="button : crop_transform_buttons"') == 2
-    assert rml.count('data-for="button : crop_action_buttons"') == 2
+    assert rml.count('data-for="button : crop_enable_buttons"') == 3
+    assert rml.count('data-for="button : crop_settings_buttons"') == 3
+    assert rml.count('data-for="button : crop_object_buttons"') == 3
+    assert rml.count('data-for="button : crop_transform_buttons"') == 3
+    assert rml.count('data-for="button : crop_action_buttons"') == 3
     assert rml.count('data-for="button : align_action_buttons"') == 2
     assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
-    assert rml.count('class="toolbar-separator"') == 6
+    assert rml.count('class="toolbar-separator"') == 10
     assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
@@ -1652,10 +1893,10 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "width: 64dp;" in rcss
     assert "width: 24dp;" in rcss
     assert ".toolbar-vertical .icon-btn {\n    position: relative;\n    display: flex;" in rcss
-    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 117dp;\n    right: 10dp;" in rcss
-    assert "flex-direction: column;\n    align-items: center;\n    width: 104dp;" in rcss
+    assert ".viewport-gizmo-controls {\n    position: absolute;\n    top: 117dp;\n    right: 3.5dp;" in rcss
+    assert "flex-direction: column;\n    align-items: center;\n    width: 117dp;" in rcss
     assert ".viewport-gizmo-control-row {\n    display: flex;\n    flex-direction: row;" in rcss
-    assert "justify-content: center;\n    width: 104dp;\n    gap: 3dp;" in rcss
+    assert "justify-content: center;\n    width: 117dp;\n    gap: 3dp;" in rcss
     assert ".viewport-gizmo-controls .icon-btn {\n    position: relative;\n    display: flex;" in rcss
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")
@@ -1921,22 +2162,23 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     tab_rule = right_panel_rcss[tab_start:tab_end]
     assert "box-sizing: border-box;" in tab_rule
     assert "border-width: 1dp;" in tab_rule
-    assert "border-bottom-width: 2dp;" in tab_rule
-    assert "transition: none;" in tab_rule
+    assert "width: 25dp;" in tab_rule
+    assert "margin: 0 0 0 3dp;" in tab_rule
     assert "0.15s" not in tab_rule
 
-    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
-        'href="right_panel.rcss"'
-    )
-    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
-        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
-    )
+    assert 'href="panel_tabs.rcss"' not in right_panel_rml
+    assert 'loadBaseRCSS("rmlui/panel_tabs.rcss")' not in right_panel_cpp
+    active_geometry_start = right_panel_rcss.index(".tab.active {")
+    active_geometry_end = right_panel_rcss.index("\n}", active_geometry_start)
+    active_geometry = right_panel_rcss[active_geometry_start:active_geometry_end]
+    assert "width: 28dp;" in active_geometry
+    assert "margin-left: 0;" in active_geometry
+    assert "border-right-width: 0;" in active_geometry
 
     for token in (
         "right_panel.tab_border",
-        "right_panel.tab_bottom_border",
         "right_panel.tab_active_border",
-        "right_panel.tab_active_bottom_border",
+        "right_panel.tab_focus_border",
     ):
         assert f"@{{{token}}}" in right_panel_theme
         assert f'"{token}"' in resolver
@@ -1957,10 +2199,10 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     active_start = right_panel_theme.index(".tab.active {")
     active_end = right_panel_theme.index("\n}", active_start)
     active_rule = right_panel_theme[active_start:active_end]
-    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+    assert "background-color: transparent;" in active_rule
+    assert "border-color: @{right_panel.tab_active_border};" in active_rule
 
     assert "@{panel.body_decor};" in shell_theme
-    assert "@{chrome.right_panel_decor};" in right_panel_theme
     assert "@{panel.host_body_decor};" in panel_host_theme
     assert '{"panel.host_body_decor"' in resolver
 
@@ -2009,6 +2251,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
             "toolbar.reset_home": "Reset Home",
+            "input_settings.action.camera_set_home": "Set Home",
             "toolbar.asset_manager": "Projects",
             "menu.tools.plugin_marketplace": "Plugins",
             "toolbar.viewport_export": "Export",
@@ -2039,27 +2282,43 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
     primary_buttons = model.handle.record_updates["utility_primary_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
-    assert len(camera_buttons) == 4
+    assert len(camera_buttons) == 5
     assert [button["value"] for button in camera_buttons] == [
         "orbit",
         "trackball",
         "fpv",
-        "drone",
+        "drone", "walk",
     ]
     assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
+    assert not camera_buttons[4]["enabled"]
+    lf_stub.get_collision_state = lambda: {"has_collision": True}
+    assert module._UtilityToolbarController().snapshot()["camera_mode_buttons"][4]["enabled"]
     assert [button["action"] for button in primary_buttons] == [
         "home",
         "focus_selection",
+        "set_home",
         "reset_home",
     ]
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
-    assert primary_buttons[2]["icon_src"] == "../icon/home-reset.png"
-    assert primary_buttons[2]["tooltip_text"] == "Reset Home"
+    assert primary_buttons[2]["icon_src"] == "../icon/home-check.png"
+    assert primary_buttons[2]["action_id"] == "CAMERA_SET_HOME"
+    assert primary_buttons[3]["icon_src"] == "../icon/home-reset.png"
+    assert primary_buttons[3]["tooltip_text"] == "Reset Home"
     reset_home_calls = []
     monkeypatch.setattr(lf_stub, "reset_home", lambda: reset_home_calls.append(True), raising=False)
     module._UtilityToolbarController().dispatch("reset_home", "")
     assert reset_home_calls == [True]
+    assert primary_buttons[3]["action_id"] == "CAMERA_RESTORE_HOME"
+    # Shift-click on Home sets the home and Ctrl-click restores the default, as Shift+H and Ctrl+H.
+    home_calls = []
+    for name in ("go_home", "set_home", "reset_home"):
+        monkeypatch.setattr(lf_stub, name, lambda name=name: home_calls.append(name), raising=False)
+    controller = module._toolbar_controller
+    for modifiers in ({}, {"shift_key": True}, {"ctrl_key": True}):
+        event = SimpleNamespace(get_bool_parameter=lambda key, default=False, held=modifiers: held.get(key, default))
+        controller._on_toolbar_action(None, event, ["home", ""])
+    assert home_calls == ["go_home", "set_home", "reset_home"]
     assert [button["button_id"] for button in extra_buttons] == [
         "util-asset-manager",
         "util-viewport-export",
@@ -2104,6 +2363,14 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
     assert extra_by_id["util-viewport-export"]["selected"] is True
+
+    # Overlay availability changes must invalidate cached crop toolbar records.
+    normal_signature = controller._toolbar_signature(None)
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: True)
+    assert controller._toolbar_signature(None) != normal_signature
+    monkeypatch.setattr(lf_stub, "get_depth_view", lambda: False)
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "gt_comparison")
+    assert controller._toolbar_signature(None) != normal_signature
 
 
 def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module, monkeypatch):
@@ -2441,3 +2708,90 @@ def test_align_toolbar_buttons_follow_native_state(toolbar_module):
     assert buttons[1]["enabled"] is True
     assert buttons[3]["selected"] is False
     assert buttons[4]["selected"] is True
+
+
+@pytest.mark.parametrize("mode,error,handled", [("walk", "No Walk support below the camera", True),
+                                               ("orbit", "No Walk support below the camera", False),
+                                               ("walk", "", False)])
+def test_walk_entry_rejection_is_already_surfaced_and_other_errors_propagate(toolbar_module, monkeypatch, mode, error, handled):
+    module, *_ = toolbar_module
+    lf = sys.modules["lichtfeld"]
+    monkeypatch.setattr(lf, "set_camera_navigation_mode", MagicMock(side_effect=RuntimeError("rejected")), raising=False)
+    monkeypatch.setattr(lf, "get_collision_state", lambda: {"walk_error": error})
+    controller = module._UtilityToolbarController()
+    if handled:
+        controller.dispatch("set_camera_navigation_mode", mode)
+    else:
+        with pytest.raises(RuntimeError):
+            controller.dispatch("set_camera_navigation_mode", mode)
+    lf.set_camera_navigation_mode.assert_called_once_with(mode)
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch, accepted):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    applied_targets = []
+    cleared = {"count": 0}
+    points = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+
+    def apply(target):
+        applied_targets.append(target)
+        if accepted:
+            points.clear()
+        return accepted
+
+    def clear():
+        cleared["count"] += 1
+        points.clear()
+
+    lf_stub.ui.can_apply_scale_distance = lambda: len(points) == 2
+    lf_stub.ui.get_scale_distance_measured = lambda: 2.5 if len(points) == 2 else 0.0
+    lf_stub.ui.get_scale_distance_points = lambda: points
+    lf_stub.ui.apply_scale_distance = apply
+    lf_stub.ui.clear_scale_distance = clear
+
+    controller = module._ViewportToolbarController()
+    model = _DataModelStub()
+    controller.bind_model(model)
+    snapshot = controller._gizmo.snapshot()
+    assert snapshot["show_scale_distance_toolbar"] is False
+
+    tool_def = SimpleNamespace(
+        id="builtin.scale_distance",
+        icon="bounds",
+        label="Scale Distance",
+        submodes=(),
+        pivot_modes=(),
+        can_activate=lambda _context: True,
+    )
+    monkeypatch.setattr(module.ToolRegistry, "get", lambda tool_id: tool_def if tool_id == "builtin.scale_distance" else None)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "builtin.scale_distance")
+
+    snapshot = controller._gizmo.snapshot()
+    assert snapshot["show_scale_distance_toolbar"] is True
+
+    controller._sync_scale_distance()
+    get_target, set_target = model.bound_binds["scale_distance_target_str"]
+    assert get_target() == "2.5000"
+    assert model.bound_funcs["scale_distance_measured_str"]() == "2.5000"
+    assert model.bound_funcs["scale_distance_can_apply"]() is True
+
+    set_target("3.0")
+    model.bound_events["toolbar_action"](None, None, ["scale_distance_apply", ""])
+    assert applied_targets == [3.0]
+    assert get_target() == ("" if accepted else "3.0")
+    controller._sync_scale_distance()
+    assert get_target() == ("" if accepted else "3.0")
+    assert model.bound_funcs["scale_distance_can_apply"]() is (not accepted)
+
+    points[:] = [[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]]
+    controller._sync_scale_distance()
+    set_target("4.0")
+
+    model.bound_events["toolbar_action"](None, None, ["scale_distance_reset", ""])
+    assert cleared["count"] == 1
+    assert get_target() == ""
+    controller._sync_scale_distance()
+    assert model.bound_funcs["scale_distance_can_apply"]() is False
+    assert model.bound_funcs["scale_distance_can_reset"]() is False

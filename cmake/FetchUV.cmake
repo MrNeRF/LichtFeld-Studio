@@ -6,25 +6,30 @@
 # Downloads the uv Python package manager for bundling with portable builds.
 # uv is a fast, Rust-based Python package manager from Astral.
 
-set(UV_VERSION "0.10.2" CACHE STRING "UV version to download")
+set(UV_VERSION "0.13.5" CACHE STRING "UV version to download")
+# uv before 0.13.4 trusts the compromised eMudhra intermediate CAs, so an older
+# value left in an existing CMakeCache.txt must not keep shipping.
+if(UV_VERSION VERSION_LESS "0.13.4")
+    set(UV_VERSION "0.13.5" CACHE STRING "UV version to download" FORCE)
+endif()
 
 # Platform-specific download URL and binary name
 if(WIN32)
     set(UV_BINARY_NAME "uv.exe")
     set(UV_ARCHIVE_EXT ".zip")
     set(UV_PLATFORM "x86_64-pc-windows-msvc")
-    if(UV_VERSION STREQUAL "0.10.2")
-        set(UV_ARCHIVE_SHA256 "493ebbe0e06128d6ee4905e1ed5e2a433fb0f7cfc08b0eaca9fab4ca76778ae1")
+    if(UV_VERSION STREQUAL "0.13.5")
+        set(UV_ARCHIVE_SHA256 "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(UV_BINARY_NAME "uv")
     set(UV_ARCHIVE_EXT ".tar.gz")
     set(UV_PLATFORM "${CMAKE_HOST_SYSTEM_PROCESSOR}-unknown-linux-gnu")
-    if(UV_VERSION STREQUAL "0.10.2")
+    if(UV_VERSION STREQUAL "0.13.5")
         if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
-            set(UV_ARCHIVE_SHA256 "6aa4576c31f791c0b9d4739e256d07358d45e7535695287fec03cf6839e25512")
+            set(UV_ARCHIVE_SHA256 "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f")
         elseif(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64")
-            set(UV_ARCHIVE_SHA256 "4998f545234d52fc6f1280827d392f00a9278295050d59c53a776546dbf0124d")
+            set(UV_ARCHIVE_SHA256 "4bb69cf95ed13f23713bb7bc09f241896ea0c75b7c557e615a20604b82f9c403")
         endif()
     endif()
 else()
@@ -33,7 +38,7 @@ else()
 endif()
 
 set(UV_DOWNLOAD_URL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_PLATFORM}${UV_ARCHIVE_EXT}")
-set(UV_WORK_DIR "${CMAKE_BINARY_DIR}/_deps/uv")
+set(UV_WORK_DIR "${CMAKE_BINARY_DIR}/_deps/uv-${UV_VERSION}")
 set(UV_ARCHIVE_DIR "${LFS_DOWNLOAD_CACHE_DIR}")
 set(UV_ARCHIVE_PATH "${UV_ARCHIVE_DIR}/uv-${UV_VERSION}-${UV_PLATFORM}${UV_ARCHIVE_EXT}")
 set(UV_EXTRACT_DIR "${UV_WORK_DIR}/extract")
@@ -138,12 +143,8 @@ function(copy_uv_to_build)
     endif()
 
     set(_DEST_DIR "${CMAKE_BINARY_DIR}/bin")
-    if(EXISTS "${_DEST_DIR}/${UV_BINARY_NAME}")
-        return()
-    endif()
-
     file(MAKE_DIRECTORY "${_DEST_DIR}")
-    file(COPY "${UV_BINARY_PATH}" DESTINATION "${_DEST_DIR}")
+    file(COPY_FILE "${UV_BINARY_PATH}" "${_DEST_DIR}/${UV_BINARY_NAME}" ONLY_IF_DIFFERENT)
     message(STATUS "FetchUV: Copied uv to ${_DEST_DIR}/")
 endfunction()
 

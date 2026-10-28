@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lod_page_cache.hpp"
+#include "core/native_fs.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"

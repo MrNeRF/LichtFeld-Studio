@@ -760,6 +760,15 @@ namespace lfs::vis::gui {
         enabled_visible_ = visible;
         if (visible)
             content_dirty_ = true;
+        if (!isMounted() || !lfs::python::can_acquire_gil())
+            return;
+        const lfs::python::GilAcquire gil;
+        try {
+            if (nb::hasattr(panel_instance_, "on_visibility_changed"))
+                panel_instance_.attr("on_visibility_changed")(visible);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Panel visibility callback failed: {}", e.what());
+        }
     }
 
     void RmlPythonPanelAdapter::on_layout_changed() {

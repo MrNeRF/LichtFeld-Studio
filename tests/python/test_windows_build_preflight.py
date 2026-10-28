@@ -269,6 +269,21 @@ class WindowsBuildPreflightTests(unittest.TestCase):
         )
         self.assertEqual([source.resolve()], [item.file for item in selected])
 
+    def test_enclosing_repository_does_not_hide_fixture_sources(self) -> None:
+        enclosing = self.root / "enclosing"
+        root = enclosing / "fixture"
+        (root / ".git").mkdir(parents=True)
+        subprocess.run(["git", "init", "--quiet", str(enclosing)], check=True, capture_output=True)
+        (enclosing / ".gitignore").write_text("fixture/\n", encoding="utf-8")
+        source = root / "src" / "visualizer" / "widget.cpp"
+        source.parent.mkdir(parents=True)
+        source.write_text('#include "deleted.hpp"\n', encoding="utf-8")
+        commands = [preflight.CompileCommand(source.resolve(), root, "cl.exe /c widget.cpp")]
+        selected = preflight.select_compile_commands(
+            root, commands, {(source.parent / "deleted.hpp").resolve()}, False
+        )
+        self.assertEqual([source.resolve()], [item.file for item in selected])
+
     def test_force_all_selects_project_cxx_but_not_cuda_or_external(self) -> None:
         source = self.write("src/visualizer/widget.cpp", "void widget() {}\n")
         cuda = self.write("src/visualizer/widget.cu", "__global__ void widget() {}\n")

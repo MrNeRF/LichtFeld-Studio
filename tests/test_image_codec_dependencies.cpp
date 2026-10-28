@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/image_codecs.hpp"
+#include "core/native_fs.hpp"
+#include "long_path_test_support.hpp"
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -85,9 +87,61 @@ namespace {
         }
         ~TemporaryDirectory() {
             std::error_code error;
-            std::filesystem::remove_all(path, error);
+            lfs::core::native_fs::remove_all(path, error);
         }
     };
+    TEST(ProductionImagePaths, PngJpegAndTiffRoundTripLongUnicodePaths) {
+        namespace fs = lfs::core::native_fs;
+#ifdef LFS_REQUIRE_LONG_PATHS_DISABLED
+        ASSERT_EQ(fs::process_long_paths_enabled(), std::optional<bool>(false));
+#endif
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        constexpr int width = 19, height = 17, channels = 3;
+        std::vector<std::uint8_t> pixels(width * height * channels);
+        for (size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 17);
+        for (const auto* extension : {".png", ".jpg", ".tif"}) {
+            SCOPED_TRACE(extension);
+            auto path = directory / fs::path(u8"image_\u6e2c\u8a66");
+            path += extension;
+            std::string error;
+            if (std::string(extension) == ".png")
+                ASSERT_TRUE(codec::write_png(path, pixels.data(), width, height, channels, 8, 6, std::nullopt, error)) << error;
+            else if (std::string(extension) == ".jpg")
+                ASSERT_TRUE(codec::write_jpeg(path, pixels.data(), width, height, channels, 95, std::nullopt, error)) << error;
+            else
+                ASSERT_TRUE(codec::write_tiff(path, pixels.data(), width, height, channels, error)) << error;
+            codec::Image image;
+            ASSERT_TRUE(codec::decode(path, image, error)) << error;
+            EXPECT_EQ(image.width, width);
+            EXPECT_EQ(image.height, height);
+            EXPECT_EQ(image.channels, channels);
+            if (std::string(extension) != ".jpg")
+                EXPECT_EQ(image.data, pixels);
+        }
+    }
+    TEST(ProductionImagePaths, TiffErrorsNameTheCallersLongPath) {
+        namespace fs = lfs::core::native_fs;
+        TemporaryDirectory temporary;
+        auto directory = temporary.path;
+        for (int i = 0; i < 12; ++i)
+            directory /= fs::path(u8"directory_\u6e2c\u8a66_01234567890123456789");
+        fs::create_directories(directory);
+        const auto path = directory / "corrupt.tif";
+        {
+            std::ofstream file(fs::native_path(path), std::ios::binary);
+            file << "II*" << '\0' << "not a tiff directory";
+        }
+        codec::Image image;
+        std::string error;
+        ASSERT_FALSE(codec::decode(path, image, error));
+        EXPECT_EQ(error.find(R"(\\?\)"), std::string::npos) << error;
+    }
+
     TEST(ProductionPng, AllChannelsAndDepthsRoundTripWithCommentsAndUnicodePaths) {
         TemporaryDirectory temporary;
         for (int channels : {1, 2, 3, 4}) {
@@ -278,6 +332,61 @@ namespace {
         std::string error;
         EXPECT_FALSE(codec::write_jpeg("/dev/full", rgb.data(), 19, 17, 3, 95, std::nullopt, error, true));
         EXPECT_FALSE(error.empty());
+    }
+#endif
+
+    // Evaluation images and FLIP maps are written through these codecs. This executable has no long-path
+    // manifest, so on Windows a writer or reader that hands the OS the plain path fails beyond 259 units.
+    void round_trip_images_around_the_extended_path_switch(const std::filesystem::path& root) {
+        using namespace lfs::test::long_paths;
+        constexpr int width = 7, height = 5, channels = 3;
+        std::vector<std::uint8_t> pixels(std::size_t(width) * height * channels);
+        for (std::size_t i = 0; i < pixels.size(); ++i)
+            pixels[i] = static_cast<std::uint8_t>(i * 29);
+        for (const auto length : kLengthsAroundExtendedPathSwitch) {
+            for (const std::string extension : {".png", ".jpg", ".tif"}) {
+                SCOPED_TRACE(::testing::Message() << length << extension);
+                const auto path = with_native_length(root / unicode_folder() / std::to_string(length), length,
+                                                     lfs::core::utf8_to_path("bild 🙂" + extension));
+                ASSERT_EQ(path.native().size(), length);
+                std::error_code created;
+                lfs::core::native_fs::create_directories(path.parent_path(), created);
+                ASSERT_FALSE(created) << created.message();
+                std::string error;
+                const bool written =
+                    extension == ".png"   ? codec::write_png(path, pixels.data(), width, height, channels, 8, 6, std::nullopt, error)
+                    : extension == ".jpg" ? codec::write_jpeg(path, pixels.data(), width, height, channels, 95, std::nullopt, error)
+                                          : codec::write_tiff(path, pixels.data(), width, height, channels, error);
+                ASSERT_TRUE(written) << error;
+                codec::Probe probe;
+                ASSERT_TRUE(codec::probe(path, probe, error)) << error;
+                EXPECT_EQ(probe.width, width);
+                EXPECT_EQ(probe.height, height);
+                codec::Image decoded;
+                ASSERT_TRUE(codec::decode(path, decoded, error)) << error;
+                EXPECT_EQ(decoded.width, width);
+                if (extension != ".jpg")
+                    EXPECT_EQ(decoded.data, pixels);
+            }
+        }
+    }
+
+    TEST(ProductionCodecs, WritersAndReadersWorkOnBothSidesOfTheExtendedPathSwitch) {
+        lfs::test::long_paths::LongPathDirectory temporary;
+        round_trip_images_around_the_extended_path_switch(temporary.path);
+    }
+
+#ifdef _WIN32
+    TEST(ProductionCodecs, WritersAndReadersWorkThroughANetworkShare) {
+        const auto share = lfs::test::long_paths::network_share();
+        if (!share) {
+            if (lfs::test::long_paths::network_share_required()) {
+                FAIL() << "LFS_TEST_UNC_ROOT and LFS_TEST_UNC_LOCAL must name a reachable network share";
+            }
+            GTEST_SKIP() << "No network share provisioned (LFS_TEST_UNC_ROOT, LFS_TEST_UNC_LOCAL)";
+        }
+        lfs::test::long_paths::LongPathDirectory run(share->local);
+        round_trip_images_around_the_extended_path_switch(share->network / run.path.filename());
     }
 #endif
 } // namespace

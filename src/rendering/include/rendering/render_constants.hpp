@@ -17,6 +17,34 @@ namespace lfs::rendering {
         ThreeDgut = 3,
     };
 
+    enum class GaussianTransparencyMode : int {
+        AlphaBlend = 0,
+        Stochastic = 1,
+        SteadySplats = 2,
+    };
+
+    inline constexpr int DEFAULT_STOCHASTIC_REFINEMENT_FRAMES = 16;
+
+    inline bool isGaussianTransparencyModeId(const std::string_view id) {
+        return id == "alpha_blend" || id == "stochastic" || id == "steady_splats";
+    }
+
+    inline std::string_view gaussianTransparencyModeId(const GaussianTransparencyMode mode) {
+        switch (mode) {
+        case GaussianTransparencyMode::Stochastic: return "stochastic";
+        case GaussianTransparencyMode::SteadySplats: return "steady_splats";
+        default: return "alpha_blend";
+        }
+    }
+
+    inline GaussianTransparencyMode gaussianTransparencyModeFromId(const std::string_view id) {
+        if (id == "stochastic")
+            return GaussianTransparencyMode::Stochastic;
+        if (id == "steady_splats")
+            return GaussianTransparencyMode::SteadySplats;
+        return GaussianTransparencyMode::AlphaBlend;
+    }
+
     enum class DepthVisualizationMode : int {
         Palette = 0,
         Grayscale = 1,

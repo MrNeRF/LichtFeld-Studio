@@ -6,6 +6,17 @@
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
+    <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden">
+        <div class="gamepad-indicator-heading">
+            <span class="gamepad-indicator-dot"></span>
+            <span id="gamepad-indicator-label" class="gamepad-indicator-label">@tr:preferences.input_gamepad</span>
+            <span id="gamepad-indicator-mode" class="gamepad-indicator-mode"></span>
+            <span id="gamepad-indicator-panel" class="gamepad-indicator-panel hidden"></span>
+        </div>
+        <div id="gamepad-indicator-status" class="gamepad-indicator-status hidden"></div>
+    </div>
+    <div id="comparison-name-left" class="comparison-name hidden"></div>
+    <div id="comparison-name-right" class="comparison-name hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
     <div id="empty-state-hint" class="empty-state-hint hidden" data-class-hidden="!show_empty_state">
         <img class="empty-state-icon" src="../icon/archive.png" />
@@ -130,7 +141,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -173,6 +184,32 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                     <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                </div>
+            </div>
+            <div id="primary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar hidden"
+                 data-class-hidden="!show_scale_distance_toolbar">
+                <span class="scale-distance-title">@tr:toolbar.scale_distance_tool</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_measured</span>
+                <span class="scale-distance-value">{{scale_distance_measured_str}}</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_set</span>
+                <input type="text" class="number-input scale-distance-input" id="primary-scale-distance-target" data-value="scale_distance_target_str" />
+                <div class="icon-btn"
+                     id="primary-scale-distance-confirm"
+                     title="@tr:toolbar.scale_distance_apply"
+                     data-attrif-disabled="!scale_distance_can_apply"
+                     data-class-disabled="!scale_distance_can_apply"
+                     data-event-click="toolbar_action('scale_distance_apply', '')">
+                    <img src="../icon/check.png" />
+                </div>
+                <div class="icon-btn"
+                     id="primary-scale-distance-reset"
+                     title="@tr:toolbar.scale_distance_reset"
+                     data-attrif-disabled="!scale_distance_can_reset"
+                     data-class-disabled="!scale_distance_can_reset"
+                     data-event-click="toolbar_action('scale_distance_reset', '')">
+                    <img src="../icon/reset.png" />
                 </div>
             </div>
             <div id="primary-crop-toolbar" class="toolbar-container hidden"
@@ -274,6 +311,31 @@
                                data-value="cropbox_loss_weight"
                                data-attrif-disabled="!crop_roi_params_available" />
                         <span class="slider-value">{{cropbox_loss_weight}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.cropbox_growth_inside">
+                    <span class="setting-row__label-col">{{label_cropbox_growth_inside}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="primary-cropbox-growth-inside"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="1"
+                               step="0.05"
+                               data-value="cropbox_growth_inside"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.crop_to_cropbox">
+                    <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="primary-crop-to-cropbox"
+                               type="checkbox"
+                               data-checked="crop_to_cropbox"
+                               data-attrif-disabled="!crop_roi_params_available" />
                     </div>
                 </div>
             </div>
@@ -390,7 +452,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="secondary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -433,6 +495,32 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                     <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                </div>
+            </div>
+            <div id="secondary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar hidden"
+                 data-class-hidden="!show_scale_distance_toolbar">
+                <span class="scale-distance-title">@tr:toolbar.scale_distance_tool</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_measured</span>
+                <span class="scale-distance-value">{{scale_distance_measured_str}}</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_set</span>
+                <input type="text" class="number-input scale-distance-input" id="secondary-scale-distance-target" data-value="scale_distance_target_str" />
+                <div class="icon-btn"
+                     id="secondary-scale-distance-confirm"
+                     title="@tr:toolbar.scale_distance_apply"
+                     data-attrif-disabled="!scale_distance_can_apply"
+                     data-class-disabled="!scale_distance_can_apply"
+                     data-event-click="toolbar_action('scale_distance_apply', '')">
+                    <img src="../icon/check.png" />
+                </div>
+                <div class="icon-btn"
+                     id="secondary-scale-distance-reset"
+                     title="@tr:toolbar.scale_distance_reset"
+                     data-attrif-disabled="!scale_distance_can_reset"
+                     data-class-disabled="!scale_distance_can_reset"
+                     data-event-click="toolbar_action('scale_distance_reset', '')">
+                    <img src="../icon/reset.png" />
                 </div>
             </div>
             <div id="secondary-crop-toolbar" class="toolbar-container hidden"
@@ -534,6 +622,31 @@
                                data-value="cropbox_loss_weight"
                                data-attrif-disabled="!crop_roi_params_available" />
                         <span class="slider-value">{{cropbox_loss_weight}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.cropbox_growth_inside">
+                    <span class="setting-row__label-col">{{label_cropbox_growth_inside}}</span>
+                    <div class="setting-row__control-col setting-row__control-col--slider">
+                        <input id="secondary-cropbox-growth-inside"
+                               type="range"
+                               class="setting-slider"
+                               min="0"
+                               max="1"
+                               step="0.05"
+                               data-value="cropbox_growth_inside"
+                               data-attrif-disabled="!crop_roi_params_available" />
+                        <span class="slider-value">{{cropbox_growth_inside_percent}}</span>
+                    </div>
+                </div>
+                <div class="setting-row crop-roi-setting-row"
+                     data-tooltip="tooltip.crop_to_cropbox">
+                    <span class="setting-row__label-col">{{label_crop_to_cropbox}}</span>
+                    <div class="setting-row__control-col">
+                        <input id="secondary-crop-to-cropbox"
+                               type="checkbox"
+                               data-checked="crop_to_cropbox"
+                               data-attrif-disabled="!crop_roi_params_available" />
                     </div>
                 </div>
             </div>
@@ -908,6 +1021,25 @@
     <div id="transform-block" class="viewport-transform-overlay hidden">
         <div class="viewport-transform-panel" data-tooltip="tooltip.transform_panel">
             <div class="viewport-transform-row">
+                <div class="viewport-transform-tool-group" data-if="show_crop_numeric_controls">
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_enable_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_settings_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                </div>
+
                 <div class="viewport-transform-tool-group" data-if="transform_show_actions">
                     <button class="icon-btn viewport-transform-option viewport-transform-tool"
                             data-for="button : transform_tool_buttons"
@@ -953,23 +1085,53 @@
                     </div>
                 </div>
 
+                <div class="viewport-transform-tool-group" data-if="transform_is_crop">
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_object_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                </div>
+                <div class="viewport-transform-option-group" data-if="transform_is_crop">
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_transform_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
+                </div>
+
                 <div class="viewport-transform-fields">
                     <div class="viewport-transform-group" data-if="transform_show_translate" data-tooltip="tooltip.transform_position">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
+                                <div class="transform-drag-handle" id="transform-pos-x-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
+                                <div class="transform-drag-handle" id="transform-pos-y-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_position_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
+                                <div class="transform-drag-handle" id="transform-pos-z-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', 1)">+</button>
                         </div>
@@ -978,19 +1140,28 @@
                     <div class="viewport-transform-group" data-if="transform_show_rotate" data-tooltip="tooltip.transform_rotation">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
+                                <div class="transform-drag-handle" id="transform-rot-x-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
+                                <div class="transform-drag-handle" id="transform-rot-y-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_rotation_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
+                                <div class="transform-drag-handle" id="transform-rot-z-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', 1)">+</button>
                         </div>
@@ -999,29 +1170,52 @@
                     <div class="viewport-transform-group" data-if="transform_show_scale" data-tooltip="tooltip.transform_scale">
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_uniform">
                             <span class="viewport-transform-axis-label">U</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
+                                <div class="transform-drag-handle" id="transform-scale-u-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis viewport-transform-axis--split" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">X</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
+                                <div class="transform-drag-handle" id="transform-scale-x-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">Y</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
+                                <div class="transform-drag-handle" id="transform-scale-y-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', 1)">+</button>
                         </div>
                         <div class="viewport-transform-axis" data-tooltip="tooltip.transform_scale_axis">
                             <span class="viewport-transform-axis-label">Z</span>
-                            <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
+                            <div class="transform-drag-field">
+                                <input data-attrif-disabled="!transform_editable" type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
+                                <div class="transform-drag-handle" id="transform-scale-z-drag" data-class-hidden="!transform_editable"></div>
+                            </div>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', -1)">-</button>
                             <button data-attrif-disabled="!transform_editable" class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', 1)">+</button>
                         </div>
                     </div>
+                </div>
+
+                <div class="viewport-transform-actions" data-if="transform_is_crop">
+                    <button class="icon-btn viewport-transform-option"
+                            data-for="button : crop_action_buttons"
+                            data-class-selected="button.selected"
+                            data-attr-title="button.tooltip_text"
+                            data-attrif-disabled="!button.enabled"
+                            data-event-click="toolbar_action(button.action, button.value)">
+                        <img data-attr-src="button.icon_src" />
+                    </button>
                 </div>
 
                 <div class="viewport-transform-actions" data-if="transform_show_actions">

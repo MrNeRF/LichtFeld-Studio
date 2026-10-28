@@ -4,6 +4,8 @@
 
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -128,12 +130,12 @@ namespace lfs::vis::gui {
         }
 
         std::filesystem::path resolveDocumentPath(const std::string& rml_path) {
-            const auto requested_path = std::filesystem::path(rml_path);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path);
             return requested_path.is_absolute() ? requested_path : lfs::vis::getAssetPath(rml_path);
         }
 
         bool isThemeProvidedStaticStylesheet(const std::filesystem::path& rcss_path) {
-            const auto filename = rcss_path.filename().string();
+            const auto filename = lfs::core::path_to_utf8(rcss_path.filename());
             return filename == "components.rcss" || filename == "font_fallback.rcss";
         }
 
@@ -145,14 +147,14 @@ namespace lfs::vis::gui {
 
             const auto normalized_path = rcss_path.lexically_normal();
             std::error_code ec;
-            if (!std::filesystem::exists(normalized_path, ec))
+            if (!lfs::core::native_fs::exists(normalized_path, ec))
                 return;
 
-            const std::string key = normalized_path.generic_string();
+            const std::string key = lfs::core::path_to_generic_utf8(normalized_path);
             if (!loaded_paths.insert(key).second)
                 return;
 
-            const std::string rcss = rml_theme::loadBaseRCSS(normalized_path.string());
+            const std::string rcss = rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(normalized_path));
             if (rcss.empty())
                 return;
 
@@ -238,10 +240,10 @@ namespace lfs::vis::gui {
             auto theme_path = resolveDocumentPath(rml_path_);
             theme_path.replace_extension(".theme.rcss");
             std::error_code ec;
-            if (std::filesystem::exists(theme_path, ec)) {
+            if (lfs::core::native_fs::exists(theme_path, ec)) {
                 if (!panel_theme.empty())
                     panel_theme += "\n";
-                panel_theme += rml_theme::loadBaseRCSS(theme_path.string());
+                panel_theme += rml_theme::loadBaseRCSS(lfs::core::path_to_utf8(theme_path));
             }
         } catch (const std::exception&) {
             // Sibling theme files are optional; missing ones should not produce startup noise.
@@ -370,7 +372,7 @@ namespace lfs::vis::gui {
         if (document_)
             return true;
         try {
-            const auto requested_path = std::filesystem::path(rml_path_);
+            const auto requested_path = lfs::core::utf8_to_path(rml_path_);
             const auto full_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(rml_path_);
@@ -1268,11 +1270,16 @@ namespace lfs::vis::gui {
                 rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
                 had_input |= rml_input::cancelFocusedElement(*rml_context_);
             } else {
+                // Enter ends an edit in a single-line input that already had focus.
+                // An input this key press focused (a scrub field opening its
+                // editor) stays open.
+                auto* const focused_before = rml_context_->GetFocusElement();
                 had_input |= rml_input::processKeyboardEvent(*rml_context_, event, text_input_handler);
                 if (!composing && event.kind == FrameInputEventKind::KeyDown &&
                     (event.scancode == SDL_SCANCODE_RETURN || event.scancode == SDL_SCANCODE_KP_ENTER) &&
-                    rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
-                    rml_context_->GetFocusElement()->Blur();
+                    rml_context_->GetFocusElement() == focused_before &&
+                    rml_input::isSingleLineTextInput(focused_before)) {
+                    focused_before->Blur();
                 }
             }
             sync_text_focus();

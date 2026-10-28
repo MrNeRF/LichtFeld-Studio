@@ -285,9 +285,9 @@ namespace lfs::vis {
         [[nodiscard]] LFS_VIS_API bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         // Dynamic rendering must be closed while external-image layout barriers
         // are recorded. These helpers bracket that interop window.
-        [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
-        [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
-                                                  const Frame& frame);
+        [[nodiscard]] LFS_VIS_API bool finishActiveRendering(VkCommandBuffer command_buffer);
+        [[nodiscard]] LFS_VIS_API bool restartActiveRendering(VkCommandBuffer command_buffer,
+                                                              const Frame& frame);
         [[nodiscard]] LFS_VIS_API bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         void requestSceneCapture() noexcept {
@@ -311,7 +311,7 @@ namespace lfs::vis {
         [[nodiscard]] std::uint64_t lastFrameSubmitSerial() const;
         // Serial of the most recent *successful* graphics frame vkQueueSubmit.
         // Used by interop layout-commit rollback when endFrame submit fails.
-        [[nodiscard]] std::uint64_t lastSuccessfulFrameSubmitSerial() const;
+        [[nodiscard]] LFS_VIS_API std::uint64_t lastSuccessfulFrameSubmitSerial() const;
         // Immediate vkQueueSubmit count for the current GUI frame (proof counter for #1575).
         // Accounting starts at resetImmediateSubmitsThisFrame (prepareFrame) and is logged
         // at endFrame; beginFrame must not clear it because prepare runs first.
@@ -339,7 +339,7 @@ namespace lfs::vis {
         // is already covered by a queued or submitted wait on the same semaphore
         // is treated as already satisfied (success, no extra submit wait). Callers
         // that commit layout optimistically must not do so on false.
-        [[nodiscard]] bool addFrameTimelineWait(
+        [[nodiscard]] LFS_VIS_API bool addFrameTimelineWait(
             VkSemaphore semaphore,
             std::uint64_t value,
             VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);

@@ -25,6 +25,17 @@ namespace lfs::rendering::pcraster {
         bool desaturate;
     };
 
+    // Extruded polygon: the outline (x, y pairs) in local XY over |z| <= half_depth.
+    inline constexpr int kMaxCropPolygonVertices = 64;
+    struct CropPolygon {
+        float to_local[16];
+        float vertices[2 * kMaxCropPolygonVertices];
+        int count;
+        float half_depth;
+        bool inverse;
+        bool desaturate;
+    };
+
     struct LaunchParams {
         const float* positions;
         const float* colors;
@@ -32,6 +43,10 @@ namespace lfs::rendering::pcraster {
         const std::int32_t* transform_indices;
         const std::uint8_t* visibility_mask;
         const bool* deleted_mask;
+        const std::uint8_t* selection_mask;
+        const std::uint8_t* preview_mask;
+        const float* selection_colors; // [258, 4], matches PointCloudOverlayState
+        bool preview_additive;
         std::size_t n_points;
         int n_transforms;
         int n_visibility;
@@ -39,6 +54,8 @@ namespace lfs::rendering::pcraster {
         CropBox crop;
         bool has_crop_ellipsoid;
         CropEllipsoid crop_ellipsoid;
+        bool has_crop_polygon;
+        CropPolygon crop_polygon;
         float view[16];
         float view_proj[16];
         int width;
