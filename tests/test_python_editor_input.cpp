@@ -259,6 +259,51 @@ namespace {
         EXPECT_NE(terminal.getAllText().find("line 20"), std::string::npos);
     }
 
+    TEST(PythonConsoleInputTest, NarrowingAndWideningKeepsALongLineWhole) {
+        // Output written before the docked console's first layout narrows it from 80 columns.
+        lfs::vis::terminal::TerminalWidget terminal(80, 24);
+        std::string line;
+        for (int i = 0; i < 68; ++i)
+            line += static_cast<char>('a' + i % 26);
+        terminal.write(line + "\r\nnext\r\n");
+        terminal.resize(49, 16);
+        EXPECT_EQ(terminal.getAllText(), line + "\nnext");
+        EXPECT_EQ(terminal.snapshot().visible_rows[1].cells[0].text, line.substr(49, 1));
+        terminal.resize(80, 24);
+        EXPECT_EQ(terminal.getAllText(), line + "\nnext");
+    }
+
+    TEST(PythonConsoleInputTest, ResizingKeepsWrappedScrollbackLinesWhole) {
+        // Growing the view pops rows back from scrollback one at a time, without libvterm's line info.
+        lfs::vis::terminal::TerminalWidget terminal(10, 3);
+        const std::string line = "abcdefghij0123456789ABCDE";
+        terminal.write(line + "\r\na\r\nb\r\nc\r\nd\r\n");
+        ASSERT_EQ(terminal.getAllText(), line + "\na\nb\nc\nd");
+        constexpr int sizes[][2] = {{10, 12}, {30, 12}, {6, 2}, {40, 20}};
+        for (const auto& size : sizes) {
+            terminal.resize(size[0], size[1]);
+            EXPECT_EQ(terminal.getAllText(), line + "\na\nb\nc\nd") << size[0] << "x" << size[1];
+        }
+    }
+
+    TEST(PythonConsoleInputTest, ResizingKeepsWrappedLinesAndTheCursorInPlace) {
+        // libvterm 0.3.3 alone reads above the screen for a line that starts in scrollback, moves a cursor
+        // below a full row onto that row, aborts when the cursor ends a wrapped line that no longer fits,
+        // and keeps only the first row of such a line.
+        lfs::vis::terminal::TerminalWidget terminal(10, 3);
+        terminal.write("abcdefghij0123456789ABCDE\r\nz\r\n");
+        terminal.resize(20, 5);
+        EXPECT_EQ(terminal.getAllText(), "abcdefghij0123456789ABCDE\nz");
+        terminal.write("ABCDEFGHIJKLMNOPQRST\r\n");
+        terminal.resize(8, 5);
+        terminal.write("end\r\n" + std::string(31, 'x'));
+        terminal.resize(8, 2);
+        terminal.resize(6, 2);
+        terminal.write("!");
+        EXPECT_EQ(terminal.getAllText(),
+                  "abcdefghij0123456789ABCDE\nz\nABCDEFGHIJKLMNOPQRST\nend\n" + std::string(31, 'x') + "!");
+    }
+
     TEST(PythonConsoleInputTest, AllTextJoinsRowsWrappedAtTheTerminalWidth) {
         // MCP editor output parses this text, so a long line must not gain newlines at the console width.
         lfs::vis::terminal::TerminalWidget terminal(6, 2);
