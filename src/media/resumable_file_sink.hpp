@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "jpeg_metadata.hpp"
+#include "image_metadata.hpp"
 #include "media/media_ingest.hpp"
 #include "media_backends.hpp"
 #include <nlohmann/json.hpp>
@@ -32,6 +32,6 @@ namespace lfs::media::detail {
         bool active_ = false;
         int applied_rotation_ = 0;
         std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
-        std::shared_ptr<const JpegMetadata> jpeg_metadata_;
+        std::shared_ptr<const EmbeddedImageMetadata> embedded_metadata_;
     };
 } // namespace lfs::media::detail

@@ -10,8 +10,8 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "decoded_video_frame_ffmpeg.hpp"
+#include "image_metadata.hpp"
 #include "io/video/probed_stream_rewind.hpp"
-#include "jpeg_metadata.hpp"
 #include "linear_frame.hpp"
 #include "media/file_frame_sink.hpp"
 #include "media/frame_color_range.hpp"
@@ -1028,8 +1028,8 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (params.embed_source_metadata && (!params.preserve_source_metadata || params.format != ImageFormat::JPG)) {
-                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (params.embed_source_metadata && (!params.preserve_source_metadata || (params.format != ImageFormat::JPG && params.format != ImageFormat::PNG))) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG or PNG file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
             }
@@ -1793,7 +1793,7 @@ namespace lfs::io {
                              frame_selection_reason, video_fps, target_fps, estimated_total, total_frames);
                 }
 
-                std::optional<media::detail::JpegMetadata> jpeg_metadata;
+                std::optional<media::detail::EmbeddedImageMetadata> jpeg_metadata;
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
                         return;
@@ -1816,7 +1816,7 @@ namespace lfs::io {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
                             if (params.embed_source_metadata) {
                                 if (!jpeg_metadata) {
-                                    auto prepared = media::detail::prepareJpegMetadata(*session.source_metadata, session.applied_rotation);
+                                    auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG);
                                     if (!prepared)
                                         check_sink(media::SinkResult::failure(prepared.error()));
                                     jpeg_metadata = std::move(*prepared);
@@ -2617,7 +2617,7 @@ namespace lfs::io {
                         nlohmann::json root;
                         root["schema_version"] = 2;
                         if (params.embed_source_metadata)
-                            root["embedded_metadata_policy"] = media::detail::jpeg_metadata_policy;
+                            root["embedded_metadata_policy"] = media::detail::embeddedMetadataPolicy(params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG);
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);

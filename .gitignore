@@ -114,3 +114,5 @@ src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 !tests/hip/test_native_runtime.py
 !tests/hip/test_tensor_operations.py
 !src/core/tensor/backend/hip/prepare_pointwise.py
+
+!tests/media/png_metadata_fixture.py
