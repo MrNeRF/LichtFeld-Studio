@@ -3,8 +3,13 @@ on:
   push:
     branches: [ diag/unc-rename ]
 jobs:
-  probe:
+  watch:
     runs-on: windows-2022
+    timeout-minutes: 230
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [ 1, 2 ]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -13,40 +18,56 @@ jobs:
           ref: master
           path: lfs
           sparse-checkout: src/core/include
-      - name: Provision a network share for path tests
+      - name: Build the probe
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include one.cpp /Fe:one.exe
+      - name: Watch deep share renames over time
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' | Format-List LongPathsEnabled, NtfsDisable8dot3NameCreation
           $local = Join-Path $env:RUNNER_TEMP 'lfs-unc-share'
           New-Item -ItemType Directory -Force -Path $local | Out-Null
           Start-Service LanmanServer
           New-SmbShare -Name 'lfs-unc-tests' -Path $local -FullAccess "$env:USERDOMAIN\$env:USERNAME" | Out-Null
-          "PROBE_UNC=\\localhost\lfs-unc-tests" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Build and run the rename probe
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include sweep.cpp /Fe:sweep.exe
-          if errorlevel 1 exit /b 1
-          cl /nologo /std:c++latest /EHsc /utf-8 /permissive- /O2 /MD /Ilfs\src\core\include probe2.cpp /Fe:probe2.exe
-          if errorlevel 1 exit /b 1
-          echo == length sweep, fresh session
-          set PROBE_ROOT=%PROBE_UNC%
-          sweep.exe
-          echo == probe 2 without FileRenameInfoEx
-          set PROBE_ROOT=%PROBE_UNC%\release
-          set PROBE_NOPOSIX=1
-          probe2.exe
-          echo == probe 2 verbatim
-          set PROBE_NOPOSIX=
-          set PROBE_ROOT=%PROBE_UNC%\debug
-          probe2.exe
-          echo == length sweep after FileRenameInfoEx
-          set PROBE_ROOT=%PROBE_UNC%\later
-          sweep.exe
-      - name: Client and server SMB settings
-        shell: pwsh
-        run: |
-          Get-SmbClientConfiguration | Format-List *
-          Get-SmbServerConfiguration | Format-List EnableLeasing, EnableOplocks, EnableStrictNameChecking, EncryptData
+          $share = '\\localhost\lfs-unc-tests'
+          $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+          "booted $boot"
+          function Snapshot {
+            $mp = Get-MpComputerStatus
+            $filters = (fltmc filters | Select-Object -Skip 3 | ForEach-Object { ($_ -split '\s+')[0] }) -join ','
+            $hotfix = (Get-HotFix | Sort-Object HotFixID | ForEach-Object HotFixID) -join ','
+            $lp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem').LongPathsEnabled
+            "mp=$($mp.AMProductVersion)/$($mp.AMEngineVersion)/$($mp.AntivirusSignatureVersion) rtp=$($mp.RealTimeProtectionEnabled) lp=$lp filters=$filters hotfix=$hotfix"
+          }
+          $last = ''
+          $failed = $false
+          for ($i = 0; $i -lt 21; $i++) {
+            $snap = Snapshot
+            if ($snap -ne $last) { "[{0:HH:mm}] {1}" -f (Get-Date), $snap; $last = $snap }
+            $line = & .\one.exe "$share\i$i" 12
+            $code = $LASTEXITCODE
+            $short = & .\one.exe "$share\s$i" 0
+            "[{0:HH:mm}] uptime={1:N0}min deep: {2} | short: {3}" -f (Get-Date), ((Get-Date) - $boot).TotalMinutes, $line, $short
+            if ($code -ne 0 -and -not $failed) {
+              $failed = $true
+              "== first failure, diagnostics"
+              & .\one.exe "$local\l$i" 12
+              Get-WinEvent -LogName System -MaxEvents 30 | Where-Object { $_.TimeCreated -gt $boot } | Format-Table TimeCreated, ProviderName, Id, Message -AutoSize -Wrap | Out-String -Width 300
+              Get-WinEvent -LogName 'Microsoft-Windows-SMBServer/Operational' -MaxEvents 10 -ErrorAction SilentlyContinue | Format-Table TimeCreated, Id, Message -Wrap | Out-String -Width 300
+              Get-WinEvent -LogName 'Microsoft-Windows-SmbClient/Connectivity' -MaxEvents 10 -ErrorAction SilentlyContinue | Format-Table TimeCreated, Id, Message -Wrap | Out-String -Width 300
+              Get-ScheduledTask | Where-Object { $_.State -eq 'Running' } | Format-Table TaskPath, TaskName | Out-String -Width 300
+              Get-Process | Sort-Object StartTime -Descending -ErrorAction SilentlyContinue | Select-Object -First 15 Name, StartTime | Format-Table | Out-String
+              Add-MpPreference -ExclusionPath $local
+              "exclusion: " + (& .\one.exe "$share\x$i" 12)
+              Remove-MpPreference -ExclusionPath $local
+              Set-MpPreference -DisableRealtimeMonitoring $true
+              "rtp off: " + (& .\one.exe "$share\r$i" 12)
+              Set-MpPreference -DisableRealtimeMonitoring $false
+              Set-SmbServerConfiguration -EnableLeasing $false -Force
+              "leasing off: " + (& .\one.exe "$share\n$i" 12)
+              Set-SmbServerConfiguration -EnableLeasing $true -Force
+              foreach ($d in 6, 8, 9, 10, 11) { "depth $d: " + (& .\one.exe "$share\d$i-$d" $d) }
+            }
+            if ($i -lt 20) { Start-Sleep -Seconds 600 }
+          }
