@@ -67,10 +67,9 @@ namespace lfs::rendering {
     // mapping (vulkan_wait.cpp) but keeps `detail` VERBATIM from the call site.
     // Duplicates the small switch so this header never includes vulkan_wait.hpp
     // (wait.cpp includes this header).
-    [[noreturn]] inline void throw_vk_result(const VkResult result,
-                                             const std::string_view /*operation*/,
-                                             std::string detail,
-                                             const lfs::core::SourceSite site) {
+    [[nodiscard]] inline lfs::Error make_vk_result_error(const VkResult result,
+                                                         std::string detail,
+                                                         const lfs::core::SourceSite site) {
         lfs::ErrorCode code = lfs::ErrorCode::Internal;
         lfs::Severity severity = lfs::Severity::Error;
         lfs::Retryability retry = lfs::Retryability::NotRetryable;
@@ -106,7 +105,7 @@ namespace lfs::rendering {
             break;
         }
 
-        throw_vk_error(lfs::make_error(lfs::ErrorInit{
+        return lfs::make_error(lfs::ErrorInit{
             .code = code,
             .domain = lfs::ErrorDomain::Vulkan,
             .severity = severity,
@@ -119,7 +118,14 @@ namespace lfs::rendering {
                 .code = static_cast<std::int64_t>(result),
                 .name = vkResultToString(result),
             },
-        }));
+        });
+    }
+
+    [[noreturn]] inline void throw_vk_result(const VkResult result,
+                                             const std::string_view /*operation*/,
+                                             std::string detail,
+                                             const lfs::core::SourceSite site) {
+        throw_vk_error(make_vk_result_error(result, std::move(detail), site));
     }
 
     [[nodiscard]] inline const char* vkResultToString(const VkResult result) noexcept {

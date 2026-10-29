@@ -67,6 +67,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
+        # User shader effects
+        shaders/slang_compiler.cpp
+
         # Preferences and theme system
         preferences.cpp
         theme/theme.cpp
@@ -549,3 +552,8 @@ file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES
 if (VISUALIZER_RESOURCE_FILES)
     add_custom_target(visualizer_resources SOURCES ${VISUALIZER_RESOURCE_FILES})
 endif ()
+
+# Runtime effect compiler; Slang headers stay private to the implementation.
+target_link_libraries(lfs_visualizer PRIVATE slang::slang)
+target_include_directories(lfs_visualizer PRIVATE "${CMAKE_BINARY_DIR}/generated/user_shaders")
+add_dependencies(lfs_visualizer lfs_user_shader_ir)

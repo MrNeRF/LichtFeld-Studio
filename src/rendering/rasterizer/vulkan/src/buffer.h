@@ -192,6 +192,9 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
+    // Custom effect 3DGUT draws only: effected world center and opacity plus
+    // three inverse scale/rotation rows per render slot, (N, 4, 4).
+    Buffer<float> custom_geometry;
     // 2-bit payload (DIM|NONSELECTABLE), one byte per splat. Byte-address
     // access rounds the descriptor up to a whole 32-bit word. Projection clears
     // the words before atomically ORing each byte; raster-only refreshes reuse

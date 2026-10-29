@@ -187,6 +187,16 @@ namespace lfs::rendering {
         // Fence lifecycle (reset/pre-wait row + post-submit fence path)
         PFN_vkResetFences reset_fences = nullptr;
 
+        // VkSplat compute program construction and destruction
+        PFN_vkCreateShaderModule create_shader_module = nullptr;
+        PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
+        PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+        PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+        PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
+        PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+        PFN_vkCreateComputePipelines create_compute_pipelines = nullptr;
+        PFN_vkDestroyPipeline destroy_pipeline = nullptr;
+
         // Production symbols. Safe to call once; returns a fully filled table.
         [[nodiscard]] static VulkanDispatch real() noexcept;
     };

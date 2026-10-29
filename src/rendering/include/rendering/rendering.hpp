@@ -134,6 +134,36 @@ namespace lfs::rendering {
         bool operator==(const GaussianRevealState&) const = default;
     };
 
+    // Inputs of a custom element effect draw. The renderer's published program
+    // set holds the code. An element runs the global binding, then its node's,
+    // then the reveal binding while a reveal is set.
+    struct GaussianCustomEffectState {
+        static constexpr std::uint32_t kNone = 0xffffffffu;
+        using Parameters = std::array<glm::vec4, 16>; // parameter slots of one binding
+        struct Binding {
+            Parameters values{};
+            std::uint32_t effect = 0; // the effect of the program set it runs
+            bool operator==(const Binding&) const = default;
+        };
+        struct Object {
+            std::uint32_t binding = kNone;
+            std::uint32_t id = 0; // dense object id the effect sees
+            bool operator==(const Object&) const = default;
+        };
+        float time = 0.0f;          // timeline seconds
+        glm::vec3 bounds_min{0.0f}; // original visible geometry
+        glm::vec3 bounds_max{0.0f};
+        std::vector<Binding> bindings;
+        std::shared_ptr<const std::vector<Binding>> shared_bindings;
+        [[nodiscard]] std::span<const Binding> bindingData() const { return shared_bindings ? std::span<const Binding>(*shared_bindings) : std::span<const Binding>(bindings); }
+        std::vector<Object> objects; // per scene node slot
+        std::uint32_t global_binding = kNone;
+        std::uint32_t reveal_binding = kNone;
+        float reveal_progress = 1.0f;
+        float reveal_softness = 0.0f;
+        bool operator==(const GaussianCustomEffectState&) const = default;
+    };
+
     struct GaussianMarkerOverlayState {
         bool show_object_outline = false;
         glm::vec3 outline_color{0.0f, 0.604f, 0.733f};
@@ -249,6 +279,7 @@ namespace lfs::rendering {
         GaussianSceneState scene;
         GaussianFilterState filters;
         std::optional<GaussianRevealState> reveal;
+        std::optional<GaussianCustomEffectState> custom_effect;
         GaussianOverlayState overlay;
         bool transparent_background = false;
         bool depth_view = false;

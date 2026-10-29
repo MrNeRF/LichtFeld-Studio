@@ -47,6 +47,7 @@ namespace lfs::vis {
     LFS_VIS_API void preloadVkSplatSpirvFiles();
 
     class VksplatViewportRenderer {
+        friend struct UserShaderTestAccess;
         friend struct VksplatScratchReleaseTestAccess;
         friend struct SplitOutputLifetimeTestAccess;
         friend struct HiGSExportTestAccess;
@@ -71,6 +72,10 @@ namespace lfs::vis {
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
             bool stochastic_accumulation_active = false;
+            // The host a requested custom effect draw runs; it drew with the
+            // built-in programs while no published program set holds it.
+            bool custom_active = false;
+            bool custom_pending = false;
         };
 
         struct ModelInputSnapshot {
@@ -302,6 +307,17 @@ namespace lfs::vis {
         void retainPublishedSplitImages(VkImageView left, VkImageView right);
         void releaseSceneResources();
         void reset();
+
+        struct PreparedDraw {
+            VulkanGSRenderer::HostInputs inputs;
+            VulkanGSRenderer::HostPlan hosts;
+            std::uint64_t device_generation = 0;
+            bool stochastic = false, warmup = false;
+        };
+        [[nodiscard]] std::expected<PreparedDraw, std::string> prepare(VulkanContext&, const core::SplatData&,
+                                                                       const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload = false, bool capture = false);
+        [[nodiscard]] PreparedDraw prepareDecision(const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload, bool capture = false);
+        [[nodiscard]] VulkanGSRenderer::HostPlan hostsFor(const VulkanGSRenderer::HostInputs& inputs) { return renderer_.hostsFor(inputs); }
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
             const lfs::core::SplatData& splat_data);
         // VRAM page-pool budget in splats for RAD-backed LoD streaming; 0 = full residency.
@@ -384,7 +400,8 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
             std::size_t ring_slot,
-            OutputSlot output_slot);
+            OutputSlot output_slot,
+            std::span<const float> custom_tail = {});
         [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
@@ -405,10 +422,18 @@ namespace lfs::vis {
             lfs::rendering::DepthVisualizationMode depth_visualization_mode,
             const _VulkanBuffer* color_override = nullptr);
 
+        // The custom effect a stochastic frame projects with: the program set
+        // and the effect's inputs. Default draws have none.
+        struct StochasticEffect {
+            std::uint64_t program_set = 0;
+            std::optional<lfs::rendering::GaussianCustomEffectState> state;
+            bool operator==(const StochasticEffect&) const = default;
+        };
         struct StochasticHistory {
             VulkanGSStochasticBuffers buffers;
             VulkanGSRendererUniforms camera{};
             const lfs::core::SplatData* model = nullptr;
+            StochasticEffect effect;
             std::uint64_t generation = 0;
             std::uint32_t samples = 0;
             std::size_t last_color = 0;
@@ -417,6 +442,7 @@ namespace lfs::vis {
         struct StochasticFrame {
             VulkanGSRendererUniforms camera{};
             const lfs::core::SplatData* model = nullptr;
+            StochasticEffect effect;
             std::uint64_t generation = 0;
             std::uint32_t samples = 0;
             std::size_t output_color = 0;
@@ -439,7 +465,7 @@ namespace lfs::vis {
             StochasticProjectionCache& cache, const VulkanGSRenderer::TileInstanceStats& stats);
         [[nodiscard]] StochasticFrame prepareStochasticFrame(
             VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
-            OutputSlot slot, bool content_changed) const;
+            OutputSlot slot, bool content_changed, StochasticEffect effect) const;
         [[nodiscard]] const _VulkanBuffer* resolveStochasticFrame(
             const VulkanGSRendererUniforms& uniforms, const StochasticFrame& frame,
             OutputSlot slot, const glm::vec3& background);
@@ -768,6 +794,7 @@ namespace lfs::vis {
         bool last_render_used_macro_chain_ = false;
         std::size_t resident_depth_wave_armed_ = 0;
         int resident_sort_bits_ = 0;
+        bool resident_projection_custom_ = false;
         // The first frame after an input reset remains on the legacy chain;
         // it uses the same fixed-K wave machinery as every other legacy frame.
         bool macro_chain_warmup_pending_ = true;

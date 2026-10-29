@@ -5,11 +5,14 @@
 #pragma once
 
 #include "core/crop_polygon.hpp"
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "rendering/rendering.hpp"
 
 #include <cstddef>
 #include <vector>
+
+struct VulkanGSRendererUniforms;
 
 namespace lfs::vis::vksplat_overlay {
 
@@ -63,5 +66,11 @@ namespace lfs::vis::vksplat_overlay {
         bool transform_indices_enabled,
         std::size_t node_mask_count,
         bool node_visibility_cull);
+
+    // The custom effect tail (custom_effect_layout.inc) that follows that table
+    // in a custom effect draw, with `camera` the draw's projection camera.
+    [[nodiscard]] LFS_VIS_API lfs::Result<std::vector<float>> buildCustomEffectTail(
+        const lfs::rendering::ViewportRenderRequest& request,
+        const VulkanGSRendererUniforms& camera);
 
 } // namespace lfs::vis::vksplat_overlay
