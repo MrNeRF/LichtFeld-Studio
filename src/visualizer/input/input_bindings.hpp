@@ -33,6 +33,7 @@ namespace lfs::vis::input {
         CROP_BOX = 7,
         WALK = 8,
         VR = 9,
+        EDITOR = 10,
     };
 
     enum class SelectionOp : uint8_t {
@@ -41,8 +42,9 @@ namespace lfs::vis::input {
         Intersect,
     };
 
-    // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
+    // Highest viewport ToolMode value plus one. Value 2 was the removed brush tool mode.
     inline constexpr size_t kToolModeCount = 10;
+    // Viewport tool modes; the persisted EDITOR scope is resolved by the editor panel.
     inline constexpr std::array<ToolMode, 9> kAllToolModes = {
         ToolMode::WALK,
         ToolMode::VR,
@@ -53,6 +55,19 @@ namespace lfs::vis::input {
         ToolMode::TRANSLATE,
         ToolMode::ROTATE,
         ToolMode::SCALE,
+    };
+
+    inline constexpr std::array<ToolMode, 10> kAllKeymapScopes = {
+        ToolMode::WALK,
+        ToolMode::VR,
+        ToolMode::GLOBAL,
+        ToolMode::SELECTION,
+        ToolMode::ALIGN,
+        ToolMode::CROP_BOX,
+        ToolMode::TRANSLATE,
+        ToolMode::ROTATE,
+        ToolMode::SCALE,
+        ToolMode::EDITOR,
     };
 
     enum class Action {
@@ -172,6 +187,9 @@ namespace lfs::vis::input {
         VR_SNAP_TURN_RIGHT,
         VR_RECENTER,
         EXIT_VR,
+        EDITOR_TOGGLE_KIND,
+        EDITOR_RUN,
+        EDITOR_STOP,
     };
 
     enum class ShortcutScope : uint8_t {

@@ -835,6 +835,7 @@ set(TEST_FILES
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_mcp_shader_tools.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
@@ -1121,6 +1122,8 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/notification_bridge.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_shader_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_editor_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
     ${CMAKE_SOURCE_DIR}/src/app/licht_command.cpp

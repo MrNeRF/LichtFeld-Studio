@@ -21,6 +21,7 @@
 #include "gui/error_event_bridge.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/panels/python_console_panel.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
 #include "gui/string_keys.hpp"
@@ -330,6 +331,7 @@ namespace lfs::vis {
             shaders::slangHostLinker(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer" / "user" /
                                      "manifest.json"),
             [this] { wakeMainLoop(); });
+        gui::panels::PythonConsoleState::getInstance().setShaderChanges(shader_service_->changes());
         rendering_manager_->setShaderService(shader_service_.get());
 
         // Set initial antialiasing

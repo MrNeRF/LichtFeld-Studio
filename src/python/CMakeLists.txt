@@ -224,6 +224,7 @@ nanobind_add_module(
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
     lfs/py_rendering.cpp
+    lfs/py_shaders.cpp
     lfs/py_selection.cpp
     lfs/py_operator.cpp
     lfs/py_pipeline.cpp

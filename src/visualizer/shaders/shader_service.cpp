@@ -218,6 +218,17 @@ namespace lfs::vis::shaders {
         CompileDiagnostics diagnostics;
     };
 
+    std::string_view shaderOutcome(const ShaderStatus& status, const std::uint64_t revision, const bool applied) {
+        if (status.revision != revision)
+            return "superseded";
+        switch (status.state) {
+        case ShaderState::Failed: return "failed";
+        case ShaderState::Blocked: return "blocked";
+        case ShaderState::Unbound: return "unbound";
+        default: return applied ? "applied" : "";
+        }
+    }
+
     void ShaderChanges::notify(const bool close, const bool cancel) {
         {
             const std::lock_guard lock(mutex);
@@ -872,28 +883,39 @@ namespace lfs::vis::shaders {
     ShaderInspection ShaderService::inspect(const bool include_source) const {
         const_cast<ShaderService*>(this)->acceptResults();
         const std::lock_guard lock(mutex_);
-        return inspectLocked(include_source, true);
+        return inspectLocked({}, include_source, true);
+    }
+    Result<ShaderInspection> ShaderService::asset(const core::Uuid& id, const bool include_source) const {
+        const_cast<ShaderService*>(this)->acceptResults();
+        const std::lock_guard lock(mutex_);
+        if (!assets_.contains(id))
+            return serviceError(ErrorCode::NotFound, "No such shader.");
+        return inspectLocked(id, include_source, true);
     }
     ShaderInspection ShaderService::work() const {
         const_cast<ShaderService*>(this)->acceptResults();
         const std::lock_guard lock(mutex_);
-        return inspectLocked(false, false);
+        return inspectLocked({}, false, false);
     }
-    ShaderInspection ShaderService::inspectLocked(const bool source, const bool include_assets) const {
+    ShaderInspection ShaderService::inspectLocked(const std::optional<core::Uuid> only, const bool source, const bool include_assets) const {
         ShaderInspection result;
         const auto add = [&](const core::Uuid& id, const Asset& asset) {
             result.assets.push_back({{id, asset.name, source ? *asset.source : std::string{}, asset.revision}, *statusLocked(id)});
         };
-        if (include_assets)
-            for (const auto& [id, asset] : assets_)
-                add(id, asset);
+        if (include_assets) {
+            if (only)
+                add(*only, assets_.at(*only));
+            else
+                for (const auto& [id, asset] : assets_)
+                    add(id, asset);
+        }
         std::ranges::sort(result.assets, {}, [](const auto& item) { return item.asset.id.bytes; });
         if (include_assets) {
             result.bindings = bindingsLocked();
             if (const auto display = display_.lock(); display && display->custom && display->snapshot)
                 result.displayed_bindings = display->snapshot->slots;
         }
-        if (stopping_)
+        if (only || stopping_)
             return result;
         for (const auto& request : requests_) {
             const auto build = request.lock();

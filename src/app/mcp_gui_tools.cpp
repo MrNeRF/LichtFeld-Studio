@@ -5,10 +5,12 @@
 
 #include "app/mcp_gui_tools.hpp"
 #include "app/mcp_app_utils.hpp"
+#include "app/mcp_editor_tools.hpp"
 #include "app/mcp_event_handlers.hpp"
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_sequencer_tools.hpp"
+#include "app/mcp_shader_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
 
@@ -41,6 +43,7 @@
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/apriltag_calibration.hpp"
+#include "visualizer/gui/editor/python_editor.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui/string_keys.hpp"
@@ -766,98 +769,6 @@ namespace lfs::app {
             if (!std::isfinite(glm::length(direction)) || glm::length(direction) <= 1.0e-6f)
                 return "Camera eye and target must not coincide";
             return std::nullopt;
-        }
-
-        void show_python_console() {
-            core::events::cmd::ShowWindow{.window_name = "python_console", .show = true}.emit();
-        }
-
-        json text_payload_json(std::string text, const int max_chars, const bool tail = true) {
-            if (max_chars >= 0 && static_cast<int>(text.size()) > max_chars) {
-                const size_t keep = static_cast<size_t>(max_chars);
-                if (tail) {
-                    text = text.substr(text.size() - keep);
-                } else {
-                    text.resize(keep);
-                }
-                return json{
-                    {"text", std::move(text)},
-                    {"truncated", true},
-                };
-            }
-
-            return json{
-                {"text", std::move(text)},
-                {"truncated", false},
-            };
-        }
-
-        struct EditorOutputObservation {
-            std::string text;
-            int64_t total_chars = 0;
-            bool running = false;
-            bool completed = false;
-            bool timed_out = false;
-            bool saw_output = false;
-        };
-
-        json editor_output_json(const std::string& text, const int max_chars, const bool tail = true) {
-            auto payload = text_payload_json(text, max_chars, tail);
-            payload["total_chars"] = static_cast<int64_t>(text.size());
-            return payload;
-        }
-
-        EditorOutputObservation observe_editor_output(vis::gui::panels::PythonConsoleState& console,
-                                                      const bool wait_for_completion,
-                                                      const bool wait_for_output,
-                                                      const int timeout_ms) {
-            using Clock = std::chrono::steady_clock;
-
-            constexpr auto POLL_INTERVAL = std::chrono::milliseconds(25);
-            const int bounded_timeout_ms = std::max(timeout_ms, 0);
-            const auto deadline = Clock::now() + std::chrono::milliseconds(bounded_timeout_ms);
-
-            EditorOutputObservation observation;
-            while (true) {
-                observation.text = console.getOutputText();
-                observation.total_chars = static_cast<int64_t>(observation.text.size());
-                observation.running = console.isScriptRunning();
-                observation.completed = !observation.running;
-                observation.saw_output = !observation.text.empty();
-
-                const bool output_ready = !wait_for_output || observation.saw_output || observation.completed;
-                const bool completion_ready = !wait_for_completion || observation.completed;
-                if (output_ready && completion_ready) {
-                    observation.timed_out = false;
-                    return observation;
-                }
-
-                if (bounded_timeout_ms == 0 || Clock::now() >= deadline) {
-                    observation.timed_out = true;
-                    return observation;
-                }
-
-                std::this_thread::sleep_for(POLL_INTERVAL);
-            }
-        }
-
-        json editor_output_response_json(vis::gui::panels::PythonConsoleState& console,
-                                         const bool wait_for_completion,
-                                         const bool wait_for_output,
-                                         const int timeout_ms,
-                                         const int output_max_chars,
-                                         const bool output_tail) {
-            auto observation = observe_editor_output(
-                console, wait_for_completion, wait_for_output, timeout_ms);
-
-            json response{
-                {"running", observation.running},
-                {"completed", observation.completed},
-                {"timed_out", observation.timed_out},
-                {"saw_output", observation.saw_output},
-            };
-            response["output"] = editor_output_json(observation.text, output_max_chars, output_tail);
-            return response;
         }
 
         std::expected<std::vector<std::string>, std::string> resolve_transform_targets(
@@ -2547,6 +2458,8 @@ namespace lfs::app {
             LOG_ERROR("GUI-native MCP scene tools require a GUI VisualizerImpl");
             return;
         }
+
+        register_shader_tools(registry, viewer, [viewer_impl] { return viewer_impl->getShaderService(); });
 
         // --- Scene operations (posted to GUI thread) ---
         registry.register_tool(
@@ -5352,253 +5265,7 @@ namespace lfs::app {
                 });
             });
 
-        // --- Editor tools ---
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.set_code",
-                .description = "Populate the visible Python editor with code in the integrated Python console",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"code", json{{"type", "string"}, {"description", "Python code to place into the visible editor"}}},
-                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}}},
-                    .required = {"code"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string code = args["code"].get<std::string>();
-                const bool show_console_window = args.value("show_console", true);
-
-                return post_and_wait(viewer_impl, [code, show_console_window]() -> json {
-                    if (show_console_window)
-                        show_python_console();
-
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-
-                    console.setEditorText(code);
-                    console.focusEditor();
-                    console.setModified(true);
-
-                    return json{
-                        {"success", true},
-                        {"chars", static_cast<int64_t>(code.size())},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.run",
-                .description = "Run code through the integrated Python console, optionally wait for completion, and return the latest captured output",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"code", json{{"type", "string"}, {"description", "Optional Python code to set and run; defaults to current editor contents"}}},
-                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}},
-                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
-                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
-                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait for completion/output before returning a partial snapshot (default: 2000)"}}},
-                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
-                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const auto code = optional_string_arg(args, "code");
-                const bool show_console_window = args.value("show_console", true);
-                const bool wait_for_completion = args.value("wait_for_completion", true);
-                const bool wait_for_output = args.value("wait_for_output", true);
-                const int timeout_ms = args.value("timeout_ms", 2000);
-                const int output_max_chars = args.value("output_max_chars", 20000);
-                const bool output_tail = args.value("output_tail", true);
-
-                auto response = post_and_wait(viewer_impl, [code, show_console_window]() -> json {
-                    if (show_console_window)
-                        show_python_console();
-
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-                    if (console.isScriptRunning())
-                        return json{{"error", "A script is already running"}};
-
-                    std::string code_to_run;
-                    if (code) {
-                        console.setEditorText(*code);
-                        console.focusEditor();
-                        console.setModified(true);
-                        code_to_run = *code;
-                    } else {
-                        code_to_run = console.getEditorTextStripped();
-                    }
-
-                    if (code_to_run.empty())
-                        return json{{"error", "Editor is empty"}};
-
-                    console.runScriptAsync(code_to_run);
-                    return json{
-                        {"success", true},
-                        {"chars", static_cast<int64_t>(code_to_run.size())},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-
-                if (response.contains("error"))
-                    return response;
-
-                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                auto observed = editor_output_response_json(
-                    console,
-                    wait_for_completion,
-                    wait_for_output,
-                    timeout_ms,
-                    output_max_chars,
-                    output_tail);
-                for (auto& [key, value] : observed.items()) {
-                    response[key] = std::move(value);
-                }
-
-                response["wait_for_completion"] = wait_for_completion;
-                response["wait_for_output"] = wait_for_output;
-                response["timeout_ms"] = timeout_ms;
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.get_code",
-                .description = "Read the current contents of the visible integrated Python editor",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"max_chars", json{{"type", "integer"}, {"description", "Maximum characters to return; defaults to no limit"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const int max_chars = args.value("max_chars", -1);
-
-                return post_and_wait(viewer_impl, [max_chars]() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-
-                    std::string code = console.getEditorText();
-                    auto result = text_payload_json(code, max_chars, false);
-                    result["success"] = true;
-                    result["total_chars"] = static_cast<int64_t>(code.size());
-                    result["modified"] = console.isModified();
-                    if (!console.getScriptPath().empty())
-                        result["path"] = core::path_to_utf8(console.getScriptPath());
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.get_output",
-                .description = "Read captured output from the integrated Python console output terminal",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"max_chars", json{{"type", "integer"}, {"description", "Maximum characters to return (default: 20000)"}}},
-                        {"tail", json{{"type", "boolean"}, {"description", "Return the most recent output when truncated (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const int max_chars = args.value("max_chars", 20000);
-                const bool tail = args.value("tail", true);
-
-                return post_and_wait(viewer_impl, [max_chars, tail]() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const output = console.getOutputTerminal();
-                    if (!output)
-                        return json{{"error", "Python output terminal not initialized"}};
-
-                    std::string text = console.getOutputText();
-                    auto result = editor_output_json(text, max_chars, tail);
-                    result["success"] = true;
-                    result["running"] = console.isScriptRunning();
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.wait",
-                .description = "Wait for the currently running editor script to finish or emit output, then return the latest output snapshot",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
-                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
-                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait before returning a partial snapshot (default: 2000)"}}},
-                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
-                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
-                    .required = {}}},
-            [](const json& args) -> json {
-                const bool wait_for_completion = args.value("wait_for_completion", true);
-                const bool wait_for_output = args.value("wait_for_output", true);
-                const int timeout_ms = args.value("timeout_ms", 2000);
-                const int output_max_chars = args.value("output_max_chars", 20000);
-                const bool output_tail = args.value("output_tail", true);
-
-                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                json response{
-                    {"success", true},
-                    {"wait_for_completion", wait_for_completion},
-                    {"wait_for_output", wait_for_output},
-                    {"timeout_ms", timeout_ms},
-                };
-
-                auto observed = editor_output_response_json(
-                    console,
-                    wait_for_completion,
-                    wait_for_output,
-                    timeout_ms,
-                    output_max_chars,
-                    output_tail);
-                for (auto& [key, value] : observed.items()) {
-                    response[key] = std::move(value);
-                }
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.is_running",
-                .description = "Check whether the integrated Python console is currently running a script",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    return json{
-                        {"success", true},
-                        {"running", console.isScriptRunning()},
-                        {"modified", console.isModified()},
-                    };
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.interrupt",
-                .description = "Interrupt the currently running script in the integrated Python console",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    const bool was_running = console.isScriptRunning();
-                    if (was_running)
-                        console.interruptScript();
-
-                    return json{
-                        {"success", true},
-                        {"was_running", was_running},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-            });
+        register_editor_tools(registry, viewer_impl);
 
         // --- Event, Tensor, and Sequencer tools ---
 
@@ -6140,6 +5807,10 @@ namespace lfs::app {
 
         register_generic_gui_operator_resources(registry, viewer);
         register_generic_gui_runtime_resources(registry, viewer);
+        register_shader_resources(registry, viewer, [viewer] {
+            auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            return impl ? impl->getShaderService() : nullptr;
+        });
         register_generic_gui_ui_resources(registry, viewer);
 
         registry.register_resource(

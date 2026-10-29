@@ -20,9 +20,11 @@ class KeymapBindingsSection:
         lf.keymap.ToolMode.CROP_BOX,
         lf.keymap.ToolMode.WALK,
         lf.keymap.ToolMode.VR,
+        lf.keymap.ToolMode.EDITOR,
     ]
 
     BINDING_SECTIONS = {
+        "editor": [lf.keymap.Action.EDITOR_TOGGLE_KIND, lf.keymap.Action.EDITOR_RUN, lf.keymap.Action.EDITOR_STOP],
         "walk": [lf.keymap.Action.EXIT_WALK],
         "vr": [
             lf.keymap.Action.VR_SNAP_TURN_LEFT,
@@ -545,6 +547,8 @@ class KeymapBindingsSection:
         tr = lf.ui.tr
         rows = []
 
+        if mode == lf.keymap.ToolMode.EDITOR:
+            self._append_binding_section(rows, tr("input_settings.mode.editor"), self.BINDING_SECTIONS["editor"], mode)
         if mode == lf.keymap.ToolMode.WALK:
             self._append_binding_section(rows, tr("collision.walk"), self.BINDING_SECTIONS["walk"], mode)
         if mode == lf.keymap.ToolMode.VR:

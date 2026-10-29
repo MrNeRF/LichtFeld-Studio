@@ -16,6 +16,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/editor/python_editor.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -757,6 +758,35 @@ namespace {
         ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes_[1]}));
         ASSERT_TRUE(commands().removeAsset(asset));
         EXPECT_EQ(service().candidate(), nullptr);
+    }
+
+    TEST_F(ShaderServiceTest, DocumentStopGuardsMultipleSlotsAndForgetsDetachedNodeUndo) {
+        lfs::vis::editor::PythonEditor editor;
+        const auto document = editor.newDocument("draft", lfs::vis::editor::DocumentKind::Shader);
+        const ShaderSlot first{Kind::Node, nodes_[0]}, second{Kind::Node, nodes_[1]};
+        for (const auto slot : {first, second, first}) {
+            ASSERT_TRUE(editor.setDocumentTarget(document, slot, service()));
+            ASSERT_TRUE(editor.runShader(service()));
+        }
+        ASSERT_EQ(editor.inspectDocument(document, &service())->owned_bindings.size(), 2u);
+        const auto other = create();
+        bind(second, other);
+        scene_->removeNode(scene().getNodeByUuid(nodes_[0])->id, false);
+        (void)editor.pollShaders(service());
+        EXPECT_EQ(editor.inspectDocument(document, &service())->owned_bindings, std::vector{first});
+        EXPECT_FALSE(service().command(shaders::UnbindShader{first, other}));
+        EXPECT_EQ(editor.stopShader(service()), std::vector{first});
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        ASSERT_NE(scene().getNodeByUuid(nodes_[0]), nullptr);
+        EXPECT_FALSE(service().boundAsset(first));
+        EXPECT_EQ(service().boundAsset(second), other);
+        for (const auto slot : {first, second}) {
+            ASSERT_TRUE(editor.setDocumentTarget(document, slot, service()));
+            ASSERT_TRUE(editor.runShader(service()));
+        }
+        EXPECT_EQ(editor.stopShader(service()), (std::vector{first, second}));
+        EXPECT_FALSE(service().boundAsset(first));
+        EXPECT_FALSE(service().boundAsset(second));
     }
 
     TEST_F(ShaderServiceTest, EffectStateNumbersVisibleSlotsAndBoundsTheOriginalGeometry) {

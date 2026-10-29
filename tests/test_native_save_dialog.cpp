@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/path_utils.hpp"
+#include "gui/editor/document_kind.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include <cctype>
 #include <cstdlib>
@@ -86,4 +87,11 @@ TEST(NativeSaveDialogTest, JsonApprovalDoesNotCoverAnAppendedSuffix) {
     }
     dialog_result = NFD_OKAY;
     std::filesystem::remove(path);
+}
+
+TEST(NativeSaveDialogTest, ShaderSaveUsesSlangSuffixAndPreservesTheChosenName) {
+    selected_path = "/tmp/generated-shader";
+    EXPECT_EQ(lfs::vis::gui::SavePythonFileDialog("generated-shader", {}, lfs::vis::editor::DocumentKind::Shader),
+              "/tmp/generated-shader.slang");
+    EXPECT_EQ(suggested_name, "generated-shader");
 }

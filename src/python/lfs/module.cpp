@@ -40,6 +40,7 @@
 #include "py_scene.hpp"
 #include "py_scripts.hpp"
 #include "py_selection.hpp"
+#include "py_shaders.hpp"
 #include "py_signals.hpp"
 #include "py_splat_data.hpp"
 #include "py_splat_simplify.hpp"
@@ -3395,6 +3396,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Rendering functions (render_view, compute_screen_positions, etc.)
     lfs::python::register_rendering(m);
+    lfs::python::register_shaders(m);
 
     // Selection primitives for Python operators
     lfs::python::register_selection(m);
@@ -4074,5 +4076,5 @@ Example:
         // Utilities
         "run", "list_scene", "mat4", "colormap", "help",
         // Submodules
-        "scene", "io", "packages", "mcp");
+        "scene", "io", "packages", "mcp", "shaders");
 }

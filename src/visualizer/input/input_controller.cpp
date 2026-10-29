@@ -659,9 +659,8 @@ namespace lfs::vis {
     }
 
     void InputController::refreshMovementKeyCache() {
-        for (size_t i = 0; i < input::kToolModeCount; ++i) {
-            const auto mode = static_cast<input::ToolMode>(i);
-            auto& mk = movement_keys_per_mode_[i];
+        for (const auto mode : input::kAllToolModes) {
+            auto& mk = movement_keys_per_mode_[static_cast<size_t>(mode)];
             mk.forward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_FORWARD, mode);
             mk.backward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_BACKWARD, mode);
             mk.left = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_LEFT, mode);

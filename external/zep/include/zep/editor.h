@@ -8,6 +8,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "zep_config.h"
@@ -367,7 +368,7 @@ namespace Zep {
         bool OnMouseWheel(const NVec2f& mousePos, float scrollDistance);
         const NVec2f GetMousePos() const;
 
-        void SetBufferSyntax(ZepBuffer& buffer) const;
+        void SetBufferSyntax(ZepBuffer& buffer, std::string_view identity = {}) const;
         void SetBufferMode(ZepBuffer& buffer) const;
 
         EditorConfig& GetConfig() {

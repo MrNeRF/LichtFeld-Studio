@@ -841,7 +841,9 @@ namespace {
     TEST(P5SessionChapterTest,
          EditorDefaultBufferDropsOnlyEmptyStateAndKeepsTypedCode) {
         using namespace lfs::vis::editor;
+        EXPECT_EQ(PythonEditorSessionFile{}, PythonEditorSessionFile{});
         PythonEditor editor;
+        EXPECT_FALSE(editor.document().id.is_nil());
         editor.restoreWorkspaceSessionState({});
         EXPECT_TRUE(
             editor.captureWorkspaceSessionState(
@@ -863,6 +865,20 @@ namespace {
             "typed = 1\n");
         EXPECT_TRUE(
             captured.open_files.front().modified);
+    }
+
+    TEST(P5SessionChapterTest, EmptyShaderDraftRetainsIdentityWithoutMakingDefaultStateNonempty) {
+        using namespace lfs::vis::editor;
+        PythonEditor editor;
+        editor.setDocumentKind(DocumentKind::Shader);
+        const auto id = editor.document().id;
+        const auto captured = editor.captureWorkspaceSessionState({}, false);
+        ASSERT_EQ(captured.open_files.size(), 1u);
+        EXPECT_EQ(captured.open_files.front().document.id, id);
+        EXPECT_TRUE(captured.open_files.front().text.empty());
+        editor.restoreWorkspaceSessionState(captured);
+        EXPECT_EQ(editor.document().id, id);
+        EXPECT_EQ(editor.document().kind, DocumentKind::Shader);
     }
 
     TEST(P5SessionChapterTest,

@@ -3,6 +3,7 @@
 
 #define LFS_USER_SHADER_SERVICE_FIXTURE
 #include "core/mesh_data.hpp"
+#include "gui/editor/python_editor.hpp"
 #include "user_shader_test_access.hpp"
 #include "user_shader_test_support.hpp"
 
@@ -29,9 +30,12 @@ namespace lfs::test::service_rendering {
         EXPECT_EQ(linkers_.load(), 0);
         EXPECT_EQ(schedule_.started.size(), 0u);
         EXPECT_EQ(manager_->customEffectGeneration(), 0u);
-        // An unbound library does not create demand either.
+        // An open shader tab and unbound library do not create demand either.
+        lfs::vis::editor::PythonEditor editor;
+        editor.newDocument(kShift, lfs::vis::editor::DocumentKind::Shader);
         ASSERT_TRUE(commands().createAsset("Unbound", kShift));
         for (int i = 0; i < 3; ++i) {
+            EXPECT_TRUE(editor.pollShaders(service()).empty());
             EXPECT_EQ(counted(), without);
             EXPECT_EQ(image(), reference);
         }

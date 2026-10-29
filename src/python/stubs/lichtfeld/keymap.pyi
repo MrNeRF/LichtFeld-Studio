@@ -5,6 +5,12 @@ import enum
 
 
 class Action(enum.Enum):
+    EDITOR_TOGGLE_KIND = 104
+
+    EDITOR_RUN = 105
+
+    EDITOR_STOP = 106
+
     NONE = 0
 
     CAMERA_ORBIT = 1
@@ -210,6 +216,8 @@ class Action(enum.Enum):
     EXIT_VR = 103
 
 class ToolMode(enum.Enum):
+    EDITOR = 10
+
     GLOBAL = 0
 
     SELECTION = 1

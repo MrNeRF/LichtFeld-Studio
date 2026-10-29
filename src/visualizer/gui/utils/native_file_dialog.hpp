@@ -10,6 +10,10 @@
 #include <utility>
 #include <vector>
 
+namespace lfs::vis::editor {
+    enum class DocumentKind;
+}
+
 namespace lfs::vis::gui {
 
     class ScopedNativeFileDialogBlock {
@@ -56,6 +60,8 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::filesystem::path SaveLazFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath,
+                                                           editor::DocumentKind kind);
 
     LFS_VIS_API std::filesystem::path SavePlyFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
@@ -88,6 +94,9 @@ namespace lfs::vis::gui {
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
                                                            const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
+                                                           const std::filesystem::path& defaultPath,
+                                                           editor::DocumentKind kind);
     LFS_VIS_API std::filesystem::path SaveProjectFileDialog(const std::string& defaultName = "project.licht",
                                                             const std::filesystem::path& defaultPath = {});
 

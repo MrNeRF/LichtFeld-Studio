@@ -83,6 +83,13 @@ Or set and run in one call:
 - use `editor_is_running` for a cheap status check
 - use `editor_interrupt` if the script must be stopped
 
+## Shader documents
+
+The sequence above assumes a Python document. A Shader document uses the same
+`editor_run` tool but applies shader source instead of executing Python. Pass its
+`document_id` to `editor_wait` and inspect `outcome` and `shader_status`;
+`editor.python` does not describe shader compilation. See [User shaders](user-shaders.md).
+
 ## AprilTag calibration
 
 `transform_detect_apriltags` and `transform_scale_by_apriltags` start `apriltag.scan`.

@@ -68,6 +68,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/framerate_controller.cpp
 
         # User shader effects
+        shaders/shader_api.cpp
         shaders/shader_service.cpp
         shaders/slang_compiler.cpp
 

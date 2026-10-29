@@ -129,6 +129,7 @@ namespace lfs::vis::shaders {
 
         // Identity of the lfs API sources this binary was built against.
         [[nodiscard]] static std::string_view abi_hash();
+        [[nodiscard]] static std::string_view compiler_build();
 
     private:
         struct Impl;

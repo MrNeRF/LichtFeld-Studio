@@ -166,6 +166,8 @@ namespace lfs::vis::shaders {
         std::uint64_t links = 0; // hosts the worker linked or tried to link with it
     };
 
+    [[nodiscard]] LFS_VIS_API std::string_view shaderOutcome(const ShaderStatus&, std::uint64_t revision, bool applied);
+
     struct ShaderMember {
         core::Uuid asset;
         std::uint64_t revision = 0;
@@ -302,6 +304,7 @@ namespace lfs::vis::shaders {
         void acceptResults();
         [[nodiscard]] Status validateBinding(const ShaderSlot& slot, const core::Uuid& asset) const;
         [[nodiscard]] ShaderInspection inspect(bool include_source = true) const;
+        [[nodiscard]] Result<ShaderInspection> asset(const core::Uuid&, bool include_source = false) const;
         [[nodiscard]] ShaderInspection work() const;
         [[nodiscard]] bool hasApplicableBindings() const;
         [[nodiscard]] bool hasBindings() const { return has_bindings_.load(std::memory_order_acquire); }
@@ -357,7 +360,7 @@ namespace lfs::vis::shaders {
         void bindingsChanged() const;
 
         struct WorkerMessage;
-        ShaderInspection inspectLocked(bool include_source, bool include_assets) const;
+        ShaderInspection inspectLocked(std::optional<core::Uuid>, bool include_source, bool include_assets) const;
         bool currentLocked(const WorkerMessage&) const;
         struct Bindings {
             std::optional<core::Uuid> global;

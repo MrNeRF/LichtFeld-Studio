@@ -7,6 +7,7 @@
 #include "lfs_shader_abi.hpp"
 
 #include <slang-com-ptr.h>
+#include <slang-tag-version.h>
 #include <slang.h>
 
 #include <nlohmann/json.hpp>
@@ -410,6 +411,8 @@ namespace lfs::vis::shaders {
 
     SlangCompiler::SlangCompiler() : impl_(std::make_unique<Impl>()) {}
     SlangCompiler::~SlangCompiler() = default;
+
+    std::string_view SlangCompiler::compiler_build() { return SLANG_TAG_VERSION; }
 
     std::string_view SlangCompiler::abi_hash() { return kAbiHash; }
 

@@ -1,10 +1,26 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "user_shader_test_access.hpp"
+
+#include "core/scene.hpp"
+#include "gui/editor/python_editor.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/terminal/terminal_input.hpp"
 #include "gui/terminal/terminal_widget.hpp"
+#include "python/runner.hpp"
+#include "user_shader_linker.hpp"
+#include <RmlUi/Core.h>
+#include <SDL3/SDL.h>
+#include <algorithm>
+#include <array>
+#include <condition_variable>
+#include <fstream>
+#include <functional>
+#include <future>
+#include <mutex>
+#include <thread>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
@@ -42,6 +58,422 @@ namespace {
         std::string text() { return buffer->GetBufferText(buffer->Begin(), buffer->End()); }
         long cursor() { return editor.GetActiveWindow()->GetBufferCursor().Index(); }
     };
+
+    namespace shader = lfs::vis::shaders;
+    using lfs::vis::editor::DocumentKind;
+    using lfs::vis::editor::PythonEditor;
+
+    class ShaderEditorTest : public ::testing::Test {
+    protected:
+        lfs::core::Scene scene;
+        lfs::test::Schedule schedule;
+        shader::ShaderService service{scene, [this] { return std::make_unique<lfs::test::ScheduledLinker>(schedule, true); }, [] {}};
+        PythonEditor editor;
+        void TearDown() override { schedule.gate(false); }
+        std::shared_ptr<const shader::DisplayRecord> display;
+        shader::SnapshotPtr publication() {
+            auto snapshot = service.candidate();
+            return snapshot ? snapshot : service.restrictFallback(display ? display->snapshot : nullptr);
+        }
+        void present() {
+            const auto snapshot = publication();
+            display = std::make_shared<const shader::DisplayRecord>(shader::DisplayRecord{snapshot, bool(snapshot)});
+            service.observeDisplay(display);
+        }
+        bool settle(const lfs::core::Uuid& asset, std::uint64_t revision) {
+            service.demandLive(std::array{std::string("projection_forward_custom")});
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (std::chrono::steady_clock::now() < deadline) {
+                present();
+                const auto status = service.status(asset);
+                if (status && status->revision == revision && !status->compiling && status->pending.empty() &&
+                    (status->state == shader::ShaderState::Applied || status->state == shader::ShaderState::Failed))
+                    return true;
+                std::this_thread::yield();
+            }
+            return false;
+        }
+    };
+
+    TEST_F(ShaderEditorTest, EditorChangesAndClosureWakeObserversWithoutShaderWork) {
+        editor.setShaderChanges(service.changes());
+        const auto doc = editor.newDocument("draft", DocumentKind::Shader);
+        auto& console = lfs::vis::gui::panels::PythonConsoleState::getInstance();
+        console.setShaderChanges(service.changes());
+        struct ResetSignal {
+            lfs::vis::gui::panels::PythonConsoleState& console;
+            ~ResetSignal() { console.setShaderChanges({}); }
+        } reset{console};
+        const std::pair<const char*, std::function<void()>> rows[] = {
+            {"source supersession", [&] { EXPECT_TRUE(editor.setDocumentText(doc, "changed")); }},
+            {"kind supersession", [&] { EXPECT_TRUE(editor.setDocumentMode(doc, DocumentKind::Python)); }},
+            {"document closed", [&] { editor.restoreWorkspaceSessionState({}); EXPECT_FALSE(editor.inspectDocument(doc)); }},
+            {"restored document", [&] { editor.setText("after restore"); }},
+            {"output only", [&] { console.addInfo("observer output"); }}};
+        for (const auto& [name, change] : rows) {
+            SCOPED_TRACE(name);
+            const auto before = service.generation();
+            std::promise<void> entering;
+            auto entered = entering.get_future();
+            auto waiting = std::async(std::launch::async, [&] {
+                entering.set_value();
+                return service.changes()->wait(before, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+            });
+            entered.wait();
+            change(); // Also covers notify between observation and entering the CV wait.
+            EXPECT_TRUE(waiting.get());
+            EXPECT_GT(service.generation(), before);
+            EXPECT_TRUE(service.work().work.empty());
+        }
+        (void)editor.pollShaders(service);
+        const auto generation = service.generation();
+        for (int i = 0; i < 100; ++i)
+            EXPECT_TRUE(editor.pollShaders(service).empty());
+        EXPECT_EQ(service.generation(), generation);
+    }
+
+    TEST_F(ShaderEditorTest, DocumentOperationsKeepFocusAndWaitForDrawDemand) {
+        const auto python = editor.document().id;
+        const auto shader_id = editor.newDocument("draft", DocumentKind::Shader);
+        ASSERT_TRUE(editor.activateDocument(python));
+        ASSERT_TRUE(editor.setDocumentText(shader_id, "valid shader"));
+        EXPECT_EQ(editor.document().id, python);
+        ASSERT_TRUE(editor.runShader(service, shader_id));
+        const auto pending = editor.inspectDocument(shader_id, &service);
+        ASSERT_TRUE(pending);
+        ASSERT_TRUE(pending->shader_status);
+        EXPECT_EQ(pending->shader_status->state, shader::ShaderState::Pending);
+        EXPECT_FALSE(pending->shader_status->compiling);
+        EXPECT_TRUE(pending->shader_status->pending.empty());
+        EXPECT_TRUE(service.inspect().work.empty());
+        ASSERT_EQ(pending->owned_bindings.size(), 1u);
+        EXPECT_FALSE(pending->applied);
+        EXPECT_EQ(editor.document().id, python);
+        ASSERT_TRUE(settle(*pending->document.shader_asset, pending->document.asset_revision));
+        EXPECT_TRUE(editor.inspectDocument(shader_id, &service)->applied);
+        ASSERT_TRUE(editor.setDocumentMode(shader_id, DocumentKind::Python));
+        ASSERT_TRUE(editor.setDocumentMode(shader_id, DocumentKind::Shader));
+        EXPECT_EQ(editor.inspectDocument(shader_id)->text, "valid shader");
+        EXPECT_EQ(editor.document().id, python);
+        const auto asset = *pending->document.shader_asset;
+        // A rebind to the same asset stays the Run's to stop.
+        ASSERT_TRUE(service.command(shader::BindShader{{}, asset}));
+        EXPECT_EQ(editor.inspectDocument(shader_id, &service)->owned_bindings.size(), 1u);
+        editor.stopShader(service, shader_id);
+        EXPECT_FALSE(service.boundAsset({}));
+    }
+
+    TEST_F(ShaderEditorTest, RejectedDocumentEditsDoNotChangeTextOrRunOwnership) {
+        const auto id = editor.newDocument("valid", DocumentKind::Shader);
+        ASSERT_TRUE(editor.runShader(service));
+        const auto before = editor.inspectDocument(id, &service);
+        ASSERT_TRUE(before);
+        const std::string oversized(shader::kMaxShaderSourceBytes + 1, 'x');
+        EXPECT_FALSE(editor.setDocumentText(id, oversized));
+        EXPECT_FALSE(editor.runShader(service, id, oversized));
+        EXPECT_FALSE(editor.setDocumentTarget(id, {shader::ShaderSlot::Kind::Node, {}}, service));
+        EXPECT_EQ(editor.inspectDocument(id, &service)->document, before->document);
+        EXPECT_EQ(editor.inspectDocument(id, &service)->text, before->text);
+        EXPECT_EQ(editor.inspectDocument(id, &service)->owned_bindings, before->owned_bindings);
+        EXPECT_EQ(editor.documents().size(), 2u);
+        const auto other = editor.newDocument("print('other')");
+        EXPECT_FALSE(editor.runShader(service, other, "mutated"));
+        EXPECT_EQ(editor.inspectDocument(other)->text, "print('other')");
+    }
+
+    TEST_F(ShaderEditorTest, BuffersKeepKindIdentityTextAndSelectionAcrossToggles) {
+        const std::string python = "alpha = 'λ'\nprint(alpha)\n";
+        const std::string slang = "import lfs;\r\n// λ  \nLfsElement effect(LfsElement e, LfsContext c) { return e; }  \r\n";
+        editor.setText(python);
+        const auto first = editor.document().id;
+        const auto second = editor.newDocument(slang, DocumentKind::Shader, "untitled://second");
+        EXPECT_NE(first, second);
+        EXPECT_EQ(editor.getTextStripped(), slang);
+        auto workspace = editor.captureWorkspaceSessionState({}, true);
+        auto& active = *std::ranges::find_if(workspace.open_files, [&](const auto& file) { return file.document.id == second; });
+        active.editor.cursor_byte = 18;
+        active.editor.selection_anchor_byte = 3;
+        editor.restoreWorkspaceSessionState(workspace);
+        editor.setDocumentKind(DocumentKind::Python);
+        editor.setDocumentKind(DocumentKind::Shader);
+        const auto after = editor.captureWorkspaceSessionState({}, true);
+        const auto selected = std::ranges::find_if(after.open_files, [&](const auto& file) { return file.document.id == second; });
+        ASSERT_NE(selected, after.open_files.end());
+        EXPECT_EQ(selected->editor.cursor_byte, 18);
+        EXPECT_EQ(selected->editor.selection_anchor_byte, 3);
+        EXPECT_EQ(editor.getText(), slang);
+        EXPECT_FALSE(editor.pythonAnalysisActive());
+        EXPECT_TRUE(editor.activateDocument(first));
+        EXPECT_EQ(editor.document().kind, DocumentKind::Python);
+        EXPECT_EQ(editor.getText(), python);
+        EXPECT_TRUE(editor.activateDocument(second));
+        EXPECT_EQ(editor.document().kind, DocumentKind::Shader);
+        EXPECT_EQ(editor.getText(), slang);
+    }
+
+    TEST_F(ShaderEditorTest, DiagnosticsUseCodePointsAndRejectNewerEditsAndOtherBuffers) {
+        const auto shader_id = editor.newDocument("// λ\nλ broken\n", DocumentKind::Shader);
+        const auto revision = editor.document().source_revision;
+        const auto python_id = editor.newDocument("print('untouched')\n");
+        const std::vector<shader::Diagnostic> diagnostics{{shader::DiagnosticSeverity::Error, "E1", "effect.slang", 2, 3, "bad <token> & value"}};
+        EXPECT_TRUE(editor.applyDiagnostics(shader_id, revision, diagnostics));
+        const auto ranges = editor.diagnosticRanges(shader_id);
+        ASSERT_EQ(ranges.size(), 1);
+        EXPECT_EQ(ranges[0].start, 9); // multibyte lambda before the marked 'b'
+        EXPECT_EQ(ranges[0].end, 10);
+        EXPECT_TRUE(editor.diagnosticRanges(python_id).empty());
+        const auto snapshot = editor.inspectDocument(shader_id);
+        ASSERT_TRUE(snapshot);
+        ASSERT_EQ(snapshot->markers.size(), 1u);
+        EXPECT_EQ(snapshot->markers[0].start, ranges[0].start);
+        EXPECT_EQ(snapshot->markers[0].end, ranges[0].end);
+        ASSERT_TRUE(editor.setDocumentText(shader_id, "corrected\n"));
+        EXPECT_EQ(editor.document().id, python_id);
+        EXPECT_GT(editor.inspectDocument(shader_id)->document.source_revision, revision);
+        EXPECT_TRUE(editor.diagnosticRanges(shader_id).empty());
+        EXPECT_FALSE(editor.applyDiagnostics(shader_id, revision, diagnostics));
+        EXPECT_TRUE(editor.diagnosticRanges(shader_id).empty());
+    }
+
+    TEST_F(ShaderEditorTest, RunWhilePendingPublishesOnlyTheNewSourceAndStopRemovesSuccessfulBind) {
+        schedule.gate(true);
+        editor.setDocumentKind(DocumentKind::Shader);
+        editor.setText("first draft");
+        ASSERT_TRUE(editor.runShader(service));
+        const auto asset = *editor.document().shader_asset;
+        service.demandLive(std::array{std::string("projection_forward_custom")});
+        ASSERT_TRUE(schedule.waitStarted(1));
+        EXPECT_TRUE(service.status(asset)->compiling);
+        editor.setText("second draft");
+        ASSERT_TRUE(editor.runShader(service));
+        EXPECT_EQ(service.assets().size(), 1);
+        EXPECT_EQ(service.assets()[0].source, "second draft");
+        const auto revision = editor.document().asset_revision;
+        schedule.gate(false);
+        ASSERT_TRUE(settle(asset, revision));
+        EXPECT_EQ(service.status(asset)->displayed_revision, revision);
+        EXPECT_FALSE(service.status(asset)->compiling);
+        EXPECT_TRUE(editor.hasShaderBinding(service));
+        editor.stopShader(service);
+        present();
+        EXPECT_FALSE(service.boundAsset({}));
+        EXPECT_FALSE(editor.hasShaderBinding(service));
+        EXPECT_EQ(service.status(asset)->state, shader::ShaderState::Unbound);
+    }
+
+    TEST_F(ShaderEditorTest, PendingStopAndFailedCompileKeepOtherBuffersAndLastGoodSafe) {
+        const auto id = editor.newDocument("valid\n", DocumentKind::Shader);
+        ASSERT_TRUE(editor.runShader(service));
+        const auto asset = *editor.document().shader_asset;
+        ASSERT_TRUE(settle(asset, editor.document().asset_revision));
+        const auto good = publication();
+        editor.setText("// λ\nλ broken\n");
+        ASSERT_TRUE(editor.runShader(service));
+        const auto failed_revision = editor.document().asset_revision;
+        editor.newDocument("print('other')");
+        ASSERT_TRUE(settle(asset, failed_revision));
+        const auto updates = editor.pollShaders(service);
+        ASSERT_FALSE(updates.empty());
+        EXPECT_EQ(publication(), good);
+        EXPECT_EQ(editor.diagnosticRanges(id).size(), 1);
+        EXPECT_TRUE(editor.diagnosticRanges(editor.document().id).empty());
+        const auto failed = editor.inspectDocument(id, &service);
+        ASSERT_TRUE(failed);
+        ASSERT_EQ(failed->diagnostics.size(), 1u);
+        EXPECT_FALSE(failed->applied);
+        EXPECT_EQ(failed->shader_status->displayed_revision, 1u);
+        const auto other = editor.document().id;
+        const auto associated = service.assets().front();
+        ASSERT_TRUE(editor.setDocumentMode(other, DocumentKind::Shader, associated));
+        const auto draft = editor.inspectDocument(other, &service);
+        ASSERT_TRUE(draft);
+        EXPECT_EQ(draft->text, "print('other')");
+        EXPECT_TRUE(draft->diagnostics.empty());
+        EXPECT_TRUE(draft->owned_bindings.empty());
+        ASSERT_TRUE(editor.activateDocument(id));
+        schedule.gate(true);
+        editor.setText("pending correction");
+        ASSERT_TRUE(editor.runShader(service));
+        service.demandLive(std::array{std::string("projection_forward_custom")});
+        ASSERT_TRUE(schedule.waitStarted(3));
+        editor.stopShader(service);
+        schedule.gate(false);
+        EXPECT_FALSE(service.boundAsset({}));
+        EXPECT_EQ(publication(), nullptr);
+    }
+
+    TEST_F(ShaderEditorTest, ParameterEditsUseServiceAndDoNotCompile) {
+        editor.setDocumentKind(DocumentKind::Shader);
+        editor.setText("valid");
+        ASSERT_TRUE(editor.runShader(service));
+        const auto asset = *editor.document().shader_asset;
+        ASSERT_TRUE(settle(asset, editor.document().asset_revision));
+        const auto links = service.status(asset)->links;
+        const std::array value{0.75f};
+        ASSERT_TRUE(lfs::vis::ShaderCommands{service}.setParameter(asset, "strength", value));
+        EXPECT_EQ(service.status(asset)->values[0].x, 0.75f);
+        EXPECT_EQ(service.status(asset)->links, links);
+        EXPECT_FALSE(lfs::vis::ShaderCommands{service}.removeAsset(asset));
+        ASSERT_TRUE(lfs::vis::ShaderCommands{service}.bind({}, asset));
+        editor.stopShader(service);
+        EXPECT_FALSE(service.boundAsset({}));
+        EXPECT_FALSE(editor.hasShaderBinding(service));
+        ASSERT_TRUE(lfs::vis::ShaderCommands{service}.renameAsset(asset, "Renamed fixture"));
+        editor.openShaderAsset(service.assets().front());
+        EXPECT_EQ(editor.getText(), "valid");
+        ASSERT_TRUE(editor.runShader(service));
+        ASSERT_TRUE(editor.setDocumentMode(editor.document().id, DocumentKind::Shader, service.assets().front()));
+        EXPECT_TRUE(editor.stopShader(service).empty());
+        EXPECT_EQ(service.boundAsset({}), asset);
+        ASSERT_TRUE(lfs::vis::ShaderCommands{service}.unbind({}));
+        EXPECT_TRUE(lfs::vis::ShaderCommands{service}.removeAsset(asset));
+    }
+
+    TEST(PythonConsoleInputTest, ShaderCommandsRespectRemappingUnbindingAndOneDispatch) {
+        using namespace lfs::vis;
+        input::InputBindings::setPersistenceEnabled(false);
+        input::InputBindings bindings;
+        auto& state = gui::panels::PythonConsoleState::getInstance();
+        state.getTerminal()->setFocused(false);
+        state.getOutputTerminal()->setFocused(false);
+        state.getEditor()->newDocument("valid", DocumentKind::Python);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::EDITOR, input::KEY_F8, 0), input::Action::NONE);
+        bindings.setBinding(input::ToolMode::EDITOR, input::Action::EDITOR_TOGGLE_KIND, input::KeyTrigger{input::KEY_F8});
+        InputEventDispatch dispatch;
+        const FrameInputEvent toggle{.scancode = SDL_SCANCODE_F8, .dispatch = &dispatch};
+        ASSERT_TRUE(state.handleShortcut(toggle, &bindings));
+        EXPECT_EQ(state.getEditor()->document().kind, DocumentKind::Shader);
+        EXPECT_FALSE(state.handleShortcut(toggle, &bindings));
+        EXPECT_EQ(state.getEditor()->document().kind, DocumentKind::Shader);
+        bindings.clearBinding(input::ToolMode::EDITOR, input::Action::EDITOR_TOGGLE_KIND);
+        EXPECT_FALSE(state.handleShortcut({.scancode = SDL_SCANCODE_F8}, &bindings));
+        EXPECT_EQ(state.getEditorText(), "valid");
+        EXPECT_FALSE(state.formatDocument());
+        EXPECT_FALSE(state.formatDocument(true));
+        state.getEditor()->refreshSyntaxDiagnostics();
+        EXPECT_TRUE(state.getEditor()->syntaxSymbols().empty());
+        EXPECT_FALSE(state.getEditor()->foldAllSyntaxBlocks());
+        EXPECT_FALSE(state.getEditor()->pythonAnalysisActive());
+        state.runScriptAsync("raise AssertionError('must not execute')");
+        EXPECT_FALSE(state.isScriptRunning());
+        state.getEditor()->setDocumentKind(DocumentKind::Python);
+        input::InputBindings::setPersistenceEnabled(true);
+    }
+
+    TEST_F(ShaderEditorTest, CopyOnlyStopsInFlightWorkAndToolbarStillUnbinds) {
+        using namespace lfs::vis;
+        struct InputEnvironment {
+            bool persistence = input::InputBindings::isPersistenceEnabled();
+            bool own_video = (SDL_WasInit(SDL_INIT_VIDEO) == 0);
+            std::string previous_driver = SDL_GetHint(SDL_HINT_VIDEO_DRIVER) ? SDL_GetHint(SDL_HINT_VIDEO_DRIVER) : "";
+            bool rml_ready = false;
+            ~InputEnvironment() {
+                input::InputBindings::setPersistenceEnabled(persistence);
+                if (rml_ready)
+                    Rml::Shutdown();
+                if (own_video) {
+                    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+                    if (previous_driver.empty())
+                        SDL_ResetHint(SDL_HINT_VIDEO_DRIVER);
+                    else
+                        SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, previous_driver.c_str(), SDL_HINT_OVERRIDE);
+                }
+            }
+        } environment;
+        input::InputBindings::setPersistenceEnabled(false);
+        if (environment.own_video) {
+            ASSERT_TRUE(SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "dummy", SDL_HINT_OVERRIDE));
+            ASSERT_TRUE(SDL_InitSubSystem(SDL_INIT_VIDEO)) << SDL_GetError();
+        }
+        environment.rml_ready = Rml::Initialise();
+        ASSERT_TRUE(environment.rml_ready);
+        Rml::Element element("div");
+        auto& state = gui::panels::PythonConsoleState::getInstance();
+        auto* document = state.getEditor();
+        state.getTerminal()->setFocused(false);
+        state.getOutputTerminal()->setFocused(false);
+        document->newDocument("valid shader", DocumentKind::Shader);
+        document->setVimModeEnabled(false);
+        input::InputBindings bindings;
+        const FrameInputEvent copy{.scancode = SDL_SCANCODE_C, .modifiers = SDL_KMOD_CTRL};
+        const auto key = [&](Rml::Input::KeyIdentifier id) {
+            Rml::Dictionary parameters;
+            parameters["key_identifier"] = static_cast<int>(id);
+            parameters["ctrl_key"] = 1;
+            Rml::Event event(&element, Rml::EventId::Keydown, "keydown",
+                             parameters, true);
+            document->processRmlEvent(element, event);
+        };
+        Rml::Event focus(&element, Rml::EventId::Focus, "focus", {}, true);
+        document->processRmlEvent(element, focus);
+        ASSERT_TRUE(document->runShader(service));
+        const auto asset = *document->document().shader_asset;
+        ASSERT_TRUE(settle(asset, document->document().asset_revision));
+        key(Rml::Input::KI_A);
+        ASSERT_TRUE(SDL_SetClipboardText("before copy"));
+        ASSERT_FALSE(state.handleShortcut(copy, &bindings, &service));
+        key(Rml::Input::KI_C);
+        char* clipboard = SDL_GetClipboardText();
+        EXPECT_STREQ(clipboard, "valid shader");
+        SDL_free(clipboard);
+        EXPECT_EQ(service.boundAsset({}), asset);
+        EXPECT_TRUE(state.documentCommand(input::Action::EDITOR_STOP, &service));
+        EXPECT_FALSE(service.boundAsset({}));
+
+        schedule.gate(true);
+        document->setText("pending shader");
+        ASSERT_TRUE(document->runShader(service));
+        service.demandLive(std::array{std::string("projection_forward_custom")});
+        ASSERT_TRUE(schedule.waitStarted(2));
+        EXPECT_TRUE(state.handleShortcut(copy, &bindings, &service));
+        EXPECT_FALSE(service.boundAsset({}));
+        schedule.gate(false);
+
+        document->setDocumentKind(DocumentKind::Python);
+        ASSERT_TRUE(lfs::python::ensure_initialized());
+        state.runScriptAsync("import time\nprint('copy interrupt ready', flush=True)\n"
+                             "for _ in range(1000): time.sleep(0.005)\n");
+        const auto wait_until = [](const auto& predicate) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+            while (!predicate() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            return predicate();
+        };
+        EXPECT_TRUE(wait_until([&] { return state.getOutputText().contains("copy interrupt ready"); }));
+        EXPECT_TRUE(state.isScriptRunning());
+        EXPECT_TRUE(state.handleShortcut(copy, &bindings, &service));
+        EXPECT_TRUE(wait_until([&] { return !state.isScriptRunning(); }));
+        EXPECT_NE(state.getOutputText().find("KeyboardInterrupt"), std::string::npos);
+        EXPECT_FALSE(state.handleShortcut(copy, &bindings, &service));
+        document->newDocument("");
+    }
+
+    TEST(PythonConsoleInputTest, DirtyShaderSaveAsReloadPreservesExactBytes) {
+        auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
+        const std::string source = "import lfs;\r\n// λ\t  \n\r\nLfsElement effect(LfsElement e, LfsContext c) { return e; }  ";
+        const auto path = std::filesystem::temp_directory_path() / ("shader-" + lfs::core::generate_uuid_v4().to_string() + ".slang");
+        state.getEditor()->newDocument(source, DocumentKind::Shader);
+        state.setModified(true);
+        ASSERT_TRUE(state.isModified());
+        ASSERT_TRUE(state.saveDocument(path));
+        EXPECT_FALSE(state.isModified());
+        std::ifstream file(path, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+        EXPECT_EQ(bytes, source);
+        state.getEditor()->newDocument("python = True\n");
+        ASSERT_TRUE(state.loadDocument(path));
+        EXPECT_EQ(state.getEditor()->document().kind, DocumentKind::Shader);
+        EXPECT_EQ(state.getEditorText(), source);
+        EXPECT_EQ(state.getScriptPath(), path);
+        EXPECT_FALSE(state.isModified());
+        state.getEditor()->setText(source + "// edited\n");
+        EXPECT_TRUE(state.isModified());
+        ASSERT_TRUE(state.saveDocument(path));
+        EXPECT_FALSE(state.isModified());
+        file.close();
+        std::filesystem::remove(path);
+        state.getEditor()->newDocument("");
+    }
 
     TEST_F(PythonEditorInputTest, MouseRangeDeletesInEitherDirectionAndUndoes) {
         const auto original = text();

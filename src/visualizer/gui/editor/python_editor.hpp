@@ -4,6 +4,8 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/editor/document_kind.hpp"
+#include "shaders/shader_service.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -18,6 +20,38 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis::editor {
+
+    struct EditorDocument {
+        core::Uuid id;
+        DocumentKind kind = DocumentKind::Python;
+        std::uint64_t source_revision = 1;
+        std::optional<core::Uuid> shader_asset;
+        std::uint64_t asset_revision = 0;
+        shaders::ShaderSlot target;
+        bool operator==(const EditorDocument&) const = default;
+    };
+
+    struct EditorDiagnosticRange {
+        std::size_t start = 0;
+        std::size_t end = 0;
+    };
+
+    struct EditorShaderUpdate {
+        core::Uuid document;
+        shaders::ShaderStatus status;
+        bool diagnostics_changed = false;
+    };
+
+    struct EditorDocumentState {
+        EditorDocument document;
+        std::string text, locator;
+        bool modified = false;
+        std::vector<EditorDiagnosticRange> markers;
+        std::vector<shaders::Diagnostic> diagnostics;
+        std::vector<shaders::ShaderSlot> owned_bindings;
+        std::optional<shaders::ShaderStatus> shader_status;
+        bool applied = false;
+    };
 
     struct PythonEditorSymbol {
         std::string label;
@@ -66,6 +100,7 @@ namespace lfs::vis::editor {
         std::string text;
         bool modified = false;
         PythonEditorSessionState editor;
+        EditorDocument document;
 
         friend bool operator==(
             const PythonEditorSessionFile&,
@@ -90,18 +125,45 @@ namespace lfs::vis::editor {
         PythonEditor(const PythonEditor&) = delete;
         PythonEditor& operator=(const PythonEditor&) = delete;
 
-        // Render the editor inside a RmlUi custom element. Returns true if execution was requested this frame.
-        bool renderRml(Rml::Element& element, float width, float height, float font_size_px = 0.0f);
+        // Render the editor inside a RmlUi custom element.
+        void renderRml(Rml::Element& element, float width, float height, float font_size_px = 0.0f);
         void processRmlEvent(Rml::Element& element, Rml::Event& event);
 
         std::string getText() const;
-        std::string getTextStripped() const;
+        std::string getTextStripped(std::optional<core::Uuid> document = {}) const;
         void setText(const std::string& text);
         void clear();
         void setActiveSessionLocator(std::string locator);
         void clearActiveSessionLocator();
 
-        bool consumeExecuteRequested();
+        [[nodiscard]] EditorDocument document() const;
+        [[nodiscard]] std::vector<EditorDocument> documents() const;
+        [[nodiscard]] Result<EditorDocumentState>
+        inspectDocument(const core::Uuid& id, const shaders::ShaderService* service = nullptr) const;
+        [[nodiscard]] Status setDocumentText(const core::Uuid& id, const std::string& text);
+        [[nodiscard]] Status setDocumentMode(const core::Uuid& id, DocumentKind kind,
+                                             const std::optional<shaders::ShaderAsset>& asset = {});
+        [[nodiscard]] Status setDocumentTarget(const core::Uuid& id, const shaders::ShaderSlot& target,
+                                               const shaders::ShaderService& service);
+        [[nodiscard]] std::string activeSessionLocator() const;
+        void setDocumentKind(DocumentKind kind);
+        core::Uuid newDocument(const std::string& text, DocumentKind kind = DocumentKind::Python,
+                               std::string locator = {});
+        bool activateDocument(const core::Uuid& id);
+        void setShaderTarget(const shaders::ShaderSlot& target);
+        void openShaderAsset(const shaders::ShaderAsset& asset);
+        [[nodiscard]] Status removeShaderAsset(shaders::ShaderService& service);
+        [[nodiscard]] Status runShader(shaders::ShaderService& service, std::optional<core::Uuid> document = {},
+                                       const std::optional<std::string>& source = {});
+        std::vector<shaders::ShaderSlot> stopShader(shaders::ShaderService& service, std::optional<core::Uuid> document = {});
+        void setShaderChanges(std::shared_ptr<shaders::ShaderChanges> changes);
+        [[nodiscard]] bool hasShaderBinding(const shaders::ShaderService& service) const;
+        [[nodiscard]] std::vector<EditorShaderUpdate> pollShaders(shaders::ShaderService& service);
+        bool applyDiagnostics(const core::Uuid& document, std::uint64_t source_revision,
+                              std::span<const shaders::Diagnostic> diagnostics);
+        [[nodiscard]] std::vector<EditorDiagnosticRange> diagnosticRanges(const core::Uuid& document) const;
+        [[nodiscard]] bool pythonAnalysisActive() const;
+
         bool consumeTextChanged();
         [[nodiscard]] std::vector<PythonEditorSymbol> syntaxSymbols() const;
         [[nodiscard]] std::vector<PythonEditorSymbol> syntaxBreadcrumbs() const;
@@ -128,12 +190,12 @@ namespace lfs::vis::editor {
             const PythonEditorWorkspaceSessionState& state);
 
         void setReadOnly(bool readonly);
+        bool isModified() const;
+        void setModified(bool modified);
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
-
-        bool execute_requested_ = false;
     };
 
 } // namespace lfs::vis::editor
