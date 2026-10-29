@@ -8255,6 +8255,8 @@ namespace lfs::vis::project {
         if (viewer_.jobs().cancelRequested(pending->job)) {
             viewer_.jobs().canceled(pending->job);
             viewer_.jobs().free(pending->job);
+            if (application_close_pending_)
+                viewer_.requestApplicationClose();
             return;
         }
         auto* parameters = viewer_.getParameterManager();
@@ -10135,7 +10137,7 @@ namespace lfs::vis::project {
             .session_dirty = session_dirty,
             .dirty_chapters = dirty_chapters,
             .hydration_state =
-                hydrationName(
+                pending_collision_open_ ? "preparing" : hydrationName(
                     hydration_.load(
                         std::memory_order_acquire)),
             .payloads = {},
