@@ -19,6 +19,9 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
     namespace codec = lfs::core::image_codecs;
@@ -582,7 +585,7 @@ namespace {
     }
 
     TEST_F(JxlCodec, ExplicitXmpLimitsFailuresAndReusePreserveDestination) {
-        const std::array<uint8_t, 18> pixels{};
+        const std::array<uint8_t, 18> pixels{3, 17, 251, 9, 64, 128, 0, 255, 7, 33, 42, 81, 120, 4, 199, 23, 88, 161};
         codec::JxlEncodeOptions options;
         std::string packet = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\" xmlns:t=\"urn:lfs:test\"><t:value>";
         packet.append(32 * 1024 * 1024 - packet.size() - std::string_view("</t:value></r:Description></r:RDF>").size(), 'a');
@@ -590,8 +593,15 @@ namespace {
         std::vector<uint8_t> encoded;
         ASSERT_TRUE(codec::encode_jxl_memory(pixels, 3, 2, 3, codec::SampleType::UInt8, 9, encoded, options, packet));
         EXPECT_EQ(exported_boxes(encoded).second, (std::vector<std::string>{packet}));
-        EXPECT_EQ(direct_decode(encoded, 3, codec::SampleType::UInt8), (std::vector<uint8_t>(18)));
-        const auto path = write(encoded);
+        EXPECT_EQ(direct_decode(encoded, 3, codec::SampleType::UInt8), (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+        const auto path = directory / "boundary.jxl";
+        ASSERT_TRUE(codec::write_jxl(path, pixels, 3, 2, 3, codec::SampleType::UInt8, 9, options, {}, packet));
+        {
+            std::ifstream stored(path, std::ios::binary);
+            const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stored)), {});
+            EXPECT_EQ(bytes, encoded);
+            EXPECT_EQ(direct_decode(bytes, 3, codec::SampleType::UInt8), (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+        }
         const auto limited_read = codec::read_source_metadata(path);
         EXPECT_EQ(limited_read.xmp.status, codec::MetadataStatus::Limited);
         EXPECT_TRUE(limited_read.xmp.blocks.empty());
@@ -610,12 +620,46 @@ namespace {
             if (failure == 1)
                 limited.max_output_bytes = 64;
             if (failure == 2)
-                limited.cancelled = [] { return true; };
+                limited.cancelled = [calls = 0]() mutable { return ++calls > 5; };
             auto failed = codec::encode_jxl_memory(pixels, 3, 2, 3, codec::SampleType::UInt8, 9, encoded, limited, packet);
             ASSERT_FALSE(failed);
             EXPECT_EQ(failed.error().code(), failure == 2 ? lfs::ErrorCode::Cancelled : lfs::ErrorCode::ResourceExhausted);
             EXPECT_EQ(encoded, original);
-            EXPECT_FALSE(codec::write_jxl(path, pixels, 3, 2, 3, codec::SampleType::UInt8, 9, limited, {.overwrite = true}, packet));
+            uintmax_t partial_bytes = 0;
+            if (failure == 2)
+                limited.cancelled = [&] {
+                    for (const auto& entry : std::filesystem::directory_iterator(directory))
+                        if (entry.path() != path && entry.is_regular_file()) {
+#ifdef _WIN32
+                            // Directory entries may retain the pre-write size while
+                            // the atomic writer holds its exclusive data handle.
+                            const auto handle = CreateFileW(entry.path().c_str(), FILE_READ_ATTRIBUTES,
+                                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                            if (handle == INVALID_HANDLE_VALUE)
+                                continue;
+                            FILE_STANDARD_INFO info{};
+                            const bool observed = GetFileInformationByHandleEx(handle, FileStandardInfo, &info, sizeof(info));
+                            EXPECT_TRUE(CloseHandle(handle));
+                            if (observed && info.EndOfFile.QuadPart > 0)
+                                partial_bytes = std::max(partial_bytes, uintmax_t(info.EndOfFile.QuadPart));
+#else
+                            partial_bytes = std::max(partial_bytes, entry.file_size());
+#endif
+                        }
+                    return partial_bytes > 0;
+                };
+            const auto refused = codec::write_jxl(path, pixels, 3, 2, 3, codec::SampleType::UInt8, 9, limited, {.overwrite = true}, packet);
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(), failure == 2 ? lfs::ErrorCode::Cancelled : lfs::ErrorCode::ResourceExhausted);
+            if (failure == 2) {
+                EXPECT_GT(partial_bytes, 0u);
+                EXPECT_LT(partial_bytes, original.size());
+            }
+            std::ifstream preserved(path, std::ios::binary);
+            EXPECT_EQ((std::vector<uint8_t>((std::istreambuf_iterator<char>(preserved)), {})), original);
+            for (const auto& entry : std::filesystem::directory_iterator(directory))
+                EXPECT_EQ(entry.path(), path);
         }
         std::ifstream file(path, std::ios::binary);
         EXPECT_EQ((std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), {})), original);
@@ -627,7 +671,7 @@ namespace {
         EXPECT_EQ(observed.xmp.blocks[0].bytes, (std::vector<uint8_t>{'<', 'x', '/', '>'}));
         std::vector<uint8_t> alias(pixels.begin(), pixels.end());
         ASSERT_TRUE(codec::encode_jxl_memory(alias, 3, 2, 3, codec::SampleType::UInt8, 9, alias, options, "<x/>"));
-        EXPECT_EQ(direct_decode(alias, 3, codec::SampleType::UInt8), (std::vector<uint8_t>(18)));
+        EXPECT_EQ(direct_decode(alias, 3, codec::SampleType::UInt8), (std::vector<uint8_t>(pixels.begin(), pixels.end())));
         for (const auto& entry : std::filesystem::directory_iterator(directory))
             EXPECT_EQ(entry.path(), path);
     }
