@@ -484,6 +484,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);
         // Replaces every node in one pass; equivalent to upserting each record in order into an empty chapter.
         [[nodiscard]] lfs::Result<void> replace_nodes(std::span<const SceneNodeRecord> values);
+        // Stores the same records as replace_nodes. When the node order is unchanged and few
+        // records differ, only their elements are rewritten; the others keep their stored JSON.
+        [[nodiscard]] lfs::Result<void> update_nodes(std::span<const SceneNodeRecord> values);
         [[nodiscard]] lfs::Result<bool> remove_node(const lfs::core::Uuid& uuid);
         [[nodiscard]] lfs::Result<void> validate_hierarchy() const;
         [[nodiscard]] lfs::Result<void>

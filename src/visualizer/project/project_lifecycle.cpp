@@ -6698,9 +6698,9 @@ namespace lfs::vis::project {
                 std::move(old_training_uuid).error());
         }
         // Records round-trip through SCNG exactly, so comparing them replaces
-        // serializing both chapters, and an unchanged scene skips the rebuild.
-        if (captured_state->training_model_uuid != *old_training_uuid ||
-            captured_state->nodes != *existing_nodes) {
+        // serializing both chapters: an unchanged scene skips the rebuild and an
+        // edit rewrites only the changed nodes.
+        if (captured_state->training_model_uuid != *old_training_uuid) {
             auto captured_scene = lfs::io::project::materialize_scene_graph_chapter(std::move(*captured_state));
             if (!captured_scene) {
                 return lfs::Status::failure(
@@ -6708,6 +6708,9 @@ namespace lfs::vis::project {
             }
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
+        } else if (captured_state->nodes != *existing_nodes) {
+            if (auto updated = document_->edit_scene_graph().update_nodes(captured_state->nodes); !updated)
+                return updated;
         }
         scene_capture_finished = std::chrono::steady_clock::now();
         if (auto synced = lfs::io::project::sync_sfm_observations(

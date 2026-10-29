@@ -3097,6 +3097,37 @@ namespace lfs::io::project {
         return dom_.set_json("nodes", std::move(array));
     }
 
+    lfs::Result<void> SceneGraphChapter::update_nodes(const std::span<const SceneNodeRecord> values) {
+        // Each in-place update searches the node array, so many changes rebuild it in one pass instead.
+        constexpr std::size_t MAX_IN_PLACE_UPDATES = 64;
+        if (auto valid = validate_hierarchy(values); !valid)
+            return valid;
+        auto current = nodes();
+        if (!current)
+            return lfs::Result<void>::failure(std::move(current).error());
+        std::vector<std::size_t> changed;
+        const bool same_layout = current->size() == values.size() &&
+                                 std::ranges::equal(*current, values, {}, &SceneNodeRecord::uuid,
+                                                    &SceneNodeRecord::uuid);
+        for (std::size_t i = 0; same_layout && i < values.size() && changed.size() <= MAX_IN_PLACE_UPDATES; ++i)
+            if ((*current)[i] != values[i])
+                changed.push_back(i);
+        if (!same_layout || changed.size() > MAX_IN_PLACE_UPDATES) {
+            if (auto replaced = replace_nodes(values); !replaced)
+                return replaced;
+        } else {
+            for (const auto i : changed)
+                if (auto pose = validated_scene_node_pose(values[i]); !pose)
+                    return lfs::Result<void>::failure(std::move(pose).error());
+            for (const auto i : changed)
+                if (auto updated = upsert_node(values[i]); !updated)
+                    return updated;
+        }
+        cached_nodes_.emplace(values.begin(), values.end());
+        hierarchy_valid_ = true;
+        return {};
+    }
+
     lfs::Result<bool> SceneGraphChapter::remove_node(
         const lfs::core::Uuid& uuid) {
         invalidate_parsed_nodes();

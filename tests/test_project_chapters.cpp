@@ -908,6 +908,71 @@ namespace {
         }
     }
 
+    // Autosave rewrites only the nodes an edit changed; the other elements keep their stored JSON.
+    TEST(SceneGraphChapterScaleTest, UpdateNodesRewritesOnlyChangedNodes) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        auto records = scene_records_with_cameras(20000);
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.replace_nodes(records));
+        const auto untouched = records[100].uuid.to_string();
+        const auto edited = records[5000].uuid.to_string();
+        for (const auto& id : {untouched, edited})
+            ASSERT_TRUE(chapter.dom().array_find("nodes", id)->set_json("vendor_extra", Json(42)));
+        records[1].locked = true;
+        records[5000].name = "renamed";
+        ASSERT_TRUE(chapter.update_nodes(records));
+
+        EXPECT_EQ(chapter.dom().array_get("nodes", untouched)->value("vendor_extra", 0), 42);
+        EXPECT_EQ(chapter.dom().array_get("nodes", edited)->value("vendor_extra", 0), 42);
+        EXPECT_EQ(chapter.dom().array_get("nodes", edited)->value("name", std::string{}), "renamed");
+        const auto cached = chapter.nodes();
+        ASSERT_TRUE(cached);
+        EXPECT_EQ(*cached, records);
+        const auto bytes = chapter.to_bytes();
+        auto reopened = SceneGraphChapter::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+        const auto reparsed = reopened->nodes();
+        ASSERT_TRUE(reparsed);
+        EXPECT_EQ(*reparsed, records);
+    }
+
+    TEST(SceneGraphChapterScaleTest, UpdateNodesMatchesReplaceForLayoutAndBulkChanges) {
+        const auto original = scene_records_with_cameras(300);
+        auto reordered = original;
+        std::swap(reordered[10], reordered[11]);
+        std::swap(reordered[10].child_order, reordered[11].child_order);
+        auto bulk = original;
+        for (std::size_t i = 2; i < 102; ++i)
+            bulk[i].name += "_renamed";
+        auto shrunk = original;
+        shrunk.pop_back();
+        for (const auto* target : {&reordered, &bulk, &shrunk}) {
+            SceneGraphChapter updated;
+            ASSERT_TRUE(updated.replace_nodes(original));
+            ASSERT_TRUE(updated.update_nodes(*target));
+            SceneGraphChapter replaced;
+            ASSERT_TRUE(replaced.replace_nodes(*target));
+            EXPECT_EQ(updated.to_bytes(), replaced.to_bytes());
+        }
+    }
+
+    TEST(SceneGraphChapterScaleTest, UpdateNodesRejectsInvalidRecordsWithoutChanges) {
+        auto records = scene_records_with_cameras(50);
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.replace_nodes(records));
+        const auto before = chapter.to_bytes();
+        records[3].locked = true;
+        records[7].name.clear();
+        EXPECT_FALSE(chapter.update_nodes(records));
+        EXPECT_EQ(chapter.to_bytes(), before);
+
+        records[7].name = "camera";
+        records[9].parent_uuid = records[9].uuid;
+        EXPECT_FALSE(chapter.update_nodes(records));
+        EXPECT_EQ(chapter.to_bytes(), before);
+    }
+
     // A scene graph of tens of thousands of cameras is captured on the GUI thread
     // before every save, so building it must stay linear in the node count.
     TEST(SceneGraphChapterScaleTest, ReplaceNodesBuildsTwentyThousandCamerasQuickly) {
