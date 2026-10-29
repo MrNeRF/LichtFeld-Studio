@@ -1585,10 +1585,10 @@ namespace {
 
     // Timing on a synthetic scene: ./lichtfeld_tests --tensor-backend=metal
     // --gtest_also_run_disabled_tests --gtest_filter='*PortableFastRaster.DISABLED_Benchmark*'
-    TEST_P(PortableFastRaster, DISABLED_Benchmark) {
+    void benchmark_fast_raster(const ops::ShStorage storage) {
         constexpr int count = 1'000'000;
         Scene s = make_scene(count, 3, 1000, 700, 77u, -4.5f, -3.0f);
-        Gpu g = upload_scene(s, ops::ShStorage::Q16);
+        Gpu g = upload_scene(s, storage);
         const LossWeights w = random_weights(s.width, s.height, 1u, false);
         const Tensor grad_image = plane(w.image, 3, s.height, s.width);
         AdamState state;
@@ -1613,9 +1613,19 @@ namespace {
                 backward_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
             }
         }
-        std::printf("Metal fast raster, %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n", count, s.width,
+        std::printf("Metal fast raster (%s), %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n",
+                    storage == ops::ShStorage::Q16 ? "Q16" : "Float32", count, s.width,
                     s.height, forward_ms / runs, backward_ms / runs);
     }
+
+    TEST_P(PortableFastRaster, DISABLED_Benchmark) {
+        benchmark_fast_raster(ops::ShStorage::Q16);
+    }
+
+    TEST_P(PortableFastRaster, DISABLED_BenchmarkFloat32) {
+        benchmark_fast_raster(ops::ShStorage::Float32);
+    }
+
     // A primitive with NaN/Inf geometry or opacity has no footprint on any backend.
     // Vulkan used to turn NaN tile bounds into tile 0 while Metal's clamp emptied
     // them, so a NaN model trained on (or failed) depending on the backend.
