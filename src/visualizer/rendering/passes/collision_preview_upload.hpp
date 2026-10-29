@@ -57,6 +57,8 @@ namespace lfs::vis::detail {
                 const auto status = future_.get();
                 return {std::move(resource), status};
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): report PendingFailure to the owner,
+                // which records the failure and retains any unretired submission.
                 // Preserve ownership conservatively: an unexpected worker
                 // exception cannot prove that its GPU submission has retired.
                 return {std::move(resource), CollisionUploadStatus::PendingFailure};

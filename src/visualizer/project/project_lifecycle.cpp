@@ -4135,6 +4135,7 @@ namespace lfs::vis::project {
             jobs.free(*handle);
             project_write_job_.reset();
             project_write_purpose_ = ProjectWritePurpose::None;
+            LOG_ERROR("Geometry snapshot worker could not start: {}", error.what());
             return fail<void>(
                 lfs::ErrorCode::Unavailable,
                 "The geometry snapshot worker could not start.",
@@ -8263,14 +8264,17 @@ namespace lfs::vis::project {
                 } catch (const std::bad_alloc& error) {
                     state->result = fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening failed.", error.what(), "COLV");
                 } catch (const std::exception& error) {
+                    LOG_ERROR("Collision payload preparation failed: {}", error.what());
                     state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", error.what(), "COLV");
                 } catch (...) {
+                    LOG_ERROR("Collision payload preparation failed with an unknown exception");
                     state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", "Unknown collision reader exception", "COLV");
                 }
                 state->done.store(true, std::memory_order_release);
                 viewer_.wakeMainLoop();
             });
         } catch (const std::exception& error) {
+            LOG_ERROR("Collision payload worker could not start: {}", error.what());
             viewer_.jobs().failed(*job, error.what());
             viewer_.jobs().free(*job);
             return fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening could not be started.", error.what(), "COLV");
