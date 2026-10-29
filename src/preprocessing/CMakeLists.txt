@@ -7,17 +7,22 @@ find_package(OpenSSL REQUIRED)
 
 add_library(lfs_preprocessing STATIC
     preprocess.cpp
-    video_masking.cpp
     video_mask_cells.cpp
     video_mask_extraction.cpp
     video_mask_command.cpp
-    operator_view.cu
     lens_priors.cpp
     lens_views.cpp
     lens_views.hpp
     include/preprocessing/preprocess.hpp
     include/preprocessing/lens_priors.hpp
 )
+
+# SAM2 video masking runs on CUDA streams; other builds report it as unsupported.
+if(LFS_HAS_CUDA)
+    target_sources(lfs_preprocessing PRIVATE video_masking.cpp operator_view.cu)
+else()
+    target_sources(lfs_preprocessing PRIVATE video_masking_unsupported.cpp)
+endif()
 
 target_include_directories(lfs_preprocessing
     PUBLIC

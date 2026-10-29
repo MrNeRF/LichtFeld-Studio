@@ -24,6 +24,7 @@ namespace lfs::preprocessing {
 
     std::expected<VideoMaskReport, Error> mask_video_frames(const std::span<const VideoMaskFrame> frames,
                                                             const ImageCircle& circle, const VideoMaskOptions& masking) {
+#if LFS_HAS_CUDA
         struct Stream {
             cudaStream_t value = nullptr;
             Stream() { LFS_CUDA_CHECK(cudaStreamCreateWithFlags(&value, cudaStreamNonBlocking)); }
@@ -35,6 +36,9 @@ namespace lfs::preprocessing {
         } stream;
         const core::CUDAStreamGuard guard(stream.value);
         return mask_video_sequence(frames, circle, masking, stream.value);
+#else
+        return mask_video_sequence(frames, circle, masking, nullptr);
+#endif
     }
 
     io::ExtractionOutcome extract_video_frames(const io::VideoFrameExtractor::Params& params,

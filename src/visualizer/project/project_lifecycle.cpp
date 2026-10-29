@@ -2938,7 +2938,7 @@ namespace lfs::vis::project {
         return gui && gui->asyncTasks().sceneReplacementPending();
     }
 
-    bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry) {
+    bool ProjectLifecycle::deferCollisionSwitch(lfs::core::MoveOnlyFunction<lfs::Result<void>()>&& retry) {
         auto* gui = viewer_.getGuiManager();
         if (!gui || !gui->asyncTasks().sceneReplacementRequired())
             return false;
@@ -8334,7 +8334,7 @@ namespace lfs::vis::project {
         lfs::io::project::ParameterManagerSnapshot parameters;
         std::optional<std::filesystem::path> discard_master;
         ProjectSwitchDisposition disposition;
-        std::move_only_function<lfs::Result<void>()> after_open;
+        lfs::core::MoveOnlyFunction<lfs::Result<void>()> after_open;
         std::array<std::chrono::steady_clock::time_point, 6> stages;
     };
 
@@ -8342,7 +8342,7 @@ namespace lfs::vis::project {
     ProjectLifecycle::openMaster(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition,
-        std::move_only_function<lfs::Result<void>()> after_open) {
+        lfs::core::MoveOnlyFunction<lfs::Result<void>()> after_open) {
         recovery_prompt_pending_ = false;
         if (auto preflight =
                 preflightSwitch(disposition);
@@ -8452,7 +8452,7 @@ namespace lfs::vis::project {
         const auto shell_staged_at =
             std::chrono::steady_clock::now();
 
-        std::move_only_function<lfs::Result<void>()> commit =
+        lfs::core::MoveOnlyFunction<lfs::Result<void>()> commit =
             [this, prepared = PreparedOpen{
                        std::move(candidate), std::move(*shell), std::move(*session),
                        std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),

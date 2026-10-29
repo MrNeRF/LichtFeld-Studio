@@ -12,6 +12,7 @@
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/move_only_function.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
@@ -66,7 +67,7 @@ namespace lfs::vis {
             void cancelCollision();
             [[nodiscard]] bool collisionWorkerActive() const;
             void dropSceneReplacement();
-            bool deferSceneReplacement(std::move_only_function<void()> replacement);
+            bool deferSceneReplacement(lfs::core::MoveOnlyFunction<void()> replacement);
             [[nodiscard]] bool sceneReplacementRequired() const { return collision_worker_.valid() || collision_replacement_; }
             [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
@@ -386,7 +387,7 @@ namespace lfs::vis {
             JobHandle collision_job_;
             std::future<void> collision_worker_;
             std::stop_source collision_stop_;
-            std::move_only_function<void()> collision_replacement_;
+            lfs::core::MoveOnlyFunction<void()> collision_replacement_;
             std::shared_ptr<const core::CollisionVolume> collision_result_;
             uint64_t collision_epoch_ = 0;
             std::optional<core::Scene::CollisionSourceIdentity> collision_source_;
