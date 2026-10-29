@@ -482,6 +482,8 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<SceneNodeRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);
+        // Replaces every node in one pass; equivalent to upserting each record in order into an empty chapter.
+        [[nodiscard]] lfs::Result<void> replace_nodes(std::span<const SceneNodeRecord> values);
         [[nodiscard]] lfs::Result<bool> remove_node(const lfs::core::Uuid& uuid);
         [[nodiscard]] lfs::Result<void> validate_hierarchy() const;
         [[nodiscard]] lfs::Result<void>

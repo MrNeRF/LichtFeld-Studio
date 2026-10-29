@@ -2957,110 +2957,144 @@ namespace lfs::io::project {
         return std::optional<SceneNodeRecord>(std::move(*parsed));
     }
 
+    namespace {
+
+        // Validates a node record and returns its georeference pose JSON.
+        lfs::Result<std::optional<JsonChapterDom::Json>> validated_scene_node_pose(const SceneNodeRecord& value) {
+            using Json = JsonChapterDom::Json;
+            if (value.uuid.is_nil() || value.type.empty() || value.name.empty() ||
+                (value.parent_uuid && value.parent_uuid->is_nil()) ||
+                std::ranges::any_of(value.local_transform,
+                                    [](const float item) { return !std::isfinite(item); }) ||
+                value.type == "keyframe" || value.type == "keyframe_group") {
+                return fail<std::optional<Json>>(
+                    lfs::ErrorCode::InvalidArgument, "The scene node record is invalid.",
+                    "UUID/type/name/transform must be valid and generated keyframes are excluded",
+                    "SCNG", "nodes");
+            }
+            if (value.collision && (value.collision->is_nil() || value.type != "collision"))
+                return fail<std::optional<Json>>(
+                    lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
+                    "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
+            if (value.payload &&
+                (value.payload->fourcc.size() != 4 ||
+                 value.payload->instance_uuid.is_nil() ||
+                 value.payload->source_kind.empty() ||
+                 (value.payload->reference_uuid &&
+                  value.payload->reference_uuid->is_nil()))) {
+                return fail<std::optional<Json>>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The scene node payload binding is invalid.",
+                    "Payload fourcc, UUID, source kind, and reference must be valid", "SCNG",
+                    "nodes.payload");
+            }
+            std::optional<Json> pose;
+            if (value.georef_pose) {
+                const double norm = std::sqrt(
+                    value.georef_pose->rotation[0] * value.georef_pose->rotation[0] +
+                    value.georef_pose->rotation[1] * value.georef_pose->rotation[1] +
+                    value.georef_pose->rotation[2] * value.georef_pose->rotation[2] +
+                    value.georef_pose->rotation[3] * value.georef_pose->rotation[3]);
+                if (!std::isfinite(norm) || norm < 1e-12 ||
+                    std::ranges::any_of(value.georef_pose->translation, [](const double item) { return !std::isfinite(item); })) {
+                    return fail<std::optional<Json>>(
+                        lfs::ErrorCode::InvalidArgument,
+                        "The node georeference pose is invalid.",
+                        "Quaternion must have non-zero norm and all values must be finite",
+                        "SCNG", "nodes.georef_pose");
+                }
+                pose = Json{
+                    {"rotation", json_array(value.georef_pose->rotation)},
+                    {"translation", json_array(value.georef_pose->translation)},
+                };
+            }
+            return pose;
+        }
+
+        void fill_scene_node_element(const SceneNodeRecord& value, std::optional<JsonChapterDom::Json> pose,
+                                     JsonChapterDom::Json& element) {
+            element["type"] = value.type;
+            element["name"] = value.name;
+            if (value.parent_uuid) {
+                element["parent_uuid"] = value.parent_uuid->to_string();
+            } else {
+                element["parent_uuid"] = nullptr;
+            }
+            element["child_order"] = value.child_order;
+            element["local_transform"] = json_array(value.local_transform);
+            element["visible"] = value.visible;
+            element["locked"] = value.locked;
+            element["training_enabled"] = value.training_enabled;
+            element["payload_diverged"] = value.payload_diverged;
+            if (value.point_cloud_source)
+                element["point_cloud_source"] = true;
+            else
+                element.erase("point_cloud_source");
+            if (pose) {
+                element["georef_pose"] = std::move(*pose);
+            } else {
+                element.erase("georef_pose");
+            }
+            if (value.payload) {
+                element["payload"] = payload_binding_json(*value.payload);
+            } else {
+                element.erase("payload");
+            }
+            if (value.cropbox) {
+                element["cropbox"] = cropbox_json(*value.cropbox);
+            } else {
+                element.erase("cropbox");
+            }
+            if (value.ellipsoid) {
+                element["ellipsoid"] = ellipsoid_json(*value.ellipsoid);
+            } else {
+                element.erase("ellipsoid");
+            }
+            if (value.crop_polygon) {
+                element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
+            } else {
+                element.erase("crop_polygon");
+            }
+            if (value.collision)
+                element["collision"] = value.collision->to_string();
+            else
+                element.erase("collision");
+            if (value.camera) {
+                element["camera"] = camera_json(*value.camera);
+            } else {
+                element.erase("camera");
+            }
+        }
+
+    } // namespace
+
     lfs::Result<void> SceneGraphChapter::upsert_node(
         const SceneNodeRecord& value) {
         invalidate_parsed_nodes();
-        if (value.uuid.is_nil() || value.type.empty() || value.name.empty() ||
-            (value.parent_uuid && value.parent_uuid->is_nil()) ||
-            std::ranges::any_of(value.local_transform,
-                                [](const float item) { return !std::isfinite(item); }) ||
-            value.type == "keyframe" || value.type == "keyframe_group") {
-            return fail<void>(
-                lfs::ErrorCode::InvalidArgument, "The scene node record is invalid.",
-                "UUID/type/name/transform must be valid and generated keyframes are excluded",
-                "SCNG", "nodes");
-        }
-        if (value.collision && (value.collision->is_nil() || value.type != "collision"))
-            return fail<void>(
-                lfs::ErrorCode::InvalidArgument, "Invalid collision payload reference.",
-                "Only collision nodes may reference a non-null COLV instance", "SCNG", "nodes.collision");
-        if (value.payload &&
-            (value.payload->fourcc.size() != 4 ||
-             value.payload->instance_uuid.is_nil() ||
-             value.payload->source_kind.empty() ||
-             (value.payload->reference_uuid &&
-              value.payload->reference_uuid->is_nil()))) {
-            return fail<void>(
-                lfs::ErrorCode::InvalidArgument,
-                "The scene node payload binding is invalid.",
-                "Payload fourcc, UUID, source kind, and reference must be valid", "SCNG",
-                "nodes.payload");
-        }
-        std::optional<Json> pose;
-        if (value.georef_pose) {
-            const double norm = std::sqrt(
-                value.georef_pose->rotation[0] * value.georef_pose->rotation[0] +
-                value.georef_pose->rotation[1] * value.georef_pose->rotation[1] +
-                value.georef_pose->rotation[2] * value.georef_pose->rotation[2] +
-                value.georef_pose->rotation[3] * value.georef_pose->rotation[3]);
-            if (!std::isfinite(norm) || norm < 1e-12 ||
-                std::ranges::any_of(value.georef_pose->translation, [](const double item) { return !std::isfinite(item); })) {
-                return fail<void>(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The node georeference pose is invalid.",
-                    "Quaternion must have non-zero norm and all values must be finite",
-                    "SCNG", "nodes.georef_pose");
-            }
-            pose = Json{
-                {"rotation", json_array(value.georef_pose->rotation)},
-                {"translation", json_array(value.georef_pose->translation)},
-            };
-        }
-
+        auto pose = validated_scene_node_pose(value);
+        if (!pose)
+            return lfs::Result<void>::failure(std::move(pose).error());
         const std::string uuid = value.uuid.to_string();
         Json element = dom_.array_get("nodes", uuid).value_or(Json{{"uuid", uuid}});
-        element["type"] = value.type;
-        element["name"] = value.name;
-        if (value.parent_uuid) {
-            element["parent_uuid"] = value.parent_uuid->to_string();
-        } else {
-            element["parent_uuid"] = nullptr;
-        }
-        element["child_order"] = value.child_order;
-        element["local_transform"] = json_array(value.local_transform);
-        element["visible"] = value.visible;
-        element["locked"] = value.locked;
-        element["training_enabled"] = value.training_enabled;
-        element["payload_diverged"] = value.payload_diverged;
-        if (value.point_cloud_source)
-            element["point_cloud_source"] = true;
-        else
-            element.erase("point_cloud_source");
-        if (pose) {
-            element["georef_pose"] = std::move(*pose);
-        } else {
-            element.erase("georef_pose");
-        }
-        if (value.payload) {
-            element["payload"] = payload_binding_json(*value.payload);
-        } else {
-            element.erase("payload");
-        }
-        if (value.cropbox) {
-            element["cropbox"] = cropbox_json(*value.cropbox);
-        } else {
-            element.erase("cropbox");
-        }
-        if (value.ellipsoid) {
-            element["ellipsoid"] = ellipsoid_json(*value.ellipsoid);
-        } else {
-            element.erase("ellipsoid");
-        }
-        if (value.crop_polygon) {
-            element["crop_polygon"] = crop_polygon_json(*value.crop_polygon);
-        } else {
-            element.erase("crop_polygon");
-        }
-        if (value.collision)
-            element["collision"] = value.collision->to_string();
-        else
-            element.erase("collision");
-        if (value.camera) {
-            element["camera"] = camera_json(*value.camera);
-        } else {
-            element.erase("camera");
-        }
+        fill_scene_node_element(value, std::move(*pose), element);
         return dom_.array_put("nodes", uuid, std::move(element));
+    }
+
+    lfs::Result<void> SceneGraphChapter::replace_nodes(const std::span<const SceneNodeRecord> values) {
+        invalidate_parsed_nodes();
+        Json array = Json::array();
+        std::unordered_map<lfs::core::Uuid, std::size_t> positions;
+        positions.reserve(values.size());
+        for (const SceneNodeRecord& value : values) {
+            auto pose = validated_scene_node_pose(value);
+            if (!pose)
+                return lfs::Result<void>::failure(std::move(pose).error());
+            const auto [position, inserted] = positions.try_emplace(value.uuid, array.size());
+            if (inserted)
+                array.push_back(Json{{"uuid", value.uuid.to_string()}});
+            fill_scene_node_element(value, std::move(*pose), array[position->second]);
+        }
+        return dom_.set_json("nodes", std::move(array));
     }
 
     lfs::Result<bool> SceneGraphChapter::remove_node(

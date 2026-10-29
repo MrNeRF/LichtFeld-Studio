@@ -3663,6 +3663,15 @@ namespace lfs::vis::project {
             return {};
         }
         const auto path = *document_->source_path();
+        // The head slots name the current commit; reopening the whole project is
+        // only needed when another writer moved the master past the held source.
+        if (const auto* source = document_->source_reader()) {
+            const auto head = lfs::io::project::ProjectReader::read_head_identity(path);
+            if (head && head->project_uuid == document_->project_uuid() &&
+                head->commit_uuid == source->commit().commit_uuid) {
+                return {};
+            }
+        }
         auto opened = ProjectDocument::open(
             path,
             {

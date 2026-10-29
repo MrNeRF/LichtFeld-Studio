@@ -776,6 +776,75 @@ namespace {
             << "scale pass took " << std::chrono::duration<double>(elapsed).count() << "s";
     }
 
+    std::vector<SceneNodeRecord> scene_records_with_cameras(const int camera_count) {
+        const auto root_id = uuid_literal("53000000-0000-4000-8000-000000000001");
+        const auto group_id = uuid_literal("53000000-0000-4000-8000-000000000002");
+        std::vector<SceneNodeRecord> records;
+        records.push_back({.uuid = root_id, .type = "dataset", .name = "Dataset", .child_order = 0});
+        records.push_back({.uuid = group_id, .type = "camera_group", .name = "Cameras", .parent_uuid = root_id, .child_order = 0});
+        for (int i = 0; i < camera_count; ++i) {
+            CameraRecord camera;
+            camera.uid = i;
+            camera.camera_id = 1;
+            camera.rotation = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            camera.translation = {0.0f, 0.0f, static_cast<float>(i)};
+            camera.focal_x = 800.0f;
+            camera.focal_y = 800.0f;
+            camera.center_x = 640.0f;
+            camera.center_y = 360.0f;
+            camera.camera_width = 1280;
+            camera.camera_height = 720;
+            camera.image_width = 1280;
+            camera.image_height = 720;
+            camera.image_name = std::format("cam_{:05}.png", i);
+            camera.image_path = camera.image_name;
+            camera.split = "train";
+            records.push_back({
+                .uuid = uuid_literal(std::format("53000000-0000-4000-8000-{:012x}", static_cast<unsigned>(i + 3))),
+                .type = "camera",
+                .name = camera.image_name,
+                .parent_uuid = group_id,
+                .child_order = static_cast<std::uint32_t>(i),
+                .camera = std::move(camera),
+            });
+        }
+        return records;
+    }
+
+    TEST(SceneGraphChapterScaleTest, ReplaceNodesMatchesSequentialUpserts) {
+        auto records = scene_records_with_cameras(300);
+        auto renamed = records[7];
+        renamed.name = "renamed";
+        records.push_back(renamed);
+
+        SceneGraphChapter upserted;
+        for (const auto& record : records)
+            ASSERT_TRUE(upserted.upsert_node(record));
+        SceneGraphChapter replaced;
+        ASSERT_TRUE(replaced.replace_nodes(records));
+        EXPECT_EQ(upserted.to_bytes(), replaced.to_bytes());
+        auto nodes = replaced.nodes();
+        ASSERT_TRUE(nodes) << lfs::format_for_developer(nodes.error());
+        EXPECT_EQ(nodes->size(), records.size() - 1);
+        EXPECT_EQ((*nodes)[7].name, "renamed");
+
+        records.back().name.clear();
+        EXPECT_FALSE(replaced.replace_nodes(records));
+    }
+
+    // A scene graph of tens of thousands of cameras is captured on the GUI thread
+    // before every save, so building it must stay linear in the node count.
+    TEST(SceneGraphChapterScaleTest, ReplaceNodesBuildsTwentyThousandCamerasQuickly) {
+        const auto records = scene_records_with_cameras(20000);
+        const auto started = std::chrono::steady_clock::now();
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.replace_nodes(records));
+        ASSERT_TRUE(chapter.validate_hierarchy());
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        EXPECT_LT(elapsed, std::chrono::seconds(5))
+            << "replace_nodes took " << std::chrono::duration<double>(elapsed).count() << "s";
+    }
+
     CameraRecord make_chapter_camera(const bool has_image = true) {
         CameraRecord camera;
         camera.uid = 3;
