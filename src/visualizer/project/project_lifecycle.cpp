@@ -4144,7 +4144,6 @@ namespace lfs::vis::project {
             jobs.free(*handle);
             project_write_job_.reset();
             project_write_purpose_ = ProjectWritePurpose::None;
-            LOG_ERROR("Geometry snapshot worker could not start: {}", error.what());
             return fail<void>(
                 lfs::ErrorCode::Unavailable,
                 "The geometry snapshot worker could not start.",
@@ -8253,6 +8252,8 @@ namespace lfs::vis::project {
         pending->epoch = epoch_.load(std::memory_order_acquire);
         pending->scene_serial = scene_mutation_serial_.load(std::memory_order_acquire);
         pending->parameter_serial = parameter_manager->dirtySerial();
+        if (const auto* shaders = viewer_.getShaderService())
+            pending->shader_token = shaders->projectToken();
         auto* state = pending.get();
         try {
             pending->worker = std::jthread([this, state, candidate = std::move(worker_candidate)](std::stop_token stop) {
@@ -8298,10 +8299,13 @@ namespace lfs::vis::project {
             return;
         }
         auto* parameters = viewer_.getParameterManager();
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
         if (pending->result &&
             (pending->epoch != epoch_.load(std::memory_order_acquire) ||
              pending->scene_serial != scene_mutation_serial_.load(std::memory_order_acquire) ||
-             !parameters || pending->parameter_serial != parameters->dirtySerial())) {
+             !parameters || pending->parameter_serial != parameters->dirtySerial() ||
+             pending->shader_token != shader_token)) {
             pending->result = fail<void>(lfs::ErrorCode::FailedPrecondition,
                                         "The current project changed while opening. Open the project again.",
                                         "Prepared collision open is stale; preserving the current scene", "project.open");

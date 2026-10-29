@@ -262,6 +262,7 @@
       "src/visualizer/gui/sequencer_ui_manager.cpp:442",
       "src/visualizer/gui/sequencer_ui_manager.cpp:1098",
       "src/visualizer/include/visualizer/post_work_utils.hpp:47",
+      "src/visualizer/project/project_lifecycle.cpp:4113",
       "src/visualizer/rendering/passes/vulkan_environment_pass.cpp:692",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:4379",
       "src/visualizer/selection/selection_service.cpp:2531",

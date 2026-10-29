@@ -640,6 +640,7 @@ namespace lfs::vis::project {
             std::uint64_t epoch = 0;
             std::uint64_t scene_serial = 0;
             std::uint64_t parameter_serial = 0;
+            std::array<std::uint64_t, 2> shader_token{};
             std::jthread worker;
         };
         std::unique_ptr<PendingCollisionOpen> pending_collision_open_;

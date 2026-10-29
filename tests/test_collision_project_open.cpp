@@ -8,6 +8,7 @@
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
+#include "shaders/shader_service.hpp"
 #include "visualizer_impl.hpp"
 #include <condition_variable>
 #include <cstdlib>
@@ -76,6 +77,8 @@ namespace lfs::vis {
             pending->epoch = lifecycle().epoch_.load();
             pending->scene_serial = lifecycle().scene_mutation_serial_.load();
             pending->parameter_serial = viewer->getParameterManager()->dirtySerial();
+            if (const auto* shaders = viewer->getShaderService())
+                pending->shader_token = shaders->projectToken();
             pending->install = [this]() -> lfs::Result<void> {
                 auto valid = lifecycle().preflightSwitch(ProjectSwitchDisposition::DiscardChanges);
                 if (!valid)
@@ -152,6 +155,10 @@ namespace lfs::vis {
         void changeEpoch() { lifecycle().epoch_.fetch_add(1); }
         void changeParameters() { viewer->getParameterManager()->markDirty(); }
         void queueStopThenOpen() { viewer->pending_training_action_ = VisualizerImpl::PendingTrainingAction::OpenProject; }
+        void attachShaders() {
+            viewer->shader_service_ = std::make_unique<shaders::ShaderService>(
+                viewer->getScene(), shaders::HostLinkerFactory{}, [] {});
+        }
     };
 
     TEST_F(CollisionProjectOpenTest, DueAutosaveWaitsForPendingOpenAndDoesNotDefeatInstallation) {
@@ -237,6 +244,20 @@ namespace lfs::vis {
         changeParameters();
         settle();
         EXPECT_FALSE(installed);
+    }
+
+    TEST_F(CollisionProjectOpenTest, StaleShadersDoNotInstallOrLoseTheEdit) {
+        attachShaders();
+        begin();
+        auto* shader_service = viewer->getShaderService();
+        const auto edited = shader_service->command(shaders::SetShaderSource{
+            .source = "import lfs;", .name = "Keep shader edit"});
+        ASSERT_TRUE(edited);
+        settle();
+        EXPECT_FALSE(installed);
+        EXPECT_TRUE(shader_service->dirty());
+        EXPECT_TRUE(shader_service->asset(*edited));
+        EXPECT_FALSE(viewer->jobs().anyRunning(JobType::ProjectOpen));
     }
 
     TEST_F(CollisionProjectOpenTest, DecodeFailureSettlesJobWithoutInstalling) {
