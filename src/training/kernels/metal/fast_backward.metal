@@ -18,6 +18,12 @@ static bool fast_valid_instance_count(device const uint* counts, const uint capa
     return counts[1] == 0u && counts[0] > 0u && counts[0] <= capacity;
 }
 
+// The instance count fits the capacity. An empty frame fits too: as in CUDA's
+// preprocess backward, its primitives still take their regularizer and Adam steps.
+static bool fast_instances_fit(device const uint* counts, const uint capacity) {
+    return counts[1] == 0u && counts[0] <= capacity;
+}
+
 struct FastClearGradParams {
     device const uint* counts;
     device const uint* n_touched;
@@ -778,7 +784,7 @@ kernel void fast_backward_sh(constant FastBackwardShParams& p [[buffer(0)]],
                              const uint simd_lane [[thread_index_in_simdgroup]],
                              const uint simd_group [[simdgroup_index_in_threadgroup]],
                              const uint simd_groups [[simdgroups_per_threadgroup]]) {
-    if (!fast_valid_instance_count(p.counts, p.capacity))
+    if (!fast_instances_fit(p.counts, p.capacity))
         return;
     threadgroup float4 scratch[32];
     const FastLane t = {lane, simd_lane, simd_group, simd_groups, group};
@@ -947,7 +953,7 @@ kernel void fast_backward_geometry(constant FastBackwardGeometryParams& p [[buff
                                    const uint simd_lane [[thread_index_in_simdgroup]],
                                    const uint simd_group [[simdgroup_index_in_threadgroup]],
                                    const uint simd_groups [[simdgroups_per_threadgroup]]) {
-    if (!fast_valid_instance_count(p.counts, p.capacity))
+    if (!fast_instances_fit(p.counts, p.capacity))
         return;
     threadgroup float4 scratch[32];
     threadgroup float sum_scratch[32];
