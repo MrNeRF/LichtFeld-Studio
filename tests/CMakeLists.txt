@@ -220,6 +220,7 @@ if(BUILD_VISUALIZER_TESTS)
         licht_test_support.cpp
         test_json_chapter_dom.cpp
         test_visualizer_post_work.cpp
+        test_collision_project_open.cpp
         test_project_document.cpp
         test_keymap_upgrade.cpp
         test_keymap_default_contract.cpp
@@ -843,6 +844,7 @@ set(TEST_FILES
     test_video_cuda_frame_handoff.cpp
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
+    test_collision_project_open.cpp
     test_file_association.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp

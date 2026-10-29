@@ -52,6 +52,7 @@
 #include "visualizer/app_store.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/visualizer_impl.hpp"
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
@@ -1580,8 +1581,9 @@ NB_MODULE(lichtfeld, m) {
                                 .keep_asset_manager_open =
                                     keep_asset_manager_open}
                                 .emit();
-                        if (const auto* gui = lfs::vis::services().guiOrNull())
-                            deferred = gui->asyncTasks().sceneReplacementPending();
+                        if (const auto* viewer = dynamic_cast<const lfs::vis::VisualizerImpl*>(
+                                lfs::python::get_visualizer()))
+                            deferred = viewer->projectOpenPending();
                     });
                 return deferred ? lfs::vis::ProjectOpenOutcome::Deferred : lfs::vis::ProjectOpenOutcome::Opened;
             }

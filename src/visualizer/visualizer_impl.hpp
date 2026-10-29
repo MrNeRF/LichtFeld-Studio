@@ -192,6 +192,7 @@ namespace lfs::vis {
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
+        [[nodiscard]] bool projectOpenPending() const;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -320,6 +321,7 @@ namespace lfs::vis {
         friend class AlignDepthIntegrationTest;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class CollisionProjectOpenTest;
         friend void installSessionTestInputController(VisualizerImpl& viewer);
         friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;

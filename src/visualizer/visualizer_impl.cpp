@@ -4469,6 +4469,8 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> VisualizerImpl::startTraining() {
+        if (project_lifecycle_ && project_lifecycle_->isOpenPending())
+            return std::unexpected("Wait for project opening before starting training.");
         if (isTrainingStartPending())
             return {};
         if (!trainer_manager_)
@@ -4913,6 +4915,12 @@ namespace lfs::vis {
     bool VisualizerImpl::projectCreatePending() const {
         return pending_training_action_ ==
                PendingTrainingAction::CreateProject;
+    }
+
+    bool VisualizerImpl::projectOpenPending() const {
+        return (project_lifecycle_ && project_lifecycle_->isOpenPending()) ||
+               (gui_manager_ && gui_manager_->asyncTasks().sceneReplacementPending()) ||
+               pending_training_action_ == PendingTrainingAction::OpenProject;
     }
 
     void VisualizerImpl::projectWaitWrite() {

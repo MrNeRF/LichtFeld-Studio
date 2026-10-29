@@ -3379,7 +3379,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::
         isBackgroundAutosaveSuppressed() const {
-        if (application_close_pending_) {
+        if (application_close_pending_ || pending_collision_open_) {
             return true;
         }
         if (close_save_state_.load(
@@ -4620,6 +4620,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProject(const bool wait_for_write) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (!pending_preview_png_.empty() ||
             project_write_purpose_ == ProjectWritePurpose::Thumbnail) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
@@ -4762,6 +4767,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProjectAsync(std::function<lfs::Result<void>()> on_ready) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (pending_training_start_) {
             return {};
         }

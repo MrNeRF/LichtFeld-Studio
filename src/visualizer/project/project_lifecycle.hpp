@@ -33,6 +33,7 @@ namespace lfs::training {
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class CollisionProjectOpenTest;
     class PayloadRecaptureTest;
     class StoredSessionRestoreTest_CompletionPublishesOnViewerThread_Test;
     class VisualizerImplResetTest_AsyncViewerTrainingStartCanBeCanceledBeforeInitialization_Test;
@@ -309,6 +310,9 @@ namespace lfs::vis::project {
         void updateMaintenance();
         void noteProjectFrameRendered(double render_ms);
         [[nodiscard]] bool hasDirtyProject();
+        [[nodiscard]] bool isOpenPending() const noexcept {
+            return pending_collision_open_ != nullptr;
+        }
         [[nodiscard]] lfs::Result<void>
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>
@@ -383,6 +387,7 @@ namespace lfs::vis::project {
             std::string* error_message = nullptr);
 
     private:
+        friend class lfs::vis::CollisionProjectOpenTest;
         friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindReturnsBeforeSlowWriteAndCoalescesStarts_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncTrainingBindFailureDoesNotStart_Test;
