@@ -627,6 +627,18 @@ namespace lfs::vis::project {
             std::move_only_function<lfs::Result<void>()> after_open = {});
         lfs::Result<void> finishScratchRecovery();
         struct PreparedOpen;
+        struct PendingCollisionOpen {
+            std::atomic<bool> done{false};
+            lfs::Result<void> result;
+            std::move_only_function<lfs::Result<void>()> install;
+            JobHandle job;
+            std::uint64_t epoch = 0;
+            std::uint64_t scene_serial = 0;
+            std::uint64_t parameter_serial = 0;
+            std::jthread worker;
+        };
+        std::unique_ptr<PendingCollisionOpen> pending_collision_open_;
+        void settleCollisionOpen();
         lfs::Result<void> commitOpen(PreparedOpen&& prepared);
         lfs::Result<void> finishRecovered(
             const std::filesystem::path& master, const std::filesystem::path& sidecar,

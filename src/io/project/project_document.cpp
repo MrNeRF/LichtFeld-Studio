@@ -5636,6 +5636,28 @@ namespace lfs::io::project {
                       bool payload_units_only,
                       const std::unordered_set<lfs::core::Uuid>* selected_payload_nodes);
 
+    bool ProjectDocument::has_deferred_collision_payloads() const {
+        return std::ranges::any_of(impl_->deferred_geometry_keys,
+                                  [](const auto& key) { return key.fourcc == FOURCC_COLV; });
+    }
+
+    lfs::Result<void> ProjectDocument::preload_collision_payloads(const std::function<bool()>& canceled) {
+        auto nodes = impl_->scene_graph.nodes();
+        if (!nodes)
+            return lfs::Status::failure(std::move(nodes).error());
+        for (const auto& node : *nodes) {
+            if (canceled && canceled())
+                return fail<void>(lfs::ErrorCode::Cancelled, "Project opening was cancelled.",
+                                  "Collision payload preparation was cancelled", "COLV");
+            if (!node.collision)
+                continue;
+            auto payload = impl_->resolve_collision(*node.collision);
+            if (!payload)
+                return lfs::Status::failure(std::move(payload).error());
+        }
+        return {};
+    }
+
     lfs::Result<std::unique_ptr<lfs::core::Scene>>
     ProjectDocument::stage_shell(
         lfs::core::Scene& destination) const {

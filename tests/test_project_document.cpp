@@ -3176,6 +3176,16 @@ namespace {
                 if (state.fourcc == FOURCC_COLV)
                     EXPECT_EQ(state.loaded, !deferred);
             document = require_result_ptr(ProjectDocument::open(destination, {.defer_geometry_payloads = deferred}));
+            EXPECT_EQ(document->has_deferred_collision_payloads(), deferred);
+            if (deferred) {
+                const auto canceled = document->preload_collision_payloads([] { return true; });
+                ASSERT_FALSE(canceled);
+                EXPECT_EQ(canceled.error().code(), lfs::ErrorCode::Cancelled);
+                EXPECT_TRUE(document->has_deferred_collision_payloads());
+            }
+            ASSERT_TRUE(document->preload_collision_payloads());
+            EXPECT_FALSE(document->has_deferred_collision_payloads());
+            EXPECT_FALSE(document->dirty());
             Scene target;
             auto shell = require_result(document->stage_shell(target));
             ASSERT_TRUE(document->hydrate(target));
