@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "rendering/program_set_handle.hpp"
 
 #include "core/tensor.hpp"
 #include "frame_contract.hpp"

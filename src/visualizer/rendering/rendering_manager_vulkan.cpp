@@ -1901,7 +1901,7 @@ namespace lfs::vis {
         frame.exact_surface_picking = exact_surface_picking_;
     }
 
-    RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
+    RenderingManager::VulkanFrameResult RenderingManager::drawVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
         if (context.deterministic_export)
             markDirty(DirtyFlag::ALL, FrameReason::AsyncCompletion, "deterministic_capture");
@@ -2663,6 +2663,8 @@ namespace lfs::vis {
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
         scene_state.reveal = sequencer_reveal_;
+        if (scene_manager)
+            attachCustomEffect(scene_state, *scene_manager, scene_time_);
         FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -2684,6 +2686,73 @@ namespace lfs::vis {
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .view_panels = {}};
         configureSurfacePicking(frame_ctx);
+
+        // Resolve every visible family's inputs before choosing the frame's immutable publication.
+        if (shader_service_ && shader_service_->hasBindings() && (frame_ctx.scene_state.custom_effect || shader_service_->hasApplicableBindings()) && (model || (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode))) && context.vulkan_context && !frame_settings.point_cloud_mode) {
+            auto base = buildViewportRenderRequest(frame_ctx, render_size);
+            std::vector<const core::SplatData*> models{model};
+            if (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                models.clear();
+                const auto nodes = plyComparisonNodes(scene_manager->getScene());
+                if (const auto pair = plyComparisonPairForOffset(nodes.size(), frame_settings.split_view_offset)) {
+                    // As the panels draw: each side's own model, else the combined model for both.
+                    const auto owned = [](const PlyComparisonNode& entry) { return hasRenderableGaussians(entry.node->model.get()) ? entry.node->model.get() : nullptr; };
+                    const std::array sides{nodes[pair->first], nodes[pair->second]};
+                    const bool own = std::ranges::all_of(sides, [&](const auto& entry) { return !entry.splat_slot || owned(entry); });
+                    for (const auto& entry : sides)
+                        if (const auto* const panel = own ? owned(entry) : scene_manager->getScene().peekCombinedModel();
+                            entry.splat_slot && !entry.node->point_cloud && !entry.node->point_cloud_source && hasRenderableGaussians(panel) && !std::ranges::contains(models, panel))
+                            models.push_back(panel);
+                }
+            }
+            std::vector<std::string> hosts;
+            for (const auto* planned_model : models) {
+                auto request = base;
+                request.gut = rendering::isGutBackend(rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut));
+                if (planned_model != model && scene_manager) {
+                    for (const auto& slot : scene_manager->getScene().getVisibleSplatNodeSlots())
+                        if (slot.node && slot.node->model.get() == planned_model) {
+                            applyPlyComparisonNodeScope(request.scene, request.filters, request.overlay, frame_ctx, *slot.node, static_cast<int>(slot.slot_index));
+                            scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
+                            break;
+                        }
+                }
+                // Traversal can select its cut later in this frame. Preparation only needs
+                // the storage kind, so admit its LoD storage before the cut is available.
+                const std::uint32_t first_leaf = 0;
+                if (planned_model == model && model->lod_tree && model->lod_tree->has_tree()) {
+                    request.lod_indices = &first_leaf;
+                    request.lod_count = 1;
+                }
+                const auto planned = vksplat_viewport_renderer_->prepare(*context.vulkan_context, *planned_model, request,
+                                                                         VksplatViewportRenderer::OutputSlot::Main, synchronize_vksplat_input_upload);
+                if (!planned)
+                    continue; // admission failures defer the frame; no discovery draw is submitted here
+                auto inputs = planned->inputs;
+                const auto add = [&](const auto& decision) {
+                    const auto host = vksplat_viewport_renderer_->hostsFor(decision).host;
+                    if (!host.empty() && !std::ranges::contains(hosts, host))
+                        hosts.emplace_back(host);
+                };
+                add(inputs);
+                if (splitViewUsesGTComparison(frame_settings.split_view_mode) && frame_settings.gt_comparison_mode != GTComparisonMode::RGB)
+                    add(vksplat_viewport_renderer_->prepareDecision(request, VksplatViewportRenderer::OutputSlot::Preview, synchronize_vksplat_input_upload, true).inputs);
+                // The first panel can finish warmup before the second panel submits.
+                if (planned->warmup) {
+                    inputs.survivors = true;
+                    add(inputs);
+                }
+            }
+            custom_hosts_planned_ = hosts;
+            shader_service_->demandLive(hosts, last_complete_);
+            syncCustomPrograms();
+            frame_ctx.scene_state.custom_effect.reset();
+            if (scene_manager)
+                attachCustomEffect(frame_ctx.scene_state, *scene_manager, scene_time_);
+        }
+
+        if (shader_service_ && shader_service_->hasBindings() && (frame_settings.point_cloud_mode || (!frame_ctx.scene_state.custom_effect && !shader_service_->hasApplicableBindings())))
+            shader_service_->demandLive({}, last_complete_);
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
@@ -2846,6 +2915,10 @@ namespace lfs::vis {
         };
         const auto note_vksplat_render_progress =
             [&](const VksplatViewportRenderer::RenderResult& result) {
+                if (!export_draw_) {
+                    custom_frame_drawing_ |= result.custom_active;
+                    custom_frame_complete_ &= !result.custom_pending;
+                }
                 if (result.lod_streaming_active) {
                     requestRenderFollowUp();
                 }
@@ -3022,6 +3095,7 @@ namespace lfs::vis {
                             frame_ctx,
                             *slot.node,
                             static_cast<int>(slot.slot_index));
+                        scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
                         break;
                     }
                 }

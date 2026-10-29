@@ -49,6 +49,7 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/reveal_render_state.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#include "shaders/shader_service.hpp"
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -510,7 +511,10 @@ namespace lfs::vis::gui {
             .transparent_background = environmentBackgroundEnabled(render_settings)};
     }
 
-    SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot) {
+    SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot,
+                                                       const std::optional<lfs::sequencer::RevealClip>& reveal_clip,
+                                                       const shaders::ShaderFrameSnapshot* const shader_snapshot,
+                                                       const float time) {
         SceneRenderState state;
         state.combined_model = snapshot.gaussianModel();
         state.model_transforms = snapshot.model_transforms;
@@ -562,6 +566,12 @@ namespace lfs::vis::gui {
                 .parent_effectively_visible = true,
             });
         }
+
+        const auto& scene = snapshot.effect_scene;
+        if (reveal_clip && scene.bounded)
+            state.reveal = makeRevealRenderState(scene.bounds_min, scene.bounds_max, *reveal_clip, time);
+        if (shader_snapshot)
+            state.custom_effect = shaders::makeCustomEffectState(*shader_snapshot, scene, time);
         return state;
     }
 
@@ -607,7 +617,9 @@ namespace lfs::vis::gui {
         VulkanContext* vulkan_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
-        const std::optional<rendering::GaussianRevealState>& reveal,
+        const std::optional<lfs::sequencer::RevealClip>& reveal_clip,
+        const shaders::ShaderFrameSnapshot* const shader_snapshot,
+        const float time,
         const lfs::sequencer::CameraState& cam_state,
         const int width,
         const int height) {
@@ -651,8 +663,7 @@ namespace lfs::vis::gui {
                 }
                 primary_frame = std::move(*render_result);
             } else {
-                auto scene_state = makeVideoExportGaussianSceneState(snapshot);
-                scene_state.reveal = reveal;
+                auto scene_state = makeVideoExportGaussianSceneState(snapshot, reveal_clip, shader_snapshot, time);
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
                 auto preview_image = render_environment
                                          ? rendering_manager.renderPreviewImageRgba8(
@@ -3436,6 +3447,7 @@ namespace lfs::vis::gui {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_RENDERING_ENGINE_UNAVAILABLE));
             return;
         }
+        // The export draws the shaders, bindings and parameters of its start.
 
         const auto export_options = *validated_options;
         auto render_settings = rendering_manager->getSettings();
@@ -3444,6 +3456,9 @@ namespace lfs::vis::gui {
         const int width = export_options.width;
         const int height = export_options.height;
         const auto render_size = render_settings.equirectangular ? lfs::io::video::VideoFrameGeometry{width, height} : lfs::io::video::videoCameraRenderSize(width, height, export_options.camera_width, export_options.camera_height, export_options.framing);
+        auto shader_lease = rendering_manager->prepareShaderExport(
+            {.width = render_size.width, .height = render_size.height},
+            sequence_uuid || lfs::python::has_scene_time_callback() ? nullptr : snapshot_result->gaussianModel(), &render_settings, sequence_uuid.has_value() || lfs::python::has_scene_time_callback());
 
         if (export_options.camera_width > 0 && render_settings.orthographic && !render_settings.equirectangular)
             render_settings.ortho_scale *= static_cast<float>(render_size.height) / std::max(1, rendering_manager->getRenderedSize().y);
@@ -3492,7 +3507,8 @@ namespace lfs::vis::gui {
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
              snapshot = sequence_uuid ? VideoExportSceneSnapshot{} : *snapshot_result,
-             frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
+             frame_states = std::move(frame_states),
+             shader_lease = std::move(shader_lease)](std::stop_token stop_token) mutable {
                 jobs_.work(job);
                 bool cancelled = false;
                 std::string error_msg;
@@ -3550,56 +3566,71 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    const auto render_frame = [&] {
-                        return postToViewerAndWait(
-                            viewer,
-                            [viewer, engine, scene_manager, rendering_manager, environment_state,
-                             mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_size, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
-                             cam_state = frame_states[frame], reveal_clip,
-                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
-                                if (sequence_uuid) {
-                                    auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
-                                    const auto* current = sequencer_ui.controller().plySequence();
-                                    if (!current || current->node_uuid != *sequence_uuid)
-                                        return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_CHANGED)));
-                                    auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
-                                    if (!ready)
-                                        return std::unexpected(std::string(ready.error().user_message()));
-                                    if (!*ready)
-                                        return lfs::core::Tensor{};
-                                }
-                                const bool animated_scene = lfs::python::has_scene_time_callback();
-                                if (animated_scene)
-                                    lfs::python::tick_scene_time_callback(clip_time);
-                                // Borrow only inside this synchronous viewer-thread render; no
-                                // per-frame Gaussian clone or retained live pointer.
-                                std::optional<VideoExportSceneSnapshot> sequence_snapshot;
-                                if (sequence_uuid || animated_scene) {
-                                    auto current = captureVideoExportSceneSnapshot(*scene_manager, VideoExportCapture::ImmediateRender);
-                                    if (!current)
-                                        return std::unexpected(current.error());
-                                    sequence_snapshot = std::move(*current);
-                                    snapshot_ptr = &*sequence_snapshot;
-                                }
+                    const auto render_frame = [&]() -> std::expected<lfs::core::Tensor, std::string> {
+                        const float clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator);
+                        const auto sequence_frame = sequence_uuid ? sequence_frames[frame] : 0;
+                        const auto prepared = postToViewerAndWait(viewer, [&]() -> std::expected<bool, std::string> {
+                            if (sequence_uuid) {
+                                auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
+                                const auto* current = sequencer_ui.controller().plySequence();
+                                if (!current || current->node_uuid != *sequence_uuid)
+                                    return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_CHANGED)));
+                                auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
+                                if (!ready)
+                                    return std::unexpected(std::string(ready.error().user_message()));
+                                if (!*ready)
+                                    return false;
+                            }
+                            const bool animated_scene = lfs::python::has_scene_time_callback();
+                            shader_lease.per_frame |= sequence_uuid.has_value() || animated_scene;
+                            if (animated_scene)
+                                lfs::python::tick_scene_time_callback(clip_time);
+                            return true;
+                        });
+                        if (!prepared)
+                            return std::unexpected(prepared.error());
+                        if (!*prepared)
+                            return lfs::core::Tensor{};
+                        std::optional<VideoExportSceneSnapshot> current_snapshot;
+                        const VideoExportSceneSnapshot* frame_snapshot = &snapshot;
+                        return rendering_manager->drawWithShaders(
+                            &shader_lease,
+                            [viewer](auto draw) { return postToViewerAndWait(viewer, std::move(draw)); },
+                            [viewer, engine, rendering_manager, environment_state,
+                             mesh_renderer_state, &frame_snapshot, render_settings, render_size,
+                             cam_state = frame_states[frame], reveal_clip, &shader_lease,
+                             clip_time]()
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 auto* const window_manager = viewer->getWindowManager();
                                 auto* const vulkan_context =
                                     window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
-                                auto reveal = reveal_clip ? makeRevealRenderState(scene_manager->getScene(), *reveal_clip, clip_time)
-                                                          : std::nullopt;
                                 return renderVideoExportFrame(
                                     *rendering_manager,
                                     *engine,
                                     *environment_state,
                                     mesh_renderer_state,
                                     vulkan_context,
-                                    *snapshot_ptr,
+                                    *frame_snapshot,
                                     render_settings,
-                                    reveal,
+                                    reveal_clip,
+                                    shader_lease.snapshot.get(),
+                                    clip_time,
                                     cam_state,
                                     render_size.width,
                                     render_size.height);
-                            });
+                            },
+                            stop_token, [&]() -> Result<bool> {
+                                if (shader_lease.per_frame) {
+                                    // Recapture after each wait; borrowed inputs are consumed in this owner task.
+                                    auto current = captureVideoExportSceneSnapshot(*scene_manager, VideoExportCapture::ImmediateRender);
+                                    if (!current)
+                                        return make_error(ErrorInit{.code = ErrorCode::Unavailable, .domain = ErrorDomain::Rendering, .user_message = current.error(), .detection = LFS_SOURCE_SITE_CURRENT()});
+                                    current_snapshot = std::move(*current);
+                                    frame_snapshot = &*current_snapshot;
+                                }
+                                return shader_lease.per_frame
+                                           ? rendering_manager->prepareShaderExport(shader_lease, frame_snapshot->gaussianModel(), &render_settings)
+                                           : rendering_manager->prepareShaderExport(shader_lease); });
                     };
                     auto frame_tensor = render_frame();
                     const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
@@ -3616,6 +3647,8 @@ namespace lfs::vis::gui {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         frame_tensor = render_frame();
                     }
+                    // A wait for the shaders ends on the stop request, a project switch and shutdown too.
+                    cancelled |= !frame_tensor && (stop_token.stop_requested() || shader_lease.ended());
                     if (cancelled)
                         break;
 

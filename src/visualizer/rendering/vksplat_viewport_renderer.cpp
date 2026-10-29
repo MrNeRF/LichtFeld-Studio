@@ -29,6 +29,7 @@
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/rasterizer/vulkan/src/visible_mask.h"
 #include "rendering/vulkan_wait.hpp"
+#include "shaders/shader_service.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vksplat_overlay_params.hpp"
@@ -2472,8 +2473,33 @@ namespace lfs::vis {
         lod_page_cache_model_ = nullptr;
         lod_page_cache_.reset();
         gpu_lod_tree_ = {};
+        // cleanup() dropped every program set and invalidated unpublished builds.
+        program_sets_.clear();
         initialized_ = false;
         context_ = nullptr;
+    }
+
+    lfs::Result<bool> VksplatViewportRenderer::preparePrograms(const std::shared_ptr<const shaders::ShaderPrograms>& programs,
+                                                               ProgramSetHandle& handle, std::function<void()> finished, const bool live) {
+        if (!programs) {
+            handle.reset();
+            return true;
+        }
+        if (!initialized_)
+            return false;
+        std::erase_if(program_sets_, [&](const auto& entry) { return !entry.second.second || entry.second.first.expired() || entry.second.second->generation != renderer_.deviceGeneration(); });
+        auto& cached = program_sets_[programs.get()];
+        if (!cached.second) {
+            std::vector<VulkanGSRenderer::ComputeProgramSource> sources;
+            for (const auto& program : programs->hosts)
+                sources.push_back({{.label = program->label, .bindings = program->bindings, .workgroup = program->workgroup, .required_subgroup_size = program->subgroup_size}, program->spirv});
+            auto requested = renderer_.prepareProgramSet(std::move(sources), std::move(finished), live);
+            if (!requested)
+                return requested.error();
+            cached = {programs, *requested};
+        }
+        handle = cached.second;
+        return renderer_.programSetReady(handle);
     }
 
     std::expected<VksplatViewportRenderer::PreparedDraw, std::string> VksplatViewportRenderer::prepare(
@@ -9276,6 +9302,11 @@ namespace lfs::vis {
         }
 
         const auto prepared = custom_prepared ? *custom_prepared : prepareDecision(request, output_slot, synchronize_input_upload);
+        if (prepare_custom) {
+            auto ready = prepare_custom(prepared, request);
+            if (!ready)
+                return std::unexpected(std::string(ready.error().user_message()));
+        }
         // Editing guides and deterministic captures retain their existing exact
         // alpha-blended behavior. This option changes transparency, not projection.
         const int requested_mode = static_cast<int>(request.transparency_mode);

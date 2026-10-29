@@ -2236,24 +2236,48 @@ if(TARGET lfs_visualizer AND TARGET lfs_user_shader_ir)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:slang::slang>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_visualizer>")
 endif()
 
-# Custom effects drawn through the viewport renderer.
+# Custom effects and the shader service share the viewer's test dependencies.
 if(TARGET lfs_visualizer AND TARGET lfs_user_shader_ir)
     add_executable(vksplat_custom_effect_tests test_vksplat_custom_effect.cpp)
+    add_executable(shader_service_tests test_shader_service.cpp test_shader_service_rendering.cpp)
+    # Measurement subprocess isolation uses Linux fork/exec and /proc/self/exe.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(bench_user_shaders EXCLUDE_FROM_ALL bench_user_shaders.cpp)
+        add_executable(user_shader_fault_tests test_user_shader_faults.cpp)
+        target_compile_definitions(lfs_visualizer PRIVATE LFS_USER_SHADER_MEASURE)
+        target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        set(_shader_measure_targets bench_user_shaders user_shader_fault_tests)
+    endif()
     get_target_property(_custom_effect_package_dir lfs_user_shader_ir LFS_USER_SHADER_PACKAGE_DIR)
-    target_compile_features(vksplat_custom_effect_tests PRIVATE cxx_std_23)
-    target_include_directories(vksplat_custom_effect_tests PRIVATE
-        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
-    target_compile_definitions(vksplat_custom_effect_tests PRIVATE
-        LFS_SHADER_PACKAGE_DIR="${_custom_effect_package_dir}")
-    target_link_libraries(vksplat_custom_effect_tests PRIVATE
-        lfs_vulkan_rasterizer lfs_visualizer lfs_core SDL3::SDL3 GTest::gtest_main)
-    add_dependencies(vksplat_custom_effect_tests lfs_user_shader_ir)
-    if(MSVC)
-        target_link_options(vksplat_custom_effect_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
-        target_link_libraries(vksplat_custom_effect_tests PRIVATE delayimp)
+    foreach(_target IN ITEMS vksplat_custom_effect_tests shader_service_tests ${_shader_measure_targets})
+        target_compile_features(${_target} PRIVATE cxx_std_23)
+        target_include_directories(${_target} PRIVATE
+            $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+        target_compile_definitions(${_target} PRIVATE LFS_SHADER_PACKAGE_DIR="${_custom_effect_package_dir}")
+        target_link_libraries(${_target} PRIVATE
+            lfs_vulkan_rasterizer lfs_visualizer lfs_core SDL3::SDL3 GTest::gtest)
+        add_dependencies(${_target} lfs_user_shader_ir)
+        if(MSVC)
+            target_link_options(${_target} PRIVATE "/DELAYLOAD:nvcuda.dll")
+            target_link_libraries(${_target} PRIVATE delayimp)
+        endif()
+    endforeach()
+    target_link_libraries(vksplat_custom_effect_tests PRIVATE GTest::gtest_main)
+    target_link_libraries(shader_service_tests PRIVATE GTest::gtest_main)
+    # The standalone benchmark has its own main and is deliberately absent from ctest.
+    if(TARGET bench_user_shaders)
+        target_compile_definitions(bench_user_shaders PRIVATE
+            LFS_PROGRAM_SET_TEST_SPIRV_DIR="${_program_set_spv_dir}"
+            LFS_SHADER_TEST_PACKAGE_DIR="${_program_set_test_package_dir}")
+        add_dependencies(bench_user_shaders lfs_user_shader_test_package)
+        add_test(NAME lichtfeld.user_shader_faults COMMAND user_shader_fault_tests)
+        set_tests_properties(lichtfeld.user_shader_faults PROPERTIES LABELS "cpu;shaders" TIMEOUT 180)
     endif()
     add_test(NAME lichtfeld.vksplat_custom_effect COMMAND vksplat_custom_effect_tests)
-    set_tests_properties(lichtfeld.vksplat_custom_effect PROPERTIES TIMEOUT 600
+    add_test(NAME lichtfeld.shader_service COMMAND shader_service_tests)
+    set_tests_properties(lichtfeld.vksplat_custom_effect PROPERTIES TIMEOUT 600)
+    set_tests_properties(lichtfeld.shader_service PROPERTIES TIMEOUT 300)
+    set_tests_properties(lichtfeld.vksplat_custom_effect lichtfeld.shader_service PROPERTIES
         LABELS "gpu;shaders"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:slang::slang>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_visualizer>")

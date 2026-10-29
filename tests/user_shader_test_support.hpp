@@ -400,37 +400,61 @@ namespace lfs::test::program_set {
 
 #endif
 
-#if defined(LFS_USER_SHADER_CUSTOM_FIXTURE)
+#if defined(LFS_USER_SHADER_CUSTOM_FIXTURE) || defined(LFS_USER_SHADER_SERVICE_FIXTURE)
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/string_keys.hpp"
+#include "gui/video_export_utils.hpp"
+#include "io/loader.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/custom_effect_layout.h"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/vksplat_overlay_params.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "scene/scene_manager.hpp"
+#include "selection/selection_service.hpp"
+#include "sequencer/reveal_render_state.hpp"
+#include "shaders/shader_service.hpp"
 #include "shaders/slang_compiler.hpp"
 #include "user_shader_images.hpp"
+#include "user_shader_linker.hpp"
 #include "user_shader_scene.hpp"
 #include "user_shader_test_access.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL.h>
 #include <array>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <expected>
+#include <functional>
+#include <future>
 #include <glm/gtc/matrix_transform.hpp>
+#include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 
 namespace lfs::test {
-    // The viewport fixture's window. Device-only program tests never include
-    // this block or initialize SDL/CUDA.
+    // Window ownership is shared by the two viewport fixtures. Device-only
+    // program tests never include this block or initialize SDL/CUDA.
     struct ShaderWindow {
         SDL_Window* window = nullptr;
         bool video = false;
@@ -803,5 +827,364 @@ namespace lfs::test::custom_effect {
                                Path::BandedSurvivors, Path::BandedGut};
 
 } // namespace lfs::test::custom_effect
+
+#endif
+
+#if defined(LFS_USER_SHADER_SERVICE_FIXTURE)
+namespace lfs::test::service_rendering {
+    namespace fs = std::filesystem;
+    namespace shaders = lfs::vis::shaders;
+    using lfs::core::Device;
+    using lfs::core::SplatData;
+    using lfs::core::Tensor;
+    using lfs::core::Uuid;
+    namespace DirtyFlag = lfs::vis::DirtyFlag;
+    using lfs::vis::FrameReason;
+    using lfs::vis::RenderingManager;
+    using shaders::ShaderService;
+    using shaders::ShaderSlot;
+    using shaders::ShaderState;
+    using Access = lfs::vis::UserShaderTestAccess;
+    using Slot = Access::Slot;
+    using Kind = ShaderSlot::Kind;
+    using namespace std::chrono_literals;
+
+    constexpr int kSize = 128;
+    // The preview the fixture's capture() and exportFrame() draw.
+    constexpr RenderingManager::ExportFrame kFrame{.width = kSize, .height = kSize};
+    const std::function<RenderingManager::ExportFrame()> kFrameOf = [] { return kFrame; };
+    // The viewport output holds 8-bit channels; separate draws of one image
+    // may round a channel differently.
+    constexpr float kOneStep = 1.5f / 255.0f;
+    constexpr std::array kRed{0.3f, -0.3f, -0.3f};
+
+    using Image = std::expected<std::vector<float>, std::string>;
+    // drawWithShaders' post on the thread that draws.
+    constexpr auto kInline = [](auto draw) { return draw(); };
+
+    class OffViewer;
+    class ExportRun;
+
+    class ShaderServiceRenderingTest : public ::testing::Test {
+    protected:
+        using RenderSettings = lfs::vis::RenderSettings;
+        friend class OffViewer;
+        friend class ExportRun;
+
+        void SetUp() override {
+            window_ = std::make_unique<ShaderWindow>();
+            const auto unavailable = window_->start();
+            if (!unavailable.empty())
+                GTEST_SKIP() << unavailable;
+            ASSERT_TRUE(window_->initialize(context_, kSize)) << SDL_GetError();
+
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::vis::services().clear();
+            lfs::vis::op::undoHistory().clear();
+            scene_ = std::make_unique<lfs::vis::SceneManager>();
+            for (int i = 0; i < 3; ++i) {
+                Uuid uuid;
+                scene().addSplat(std::format("node{}", i), node(1.2f * static_cast<float>(i - 1)),
+                                 lfs::core::NULL_NODE, &uuid);
+                nodes_.push_back(uuid);
+            }
+            scene_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+            manager_ = std::make_unique<RenderingManager>();
+            lfs::vis::services().set(scene_.get());
+            lfs::vis::services().set(manager_.get());
+            Access::install(*manager_, *context_);
+            scene().setCombinedModelAllocator(manager_->makeSplatTensorAllocator());
+            manager_->setWakeCallback([this] { ++render_wakes_; });
+            settings_ = manager_->getSettings();
+            settings_.background_color = glm::vec3(0.0f);
+            settings_.sh_degree = 0;
+            settings_.show_grid = false;
+            settings_.show_camera_frustums = false;
+            manager_->updateSettings(settings_);
+            viewport_.frameBufferSize = {kSize, kSize};
+            look(viewport_, eye_);
+
+            const fs::path manifest = fs::path(LFS_SHADER_PACKAGE_DIR) / "manifest.json";
+            service_ = std::make_unique<ShaderService>(
+                scene(),
+                [this, slang = shaders::slangHostLinker(manifest)] {
+                    ++linkers_;
+                    return std::make_unique<ScheduledLinker>(schedule_, slang());
+                },
+                [this] { ++service_wakes_; });
+            manager_->setShaderService(service_.get());
+            // The first frames of a new viewport size wait for it to settle.
+            ASSERT_TRUE(settle([&] { return frame().rendered; }));
+        }
+
+        void TearDown() override {
+            Access::fail_pipeline = false;
+            gate(false);
+            manager_.reset();
+            service_.reset();
+            scene_.reset();
+            lfs::vis::op::undoHistory().clear();
+            lfs::vis::services().clear();
+            lfs::event::EventBridge::instance().clear_all();
+            context_.reset();
+            window_.reset();
+        }
+
+        // A 5x5 grid of gray splats around (x, 0, 0) in fresh Vulkan memory.
+        std::unique_ptr<SplatData> node(const float x) {
+            const auto a = generate(5, 5, x);
+            const auto n = a.size();
+            const auto external = [&](const std::vector<float>& values, lfs::core::TensorShape shape) {
+                const auto cpu = Tensor::from_vector(values, std::move(shape), Device::CPU);
+                return externalTensor(*context_, cpu, cpu.numel(), "shader-service-fixture");
+            };
+            return std::make_unique<SplatData>(
+                0, external(a.means, {n, 3}), external(a.sh0, {n, 1, 3}),
+                Tensor::zeros({n, std::size_t{0}, std::size_t{3}}, Device::CUDA),
+                external(a.scales, {n, 3}), external(a.rotations, {n, 4}), external(a.opacities, {n, 1}), 1.0f);
+        }
+
+        static void look(Viewport& viewport, const glm::vec3& eye) {
+            viewport.setViewMatrix(lfs::rendering::makeVisualizerLookAtRotation(eye, glm::vec3(0.0f)), eye);
+        }
+
+        lfs::core::Scene& scene() { return scene_->getScene(); }
+        ShaderService& service() { return *service_; }
+        lfs::vis::ShaderCommands commands() { return {service()}; }
+
+        void gate(const bool closed) { schedule_.gate(closed); }
+
+        // One viewer loop iteration: adopt the service's programs, then draw.
+        RenderingManager::VulkanFrameResult frame(const bool on_screen = true) {
+            manager_->syncCustomPrograms();
+            (void)manager_->frameDemandLedger().plan(lfs::vis::FrameClock::now());
+            return manager_->renderVulkanFrame({.viewport = viewport_,
+                                                .settings = settings_,
+                                                .scene_manager = scene_.get(),
+                                                .vulkan_context = context_.get(),
+                                                .on_screen = on_screen});
+        }
+        RenderingManager::VulkanFrameResult redraw() {
+            manager_->markDirty(DirtyFlag::SPLATS, FrameReason::SettingsChange);
+            return frame();
+        }
+        bool settle(const std::function<bool()>& done) {
+            const auto deadline = std::chrono::steady_clock::now() + 30s;
+            while (!done()) {
+                if (std::chrono::steady_clock::now() > deadline)
+                    return false;
+                frame();
+                std::this_thread::sleep_for(2ms);
+            }
+            return true;
+        }
+        bool applied(const Uuid& asset) {
+            return settle([&] { return service().status(asset)->state == ShaderState::Applied; });
+        }
+        // Applied, and every draw of a frame runs it: a set that grows by a
+        // family the frames need may still be building after `applied`.
+        bool drawing(const Uuid& asset) {
+            return settle([&] {
+                redraw();
+                return service().status(asset)->state == ShaderState::Applied && Access::ranEveryProgram(*manager_);
+            });
+        }
+        std::uint64_t links(const Uuid& asset) { return service().status(asset)->links; }
+        std::size_t shownHosts() {
+            const auto shown = Access::displayPrograms(*manager_);
+            return shown ? shown->hosts.size() : 0;
+        }
+        lfs::core::NodeId id(const Uuid& node) { return scene().getNodeByUuid(node)->id; }
+        std::vector<float> image(const Slot slot = Slot::Main) { return Access::image(*manager_, *context_, slot); }
+        std::vector<float> drawn() {
+            redraw();
+            return image();
+        }
+        void apply(RenderSettings settings) {
+            settings_ = settings;
+            manager_->updateSettings(settings_);
+        }
+
+        Uuid bound(const std::string& source, const ShaderSlot& slot = {.kind = Kind::Global}) {
+            auto asset = commands().createAsset("Effect", source);
+            EXPECT_TRUE(asset);
+            const auto status = commands().bind(slot, *asset);
+            EXPECT_TRUE(status) << lfs::format_for_developer(status.error());
+            return *asset;
+        }
+        void set(const Uuid& asset, const std::string_view name, const std::span<const float> value) {
+            const auto status = commands().setParameter(asset, name, value);
+            ASSERT_TRUE(status) << lfs::format_for_developer(status.error());
+        }
+        void shift(const Uuid& asset, const std::array<float, 3>& value) { set(asset, "shift", value); }
+
+        // The viewport camera's image of `model` drawn with `state`.
+        Image preview(const lfs::core::SplatData& model, lfs::vis::SceneRenderState state) {
+            return rgbOf(manager_->renderPreviewImage(model, std::move(state), viewport_.getRotationMatrix(),
+                                                      viewport_.getTranslation(), settings_.focal_length_mm, kSize,
+                                                      kSize));
+        }
+        // The splat path of a video export frame: the scene of the export's
+        // start with its reveal and the custom effect of its lease at `time`.
+        std::vector<float> capture() {
+            return rgbOf(manager_->renderPreviewImage(scene_.get(), viewport_.getRotationMatrix(),
+                                                      viewport_.getTranslation(), settings_.focal_length_mm, kSize, kSize));
+        }
+        Image exportFrame(const lfs::vis::gui::VideoExportSceneSnapshot& snapshot,
+                          const ShaderService::ExportLease& lease, const float time,
+                          const std::optional<lfs::sequencer::RevealClip>& clip) {
+            const auto shaders = lease.snapshot;
+            return preview(*snapshot.gaussianModel(),
+                           lfs::vis::gui::makeVideoExportGaussianSceneState(snapshot, clip, shaders.get(), time));
+        }
+
+        // Pixels of each node, from built-in draws of that node alone.
+        std::vector<std::vector<bool>> nodeMasks() {
+            std::vector<std::vector<bool>> masks;
+            for (std::size_t shown = 0; shown < nodes_.size(); ++shown) {
+                for (std::size_t i = 0; i < nodes_.size(); ++i)
+                    scene().setNodeVisibility(scene().getNodeByUuid(nodes_[i])->id, i == shown);
+                const auto rgb = drawn();
+                auto& mask = masks.emplace_back(rgb.size() / 3);
+                for (std::size_t p = 0; p < mask.size(); ++p)
+                    mask[p] = rgb[3 * p] + rgb[3 * p + 1] + rgb[3 * p + 2] > 0.15f;
+                EXPECT_GT(std::ranges::count(mask, true), 10) << "node " << shown << " is off screen";
+            }
+            for (const auto& uuid : nodes_)
+                scene().setNodeVisibility(scene().getNodeByUuid(uuid)->id, true);
+            return masks;
+        }
+
+        std::unique_ptr<ShaderWindow> window_;
+        std::unique_ptr<lfs::vis::VulkanContext> context_;
+        std::unique_ptr<lfs::vis::SceneManager> scene_;
+        std::unique_ptr<RenderingManager> manager_;
+        std::unique_ptr<ShaderService> service_;
+        std::vector<Uuid> nodes_;
+        RenderSettings settings_;
+        Viewport viewport_{kSize, kSize};
+        glm::vec3 eye_{0.0f, 0.0f, 6.0f};
+
+        Schedule schedule_;
+        std::atomic<int> linkers_ = 0;
+        std::atomic<int> service_wakes_ = 0;
+        std::atomic<int> render_wakes_ = 0;
+    };
+
+    class OffViewer {
+    public:
+        explicit OffViewer(ShaderServiceRenderingTest& test, std::function<void()> loop = {})
+            : test_(test),
+              loop_(std::move(loop)) {}
+
+        template <class Work>
+        std::invoke_result_t<Work&> run(Work work) {
+            auto done = std::async(std::launch::async, std::move(work));
+            const auto deadline = std::chrono::steady_clock::now() + 30s;
+            while (done.wait_for(0ms) != std::future_status::ready) {
+                drain();
+                if (loop_)
+                    loop_();
+                else
+                    test_.frame();
+                if (std::chrono::steady_clock::now() > deadline) {
+                    ADD_FAILURE() << "the work did not end";
+                    test_.service().stop();
+                }
+                std::this_thread::sleep_for(1ms);
+            }
+            return done.get();
+        }
+        // drawWithShaders' post: runs `work` on the viewer thread.
+        template <class Work>
+        std::invoke_result_t<Work&> onViewer(Work work) {
+            std::packaged_task<std::invoke_result_t<Work&>()> task(std::move(work));
+            auto done = task.get_future();
+            {
+                const std::lock_guard lock(mutex_);
+                tasks_.emplace_back([&task] { task(); });
+            }
+            return done.get();
+        }
+        auto post() {
+            return [this](auto draw) { return onViewer(std::move(draw)); };
+        }
+
+    private:
+        void drain() {
+            std::vector<std::function<void()>> tasks;
+            {
+                const std::lock_guard lock(mutex_);
+                tasks.swap(tasks_);
+            }
+            for (auto& task : tasks)
+                task();
+        }
+
+        ShaderServiceRenderingTest& test_;
+        std::function<void()> loop_;
+        std::mutex mutex_;
+        std::vector<std::function<void()>> tasks_;
+    };
+
+    // Exports from another thread as the video export does: through
+    // drawWithShaders, each frame drawn on the viewer thread from the scene
+    // snapshot of the export's start, while the viewer keeps drawing frames.
+    class ExportRun {
+    public:
+        ExportRun(ShaderServiceRenderingTest& test, const ShaderService::ExportLease& lease,
+                  std::optional<lfs::sequencer::RevealClip> clip = {})
+            : test_(test),
+              viewer_(test),
+              lease_(lease),
+              clip_(clip) {}
+
+        // `edit` runs on the viewer thread after each exported frame.
+        std::expected<std::vector<std::vector<float>>, std::string> run(const std::function<void(int)>& edit = {}) {
+            return viewer_.run([&] { return exportFrames(edit); });
+        }
+        // Actual draw callbacks after shader preflight.
+        int draws() const { return draws_; }
+
+    private:
+        std::expected<std::vector<std::vector<float>>, std::string> exportFrames(const std::function<void(int)>& edit) {
+            const auto onViewer = [this](auto work) { return viewer_.onViewer(std::move(work)); };
+            auto snapshot = onViewer([&] {
+                auto captured = lfs::vis::gui::captureVideoExportSceneSnapshot(*test_.scene_);
+                // The viewer moves the copy into Vulkan memory through its window; the test has none.
+                if (captured) {
+                    if (auto moved = lfs::io::migrateSplatTensorsToAllocator(*captured->combined_model,
+                                                                             test_.manager_->makeSplatTensorAllocator());
+                        !moved)
+                        captured = std::unexpected(moved.error().format());
+                }
+                return captured;
+            });
+            if (!snapshot)
+                return std::unexpected(snapshot.error());
+            std::vector<std::vector<float>> frames;
+            for (int index = 0; index < 3; ++index) {
+                const float time = 0.5f * static_cast<float>(index);
+                auto image = test_.manager_->drawWithShaders(&lease_, viewer_.post(), [&] {
+                    ++draws_;
+                    return test_.exportFrame(*snapshot, lease_, time, clip_);
+                });
+                if (!image)
+                    return std::unexpected(image.error());
+                frames.push_back(std::move(*image));
+                if (edit)
+                    onViewer([&] { edit(index); });
+            }
+            return frames;
+        }
+
+        ShaderServiceRenderingTest& test_;
+        OffViewer viewer_;
+        const ShaderService::ExportLease& lease_;
+        std::optional<lfs::sequencer::RevealClip> clip_;
+        std::atomic<int> draws_ = 0;
+    };
+
+} // namespace lfs::test::service_rendering
 
 #endif

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include <cstring>
 #include <gtest/gtest.h>
@@ -48,6 +49,22 @@ namespace lfs::test {
             ++count;
         }
         return count ? static_cast<float>(sum / static_cast<double>(count)) : 0.0f;
+    }
+
+    inline float maxDifference(const std::vector<float>& a, const std::vector<float>& b) {
+        if (a.size() != b.size() || a.empty())
+            return INFINITY;
+        return lfs::test::compareImages(a, b).max;
+    }
+
+    inline std::vector<float> rgbOf(const std::shared_ptr<lfs::core::Tensor>& image) {
+        if (!image || !image->is_valid()) {
+            ADD_FAILURE() << "no image";
+            return {};
+        }
+        const auto cpu = image->cpu().contiguous();
+        const auto channels = static_cast<std::size_t>(cpu.size(2));
+        return lfs::test::rgbChannels(cpu.ptr<float>(), cpu.numel() / channels, channels);
     }
 
     inline std::vector<float> readBuffer(VulkanGSRenderer& renderer, const _VulkanBuffer& buffer,

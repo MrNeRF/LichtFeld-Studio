@@ -50,6 +50,7 @@ namespace lfs::vis {
         bool has_selection = false;
         size_t visible_splat_count = 0;
         std::optional<lfs::rendering::GaussianRevealState> reveal;
+        std::optional<lfs::rendering::GaussianCustomEffectState> custom_effect;
     };
 
 } // namespace lfs::vis

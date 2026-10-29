@@ -390,6 +390,36 @@ namespace lfs::app {
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
         }
 
+        // Draws `render` through `post` with the shaders the viewport binds: an
+        // export freezes them, a live render draws what the viewport would; see
+        // RenderingManager::drawWithShaders. `frame` is what `render` draws.
+        template <typename Post, typename Render>
+        auto draw_with_viewport_shaders(vis::Visualizer* viewer, Post post, Render render,
+                                        const std::function<vis::RenderingManager::ExportFrame()>& frame,
+                                        const bool exporting = false) {
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!rendering_manager)
+                return post(render);
+            return rendering_manager->drawWithShaders(exporting, post, render, frame);
+        }
+
+        // The preview render_dataset_camera_to_base64 draws: the camera's image size.
+        vis::RenderingManager::ExportFrame dataset_camera_frame(vis::Visualizer* viewer, const int camera_uid) {
+            auto* const scene_manager = viewer->getSceneManager();
+            const auto camera = scene_manager ? scene_manager->getScene().getCameraByUid(camera_uid) : nullptr;
+            if (!camera)
+                return {};
+            return {.width = camera->image_width(), .height = camera->image_height()};
+        }
+
+        std::expected<std::string, std::string> render_dataset_camera_with_shaders(vis::Visualizer* viewer,
+                                                                                   const int camera_uid) {
+            return draw_with_viewport_shaders(
+                viewer, [viewer](auto draw) { return post_and_wait(viewer, std::move(draw)); },
+                [viewer, camera_uid] { return render_dataset_camera_to_base64(viewer, camera_uid, 0, 0); },
+                [viewer, camera_uid] { return dataset_camera_frame(viewer, camera_uid); });
+        }
+
         std::expected<std::string, std::string> capture_viewport_from_window(
             vis::VisualizerImpl* viewer_impl,
             const vis::RenderingManager& rendering_manager,
@@ -2893,14 +2923,25 @@ namespace lfs::app {
                     return result;
                 },
             .render_capture =
-                [viewer](std::optional<int> camera_index, int width, int height) {
-                    // Runs as render work, not plain posted work: the window-crop fallback
-                    // inside capture_live_viewport_to_base64 needs an active GUI frame.
-                    return capture_after_gui_render(viewer, [viewer, camera_index, width, height]() {
-                        if (camera_index)
-                            return render_dataset_camera_to_base64(viewer, *camera_index, width, height);
-                        return capture_live_viewport_to_base64(viewer, width, height); }, !camera_index.has_value());
-                },
+                [viewer](std::optional<int> camera_index, int width, int height) -> lfs::Result<std::string> {
+                const auto render = [viewer, camera_index, width, height] {
+                    return lfs::from_legacy_expected(
+                        camera_index ? render_dataset_camera_to_base64(viewer, *camera_index, width, height)
+                                     : capture_live_viewport_to_base64(viewer, width, height),
+                        lfs::LegacyErrorContext{
+                            .code = lfs::ErrorCode::FailedPrecondition,
+                            .domain = lfs::ErrorDomain::MCP,
+                            .operation = "Capture scene",
+                            .source = LFS_SOURCE_SITE_CURRENT(),
+                        });
+                };
+                // The window-crop fallback needs an active GUI frame.
+                if (!camera_index)
+                    return capture_after_gui_render(viewer, render, true);
+                return draw_with_viewport_shaders(
+                    viewer, [viewer](auto draw) { return capture_after_gui_render(viewer, std::move(draw)); }, render,
+                    [viewer, camera_index] { return dataset_camera_frame(viewer, *camera_index); }, true);
+            },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
                 return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
@@ -5981,9 +6022,7 @@ namespace lfs::app {
                 bool include_render = args.value("include_render", true);
                 if (include_render) {
                     int camera_index = args.value("camera_index", 0);
-                    auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
-                    });
+                    auto render_result = render_dataset_camera_with_shaders(viewer, camera_index);
                     if (render_result)
                         base64_render = *render_result;
                 }
@@ -6030,9 +6069,7 @@ namespace lfs::app {
                 const int camera_index = args.value("camera_index", 0);
                 const std::string description = args["description"].get<std::string>();
 
-                auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer_impl, camera_index, 0, 0);
-                });
+                auto render_result = render_dataset_camera_with_shaders(viewer_impl, camera_index);
                 if (!render_result)
                     return json{{"error", render_result.error()}};
 
@@ -6228,9 +6265,7 @@ namespace lfs::app {
                     return std::unexpected("Invalid camera resource URI: " + uri);
                 }
 
-                auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer, camera_index, 0, 0);
-                });
+                auto result = render_dataset_camera_with_shaders(viewer, camera_index);
                 if (!result)
                     return std::unexpected(result.error());
 

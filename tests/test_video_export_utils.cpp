@@ -802,7 +802,7 @@ TEST(VideoExportUtilsTest, CropPolygonsReachPointCloudAndSplatFrames) {
         ASSERT_TRUE(snapshot.has_value()) << snapshot.error();
         ASSERT_EQ(snapshot->crop_polygons.size(), 1u);
         EXPECT_EQ(snapshot->crop_polygons.front().parent_node_index, 0);
-        const auto state = lfs::vis::gui::makeVideoExportGaussianSceneState(*snapshot);
+        const auto state = lfs::vis::gui::makeVideoExportGaussianSceneState(*snapshot, std::nullopt, nullptr, 0.0f);
         ASSERT_EQ(state.crop_polygons.size(), 1u);
         EXPECT_EQ(state.crop_polygons.front().parent_node_index, 0);
         ASSERT_NE(state.crop_polygons.front().data, nullptr);

@@ -2915,7 +2915,10 @@
     "task_failed_detail": "Fallido: {}",
     "video_export_sequence_changed": "La secuencia PLY cambió durante la exportación de vídeo",
     "video_export_sequence_frame_timeout": "Se agotó el tiempo al cargar un fotograma de la secuencia PLY para la exportación de vídeo",
+    "export_shader_unavailable": "El shader personalizado no se puede dibujar para la exportación: {}",
+    "export_shader_not_ready": "El shader personalizado aún no está listo; inténtalo de nuevo.",
     "export_cancelled": "Exportación cancelada por el usuario",
+    "export_stopped": "Exportación detenida: se cerró el proyecto o la aplicación se está cerrando.",
     "no_splat_data": "No hay datos de splats para exportar",
     "export_streamed_lod": "No se puede exportar \"{}\": el modelo es demasiado grande para la memoria y se transmite desde el disco.",
     "export_extension_required": "El nombre del archivo de exportación debe terminar en {}.",
@@ -3500,6 +3503,7 @@
   "preferences.drag_title": "Transferencia de splats",
   "preferences.drag_pause": "Pausa el entrenamiento antes de arrastrar los splats.",
   "selection.reveal_moving_blocked": "La selección no está disponible mientras un efecto de aparición mueve los splats.",
+  "selection.shader_effect_blocked": "La selección no está disponible mientras un shader personalizado dibuja los splats.",
   "preferences.drag_failed": "Error al exportar los splats. Consulta el registro de la aplicación para ver los detalles.",
   "collision.walk": "Caminar",
   "collision.walk_no_collision": "Carga o genera un colisionador antes de entrar en Caminar.",
@@ -3701,5 +3705,7 @@
     "status_no_target": "No hay un objetivo transformable para escalar."
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "Sombreador",
+  "shader.untitled": "Sombreador sin título"
 }

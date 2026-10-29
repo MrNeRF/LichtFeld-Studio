@@ -2915,7 +2915,10 @@
     "task_failed_detail": "失败：{}",
     "video_export_sequence_changed": "视频导出期间 PLY 序列已更改",
     "video_export_sequence_frame_timeout": "加载用于视频导出的 PLY 序列帧超时",
+    "export_shader_unavailable": "无法为导出绘制自定义着色器：{}",
+    "export_shader_not_ready": "自定义着色器尚未就绪，请重试。",
     "export_cancelled": "用户已取消导出",
+    "export_stopped": "导出已停止：项目已关闭或应用程序正在退出。",
     "no_splat_data": "没有可导出的 splat 数据",
     "export_streamed_lod": "无法导出“{}”：模型太大，无法装入内存，正在从磁盘流式加载。",
     "export_extension_required": "导出文件名必须以 {} 结尾。",
@@ -3500,6 +3503,7 @@
   "preferences.drag_title": "高斯点传输",
   "preferences.drag_pause": "拖动高斯点前请暂停训练。",
   "selection.reveal_moving_blocked": "显示效果移动 splat 时无法选择。",
+  "selection.shader_effect_blocked": "自定义着色器绘制 splat 时无法选择。",
   "preferences.drag_failed": "高斯点导出失败。详情请查看应用程序日志。",
   "collision.walk": "行走",
   "collision.walk_no_collision": "进入行走模式前，请先加载或生成碰撞体。",
@@ -3701,5 +3705,7 @@
     "status_no_target": "没有可缩放的可变换目标。"
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "着色器",
+  "shader.untitled": "未命名着色器"
 }

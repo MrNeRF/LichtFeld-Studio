@@ -2915,7 +2915,10 @@
     "task_failed_detail": "失敗: {}",
     "video_export_sequence_changed": "動画の書き出し中に PLY シーケンスが変更されました",
     "video_export_sequence_frame_timeout": "動画の書き出し用の PLY シーケンスフレームの読み込みがタイムアウトしました",
+    "export_shader_unavailable": "書き出しでカスタムシェーダーを描画できません: {}",
+    "export_shader_not_ready": "カスタムシェーダーの準備がまだできていません。もう一度お試しください。",
     "export_cancelled": "ユーザーによってエクスポートがキャンセルされました",
+    "export_stopped": "エクスポートを停止しました。プロジェクトが閉じられたか、アプリケーションが終了しています。",
     "no_splat_data": "エクスポートするスプラットデータがありません",
     "export_streamed_lod": "「{}」をエクスポートできません: モデルが大きすぎてメモリに収まらず、ディスクからストリーミングされています。",
     "export_extension_required": "エクスポートするファイル名は {} で終わる必要があります。",
@@ -3500,6 +3503,7 @@
   "preferences.drag_title": "スプラットの転送",
   "preferences.drag_pause": "スプラットをドラッグする前にトレーニングを一時停止してください。",
   "selection.reveal_moving_blocked": "リビール効果でスプラットが移動している間は選択できません。",
+  "selection.shader_effect_blocked": "カスタムシェーダーがスプラットを描画している間は選択できません。",
   "preferences.drag_failed": "スプラットのエクスポートに失敗しました。詳細はアプリケーションログを確認してください。",
   "collision.walk": "歩行",
   "collision.walk_no_collision": "歩行モードに入る前にコライダーを読み込むか生成してください。",
@@ -3701,5 +3705,7 @@
     "status_no_target": "スケールできる対象がありません。"
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "シェーダー",
+  "shader.untitled": "無題のシェーダー"
 }

@@ -2927,7 +2927,10 @@
     "task_failed_detail": "Failed: {}",
     "video_export_sequence_changed": "PLY sequence changed during video export",
     "video_export_sequence_frame_timeout": "Timed out loading PLY sequence frame for video export",
+    "export_shader_unavailable": "The custom shader cannot be drawn for the export: {}",
+    "export_shader_not_ready": "The custom shader is not ready to draw yet; try again.",
     "export_cancelled": "Export cancelled by user",
+    "export_stopped": "Export stopped: the project closed or the application is exiting.",
     "no_splat_data": "No splat data to export",
     "export_streamed_lod": "Can't export \"{}\": the model is too large to fit in memory and streams from disk.",
     "export_extension_required": "Export file name must end with {}.",
@@ -3500,6 +3503,7 @@
   "project.session.newer_settings.message": "This project contains settings this version does not recognize. Default values were used for: {}",
   "preferences.drag_pause": "Pause training before dragging splats.",
   "selection.reveal_moving_blocked": "Selection is unavailable while a reveal moves splats.",
+  "selection.shader_effect_blocked": "Selection is unavailable while a custom shader draws the splats.",
   "preferences.drag_failed": "Splat export failed. See the application log for details.",
   "collision.walk": "Walk",
   "collision.walk_no_collision": "Load or generate a collider before entering Walk.",
@@ -3701,5 +3705,7 @@
     "status_no_target": "No transformable target to scale."
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "Shader",
+  "shader.untitled": "Untitled shader"
 }

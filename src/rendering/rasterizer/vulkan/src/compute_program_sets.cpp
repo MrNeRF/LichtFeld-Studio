@@ -6,6 +6,7 @@
 // Custom compute program sets: built on a worker, adopted at a render boundary
 // and retired with the same in-flight timeline keys as grown buffers.
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gs_pipeline.h"
 #include "shader_variants.hpp"
@@ -20,7 +21,7 @@ VulkanGSPipeline::ComputeProgramSet::~ComputeProgramSet() {
 }
 
 lfs::Result<VulkanGSPipeline::ProgramSetHandle> VulkanGSPipeline::prepareProgramSet(
-    std::vector<ComputeProgramSource> programs) {
+    std::vector<ComputeProgramSource> programs, std::function<void()> finished, const bool live) {
     if (device == VK_NULL_HANDLE || programs.empty())
         return vksplatProgramError(lfs::ErrorCode::FailedPrecondition, "Program sets require a device and hosts", LFS_SOURCE_SITE_CURRENT());
     auto fixed = missingFixedVariants(programs);
@@ -34,7 +35,9 @@ lfs::Result<VulkanGSPipeline::ProgramSetHandle> VulkanGSPipeline::prepareProgram
         releases->second.push_back(key->id);
         delete key;
     });
-    store.queued.push_back({computeBuildContext(), std::move(programs), std::move(fixed), handle->generation, id, handle});
+    if (live)
+        std::erase_if(store.queued, [](const auto& job) { return job.live; });
+    store.queued.push_back({computeBuildContext(), std::move(programs), std::move(fixed), handle->generation, std::move(finished), id, live, handle});
     if (!store.worker.joinable())
         store.worker = std::thread(runProgramSetWorker, std::ref(store));
     store.changed.notify_all();
@@ -77,6 +80,7 @@ void VulkanGSPipeline::runProgramSetWorker(ProgramSetStore& store) {
 
     const lfs::core::TaskContext context{.name = "user shader pipelines", .domain = lfs::ErrorDomain::Rendering, .operation_id = {}, .site = LFS_SOURCE_SITE_CURRENT()};
     std::uint64_t active_generation = 0, active_key = 0;
+    std::function<void()> active_finished;
     lfs::core::run_guarded<void>(context, [&]() -> lfs::Status {
     std::unique_lock lock(store.mutex);
     for (;;) {
@@ -86,6 +90,7 @@ void VulkanGSPipeline::runProgramSetWorker(ProgramSetStore& store) {
         ProgramSetJob job = std::move(store.queued.front());
         active_generation = job.generation;
         active_key = job.key;
+        active_finished = job.finished;
         store.queued.pop_front();
         store.building = true;
         lock.unlock();
@@ -111,6 +116,11 @@ void VulkanGSPipeline::runProgramSetWorker(ProgramSetStore& store) {
             store.built.emplace(job.key, std::move(built));
         }
         store.changed.notify_all();
+        if (current && job.finished) {
+            lock.unlock();
+            job.finished();
+            lock.lock();
+        }
     }
     lock.unlock();
     return {}; }, [&](lfs::Status&& result) {
@@ -120,8 +130,20 @@ void VulkanGSPipeline::runProgramSetWorker(ProgramSetStore& store) {
         store.stopping = true;
         if (active_generation == store.generation.load()) store.built.emplace(active_key, result.error());
         for (const auto& job : store.queued) store.built.emplace(job.key, result.error());
+        auto queued = std::move(store.queued);
         store.queued.clear();
-        store.changed.notify_all(); });
+        store.changed.notify_all();
+        lock.unlock();
+        // Even a failed wake callback cannot strand other owners' wait signals.
+        const auto wake = [](const std::function<void()>& finished) {
+            try {
+                if (finished) finished();
+            } catch (...) {
+                LOG_ERROR("A program set wake callback failed after the build worker stopped");
+            }
+        };
+        wake(active_finished);
+        for (const auto& job : queued) wake(job.finished); });
     if (cache != VK_NULL_HANDLE)
         vkDestroyPipelineCache(cache_device, cache, nullptr);
 }

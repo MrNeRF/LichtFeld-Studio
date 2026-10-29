@@ -281,6 +281,7 @@
       "src/app/mcp_gui_tools.cpp:139",
       "src/app/mcp_gui_tools.cpp:296",
       "src/app/mcp_gui_tools.cpp:393",
+      "src/app/mcp_gui_tools.cpp:415",
       "src/app/mcp_gui_tools.cpp:440",
       "src/app/mcp_gui_tools.cpp:465",
       "src/app/mcp_gui_tools.cpp:712",
@@ -606,12 +607,10 @@
       "src/mcp/shared_scene_tools.hpp:24",
       "src/mcp/shared_scene_tools.hpp:26",
       "src/mcp/shared_scene_tools.hpp:28",
-      "src/mcp/shared_scene_tools.hpp:30",
       "src/mcp/shared_scene_tools.hpp:32"
     ],
     "python": [
       "src/python/lfs/py_io.cpp:1309",
-      "src/python/lfs/py_rendering.cpp:1264",
       "src/python/lfs/py_splat_simplify.cpp:222"
     ],
     "rendering": [
@@ -767,6 +766,8 @@
       "src/visualizer/gui/async_task_manager.cpp:1019",
       "src/visualizer/gui/async_task_manager.cpp:3505",
       "src/visualizer/gui/async_task_manager.cpp:3560",
+      "src/visualizer/gui/async_task_manager.cpp:3569",
+      "src/visualizer/gui/async_task_manager.cpp:3572",
       "src/visualizer/gui/async_task_manager.cpp:4120",
       "src/visualizer/gui/async_task_manager.hpp:82",
       "src/visualizer/gui/gui_manager.cpp:8972",
@@ -918,7 +919,7 @@
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:1775",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:1810",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:2000",
-      "src/visualizer/rendering/vksplat_viewport_renderer.cpp:2479",
+      "src/visualizer/rendering/vksplat_viewport_renderer.cpp:2505",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:2681",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:3122",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:3272",
@@ -970,7 +971,7 @@
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:278",
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:280",
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:290",
-      "src/visualizer/rendering/vksplat_viewport_renderer.hpp:317",
+      "src/visualizer/rendering/vksplat_viewport_renderer.hpp:323",
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:341",
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:347",
       "src/visualizer/rendering/vksplat_viewport_renderer.hpp:353",

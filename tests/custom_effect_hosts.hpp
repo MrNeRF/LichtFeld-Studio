@@ -8,13 +8,36 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace lfs::test {
+
+    // Threads of this process; 0 where /proc is unavailable.
+    inline std::size_t threadCount() {
+        const std::filesystem::path tasks = "/proc/self/task";
+        if (!std::filesystem::exists(tasks))
+            return 0;
+        return static_cast<std::size_t>(
+            std::distance(std::filesystem::directory_iterator(tasks), std::filesystem::directory_iterator()));
+    }
+    // Whether the process runs `count` threads within a second: runtime
+    // threads may come and go meanwhile.
+    inline bool threadsSettleAt(const std::size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (threadCount() != count) {
+            if (std::chrono::steady_clock::now() > deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return true;
+    }
 
     inline std::shared_ptr<const lfs::vis::shaders::ShaderPackage> loadPackage(const std::filesystem::path& directory) {
         auto package = lfs::vis::shaders::SlangCompiler::load_package(directory / "manifest.json");

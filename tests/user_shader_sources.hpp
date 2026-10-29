@@ -26,4 +26,28 @@ LfsElement effect(LfsElement e, LfsContext ctx) {
     inline constexpr char kTinyEffect[] =
         "import lfs;\nLfsElement effect(LfsElement e, LfsContext ctx) {\n"
         "    e.color = float3(0.25, 0.5, 0.75);\n    e.opacity = 0.5;\n    return e;\n}\n";
+    inline constexpr char kShift[] = R"(import lfs;
+struct Params { [LfsParam(-1.0, 1.0, 0.0)] float3 shift; };
+LfsElement effect(LfsElement e, LfsContext ctx, Params p) {
+    e.color += p.shift;
+    return e;
+})";
+    inline constexpr char kGreen[] = R"(import lfs;
+struct Params { [LfsParam(0.0, 1.0, 0.0)] float green; };
+LfsElement effect(LfsElement e, LfsContext ctx, Params p) {
+    e.color.g += p.green;
+    return e;
+})";
+    inline constexpr char kObjectBounds[] = R"(import lfs;
+LfsElement effect(LfsElement e, LfsContext ctx) {
+    float extent = max(ctx.boundsMax.x - ctx.boundsMin.x, 0.001);
+    e.color = float3(0.3 * float(e.objectId), (e.position.x - ctx.boundsMin.x) / extent, 0.5);
+    return e;
+})";
+    inline constexpr char kBroken[] = "import lfs;\nLfsElement effect(LfsElement e, LfsContext ctx) { return f; }\n";
+    inline constexpr char kCameraSide[] = R"(import lfs;
+LfsElement effect(LfsElement e, LfsContext ctx) {
+    e.color = ctx.cameraPosition.x > 0.0 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0);
+    return e;
+})";
 } // namespace lfs::test

@@ -33,6 +33,10 @@ namespace lfs::sequencer {
                                     DarkToLight = 9,
                                     Distortion = 10,
                                     CameraLight = 11 };
+    // Whether the effect moves splats away from their stored positions while it plays.
+    [[nodiscard]] constexpr bool revealMovesSplats(const RevealEffect effect) {
+        return effect <= RevealEffect::Rainbow || effect == RevealEffect::Distortion;
+    }
     struct RevealClip {
         float start = 0.0f;
         float end = 3.0f;

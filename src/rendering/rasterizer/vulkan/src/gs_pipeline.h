@@ -439,7 +439,7 @@ protected:
     };
     using ProgramSetKey = lfs::rendering::ProgramSetKey;
     using ProgramSetHandle = lfs::rendering::ProgramSetHandle;
-    [[nodiscard]] lfs::Result<ProgramSetHandle> prepareProgramSet(std::vector<ComputeProgramSource> programs);
+    [[nodiscard]] lfs::Result<ProgramSetHandle> prepareProgramSet(std::vector<ComputeProgramSource> programs, std::function<void()> finished = {}, bool live = false);
     [[nodiscard]] lfs::Result<bool> programSetReady(const ProgramSetHandle& handle);
     void useProgramSet(const ProgramSetHandle& handle);
     [[nodiscard]] std::uint64_t deviceGeneration() const { return program_sets_.generation.load(); }
@@ -499,7 +499,9 @@ private:
         std::vector<ComputeProgramSource> programs;
         std::vector<FixedProgramSource> fixed;
         std::uint64_t generation = 0;
+        std::function<void()> finished;
         std::uint64_t key = 0;
+        bool live = false;
         std::weak_ptr<const ProgramSetKey> owner;
     };
     struct RetiredProgramSet {

@@ -40,6 +40,10 @@
 #include <utility>
 #include <vector>
 
+namespace lfs::vis::shaders {
+    struct ShaderPrograms;
+} // namespace lfs::vis::shaders
+
 namespace lfs::vis {
 
     // Starts with file-only work: shader blobs are cached for the first
@@ -308,6 +312,8 @@ namespace lfs::vis {
         void releaseSceneResources();
         void reset();
 
+        auto initializePrograms(VulkanContext& context) { return ensureInitialized(context); }
+        using ProgramSetHandle = VulkanGSRenderer::ProgramSetHandle;
         struct PreparedDraw {
             VulkanGSRenderer::HostInputs inputs;
             VulkanGSRenderer::HostPlan hosts;
@@ -318,6 +324,15 @@ namespace lfs::vis {
                                                                        const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload = false, bool capture = false);
         [[nodiscard]] PreparedDraw prepareDecision(const rendering::ViewportRenderRequest&, OutputSlot, bool synchronize_input_upload, bool capture = false);
         [[nodiscard]] VulkanGSRenderer::HostPlan hostsFor(const VulkanGSRenderer::HostInputs& inputs) { return renderer_.hostsFor(inputs); }
+        [[nodiscard]] lfs::Result<bool> preparePrograms(const std::shared_ptr<const shaders::ShaderPrograms>&,
+                                                        ProgramSetHandle&, std::function<void()> finished, bool live = false);
+        void usePrograms(const ProgramSetHandle& handle) {
+            std::erase_if(program_sets_, [](const auto& entry) { return entry.second.first.expired(); });
+            renderer_.useProgramSet(handle);
+        }
+        [[nodiscard]] std::uint64_t deviceGeneration() const { return renderer_.deviceGeneration(); }
+        [[nodiscard]] std::uint64_t programSetSerial() const { return renderer_.programSetSerial(); }
+        std::function<Status(const PreparedDraw&, const rendering::ViewportRenderRequest&)> prepare_custom;
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
             const lfs::core::SplatData& splat_data);
         // VRAM page-pool budget in splats for RAD-backed LoD streaming; 0 = full residency.
@@ -795,6 +810,8 @@ namespace lfs::vis {
         std::size_t resident_depth_wave_armed_ = 0;
         int resident_sort_bits_ = 0;
         bool resident_projection_custom_ = false;
+        // Program sets of linked shader programs, reused while those programs live.
+        std::unordered_map<const shaders::ShaderPrograms*, std::pair<std::weak_ptr<const shaders::ShaderPrograms>, ProgramSetHandle>> program_sets_;
         // The first frame after an input reset remains on the legacy chain;
         // it uses the same fixed-K wave machinery as every other legacy frame.
         bool macro_chain_warmup_pending_ = true;

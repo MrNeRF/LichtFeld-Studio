@@ -2915,7 +2915,10 @@
     "task_failed_detail": "실패: {}",
     "video_export_sequence_changed": "비디오 내보내기 중 PLY 시퀀스가 변경되었습니다",
     "video_export_sequence_frame_timeout": "비디오 내보내기용 PLY 시퀀스 프레임을 불러오는 중 시간이 초과되었습니다",
+    "export_shader_unavailable": "내보내기에서 사용자 셰이더를 그릴 수 없습니다: {}",
+    "export_shader_not_ready": "사용자 셰이더가 아직 준비되지 않았습니다. 다시 시도하세요.",
     "export_cancelled": "사용자가 내보내기를 취소했습니다",
+    "export_stopped": "내보내기가 중지되었습니다. 프로젝트가 닫혔거나 애플리케이션이 종료되는 중입니다.",
     "no_splat_data": "내보낼 스플랫 데이터가 없습니다",
     "export_streamed_lod": "\"{}\"을(를) 내보낼 수 없습니다: 모델이 너무 커서 메모리에 들어가지 않으며 디스크에서 스트리밍됩니다.",
     "export_extension_required": "내보낼 파일 이름은 {}로 끝나야 합니다.",
@@ -3500,6 +3503,7 @@
   "preferences.drag_title": "스플랫 전송",
   "preferences.drag_pause": "스플랫을 드래그하기 전에 학습을 일시 중지하세요.",
   "selection.reveal_moving_blocked": "리빌 효과가 스플랫을 이동하는 동안에는 선택할 수 없습니다.",
+  "selection.shader_effect_blocked": "사용자 셰이더가 스플랫을 그리는 동안에는 선택할 수 없습니다.",
   "preferences.drag_failed": "스플랫 내보내기에 실패했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요.",
   "collision.walk": "걷기",
   "collision.walk_no_collision": "걷기 모드에 들어가기 전에 콜라이더를 불러오거나 생성하세요.",
@@ -3701,5 +3705,7 @@
     "status_no_target": "크기를 조절할 변환 가능한 대상이 없습니다."
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "셰이더",
+  "shader.untitled": "제목 없는 셰이더"
 }

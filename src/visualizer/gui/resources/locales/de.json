@@ -2915,7 +2915,10 @@
     "task_failed_detail": "Fehlgeschlagen: {}",
     "video_export_sequence_changed": "Die PLY-Sequenz wurde während des Videoexports geändert",
     "video_export_sequence_frame_timeout": "Zeitüberschreitung beim Laden eines PLY-Sequenzbilds für den Videoexport",
+    "export_shader_unavailable": "Der eigene Shader kann für den Export nicht gezeichnet werden: {}",
+    "export_shader_not_ready": "Der eigene Shader ist noch nicht bereit; bitte erneut versuchen.",
     "export_cancelled": "Export vom Benutzer abgebrochen",
+    "export_stopped": "Export beendet: Das Projekt wurde geschlossen oder die Anwendung wird beendet.",
     "no_splat_data": "Keine Splat-Daten zum Exportieren",
     "export_streamed_lod": "\"{}\" kann nicht exportiert werden: Das Modell passt nicht in den Arbeitsspeicher und wird von der Festplatte gestreamt.",
     "export_extension_required": "Der Dateiname für den Export muss auf {} enden.",
@@ -3500,6 +3503,7 @@
   "preferences.drag_title": "Splat-Übertragung",
   "preferences.drag_pause": "Vor dem Ziehen der Splats das Training pausieren.",
   "selection.reveal_moving_blocked": "Die Auswahl ist nicht verfügbar, während ein Einblendeffekt Splats bewegt.",
+  "selection.shader_effect_blocked": "Die Auswahl ist nicht verfügbar, während ein eigener Shader die Splats zeichnet.",
   "preferences.drag_failed": "Splat-Export fehlgeschlagen. Details stehen im Anwendungsprotokoll.",
   "collision.walk": "Begehen",
   "collision.walk_no_collision": "Vor dem Begehen einen Kollisionskörper laden oder erzeugen.",
@@ -3701,5 +3705,7 @@
     "status_no_target": "Kein transformierbares Ziel zum Skalieren."
   },
   "training.save.keep_all_checkpoints": "Keep all checkpoints",
-  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size.",
+  "editor.shader": "Shader",
+  "shader.untitled": "Unbenannter Shader"
 }

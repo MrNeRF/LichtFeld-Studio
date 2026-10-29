@@ -100,6 +100,10 @@ namespace lfs::io::project {
         JsonChapterDom& destination,
         const JsonChapterDom::Json& known_state);
 
+    inline constexpr std::size_t kMaxShaderAssets = 256, kMaxShaderSourceBytes = 1024 * 1024,
+                                 kMaxShaderTotalSourceBytes = 16 * 1024 * 1024, kMaxShaderChapterBytes = 32 * 1024 * 1024,
+                                 kMaxShaderBindings = 65536, kMaxShaderNames = 256;
+
     template <SessionJsonChapterKind Kind>
     class BasicSessionJsonChapter {
     public:

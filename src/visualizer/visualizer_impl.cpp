@@ -47,6 +47,7 @@
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
 #include "scene/scene_manager.hpp"
+#include "shaders/shader_service.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/scale_distance_tool.hpp"
@@ -324,6 +325,12 @@ namespace lfs::vis {
         rendering_manager_->setWakeCallback([this] {
             wakeMainLoop();
         });
+        shader_service_ = std::make_unique<shaders::ShaderService>(
+            scene_manager_->getScene(),
+            shaders::slangHostLinker(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer" / "user" /
+                                     "manifest.json"),
+            [this] { wakeMainLoop(); });
+        rendering_manager_->setShaderService(shader_service_.get());
 
         // Set initial antialiasing
         RenderSettings initial_settings;
@@ -1468,6 +1475,8 @@ namespace lfs::vis {
         scene_capture_jobs_.cancelAll(true);
         if (auto* const context = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
             context->cancelSceneCaptureRequest();
+        if (shader_service_)
+            shader_service_->stop();
 
         if (gui_manager_)
             gui_manager_->asyncTasks().shutdownAprilTagScan();
@@ -2313,6 +2322,9 @@ namespace lfs::vis {
         if (gui_manager_ && gui_manager_->asyncTasks().hasPendingMainThreadCompletions())
             gui_manager_->asyncTasks().pollImportCompletion();
 
+        // Shader compiles and publications wake the loop without input.
+        rendering_manager_->syncCustomPrograms();
+
         motion_only_wake_skipped_ = !vr_active_ && isMotionOnlyWake();
         if (motion_only_wake_skipped_)
             return;
@@ -3001,7 +3013,8 @@ namespace lfs::vis {
             .screen_size_px = window_manager_->getFramebufferSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
             .scene_manager = scene_manager_.get(),
-            .vulkan_context = window_manager_->getVulkanContext()};
+            .vulkan_context = window_manager_->getVulkanContext(),
+            .on_screen = true};
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
@@ -3493,6 +3506,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::shutdown() {
+        // On every quit path, before the MCP server joins its handlers: their shader waits end.
+        if (shader_service_)
+            shader_service_->stop();
         if (trainer_manager_ &&
             (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
             LOG_CRITICAL("Shutdown reached before the training worker was reaped");
@@ -4210,6 +4226,8 @@ namespace lfs::vis {
         hydration_terminal_restore_ticket_.reset();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
+        if (shader_service_)
+            shader_service_->clear();
         if (reset_panel_registry) {
             gui::PanelRegistry::instance()
                 .reset_project_state();

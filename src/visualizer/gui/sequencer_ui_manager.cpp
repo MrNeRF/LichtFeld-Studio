@@ -1587,6 +1587,7 @@ namespace lfs::vis::gui {
             const auto& clip = controller_.timeline().revealClip();
             rm->setSequencerReveal(clip && sm ? makeRevealRenderState(sm->getScene(), *clip, controller_.playhead())
                                               : std::nullopt);
+            rm->setSceneTime(controller_.playhead());
         };
         if (export_ply_frame_) {
             last_playback_tick_time_ = std::nullopt;
@@ -3183,6 +3184,7 @@ namespace lfs::vis::gui {
             key.orthographic = settings.orthographic;
             const int reference_height = std::max(1, rendering->getRenderedSize().y);
             key.ortho_scale = settings.ortho_scale * static_cast<float>(key.height) / reference_height;
+            key.custom_effect_generation = rendering->customEffectGeneration();
         }
 
         if (follow_playhead) {
@@ -3198,6 +3200,7 @@ namespace lfs::vis::gui {
         const auto* const kf = controller_.timeline().getKeyframe(*selected);
         if (kf) {
             key.selected_id = kf->id;
+            key.playhead = kf->time;
             key.position = kf->position;
             key.rotation = kf->rotation;
             key.focal_length_mm = kf->focal_length_mm;
@@ -3239,7 +3242,7 @@ namespace lfs::vis::gui {
         const glm::mat3 cam_rot = glm::mat3_cast(key.rotation);
         const auto image = rm->renderPreviewImage(sm, cam_rot, key.position, key.focal_length_mm,
                                                   key.width, key.height, std::nullopt, key.orthographic, key.ortho_scale,
-                                                  key.equirectangular, /*deterministic_export=*/false);
+                                                  key.equirectangular, /*deterministic_export=*/false, key.playhead);
         // Vulkan preview readback is already in the orientation RmlUi samples.
         // upload() recreates the VkImage when width/height change.
         if (image && pip_texture_.upload(*image, key.width, key.height, /*flip_y=*/false)) {

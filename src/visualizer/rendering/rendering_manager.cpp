@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/string_keys.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "python/python_runtime.hpp"
@@ -19,6 +20,7 @@
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
+#include "sequencer/timeline.hpp"
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -293,6 +295,166 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::syncCustomPrograms() {
+        if (!shader_service_)
+            return;
+        const auto generation = shader_service_->generation();
+        if (shader_sync_generation_ == generation && !shader_service_->hasBindings() && !custom_effect_snapshot_)
+            return;
+        // Frames plan their hosts, so a service change must reach a drawn frame.
+        if (shader_sync_generation_ != generation)
+            markDirty(DirtyFlag::SPLATS, FrameReason::AsyncCompletion, "custom_effect");
+        shader_sync_generation_ = generation;
+        const auto retained = shader_service_->restrictFallback(last_complete_);
+        if (!retained)
+            last_complete_.reset();
+        if (!vksplat_viewport_renderer_)
+            return;
+        if (shader_device_generation_ != vksplat_viewport_renderer_->deviceGeneration()) {
+            shader_device_generation_ = vksplat_viewport_renderer_->deviceGeneration();
+            shader_service_->observeDisplay({});
+            display_record_.reset();
+            shader_service_->deviceReset();
+        }
+        const auto target = shader_service_->candidate();
+        shaders::SnapshotPtr selected;
+        rendering::ProgramSetHandle handle;
+        const auto wake = [changes = shader_service_->changes(), this] {
+            changes->notify();
+            std::function<void()> callback;
+            {
+                std::scoped_lock lock(wake_callback_mutex_);
+                callback = wake_callback_;
+            }
+            if (callback)
+                callback();
+        };
+        for (const auto& snapshot : {target, retained}) {
+            if (!snapshot)
+                continue;
+            auto ready = vksplat_viewport_renderer_->preparePrograms(snapshot->programs, handle, wake, snapshot == target);
+            if (!ready) {
+                shader_service_->failCandidate(snapshot, ready.error());
+                continue;
+            }
+            if (*ready) {
+                selected = snapshot;
+                break;
+            }
+        }
+        if (!selected)
+            handle.reset();
+        if (custom_effect_snapshot_ != selected || live_programs_ != handle) {
+            custom_effect_snapshot_ = std::move(selected);
+            live_programs_ = std::move(handle);
+            ++custom_effect_generation_;
+            markDirty(DirtyFlag::SPLATS, FrameReason::AsyncCompletion, "custom_effect");
+        }
+    }
+
+    RenderingManager::ExportLease RenderingManager::prepareShaderExport(const ExportFrame frame, const core::SplatData* model, const RenderSettings* settings, const bool dynamic) {
+        if (!shader_service_ || !shader_service_->hasBindings() || (settings && (settings->point_cloud_mode || ((!model || model->size() == 0) && !dynamic))))
+            return {};
+        if (!model && !settings && !shader_service_->hasApplicableBindings())
+            return {};
+        auto lease = shader_service_->prepareExport({});
+        lease.per_frame = dynamic || !model || !settings;
+        lease.frame = frame;
+        if (!lease.per_frame) {
+            auto ready = prepareShaderExport(lease, model, settings);
+            if (!ready)
+                lease.error = ready.error();
+        }
+        return lease;
+    }
+
+    Status RenderingManager::selectExportPrograms(std::string_view host) {
+        const auto& lease = *export_draw_;
+        if (lease.ended() || (lease.snapshot && (!lease.programs || lease.programs->generation != vksplat_viewport_renderer_->deviceGeneration())))
+            return Status::failure(shadersNotReady());
+        if (lease.request && (!lease.snapshot || !std::ranges::contains(lease.snapshot->programs->hosts, host, &shaders::HostProgram::label))) {
+            // A host beyond the plan, such as the banded retry of a tile-instance overflow only the draw finds.
+            if (!std::ranges::contains(lease.missing, host))
+                lease.missing.emplace_back(host);
+            return Status::failure(shadersNotReady());
+        }
+        vksplat_viewport_renderer_->usePrograms(export_draw_->programs);
+        return {};
+    }
+
+    void RenderingManager::setSceneTime(const float seconds) {
+        if (scene_time_ == seconds)
+            return;
+        scene_time_ = seconds;
+        if (display_record_ && display_record_->custom)
+            markDirty(DirtyFlag::SPLATS, FrameReason::Playback);
+    }
+
+    RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
+        custom_frame_drawing_ = false;
+        custom_frame_complete_ = true;
+        custom_hosts_planned_.clear();
+        if (!vksplat_viewport_renderer_)
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        vksplat_viewport_renderer_->prepare_custom = [this](const auto& prepared, [[maybe_unused]] const auto& request) -> Status {
+            if (export_draw_)
+                return selectExportPrograms(prepared.hosts.host);
+            assert(!request.custom_effect || std::ranges::contains(custom_hosts_planned_, prepared.hosts.host));
+            vksplat_viewport_renderer_->usePrograms(live_programs_);
+            return {};
+        };
+        auto frame = drawVulkanFrame(context);
+        if (frame.rendered && context.on_screen) {
+            if (custom_frame_drawing_ && custom_frame_complete_)
+                last_complete_ = custom_effect_snapshot_;
+            if (!display_record_ || display_record_->snapshot != custom_effect_snapshot_ || display_record_->custom != custom_frame_drawing_ || display_record_->complete != custom_frame_complete_) {
+                display_record_ = std::make_shared<const shaders::DisplayRecord>(shaders::DisplayRecord{custom_effect_snapshot_, custom_frame_drawing_, live_programs_, custom_frame_complete_});
+                if (shader_service_)
+                    shader_service_->observeDisplay(display_record_);
+            }
+        }
+        return frame;
+    }
+
+    void RenderingManager::attachCustomEffect(SceneRenderState& state, const SceneManager& scene_manager, const float time) const {
+        const auto snapshot = export_draw_ ? export_draw_->snapshot : custom_effect_snapshot_;
+        if (!snapshot || (!export_draw_ && shader_service_ && snapshot->epoch != shader_service_->projectToken()[0]))
+            return;
+        const auto scene = shaders::captureEffectScene(scene_manager.getScene(), state.model_transforms.size());
+        state.custom_effect = shaders::makeCustomEffectState(*snapshot, scene, time);
+    }
+
+    Error RenderingManager::shaderWaitError(const Error& error, const std::stop_token& stop) {
+        // The viewer thread cannot wait for them.
+        if (error.code() == ErrorCode::ContractViolation)
+            return shadersNotReady();
+        using namespace lichtfeld::Strings;
+        std::string message =
+            error.code() != ErrorCode::Cancelled
+                ? LOCF(Runtime::EXPORT_SHADER_UNAVAILABLE, std::string(error.user_message()))
+                : LOC(stop.stop_requested() ? Runtime::EXPORT_CANCELLED : Runtime::EXPORT_STOPPED);
+        return make_error(ErrorInit{.code = error.code(),
+                                    .domain = ErrorDomain::Rendering,
+                                    .user_message = std::move(message),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+    }
+
+    Error RenderingManager::shadersNotReady() {
+        return make_error(ErrorInit{.code = ErrorCode::FailedPrecondition,
+                                    .domain = ErrorDomain::Rendering,
+                                    .user_message = LOC(lichtfeld::Strings::Runtime::EXPORT_SHADER_NOT_READY),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+    }
+
+    RenderingManager::SplatMotion RenderingManager::displayedSplatMotion() const {
+        if (display_record_ && display_record_->custom)
+            return SplatMotion::CustomEffect;
+        if (sequencer_reveal_ &&
+            lfs::sequencer::revealMovesSplats(static_cast<lfs::sequencer::RevealEffect>(sequencer_reveal_->effect)))
+            return SplatMotion::Reveal;
+        return SplatMotion::None;
+    }
+
     void RenderingManager::notifyAsyncLodResultsReady() {
         requestRenderFollowUp();
     }
@@ -456,6 +618,10 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneRenderResources() {
+        if (shader_service_)
+            shader_service_->observeDisplay({});
+        display_record_.reset();
+        live_programs_.reset();
         vksplat_stale_frame_guard_.onSuccess();
         viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();

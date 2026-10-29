@@ -211,7 +211,7 @@ namespace lfs::mcp {
 
                 auto result = backend.render_capture(camera_index, width, height);
                 if (!result)
-                    return json{{"error", result.error()}};
+                    return json{{"error", core::to_wire_envelope(result.error())}};
 
                 return json{
                     {"success", true},
