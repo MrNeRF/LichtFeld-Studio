@@ -163,6 +163,7 @@ namespace lfs::media::json_detail {
                                                                                            : block.envelope == XmpEnvelope::PngInternationalText ? "png_itxt"
                                                                                            : block.envelope == XmpEnvelope::TiffTag              ? "tiff_tag700"
                                                                                            : block.envelope == XmpEnvelope::HeifMime             ? "heif_mime"
+                                                                                           : block.envelope == XmpEnvelope::ExrString            ? "exr_string"
                                                                                                                                                  : "jxl_xml";
                 json payload = nullptr;
                 if (const auto view = catalog.xmpPayloadBytes({index}))

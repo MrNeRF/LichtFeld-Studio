@@ -356,7 +356,7 @@ class IngestCLI(unittest.TestCase):
     def test_source_metadata_xmp_interpretation_carriers(self):
         packet = self._rdf_packet('<t:Model>Body &amp; lens</t:Model><e:FNumber>28/10</e:FNumber>',
                                   't:Make="Caméra 日本語" xmlns:d="http://www.dji.com/drone-dji/1.0/" d:RelativeAltitude="-0.75"').encode()
-        for carrier in ("jpeg", "png", "jxl", "tiff", "avif", "heic"):
+        for carrier in ("jpeg", "png", "jxl", "tiff", "avif", "heic", "exr"):
             with self.subTest(carrier=carrier):
                 path = self.root / ("interpreted." + carrier)
                 if carrier == "jpeg":
@@ -367,6 +367,11 @@ class IngestCLI(unittest.TestCase):
                     self._xmp_jxl(path, [(b"xml ", packet)])
                 elif carrier == "tiff":
                     source_exif_fixture.write_tiff(path, xmp_packets=[packet])
+                elif carrier == "exr":
+                    # Header-only metadata fixture; complete EXR images and pixels
+                    # are exercised by the codec and extraction contracts.
+                    path.write_bytes(struct.pack("<II", 20000630, 2) + b"xmp\0string\0" +
+                                     struct.pack("<i", len(packet)) + packet + b"\0")
                 else:
                     source_exif_fixture.write_heif_metadata(path, [{"data": zlib.compress(packet), "encoding": "compress_zlib"}], carrier=carrier)
                 original, stamp = path.read_bytes(), path.stat().st_mtime_ns
@@ -1952,8 +1957,8 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(manifest["embedded_metadata_policy"], "jpeg-static-source-xmp-v1")
         self.assertTrue(list(directory.glob("*.jpg")))
         self.assertIn(b"Exif\0\0", next(directory.glob("*.jpg")).read_bytes())
-        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-exr-invalid",
-                                "--format", "exr", "--embed-source-metadata", code=2)
+        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-jxl-invalid",
+                                "--format", "jxl", "--embed-source-metadata", code=2)
         self.assertEqual(result["error"]["code"], "InvalidArgument")
 
     def test_embedded_png_metadata_cli_and_md5_independence(self):
@@ -1995,6 +2000,27 @@ class IngestCLI(unittest.TestCase):
         self.assertTrue(paths)
         for path in paths:
             _, _, packet = source_exif_fixture.read_export_tiff(path.read_bytes())
+            facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                     if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+            self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+            self.assertGreater(len(packet), 65535)
+
+    def test_embedded_exr_metadata_cli(self):
+        import xml.etree.ElementTree as ET
+        source = self.root / "exr-source-tags.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()), "-map", "0:v:0",
+                        "-c:v", "copy", "-metadata", "comment=" + 'A<&"' * 4000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        result, _ = self.invoke("extract", source, "--output", self.root / "embedded-exr", "--format", "exr",
+                                "--input-transfer", "linear", "--input-primaries", "bt709",
+                                "--interval", "1", "--end", "0.2", "--embed-source-metadata")
+        self.assertTrue(result["success"])
+        manifest = json.loads((self.root / "embedded-exr/extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "exr-static-source-xmp-v1")
+        paths = list((self.root / "embedded-exr").glob("*.exr"))
+        self.assertTrue(paths)
+        for path in paths:
+            _, _, packet = source_exif_fixture.read_export_exr(path.read_bytes())
             facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])

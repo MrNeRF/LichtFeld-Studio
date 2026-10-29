@@ -11,7 +11,6 @@
 #include <array>
 #include <cstring>
 #include <limits>
-#include <new>
 #include <utility>
 
 namespace lfs::media {
@@ -54,8 +53,8 @@ namespace lfs::media {
         source_metadata_.reset();
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata) {
-            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16)
-                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG or TIFF16 output");
+            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR)
+                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16 or EXR output");
             if (!session.source_metadata)
                 return sinkError(ErrorCode::InvalidArgument, "Image metadata requires an explicit source observation");
             // GPU extraction writes its encoded batch directly. Keep only the
@@ -123,24 +122,16 @@ namespace lfs::media {
                 std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared));
             source_metadata_.reset();
         }
-        if (options_.format == FrameFileFormat::EXR)
-            return ImageOutput::writeExr(filename, frame, options_.exr);
-        if (options_.format == FrameFileFormat::TIFF16) {
+        if (options_.format == FrameFileFormat::EXR || options_.format == FrameFileFormat::TIFF16) {
+            const bool exr = options_.format == FrameFileFormat::EXR;
             if (!options_.embed_source_metadata)
-                return ImageOutput::writeTiff16(filename, frame, options_.tiff16);
-            auto packet = detail::imageXmpPrefix(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                return exr ? ImageOutput::writeExr(filename, frame, options_.exr)
+                           : ImageOutput::writeTiff16(filename, frame, options_.tiff16);
+            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
             if (!packet)
                 return SinkResult::failure(packet.error());
-            // TIFFSetField requires one contiguous packet and makes its own copy.
-            // Keep this bounded assembly local to the synchronous write.
-            try {
-                packet->reserve(packet->size() + embedded_metadata_->source_properties.size() + detail::imageXmpSuffix().size());
-                *packet += embedded_metadata_->source_properties;
-                *packet += detail::imageXmpSuffix();
-            } catch (const std::bad_alloc&) {
-                return sinkError(ErrorCode::ResourceExhausted, "TIFF XMP packet allocation failed");
-            }
-            return ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
+            return exr ? ImageOutput::writeExr(filename, frame, options_.exr, *packet)
+                       : ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
         }
         if (options_.format == FrameFileFormat::JXL)
             return ImageOutput::writeJxl(filename, frame, options_.jxl);

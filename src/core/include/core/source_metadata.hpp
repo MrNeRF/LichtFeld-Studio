@@ -104,7 +104,8 @@ namespace lfs::core::image_codecs {
                              PngInternationalText,
                              TiffTag,
                              HeifMime,
-                             JxlXml };
+                             JxlXml,
+                             ExrString };
     struct XmpLimits {
         std::size_t blocks = 64;
         std::size_t block_bytes = 1024 * 1024;
@@ -125,7 +126,7 @@ namespace lfs::core::image_codecs {
     };
     struct XmpBlock {
         XmpEnvelope envelope = XmpEnvelope::JpegApp1;
-        // Exact APP1/iTXt data, or provider-decoded HEIF MIME/JXL XML payloads.
+        // Exact APP1/iTXt/EXR string bytes, or provider-decoded HEIF MIME/JXL XML payloads.
         // TIFF packets reference library-decoded bytes owned by SourceExif.
         std::vector<std::uint8_t> bytes;
         // Used only for compressed PNG text; originals remain unchanged.

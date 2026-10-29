@@ -71,6 +71,9 @@ namespace lfs::core::image_codecs {
     } // namespace
 
     Result<void> encode_exr(const ExrEncodeView& view, const ExrWriteStream& stream, const ExrEncodeOptions& options) {
+        return encode_exr(view, stream, options, {});
+    }
+    Result<void> encode_exr(const ExrEncodeView& view, const ExrWriteStream& stream, const ExrEncodeOptions& options, const std::string& xmp) {
         try {
             const auto row_bytes = view.width > 0 && (view.channels == 3 || view.channels == 4) ? size_t(view.width) * view.channels * sizeof(float) : 0;
             const auto rows = view.height > 0 ? size_t(view.height - 1) : 0;
@@ -88,6 +91,8 @@ namespace lfs::core::image_codecs {
             for (const auto component : options.chromaticities)
                 if (!std::isfinite(component))
                     return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, std::format("EXR chromaticity must be finite (value={})", component)));
+            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string::npos)
+                return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, "Invalid EXR XMP packet"));
             constexpr size_t metadata_limit = 1024 * 1024 + 4096;
             if (options.text.size() > 32)
                 return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, std::format("EXR text attribute count exceeds budget (count={}, limit=32)", options.text.size())));
@@ -98,7 +103,7 @@ namespace lfs::core::image_codecs {
                     return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, std::format("Invalid EXR text metadata (key_bytes={}, value_bytes={}, used_bytes={}, limit={})", key.size(), value.size(), metadata_bytes, metadata_limit)));
                 metadata_bytes += value.size();
                 constexpr std::array<std::string_view, 9> reserved{"channels", "compression", "dataWindow", "displayWindow", "lineOrder", "pixelAspectRatio", "screenWindowCenter", "screenWindowWidth", "chromaticities"};
-                if (std::find(reserved.begin(), reserved.end(), key) != reserved.end() || std::find(keys.begin(), keys.end(), key) != keys.end())
+                if (std::find(reserved.begin(), reserved.end(), key) != reserved.end() || std::find(keys.begin(), keys.end(), key) != keys.end() || (!xmp.empty() && key == "xmp"))
                     return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, std::format("EXR text metadata has reserved or duplicate key (key={})", key)));
                 keys.push_back(key);
             }
@@ -125,6 +130,8 @@ namespace lfs::core::image_codecs {
             check(exr_attr_set_chromaticities(context.value, part, "chromaticities", &chroma), state);
             for (const auto& [key, value] : options.text)
                 check(exr_attr_set_string(context.value, part, key.c_str(), value.c_str()), state);
+            if (!xmp.empty())
+                check(exr_attr_set_string(context.value, part, "xmp", xmp.c_str()), state);
             check(exr_write_header(context.value), state);
             Pipeline pipeline{.context = context.value};
             std::vector<float> scratch;

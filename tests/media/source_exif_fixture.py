@@ -543,3 +543,61 @@ def read_export_tiff(data):
     # Strip offsets can change when a metadata tag is added; values and compressed
     # strip bytes, rather than absolute offsets, define the unchanged image.
     return {tag: value for tag, value in tags.items() if tag not in (273, 700)}, strips, packet
+
+
+
+def read_export_exr(data):
+    """Independent single-part scanline header/chunk oracle for None/ZIP exports."""
+    if len(data) < 9 or data[:4] != b"\x76\x2f\x31\x01" or struct.unpack_from("<I", data, 4)[0] not in (2, 0x402):
+        raise AssertionError("not a supported single-part EXR export")
+    at = 8
+    def text():
+        nonlocal at
+        end = data.find(b"\0", at, at + 256)
+        if end < 0:
+            raise AssertionError("truncated EXR attribute name/type")
+        value = data[at:end].decode("ascii")
+        at = end + 1
+        return value
+    attrs = {}
+    while True:
+        name = text()
+        if not name:
+            break
+        kind = text()
+        if not kind or name in attrs or at + 4 > len(data):
+            raise AssertionError("invalid EXR attribute")
+        size, = struct.unpack_from("<i", data, at)
+        at += 4
+        if size < 0 or size > len(data) - at:
+            raise AssertionError("invalid EXR attribute extent")
+        attrs[name] = (kind, data[at:at + size])
+        at += size
+    xmin, ymin, xmax, ymax = struct.unpack("<4i", attrs["dataWindow"][1])
+    if xmin or ymin or xmax < 0 or ymax < 0:
+        raise AssertionError("unexpected export window")
+    compression = attrs["compression"][1]
+    if compression not in (b"\0", b"\x03"):
+        raise AssertionError("unexpected export compression")
+    rows = 16 if compression == b"\x03" else 1
+    chunks = (ymax + rows) // rows
+    table_end = at + chunks * 8
+    if table_end > len(data):
+        raise AssertionError("truncated EXR offset table")
+    payload = []
+    previous_end = table_end
+    for i in range(chunks):
+        offset, = struct.unpack_from("<Q", data, at + 8 * i)
+        if offset < previous_end or offset + 8 > len(data):
+            raise AssertionError("invalid EXR chunk offset")
+        y, size = struct.unpack_from("<iI", data, offset)
+        if y != i * rows or size > len(data) - offset - 8:
+            raise AssertionError("invalid EXR chunk extent")
+        previous_end = offset + 8 + size
+        payload.append(data[offset:previous_end])
+    if previous_end != len(data):
+        raise AssertionError("unexpected trailing EXR bytes")
+    packet = attrs.get("xmp")
+    if packet is not None and packet[0] != "string":
+        raise AssertionError("XMP must use an EXR string attribute")
+    return {key: value for key, value in attrs.items() if key != "xmp"}, tuple(payload), None if packet is None else packet[1]

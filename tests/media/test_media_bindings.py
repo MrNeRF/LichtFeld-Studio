@@ -1232,9 +1232,69 @@ class MediaBindings(unittest.TestCase):
     def test_tiff_embedded_metadata_resume_policy_and_replay(self):
         self._check_embedded_metadata_resume(media.FrameFileFormat.TIFF16, ".tif")
 
+    def test_exr_embedded_metadata_preserves_attributes_chunks_and_pixels(self):
+        import xml.etree.ElementTree as ET
+        request = self.metadata_request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        request.geometry.clockwise_rotation = 90
+        request.end_seconds = 0.01
+        for precision in (media.ExrPrecision.Half, media.ExrPrecision.Float):
+            for compression in (media.ExrCompression.Uncompressed, media.ExrCompression.ZIP):
+                with self.subTest(precision=precision, compression=compression):
+                    name = f"exr-{precision}-{compression}"
+                    plain = media.FileExtraction()
+                    plain.files.format = media.FrameFileFormat.EXR
+                    plain.files.exr.precision, plain.files.exr.compression = precision, compression
+                    plain.files.output_directory = self.root / (name + "-plain")
+                    self.assertGreater(media.MediaIngest.extract_files(request, plain).frames_accepted, 0)
+                    output = media.FileExtraction()
+                    output.files.format = media.FrameFileFormat.EXR
+                    output.files.exr.precision, output.files.exr.compression = precision, compression
+                    output.files.embed_source_metadata = True
+                    output.files.output_directory = self.root / (name + " é 日本語")
+                    self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+                    manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                    self.assertEqual(manifest["embedded_metadata_policy"], "exr-static-source-xmp-v1")
+                    paths = list(output.files.output_directory.glob("*.exr"))
+                    self.assertTrue(paths)
+                    for image in paths:
+                        attrs, chunks, packet = source_exif_fixture.read_export_exr(image.read_bytes())
+                        original = plain.files.output_directory / image.name
+                        before, before_chunks, absent = source_exif_fixture.read_export_exr(original.read_bytes())
+                        self.assertIsNone(absent)
+                        self.assertEqual(attrs, before)
+                        self.assertEqual(chunks, before_chunks)
+                        self.assertTrue(packet.endswith(b'<?xpacket end="r"?>'))
+                        self.assertNotIn(b"\0", packet)
+                        facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                                 if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                        self.assertEqual(facts["MetadataPolicy"], "exr-static-source-xmp-v1")
+                        self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), ("32", "64"))
+                        self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+                        self.assertEqual(facts["TimestampOrigin"], "best_effort")
+                        self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+                        observed = json.loads(media.MediaIngest.source_metadata_json(image))
+                        self.assertTrue(observed["success"])
+                        blocks = observed["metadata"]["image_xmp"]["blocks"]
+                        self.assertEqual([block["envelope"] for block in blocks], ["exr_string"])
+                        self.assertEqual([bytes.fromhex(block["bytes"]) for block in blocks], [packet])
+                        decoded = []
+                        for path in (original, image):
+                            decoded.append(subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                                           "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-"], timeout=30))
+                        self.assertEqual(len(decoded[0]), 32 * 64 * 12)
+                        self.assertEqual(decoded[0], decoded[1])
+                        with self.assertRaises(AssertionError):
+                            source_exif_fixture.read_export_exr(image.read_bytes()[:12])
+
+    def test_exr_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.EXR, ".exr")
+
     def _check_embedded_metadata_resume(self, file_format, extension):
         request = self.metadata_request()
-        if file_format == media.FrameFileFormat.TIFF16:
+        if file_format in (media.FrameFileFormat.TIFF16, media.FrameFileFormat.EXR):
             request.output_format = media.FramePixelFormat.RGBFloat32
             request.input_color.transfer = media.ColorTransfer.Linear
             request.input_color.primaries = media.ColorPrimaries.Bt709
@@ -1327,8 +1387,8 @@ class MediaBindings(unittest.TestCase):
     def test_embedding_rejects_other_formats_before_output(self):
         output = media.FileExtraction()
         output.files.embed_source_metadata = True
-        output.files.format = media.FrameFileFormat.EXR
-        output.files.output_directory = self.root / "invalid-embedded-exr"
+        output.files.format = media.FrameFileFormat.JXL
+        output.files.output_directory = self.root / "invalid-embedded-jxl"
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(self.request(), output)
         self.assertFalse(output.files.output_directory.exists())

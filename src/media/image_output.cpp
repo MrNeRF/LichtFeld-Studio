@@ -289,9 +289,14 @@ namespace lfs::media {
                               "ImageOutput.writeTiff16");
     }
     SinkResult ImageOutput::writeExr(const std::filesystem::path& target, const FrameView& frame, const ExrOutputOptions& options) {
+        return writeExr(target, frame, options, {});
+    }
+    SinkResult ImageOutput::writeExr(const std::filesystem::path& target, const FrameView& frame, const ExrOutputOptions& options, const std::string& xmp) {
         return outputBoundary([&]() -> SinkResult {
             if (auto valid = validateExrOutputOptions(options); !valid)
                 return valid;
+            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string::npos)
+                return SinkResult::failure(outputError(ErrorCode::InvalidArgument, "Invalid EXR XMP packet"));
             auto required = frame.requiredBytes();
             if (!required)
                 return SinkResult::failure(required.error());
@@ -334,7 +339,7 @@ namespace lfs::media {
             cancel(options);
             const auto name = core::path_to_utf8(target);
             auto status = core::writeFileAtomically(target, [&](FILE* stream) -> Status {
-                auto encoded = codecs::encode_exr({layout.width, layout.height, rgba ? 4 : 3, layout.row_stride, frame.pixels}, {name, stream, writeBytes}, encoding);
+                auto encoded = codecs::encode_exr({layout.width, layout.height, rgba ? 4 : 3, layout.row_stride, frame.pixels}, {name, stream, writeBytes}, encoding, xmp);
                 if (!encoded)
                     return Status::failure(std::move(encoded).error().with_context("ImageOutput.writeExr", LFS_SOURCE_SITE_CURRENT()));
                 return {};

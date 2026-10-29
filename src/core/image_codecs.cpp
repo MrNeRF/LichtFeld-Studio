@@ -2081,7 +2081,7 @@ namespace lfs::core::image_codecs {
                     const char* diagnostic = nullptr;
                     if (!source_extended_xmp_segment(block, &diagnostic))
                         malformed(diagnostic);
-                } else {
+                } else if (envelope == XmpEnvelope::PngInternationalText) {
                     if (crc && !*crc)
                         malformed("XMP iTXt CRC mismatch");
                     size_t offset = sizeof(kPngXmp);
@@ -2837,6 +2837,122 @@ namespace lfs::core::image_codecs {
 
     } // namespace
 
+    // Header-only collection: payload extents and names are bounded before
+    // allocation. Chunk tables and pixel data are never read or decoded.
+    static void collect_exr_xmp(std::ifstream& input, const std::array<uint8_t, 12>& signature, size_t signature_size, XmpCollector& collector) {
+        collector.supported_carrier = true;
+        collector.result.status = MetadataStatus::Absent;
+        collector.result.scope = "exr-single-header-string-xmp";
+        const auto fail = [&](MetadataStatus status, const char* diagnostic) {
+            collector.scan_status = status;
+            collector.scan_diagnostic = diagnostic;
+        };
+        if (signature_size < 8) {
+            fail(MetadataStatus::Malformed, "Truncated EXR version");
+            return;
+        }
+        const auto u32 = [](const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; };
+        const auto version = u32(signature.data() + 4);
+        if ((version & 255) != 2 || (version & ~uint32_t(0x6ff))) {
+            collector.result.status = MetadataStatus::Unsupported;
+            collector.result.diagnostic = "EXR XMP collection requires a single-part non-deep version 2 header";
+            return;
+        }
+        input.clear();
+        input.seekg(0, std::ios::end);
+        const auto end = input.tellg();
+        if (end < 8) {
+            fail(MetadataStatus::IoError, "Cannot determine EXR source extent");
+            return;
+        }
+        const auto file_bytes = static_cast<uint64_t>(end);
+        input.seekg(8, std::ios::beg);
+        constexpr uint64_t header_limit = 64 * 1024 * 1024;
+        constexpr size_t attribute_limit = 4096;
+        const size_t name_limit = version & 0x400 ? 255 : 31;
+        uint64_t position = 8;
+        const auto extent = [&](size_t count) {
+            if (count > header_limit - position) {
+                fail(MetadataStatus::Limited, "EXR header scan budget exhausted");
+                return false;
+            }
+            if (count > file_bytes - position) {
+                fail(MetadataStatus::Malformed, "Truncated EXR header value");
+                return false;
+            }
+            return true;
+        };
+        const auto read = [&](void* bytes, size_t count) {
+            if (!extent(count))
+                return false;
+            if (!count)
+                return true;
+            input.read(static_cast<char*>(bytes), static_cast<std::streamsize>(count));
+            if (!input) {
+                fail(MetadataStatus::IoError, "Cannot read EXR header value");
+                return false;
+            }
+            position += count;
+            return true;
+        };
+        const auto name = [&](std::string& text) {
+            text.clear();
+            for (size_t n = 0; n <= name_limit; ++n) {
+                char c = 0;
+                if (!read(&c, 1))
+                    return false;
+                if (!c)
+                    return true;
+                text += c;
+            }
+            fail(MetadataStatus::Malformed, "EXR attribute name/type exceeds its declared limit");
+            return false;
+        };
+        std::set<std::string> names;
+        for (size_t index = 0;; ++index) {
+            std::string key, type;
+            if (!name(key) || key.empty())
+                return;
+            if (index >= attribute_limit) {
+                fail(MetadataStatus::Limited, "EXR attribute count budget exhausted");
+                return;
+            }
+            if (!name(type))
+                return;
+            std::array<uint8_t, 4> raw{};
+            if (!read(raw.data(), raw.size()))
+                return;
+            const auto size = u32(raw.data());
+            if (type.empty() || size > uint32_t(std::numeric_limits<int32_t>::max())) {
+                fail(MetadataStatus::Malformed, "Invalid EXR attribute type or size");
+                return;
+            }
+            if (!names.insert(key).second)
+                fail(MetadataStatus::Malformed, "Duplicate EXR header attribute");
+            if (!extent(size))
+                return;
+            if (key == "xmp" && type == "string" && collector.canRetain(size)) {
+                std::vector<uint8_t> bytes(size);
+                if (!read(bytes.data(), bytes.size()))
+                    return;
+                collector.append(std::move(bytes), XmpEnvelope::ExrString);
+            } else {
+                if (key == "xmp" && type != "string") {
+                    if (collector.result.status != MetadataStatus::Limited) {
+                        collector.result.status = MetadataStatus::Unsupported;
+                        collector.result.diagnostic = "EXR xmp attribute is not a string";
+                    }
+                }
+                input.seekg(static_cast<std::streamoff>(size), std::ios::cur);
+                if (!input) {
+                    fail(MetadataStatus::IoError, "Cannot skip EXR header attribute");
+                    return;
+                }
+                position += size;
+            }
+        }
+    }
+
     static SourceExif collect_source_exif(const std::filesystem::path& path, const MetadataLimits& limits, XmpCollector* xmp) {
         SourceExif result;
         if (!limits.block_bytes || !limits.total_bytes) {
@@ -2862,6 +2978,13 @@ namespace lfs::core::image_codecs {
         if (input.bad()) {
             result.status = MetadataStatus::IoError;
             result.diagnostic = "Cannot read metadata source";
+            return result;
+        }
+        if (xmp && signature_size >= 4 && signature[0] == 0x76 && signature[1] == 0x2f && signature[2] == 0x31 && signature[3] == 0x01) {
+            result.status = MetadataStatus::Unsupported;
+            result.scope = "exr-header-xmp-only";
+            result.diagnostic = "Standalone EXIF collection is not defined for this EXR observation";
+            collect_exr_xmp(input, signature, signature_size, *xmp);
             return result;
         }
         const bool tiff_signature = signature_size >= 4 &&
@@ -3070,7 +3193,8 @@ namespace lfs::core::image_codecs {
             if (block.heif_item && (!block.heif_item->image_item || !block.heif_item->metadata_item ||
                                     block.inflated || block.compressed || block.payload_offset || block.crc_valid))
                 return std::nullopt;
-            if (block.jxl_box && (block.inflated || block.compressed || block.payload_offset || block.crc_valid))
+            if ((block.jxl_box || block.envelope == XmpEnvelope::ExrString) &&
+                (block.inflated || block.compressed || block.payload_offset || block.crc_valid))
                 return std::nullopt;
             return std::span<const uint8_t>(block.bytes);
         }
@@ -3106,7 +3230,7 @@ namespace lfs::core::image_codecs {
         const auto& scan_diagnostic = collector.scan_status ? collector.scan_diagnostic : result.exif.diagnostic;
         if (result.xmp.status == MetadataStatus::NotExamined) {
             result.xmp.status = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_status : MetadataStatus::Unsupported;
-            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt, observed TIFF tag 700, HEIF primary-image MIME items and JPEG XL XML boxes";
+            result.xmp.diagnostic = (scan_status == MetadataStatus::IoError || scan_status == MetadataStatus::Limited) ? scan_diagnostic : "XMP collection supports JPEG APP1, PNG iTXt, observed TIFF tag 700, HEIF primary-image MIME items, JPEG XL XML boxes and single-header EXR xmp strings";
         } else if ((collector.supported_carrier || result.xmp.status != MetadataStatus::Unsupported) &&
                    (scan_status == MetadataStatus::Limited || scan_status == MetadataStatus::Malformed || scan_status == MetadataStatus::IoError)) {
             // Conservatively retain the enclosing scan's incomplete/invalid status.
