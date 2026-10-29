@@ -73,6 +73,26 @@ TEST(RmlDocumentUtilsTest, LeavesNonFileImageSourcesUnchanged) {
     EXPECT_EQ(rewritten, source);
 }
 
+// RmlUi passes every image source through JoinPath before LoadTexture opens it,
+// so an encoded source must come back as the original path (e.g. a mounted
+// "/Volumes/LichtFeld Studio" disk image).
+TEST(RmlSystemInterfaceTest, JoinPathDecodesImageSourcesWithSpaces) {
+#ifdef _WIN32
+    const auto path = std::filesystem::path(L"C:\\Program Files\\LichtFeld Studio\\splash logo.png");
+    const Rml::String document_path = "C:/Program Files/LichtFeld Studio/assets/rmlui/startup.rml";
+#else
+    const auto path = std::filesystem::path("/Volumes/LichtFeld Studio/LichtFeld-Studio.app/splash logo.png");
+    const Rml::String document_path = "/Volumes/LichtFeld Studio/LichtFeld-Studio.app/assets/rmlui/startup.rml";
+#endif
+    lfs::vis::gui::RmlSystemInterface system_interface(nullptr);
+    Rml::String translated_path;
+
+    system_interface.JoinPath(translated_path, document_path,
+                              lfs::vis::gui::rml_theme::pathToRmlImageSource(path));
+
+    EXPECT_EQ(translated_path, lfs::vis::gui::rml_paths::normalizeFilesystemPath(path));
+}
+
 #ifdef _WIN32
 TEST(RmlSystemInterfaceTest, JoinsWindowsDrivePathsWithoutTreatingDriveAsUriScheme) {
     lfs::vis::gui::RmlSystemInterface system_interface(nullptr);
