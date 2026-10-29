@@ -112,6 +112,9 @@
 #if defined(__linux__)
 #include <sys/resource.h>
 #endif
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 namespace lfs::training {
 
@@ -3425,9 +3428,15 @@ namespace lfs::training {
         return active_image_loader_;
     }
 
-    std::function<std::uint64_t(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
-        return [loader = getActiveImageLoader()](const std::uint64_t bytes) -> std::uint64_t {
-            return loader ? loader->release_host_cache(static_cast<size_t>(bytes)) : 0;
+    std::function<void(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
+        return [loader = getActiveImageLoader()](const std::uint64_t bytes) {
+            if (loader)
+                loader->release_host_cache(static_cast<size_t>(bytes));
+#ifdef __GLIBC__
+            // Image buffers freed by eviction, or by the loader a finished run already destroyed,
+            // stay in the allocator's arenas until trimmed.
+            malloc_trim(0);
+#endif
         };
     }
 
@@ -9609,6 +9618,16 @@ namespace lfs::training {
                                                       terminal_iteration, save_result.error()),
                                 .detection = LFS_SOURCE_SITE_CURRENT(),
                             }));
+                        }
+                        // A headless process exits after a failed save and would take the trained model with it.
+                        auto fallback = getParams();
+                        if (fallback.optimization.headless) {
+                            fallback.export_formats = {lfs::core::param::OutputFormat::PLY};
+                            if (export_final_splats(*this, fallback))
+                                LOG_ERROR("The project was not saved at iteration {}; the trained splats were exported "
+                                          "as PLY to {}",
+                                          terminal_iteration,
+                                          lfs::core::path_to_utf8(fallback.dataset.output_path));
                         }
                     }
                 } else {

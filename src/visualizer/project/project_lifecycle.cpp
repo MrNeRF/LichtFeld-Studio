@@ -3672,6 +3672,15 @@ namespace lfs::vis::project {
             return {};
         }
         const auto path = *document_->source_path();
+        // The head slots name the current commit; reopening the whole project is
+        // only needed when another writer moved the master past the held source.
+        if (const auto* source = document_->source_reader()) {
+            const auto head = lfs::io::project::ProjectReader::read_head_identity(path);
+            if (head && head->project_uuid == document_->project_uuid() &&
+                head->commit_uuid == source->commit().commit_uuid) {
+                return {};
+            }
+        }
         auto opened = ProjectDocument::open(
             path,
             {
@@ -6697,21 +6706,11 @@ namespace lfs::vis::project {
         if (!captured_state)
             return lfs::Status::failure(std::move(captured_state).error());
         auto collisions = std::move(captured_state->collisions);
-        auto captured_scene = lfs::io::project::materialize_scene_graph_chapter(std::move(*captured_state));
-        if (!captured_scene) {
-            return lfs::Status::failure(
-                std::move(captured_scene).error());
-        }
         std::unordered_set<lfs::core::Uuid>
             captured_scene_uuids;
-        if (const auto captured_nodes =
-                captured_scene->nodes();
-            captured_nodes) {
-            captured_scene_uuids.reserve(
-                captured_nodes->size());
-            for (const auto& node : *captured_nodes) {
-                captured_scene_uuids.insert(node.uuid);
-            }
+        captured_scene_uuids.reserve(captured_state->nodes.size());
+        for (const auto& node : captured_state->nodes) {
+            captured_scene_uuids.insert(node.uuid);
         }
         const auto old_training_uuid =
             document_->scene_graph().training_model_uuid();
@@ -6719,18 +6718,19 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(old_training_uuid).error());
         }
-        const bool drops_training_binding =
-            training_uuid.is_nil() && old_training_uuid->has_value();
-        const auto old_scene_bytes =
-            document_->scene_graph().to_bytes();
-        const auto new_scene_bytes =
-            captured_scene->to_bytes();
-        scene_capture_finished = std::chrono::steady_clock::now();
-        if (drops_training_binding ||
-            !sameBytes(old_scene_bytes, new_scene_bytes)) {
+        // Records round-trip through SCNG exactly, so comparing them replaces
+        // serializing both chapters, and an unchanged scene skips the rebuild.
+        if (captured_state->training_model_uuid != *old_training_uuid ||
+            captured_state->nodes != *existing_nodes) {
+            auto captured_scene = lfs::io::project::materialize_scene_graph_chapter(std::move(*captured_state));
+            if (!captured_scene) {
+                return lfs::Status::failure(
+                    std::move(captured_scene).error());
+            }
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
+        scene_capture_finished = std::chrono::steady_clock::now();
         if (auto synced = lfs::io::project::sync_sfm_observations(
                 *document_, lfs::io::project::capture_sfm_observation_cameras(scene));
             !synced) {

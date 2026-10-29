@@ -589,11 +589,8 @@ namespace lfs::io::project {
             !status) {
             return std::move(status).error();
         }
-        for (const auto& node : state.nodes) {
-            if (auto status = result.upsert_node(node);
-                !status) {
-                return std::move(status).error();
-            }
+        if (auto status = result.replace_nodes(state.nodes); !status) {
+            return std::move(status).error();
         }
         if (auto valid = result.validate_hierarchy(); !valid) {
             return std::move(valid).error();

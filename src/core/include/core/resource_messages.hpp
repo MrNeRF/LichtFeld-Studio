@@ -10,7 +10,7 @@ namespace lfs::core {
     // snapshot service starts its user message with this prefix so error
     // surfaces can tell the two apart without new event plumbing.
     inline constexpr const char* HOST_MEMORY_SAVE_ERROR_PREFIX =
-        "Not enough free memory to save the project";
+        "Not enough free RAM to save the project";
 
     // A project save whose volume is full, from the save preflight or a failed write. Other ResourceExhausted
     // IO errors are memory or format limits, and some write paths carry only the text, so surfaces match the

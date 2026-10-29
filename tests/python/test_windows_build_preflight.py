@@ -131,6 +131,26 @@ class WindowsBuildPreflightTests(unittest.TestCase):
         )
         self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
 
+    def test_calls_inside_inline_bodies_are_not_declarations(self) -> None:
+        self.write(
+            "src/visualizer/gui/widget.hpp",
+            "namespace lfs::vis::gui {\n"
+            "inline int wrapper(int size) {\n"
+            "    int area = 0;\n"
+            "    if (!makeWidget(size))\n"
+            "        return 0;\n"
+            "    const bool again = makeWidget(size + 1);\n"
+            "    return again ? area : 1;\n"
+            "}\n"
+            "}\n",
+        )
+        self.write(
+            "tests/test_widget.cpp",
+            '#include "gui/widget.hpp"\n'
+            "void test() { (void)lfs::vis::gui::makeWidget(3); }\n",
+        )
+        self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
+
     def test_inline_definition_is_available_without_dll_export(self) -> None:
         self.write(
             "src/visualizer/gui/widget.hpp",

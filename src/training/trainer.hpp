@@ -729,7 +729,7 @@ namespace lfs::training {
         void evaluate_at(int iteration, std::stop_token stop_token = {});
         bool service_evaluation_controls(int iteration, std::stop_token stop_token);
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
-        [[nodiscard]] std::function<std::uint64_t(std::uint64_t)> release_image_cache_for_snapshot() const;
+        [[nodiscard]] std::function<void(std::uint64_t)> release_image_cache_for_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;

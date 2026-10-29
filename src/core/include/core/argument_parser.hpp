@@ -8,6 +8,8 @@
 
 #include "core/collision.hpp"
 #include "core/parameters.hpp"
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -86,8 +88,15 @@ namespace lfs::core::args {
         std::string name;
     };
     struct LichtMode {
+        enum class Action { EMBED,
+                            LIST_CHECKPOINTS,
+                            PRUNE_CHECKPOINTS,
+                            REMOVE_CHECKPOINTS };
         std::filesystem::path project_path;
         std::optional<std::filesystem::path> dataset_path;
+        Action action = Action::EMBED;
+        std::size_t keep_checkpoints = 0;
+        std::vector<std::int32_t> checkpoint_iterations;
     };
     struct BatchTrainingMode {
         param::BatchTrainingParameters params;
