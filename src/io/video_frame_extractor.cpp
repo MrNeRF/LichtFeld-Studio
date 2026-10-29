@@ -84,6 +84,7 @@ namespace lfs::io {
                 const AVStream* const stream = context->streams[i];
                 const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
                 if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC) &&
                     parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
                     parameters->height > 0) {
                     return static_cast<int>(i);
