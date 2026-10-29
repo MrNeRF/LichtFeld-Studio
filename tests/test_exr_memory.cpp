@@ -96,20 +96,34 @@ namespace {
                                                } catch (...) { return -1; }
                                            }};
         for (const auto precision : {codec::ExrSampleType::Half, codec::ExrSampleType::Float})
-            for (const auto compression : {codec::ExrCompression::None, codec::ExrCompression::Zip}) {
-                codec::ExrEncodeOptions options;
-                options.precision = precision;
-                options.compression = compression;
-                std::vector<uint8_t> plain;
-                ASSERT_TRUE(codec::encode_exr_memory(input.view(), plain, options));
-                encoded.clear();
-                ASSERT_TRUE(codec::encode_exr(input.view(), stream, options, packet));
-                EXPECT_EQ(reference(encoded, input.width, input.height), reference(plain, input.width, input.height));
-                Input reader(encoded);
-                exr::InputFile file(reader);
-                EXPECT_EQ(file.header().typedAttribute<exr::StringAttribute>("xmp").value(), packet);
-                EXPECT_EQ(input.bytes, original);
-            }
+            for (const auto compression : {codec::ExrCompression::None, codec::ExrCompression::Zip})
+                for (const bool premultiply : {false, true}) {
+                    codec::ExrEncodeOptions options;
+                    options.precision = precision;
+                    options.compression = compression;
+                    options.premultiply_alpha = premultiply;
+                    std::vector<uint8_t> plain;
+                    ASSERT_TRUE(codec::encode_exr_memory(input.view(), plain, options));
+                    encoded.clear();
+                    ASSERT_TRUE(codec::encode_exr(input.view(), stream, options, packet));
+                    EXPECT_EQ(reference(encoded, input.width, input.height), reference(plain, input.width, input.height));
+                    const auto decoded = reference(encoded, input.width, input.height);
+                    for (int y = 0; y < input.height; ++y)
+                        for (int x = 0; x < input.width; ++x) {
+                            std::array<float, 4> values;
+                            std::memcpy(values.data(), input.bytes.data() + y * input.stride + x * 4 * sizeof(float), sizeof(values));
+                            for (int c = 0; c < 4; ++c) {
+                                float expected = premultiply && c < 3 ? values[c] * values[3] : values[c];
+                                if (precision == codec::ExrSampleType::Half)
+                                    expected = float(Imath::half(expected));
+                                EXPECT_EQ(decoded[(y * input.width + x) * 4 + c], expected);
+                            }
+                        }
+                    Input reader(encoded);
+                    exr::InputFile file(reader);
+                    EXPECT_EQ(file.header().typedAttribute<exr::StringAttribute>("xmp").value(), packet);
+                    EXPECT_EQ(input.bytes, original);
+                }
         codec::ExrEncodeOptions options;
         const auto previous = encoded;
         for (const auto& bad : {std::string("x\0mp", 4), std::string(32 * 1024 * 1024 + 1, 'a')}) {
@@ -137,7 +151,10 @@ namespace {
         Input reader(encoded);
         exr::InputFile file(reader);
         EXPECT_EQ(file.header().typedAttribute<exr::StringAttribute>("xmp").value(), boundary);
-        EXPECT_EQ(reference(encoded, input.width, input.height).size(), size_t(input.width) * input.height * 4);
+        std::vector<uint8_t> plain;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), plain, options));
+        EXPECT_EQ(reference(encoded, input.width, input.height), reference(plain, input.width, input.height));
+        EXPECT_EQ(input.bytes, original);
     }
 
     TEST(ExrMemory, MetadataHeaderCollectionKeepsOpaqueBytesAndBoundsMalformedInput) {
