@@ -15,6 +15,22 @@
   <div id="controls">
     <div data-if="show_ctrl_ready">
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{btn_start}}</button>
+      <div class="training-subsection section-gap">
+        <div class="section-header">@tr:auto_tiles.title</div>
+        <div class="setting-row">
+          <label>@tr:auto_tiles.columns <input type="text" class="number-input" data-value="auto_tile_columns" /></label>
+          <label>@tr:auto_tiles.rows <input type="text" class="number-input" data-value="auto_tile_rows" /></label>
+        </div>
+        <div class="setting-row">
+          <label>@tr:auto_tiles.overlap <input type="range" class="setting-slider" min="0" max="0.3" step="0.01" data-value="auto_tile_overlap" /></label>
+          <span>{{auto_tile_overlap}}</span>
+        </div>
+        <label class="setting-row"><input type="checkbox" data-checked="auto_tile_align" />@tr:auto_tiles.align_pca</label>
+        <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
+        <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
+        <button class="btn btn--warning btn--full" data-if="auto_tile_running" data-event-click="action('auto_tile_cancel')">@tr:auto_tiles.cancel</button>
+        <span class="status-text">{{auto_tile_status}}</span>
+      </div>
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
