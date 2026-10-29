@@ -300,15 +300,17 @@ namespace {
         EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
     }
 
-    TEST_F(SequencerHistoryRegressionTest, ProtectedAndMissingDeleteCommandsDoNotCreateHistory) {
+    TEST_F(SequencerHistoryRegressionTest, FirstKeyDeleteIsOneUndoStepAndMissingDeleteAddsNone) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& controller = viewer.getGuiManager()->sequencerUI().controller();
         const auto first = controller.addKeyframe(makeKeyframe(0.0f));
         auto& history = lfs::vis::op::undoHistory();
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 0}.emit();
+        EXPECT_EQ(controller.timeline().getKeyframeById(first), nullptr);
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 99}.emit();
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
         EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
-        EXPECT_EQ(history.undoCount(), 0u);
     }
 
     TEST_F(SequencerHistoryRegressionTest, GroupedControllerDeletionIsOneUndoStep) {
