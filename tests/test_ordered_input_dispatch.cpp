@@ -145,6 +145,7 @@ namespace lfs::vis {
                 Rml::RemoveContext(context_->GetName());
             context_ = nullptr;
             document_ = nullptr;
+            gui::guiFocusState().reset();
         }
 
         static inline NullRenderInterface* render_interface_ = nullptr;
@@ -554,6 +555,8 @@ namespace lfs::vis {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         EXPECT_TRUE(editor.hasActiveCompletion());
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_TRUE(gui::guiFocusState().want_text_input);
         view->setEditor(nullptr);
         unsetenv("LFS_PYTHON_LSP");
         unsetenv("LFS_PYTHON_LSP_WORKSPACE");
