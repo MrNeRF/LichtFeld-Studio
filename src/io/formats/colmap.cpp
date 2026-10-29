@@ -1903,6 +1903,14 @@ namespace lfs::io {
         return lines;
     }
 
+    // An image NAME has an extension that starts with a letter. The rest of a
+    // POINTS2D line never does: its last '.' sits inside a number.
+    static bool has_image_file_extension(const std::string& name) {
+        const auto dot_pos = name.rfind('.');
+        return dot_pos != std::string::npos && dot_pos + 1 < name.size() &&
+               std::isalpha(static_cast<unsigned char>(name[dot_pos + 1]));
+    }
+
     bool parse_image_metadata_line(const std::string& line, ImageData& img) {
         std::istringstream iss(line);
         if (!(iss >> img.image_id >> img.qvec[0] >> img.qvec[1] >> img.qvec[2] >> img.qvec[3] >> img.tvec[0] >> img.tvec[1] >> img.tvec[2] >> img.camera_id)) {
@@ -1910,15 +1918,7 @@ namespace lfs::io {
         }
 
         iss >> std::ws;
-        if (!std::getline(iss, img.name) || img.name.empty()) {
-            return false;
-        }
-
-        const auto dot_pos = img.name.rfind('.');
-        if (dot_pos == std::string::npos || dot_pos == img.name.size() - 1) {
-            return false;
-        }
-        if (!std::isalpha(static_cast<unsigned char>(img.name[dot_pos + 1]))) {
+        if (!std::getline(iss, img.name) || !has_image_file_extension(img.name)) {
             return false;
         }
 
@@ -1946,8 +1946,10 @@ namespace lfs::io {
               tvec[0] >> tvec[1] >> tvec[2] >> camera_id)) {
             return false;
         }
+        // Integer reads stop at a '.', so a POINTS2D line such as
+        // "2353.88 48.8696 0 3755.43 ..." passes the numeric fields; its NAME does not.
         iss >> std::ws;
-        return static_cast<bool>(std::getline(iss, name)) && !name.empty();
+        return static_cast<bool>(std::getline(iss, name)) && has_image_file_extension(name);
     }
 
     bool read_next_short_metadata_line_or_skip(std::ifstream& file,
@@ -2147,6 +2149,8 @@ namespace lfs::io {
                 if (pose_tally) {
                     pose_tally->record(std::format("source_line={}", file_lines));
                 }
+                // The skipped image's POINTS2D line goes with it, so it is not counted again.
+                has_pending_line = read_next_short_metadata_line_or_skip(file, pending_line, file_lines);
                 continue;
             }
 
