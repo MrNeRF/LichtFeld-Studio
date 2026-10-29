@@ -1040,6 +1040,57 @@ namespace {
         check_gradients(1, true, ops::ShStorage::Float32, true);
     }
 
+    TEST_P(PortableFastRaster, ContributorBatchesMatchReference) {
+        // Interleave splats below every pixel's alpha cutoff with contributors
+        // across several 128-entry batches, then exercise early stop and no kept entries.
+        Scene s = make_scene(513, 0, 17, 13, 97u);
+        s.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 4, 0, 0, 0, 1};
+        s.camera = {0, 0, -4};
+        Frame frame;
+        for (const float opacity : {-4.2f, 2.0f, -5.4f, -4.2f}) {
+            SCOPED_TRACE(opacity);
+            for (int i = 0; i < s.count; ++i) {
+                const bool missed = i % 3 == 0 || opacity == -5.4f;
+                s.means[3 * i] = s.means[3 * i + 1] = 0;
+                s.means[3 * i + 2] = 0.001f * i;
+                s.opacities[i] = missed ? -5.4f : opacity;
+                for (int c = 0; c < 3; ++c)
+                    s.scales[3 * i + c] = missed ? -8.0f : -0.4f;
+            }
+            const auto expected = render(s, Params(s), make_view(s, false), nullptr);
+            if (opacity == -4.2f) {
+                size_t longest = 0;
+                for (const auto& list : expected.lists)
+                    longest = std::max(longest, list.size());
+                EXPECT_GT(longest, 128u);
+            }
+            for (int i = 0; i < s.count; i += 3)
+                EXPECT_EQ(expected.weight[i], 0.0);
+            Gpu g = upload_scene(s, ops::ShStorage::Float32);
+            forward(frame, s, g, {.normals = true});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            expect_close(download(frame.image), expected.image, 2e-4, "compacted image");
+            expect_close(download(frame.alpha), expected.alpha, 2e-4, "compacted alpha");
+            expect_close(download(frame.depth), expected.depth, 1e-3, "compacted depth");
+            expect_close(download(frame.normal), expected.normal, 2e-4, "compacted normal");
+
+            AdamState state;
+            auto adam = make_adam(g, state, s.count, {});
+            for (auto& group : adam.groups)
+                group.enabled = false;
+            adam.groups[4].gradient = Tensor::zeros_like(g.sh0);
+            const auto grad = Tensor::ones_like(frame.image);
+            Tensor none;
+            fast_ops().backward(frame.saved, {grad, none, none, none}, none, none, none, none, adam,
+                                DensificationType::None);
+            std::vector<double> sh0(s.count * 3);
+            for (int i = 0; i < s.count; ++i)
+                for (int c = 0; c < 3; ++c)
+                    sh0[3 * i + c] = 0.28209479177387814 * expected.weight[i];
+            expect_close(download(adam.groups[4].gradient), sh0, 2e-4, "compacted SH gradient");
+        }
+    }
+
     // With the trainer's Adam settings a first step from zero moments moves every
     // gradient-carrying parameter by the learning rate against its gradient.
     TEST_P(PortableFastRaster, FirstAdamStepFollowsGradientSign) {

@@ -79,7 +79,7 @@ namespace lfs::training {
             int width = -1, height = -1;
             Tensor mean_box, conic_opacity, color_depth, tile_info, normals, n_touched, offsets;
             Tensor grads, normal_grads;
-            Tensor ranges, final_transmittance, n_contrib;
+            Tensor ranges, final_transmittance, n_contrib, coverage;
             Tensor block_sums, counts, histogram;
             std::array<Tensor, 2> keys, values, depth_keys, depth_order;
             Tensor ordered_counts, visible_count;
@@ -243,7 +243,7 @@ namespace lfs::training {
         };
 
         struct BlendParams {
-            uint64_t ranges, values, mean_box, conic_opacity, color_depth, normals;
+            uint64_t ranges, values, coverage, mean_box, conic_opacity, color_depth, normals;
             uint64_t image, alpha, depth, normal, n_contrib, final_transmittance, bg_color, bg_image;
             uint32_t width, height, grid_w, unused;
         };
@@ -492,6 +492,7 @@ namespace lfs::training {
                         reserve(s.values[i], capacity, DataType::UInt32,
                                 i == 0 ? "fast.sort.values0" : "fast.sort.values1", false);
                     }
+                    reserve(s.coverage, capacity, DataType::UInt8, "fast.sort.coverage", false);
                     const InstanceParams inst{mk::address(s.mean_box), mk::address(s.conic_opacity),
                                               mk::address(s.tile_info), mk::address(s.n_touched),
                                               mk::address(s.offsets), mk::address(s.keys[0]),
@@ -511,6 +512,7 @@ namespace lfs::training {
                     const BlendParams blend{
                         .ranges = mk::address(s.ranges),
                         .values = mk::address(s.values[f.sorted]),
+                        .coverage = mk::address(s.coverage),
                         .mean_box = mk::address(s.mean_box),
                         .conic_opacity = mk::address(s.conic_opacity),
                         .color_depth = mk::address(s.color_depth),
@@ -529,7 +531,7 @@ namespace lfs::training {
                         .unused = 0,
                     };
                     launch("fast_blend_forward", blend,
-                           {&s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth,
+                           {&s.ranges, &s.values[f.sorted], &s.coverage, &s.mean_box, &s.conic_opacity, &s.color_depth,
                             &normals_use, &s.image, &s.alpha, &s.depth, &s.normal, &s.n_contrib,
                             &s.final_transmittance, &bg_use},
                            f.grid_w, f.grid_h, kBlendThreads,
@@ -658,7 +660,7 @@ namespace lfs::training {
         }
 
         struct BlendBackwardParams {
-            uint64_t counts, ranges, values, mean_box, conic_opacity, color_depth, normals;
+            uint64_t counts, ranges, values, coverage, mean_box, conic_opacity, color_depth, normals;
             uint64_t grad_image, grad_alpha, grad_depth, grad_normal, bg_color, bg_image, n_contrib,
                 final_transmittance;
             uint64_t grads, normal_grads, densification, error_map, edge_weight, edge_score, impact_sum, impact_peak;
@@ -736,6 +738,7 @@ namespace lfs::training {
                 .counts = mk::address(s.counts),
                 .ranges = mk::address(s.ranges),
                 .values = mk::address(s.values[f.sorted]),
+                .coverage = mk::address(s.coverage),
                 .mean_box = mk::address(s.mean_box),
                 .conic_opacity = mk::address(s.conic_opacity),
                 .color_depth = mk::address(s.color_depth),
@@ -752,7 +755,7 @@ namespace lfs::training {
                 .capacity = s.pending_capacity,
             };
             launch("fast_blend_backward", p,
-                   {&s.counts, &s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth,
+                   {&s.counts, &s.ranges, &s.values[f.sorted], &s.coverage, &s.mean_box, &s.conic_opacity, &s.color_depth,
                     &color, &image, &s.n_contrib, &s.final_transmittance, &scratch},
                    f.grid_w * f.grid_h, 1, kBackwardThreads,
                    {{kDensificationConstant, 0}, {kNormalChannelConstant, 0}, {kDepthGradConstant, 0}, {kEdgeWeightConstant, 0}, {kImpactScoreConstant, 2}});
@@ -838,6 +841,7 @@ namespace lfs::training {
                     .counts = mk::address(s.counts),
                     .ranges = mk::address(s.ranges),
                     .values = mk::address(s.values[f.sorted]),
+                    .coverage = mk::address(s.coverage),
                     .mean_box = mk::address(s.mean_box),
                     .conic_opacity = mk::address(s.conic_opacity),
                     .color_depth = mk::address(s.color_depth),
@@ -871,8 +875,8 @@ namespace lfs::training {
                 const Tensor& impact_sum_use = impact ? adam.impact_sum : none;
                 const Tensor& impact_peak_use = impact ? adam.impact_peak : none;
                 launch("fast_blend_backward", params,
-                       {&s.counts, &s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth, &normals_use,
-                        &grad_image, &grad_alpha, &grad_depth, &grad_normal, &bg_use, &s.n_contrib,
+                       {&s.counts, &s.ranges, &s.values[f.sorted], &s.coverage, &s.mean_box, &s.conic_opacity,
+                        &s.color_depth, &normals_use, &grad_image, &grad_alpha, &grad_depth, &grad_normal, &bg_use, &s.n_contrib,
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
                         &edge_scores, &impact_sum_use, &impact_peak_use},
                        f.grid_w * f.grid_h, 1, kBackwardThreads,
@@ -1058,7 +1062,7 @@ namespace lfs::training {
             for (const Tensor* tensor :
                  {&s->keys[0], &s->keys[1], &s->values[0], &s->values[1], &s->histogram, &s->block_sums,
                   &s->depth_keys[0], &s->depth_keys[1], &s->depth_order[0], &s->depth_order[1],
-                  &s->ordered_counts, &s->visible_count})
+                  &s->ordered_counts, &s->visible_count, &s->coverage})
                 sort += tensor_reserved_bytes(*tensor);
             record_vram_current(scope, "forward.per_primitive_buffers", per_primitive);
             record_vram_current(scope, "forward.per_tile_buffers", per_tile);

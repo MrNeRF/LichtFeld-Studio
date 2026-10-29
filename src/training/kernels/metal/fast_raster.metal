@@ -834,8 +834,9 @@ static float3 fast_background(device const float* bg_color, device const float* 
 }
 
 struct FastBlendParams {
-    device const uint2* ranges;
-    device const uint* values;
+    device uint2* ranges;
+    device uint* values;
+    device uchar* coverage;
     device const FastMeanBox* mean_box;
     device const float4* conic_opacity;
     device const float4* color_depth;
@@ -856,31 +857,30 @@ struct FastPixelState {
     float3 normal;
     float depth;
     float transmittance;
-    uint possible;
     uint contributions;
     bool done;
 };
 
-static void fast_blend_pixel(thread FastPixelState& s, const float2 pixel, const float2 mean, const float4 conic_opacity,
+static bool fast_blend_pixel(thread FastPixelState& s, const float2 pixel, const float2 mean, const float4 conic_opacity,
                              const float4 color_log_alpha, const float depth, const float3 normal) {
     const float2 d = mean - pixel;
     const float sigma_over_2 = (conic_opacity.x * d.x * d.x + conic_opacity.z * d.y * d.y) + conic_opacity.y * d.x * d.y;
     // Skip only when even a slightly high exp would stay below 1/255; the
     // survivors take the exact alpha test.
     if (sigma_over_2 < 0.0f || sigma_over_2 > color_log_alpha.w + 1.0e-5f)
-        return;
+        return false;
     const float alpha = fmin(conic_opacity.w * exp(-sigma_over_2), kFastMaxFragmentAlpha);
     if (alpha < kFastMinAlpha)
-        return;
+        return false;
     const float weight = s.transmittance * alpha;
     s.color += weight * color_log_alpha.xyz;
     s.depth += weight * depth;
     if (kFastRenderNormal != 0u)
         s.normal += weight * normal;
     s.transmittance *= 1.0f - alpha;
-    s.contributions = s.possible;
     if (s.transmittance < kFastTransmittanceThreshold)
         s.done = true;
+    return true;
 }
 
 static void fast_store_pixel(constant FastBlendParams& p, const FastPixelState s, const uint2 pix) {
@@ -915,6 +915,9 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
     threadgroup float s_depth[kFastBlendThreads];
     threadgroup float3 s_normal[kFastBlendThreads];
     threadgroup uint s_done[kFastBlendThreads / 32u];
+    threadgroup uchar s_coverage[4u][kFastBlendThreads];
+    threadgroup uint s_rank[kFastBlendThreads];
+    threadgroup uint s_kept[4u];
 
     const FastTilePixels t = fast_tile_pixels(tile, lane, warp, p.width, p.height);
     const float2 pixel0 = float2(t.pix0) + 0.5f;
@@ -923,9 +926,10 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
     const uint2 range = p.ranges[tile_idx];
     const int total = int(range.y - range.x);
 
-    FastPixelState s0 = {float3(0.0f), float3(0.0f), 0.0f, 1.0f, 0u, 0u, !t.inside0};
-    FastPixelState s1 = {float3(0.0f), float3(0.0f), 0.0f, 1.0f, 0u, 0u, !t.inside1};
+    FastPixelState s0 = {float3(0.0f), float3(0.0f), 0.0f, 1.0f, 0u, !t.inside0};
+    FastPixelState s1 = {float3(0.0f), float3(0.0f), 0.0f, 1.0f, 0u, !t.inside1};
 
+    uint kept_count = 0u;
     for (int remaining = total, batch = 0; remaining > 0; remaining -= int(kFastBlendThreads), batch += int(kFastBlendThreads)) {
         const bool all_done = simd_all(s0.done && s1.done);
         if (lane == 0u)
@@ -933,9 +937,11 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (s_done[0] + s_done[1] + s_done[2] + s_done[3] == kFastBlendThreads / 32u)
             break;
+        const uint previous0 = s0.contributions, previous1 = s1.contributions;
+        s0.contributions = s1.contributions = 0u;
         const int fetch = int(range.x) + batch + int(rank);
+        const uint prim = fetch < int(range.y) ? p.values[fetch] : kFastInvalid;
         if (fetch < int(range.y)) {
-            const uint prim = p.values[fetch];
             if (prim != kFastInvalid) {
                 const FastMeanBox geom = p.mean_box[prim];
                 float4 co = p.conic_opacity[prim];
@@ -961,7 +967,7 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
             const int j_test = j_base + int(lane);
             bool hit0 = false, hit1 = false;
             if (j_test < batch_size) {
-                // The exact ellipse test of the backward keeps splats whose box
+                // The exact ellipse test keeps splats whose box
                 // but not ellipse reaches a sub-tile out of the serial walk.
                 const ushort4 bb = s_bbox[j_test];
                 const float2 mean = s_mean[j_test];
@@ -973,23 +979,14 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
             }
             const uint mask0 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit0)));
             const uint mask1 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit1)));
-            // Walk only splats that touch a sub-tile of this SIMD group. A pixel's
-            // done flag changes only when it blends, so every skipped splat counts
-            // toward `possible` exactly as a one-by-one walk would.
-            const uint chunk = uint(min(32, batch_size - j_base));
             uint live = mask0 | mask1;
-            uint walked = 0u;
+            uint blended0 = 0u, blended1 = 0u;
             while (live != 0u) {
                 const uint k = ctz(live);
                 live &= live - 1u;
                 const int j = j_base + int(k);
-                const bool walk0 = !s0.done;
-                const bool walk1 = !s1.done;
-                s0.possible += walk0 ? k + 1u - walked : 0u;
-                s1.possible += walk1 ? k + 1u - walked : 0u;
-                walked = k + 1u;
-                const bool use0 = walk0 && ((mask0 >> k) & 1u) != 0u;
-                const bool use1 = walk1 && ((mask1 >> k) & 1u) != 0u;
+                const bool use0 = !s0.done && ((mask0 >> k) & 1u) != 0u;
+                const bool use1 = !s1.done && ((mask1 >> k) & 1u) != 0u;
                 if (!use0 && !use1)
                     continue;
                 const float2 mean = s_mean[j];
@@ -997,15 +994,54 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
                 const float4 c = s_color[j];
                 const float depth = s_depth[j];
                 const float3 normal = kFastRenderNormal != 0u ? s_normal[j] : float3(0.0f);
-                if (use0)
-                    fast_blend_pixel(s0, pixel0, mean, co, c, depth, normal);
-                if (use1)
-                    fast_blend_pixel(s1, pixel1, mean, co, c, depth, normal);
+                if (use0 && fast_blend_pixel(s0, pixel0, mean, co, c, depth, normal)) {
+                    s0.contributions = uint(j) + 1u;
+                    blended0 |= 1u << k;
+                }
+                if (use1 && fast_blend_pixel(s1, pixel1, mean, co, c, depth, normal)) {
+                    s1.contributions = uint(j) + 1u;
+                    blended1 |= 1u << k;
+                }
             }
-            s0.possible += !s0.done ? chunk - walked : 0u;
-            s1.possible += !s1.done ? chunk - walked : 0u;
+            blended0 = simd_or(blended0);
+            blended1 = simd_or(blended1);
+            if (j_test < batch_size)
+                s_coverage[warp][j_test] = uchar(((blended0 >> lane) & 1u) << warp |
+                                                ((blended1 >> lane) & 1u) << (warp + 4u));
         }
+
+        // All IDs are in registers before in-place compaction; a destination
+        // cannot overtake the next batch. Each SIMD group records its own bits.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const uint coverage = int(rank) < batch_size
+                                  ? s_coverage[0][rank] | s_coverage[1][rank] |
+                                        s_coverage[2][rank] | s_coverage[3][rank]
+                                  : 0u;
+        const uint kept = coverage != 0u ? 1u : 0u;
+        const uint prefix = simd_prefix_inclusive_sum(kept);
+        s_rank[rank] = prefix;
+        if (lane == 31u)
+            s_kept[warp] = prefix;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        uint destination = kept_count + prefix;
+        uint last0 = kept_count, last1 = kept_count;
+#pragma unroll
+        for (uint w = 0u; w < 4u; ++w) {
+            destination += w < warp ? s_kept[w] : 0u;
+            last0 += s0.contributions > (w + 1u) * 32u ? s_kept[w] : 0u;
+            last1 += s1.contributions > (w + 1u) * 32u ? s_kept[w] : 0u;
+        }
+        if (kept != 0u) {
+            p.values[range.x + destination - 1u] = prim;
+            p.coverage[range.x + destination - 1u] = uchar(coverage);
+        }
+        // Convert each pixel's batch-local last contributor to compacted space.
+        s0.contributions = s0.contributions != 0u ? last0 + s_rank[s0.contributions - 1u] : previous0;
+        s1.contributions = s1.contributions != 0u ? last1 + s_rank[s1.contributions - 1u] : previous1;
+        kept_count += s_kept[0] + s_kept[1] + s_kept[2] + s_kept[3];
     }
+    if (rank == 0u)
+        p.ranges[tile_idx].y = range.x + kept_count;
 
     if (t.inside0)
         fast_store_pixel(p, s0, t.pix0);
