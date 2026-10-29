@@ -3,8 +3,8 @@
 
 // Builds without CUDA: SAM2 video masking has no port to the other tensor backends.
 
-#include "preprocessing/video_masking.hpp"
 #include "core/source_site.hpp"
+#include "preprocessing/video_masking.hpp"
 
 namespace lfs::preprocessing {
 
