@@ -853,6 +853,10 @@ set(TEST_FILES
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp
     fastgs_tile_culling_boundary_cuda.cu
+    test_fastgs_forward_mask.cpp
+    test_raster_evaluation.cu
+    test_raster_reduction.cu
+    test_raster_tile_keys.cu
     test_sh_swizzle_layout.cpp
     test_shn_bda_index_math.cpp
     test_python_io.cpp

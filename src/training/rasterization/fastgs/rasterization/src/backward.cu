@@ -17,7 +17,7 @@
 
 namespace {
     std::atomic_bool g_force_generic_preprocess_for_testing{false};
-}
+} // namespace
 
 void fast_lfs::rasterization::set_force_generic_preprocess_for_testing(const bool force) noexcept {
     g_force_generic_preprocess_for_testing.store(force, std::memory_order_relaxed);
@@ -46,6 +46,9 @@ void fast_lfs::rasterization::backward(
     char* per_primitive_buffers_blob,
     char* per_tile_buffers_blob,
     const uint* sorted_primitive_indices,
+    const unsigned char* contributor_masks,
+    const uint* contributor_positions,
+    uint* primitive_touched,
     const uint* primitive_work_indices,
     float* grad_opacity_helper,
     float3* grad_color_helper,
@@ -92,27 +95,20 @@ void fast_lfs::rasterization::backward(
     auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
-        // cull mode + batch size via shared test hooks (production: cull ON,
-        // config::blend_batch_size). Mode is read at backward launch so tests can set it
-        // after forward returns.
+        // The warp cull mode is a test hook (production: on), read at launch so
+        // tests can set it after forward returns.
         const int warp_cull_mode = warp_cull_mode_for_testing();
-        const int blend_batch_override = blend_batch_size_for_testing();
 
-        // Backward blend (template dispatch eliminates densification branch from inner loop).
-        // Production instantiates WARP_CULL_MODE=0 only (3 dens × 2 normal = 6).
-        // Modes 1/2 are test-only (set_warp_cull_mode_for_testing); WarpCullBwd drives
-        // DensificationType::None and no normal channel, so those two stay off the
-        // production nest.
         auto launch_blend_backward_typed =
             [&]<DensificationType DENS_TYPE, bool NORMAL_CHANNEL, bool IMPACT_SCORE, int WARP_CULL_MODE, bool COLOR_VARIANCE>() {
                 kernels::backward::blend_backward_cu<DENS_TYPE, NORMAL_CHANNEL, IMPACT_SCORE, WARP_CULL_MODE, COLOR_VARIANCE>
                     <<<n_tiles, config::block_size_blend_backward, 0, stream>>>(
                         per_tile_buffers.instance_ranges,
                         sorted_primitive_indices,
+                        contributor_masks,
+                        contributor_positions,
                         primitive_work_indices,
-                        per_primitive_buffers.mean2d,
-                        per_primitive_buffers.conic_opacity,
-                        per_primitive_buffers.color,
+                        per_primitive_buffers.projected,
                         per_primitive_buffers.depths,
                         primitive_normals,
                         grad_image,
@@ -120,7 +116,6 @@ void fast_lfs::rasterization::backward(
                         grad_depth,
                         grad_normal,
                         image,
-                        alpha,
                         per_tile_buffers.n_contributions,
                         per_tile_buffers.final_transmittance,
                         grad_mean2d_helper,
@@ -135,6 +130,7 @@ void fast_lfs::rasterization::backward(
                         edge_score_out,
                         impact_sum_out,
                         impact_peak_out,
+                        primitive_touched,
                         fastgs_status,
                         static_cast<uint>(n_instances),
                         n_primitives,
@@ -142,7 +138,6 @@ void fast_lfs::rasterization::backward(
                         width,
                         height,
                         grid.x,
-                        blend_batch_override,
                         color_variance);
                 LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
             };
@@ -205,7 +200,8 @@ void fast_lfs::rasterization::backward(
                 cam_position,
                 raw_opacities,
                 primitive_work_indices,
-                per_primitive_buffers.color,
+                primitive_touched,
+                per_primitive_buffers.projected,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_depth_helper,
