@@ -1,6 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "fast_common.slangh"
+#ifndef FAST_FORWARD_THREADS
+#define FAST_FORWARD_THREADS 256
+#endif
 [SpecializationConstant] const uint fastStage = 0;
 struct Push {
     uint64_t parameters;
@@ -158,8 +161,160 @@ void rasterSubgroup(FastPush p, uint tile, uint rank) {
     }
     storeFloat(p.transmittance, tile * 256 + rank, T);
 }
+#if FAST_FORWARD_THREADS == 128
+groupshared Projected stagedForward[FAST_FORWARD_THREADS];
+groupshared uint stagedIds[FAST_FORWARD_THREADS], stagedCoverage[FAST_FORWARD_THREADS];
+groupshared uint forwardTotals[FAST_FORWARD_THREADS / 32], forwardLive[FAST_FORWARD_THREADS / 32];
+// Front-to-back blend of one tile by four 32-lane subgroups (kFastQuadrants).
+// Batches of 128 entries are staged in shared memory; a subgroup walks the
+// entries that overlap its two 8x4 regions and both rows of a lane share one
+// column evaluation. Entries that no pixel blended are compacted out of the
+// tile list in place. A kept entry stores the regions it blended and its
+// original list position over its spent sort key, which the backward walk
+// stages from, and flags its splat in the spent tile counts for the projection
+// backward. Pixels keep `last` as an original list position.
+void rasterQuadrants(FastPush p, uint tile, uint thread) {
+    uint lane = WaveGetLaneIndex(), warp = thread / 32;
+    uint topRegion = (warp % 2) + 4 * (warp / 2);
+    uint pixel[2], last[2];
+    float T[2], depth[2];
+    float3 rgb[2], normal[2];
+    bool done[2];
+    uint rank0 = quadrantRank(thread, 0);
+    float2 center = float2((tile % p.gridWidth) * 16 + rank0 % 16,
+                          (tile / p.gridWidth) * 16 + rank0 / 16) + 0.5f;
+    [unroll] for (uint k = 0; k < 2; ++k) {
+        pixel[k] = quadrantPixel(p, tile, quadrantRank(thread, k));
+        last[k] = 0;
+        T[k] = 1;
+        rgb[k] = normal[k] = 0;
+        depth[k] = 0;
+        done[k] = pixel[k] == 0xffffffffu;
+    }
+    uint begin = loadUint(p.ranges, tile * 2), end = loadUint(p.ranges, tile * 2 + 1);
+    uint keptCount = 0;
+    bool live = true;
+    float2 regionOrigin = float2((tile % p.gridWidth) * 16 + (warp % 2) * 8, (tile / p.gridWidth) * 16 + (warp / 2) * 8);
+    // Three workgroup barriers per batch: staged, covered, counted. Every shared
+    // slot a thread writes before the first is read by others only after it.
+    for (uint batch = begin; live && batch < end; batch += FAST_FORWARD_THREADS) {
+        uint at = batch + thread;
+        if (at < end) {
+            uint work = loadUint(p.values, at);
+            stagedIds[thread] = work;
+            stagedForward[thread] = projectedAt(p, work);
+        }
+        stagedCoverage[thread] = 0;
+        GroupMemoryBarrierWithGroupSync();
+        uint count = min(uint(FAST_FORWARD_THREADS), end - batch);
+        for (uint base = 0; base < count; base += 32) {
+            // A subgroup tests its own two 8x4 regions, and only while it still
+            // has pixels to blend.
+            uint maskTop = 0, maskBottom = 0;
+            if (!WaveActiveAllTrue(done[0] && done[1])) {
+                Projected staged = stagedForward[base + lane];
+                bool valid = base + lane < count;
+                maskTop = WaveActiveBallot(valid && overlapsSubtile(staged, regionOrigin)).x;
+                maskBottom = WaveActiveBallot(valid && overlapsSubtile(staged, regionOrigin + float2(0, 4))).x;
+            }
+            uint mine = lane < 16 ? maskTop : maskBottom;
+            uint walk = maskTop | maskBottom, blended = 0;
+            while (walk != 0) {
+                uint selected = firstbitlow(walk);
+                walk &= walk - 1;
+                uint slot = base + selected;
+                Projected o = stagedForward[slot];
+                AlphaColumn column = alphaColumn(o, o.mx - center.x);
+                bool acceptedAny = false;
+                [unroll] for (uint k = 0; k < 2; ++k) {
+                    if (done[k] || (mine & (1u << selected)) == 0)
+                        continue;
+                    float unclamped = columnAlpha(column, o.my - center.y - float(k));
+                    if (!(unclamped >= 1.0f / 255))
+                        continue;
+                    float alpha = min(unclamped, 0.999f), weight = T[k] * alpha;
+                    rgb[k] += weight * clamp(float3(o.red, o.green, o.blue), float3(0), float3(4));
+                    if (p.renderDepth != 0)
+                        depth[k] += weight * o.depth;
+                    if (p.renderNormal != 0)
+                        normal[k] += weight * float3(o.nx, o.ny, o.nz);
+                    T[k] *= 1 - alpha;
+                    last[k] = batch + slot - begin + 1;
+                    done[k] = T[k] < 1e-4f;
+                    acceptedAny = true;
+                }
+                if (acceptedAny)
+                    blended |= 1u << selected;
+            }
+            [unroll] for (uint offset = 8; offset > 0; offset >>= 1)
+                blended |= WaveReadLaneAt(blended, lane ^ offset);
+            uint top = WaveReadLaneAt(blended, 0), bottom = WaveReadLaneAt(blended, 16);
+            uint coverage = ((top & (1u << lane)) != 0 ? 1u << topRegion : 0u) |
+                            ((bottom & (1u << lane)) != 0 ? 1u << (topRegion + 2) : 0u);
+            if (coverage != 0) {
+                uint previous;
+                InterlockedOr(stagedCoverage[base + lane], coverage, previous);
+            }
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+        uint coverage = stagedCoverage[thread];
+        bool kept = at < end && coverage != 0;
+        uint rank = WavePrefixCountBits(kept), total = WaveActiveCountBits(kept);
+        bool warpLive = !WaveActiveAllTrue(done[0] && done[1]);
+        if (lane == 0) {
+            forwardTotals[warp] = total;
+            forwardLive[warp] = warpLive ? 1 : 0;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        for (uint w = 0; w < warp; ++w)
+            rank += forwardTotals[w];
+        if (kept) {
+            uint destination = begin + keptCount + rank;
+            storeUint(p.values, destination, stagedIds[thread]);
+            ((Ptr<uint2, Access.ReadWrite>)p.contributors)[destination] = uint2(coverage, at - begin);
+            uint previous;
+            InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.counts)[2 * stagedIds[thread]], 1u, previous);
+        }
+        for (uint w = 0; w < FAST_FORWARD_THREADS / 32; ++w)
+            keptCount += forwardTotals[w];
+        live = (forwardLive[0] | forwardLive[1] | forwardLive[2] | forwardLive[3]) != 0;
+    }
+    if (thread == 0)
+        storeUint(p.ranges, tile * 2 + 1, begin + keptCount);
+    [unroll] for (uint k = 0; k < 2; ++k) {
+        storeFloat(p.transmittance, tile * 256 + quadrantRank(thread, k), T[k]);
+        if (pixel[k] == 0xffffffffu)
+            continue;
+        uint pixels = p.width * p.height;
+        rgb[k] += T[k] * background(p, pixel[k]);
+        [unroll] for (uint c = 0; c < 3; ++c) {
+            storeFloat(p.image, c * pixels + pixel[k], rgb[k][c]);
+            if (p.renderNormal != 0)
+                storeFloat(p.normal, c * pixels + pixel[k], normal[k][c]);
+        }
+        storeFloat(p.alpha, pixel[k], 1 - T[k]);
+        if (p.renderDepth != 0)
+            storeFloat(p.depth, pixel[k], depth[k]);
+        storeUint(p.last, pixel[k], last[k]);
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+}
+
+[numthreads(128, 1, 1)] void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex) {
+    uint3 groups = spirv_asm {
+result:
+        $$uint3 = OpLoad builtin(NumWorkgroups : uint3);
+    };
+    FastPush p = ((Ptr<FastPush, Access.Read>)push.parameters)[0];
+    specializeFast(p, fastStage);
+    for (uint tile = gid.x; tile < p.gridWidth * p.gridHeight; tile += groups.x)
+        rasterQuadrants(p, tile, lane);
+}
+#else
 groupshared uint64_t scanValues[256];
-[numthreads(256, 1, 1)] void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex) {
+[numthreads(FAST_FORWARD_THREADS, 1, 1)] void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex) {
     uint3 groups = spirv_asm {
 result:
         $$uint3 = OpLoad builtin(NumWorkgroups : uint3);
@@ -294,6 +449,10 @@ result:
                 touched = ((Ptr<uint64_t, Access.Read>)p.counts)[loadUint(p.depthOrder, i)];
             ((Ptr<uint64_t, Access.ReadWrite>)p.orderedCounts)[i] = touched;
         } else if (p.stage == 3) {
+            // Tile counts are spent once offsets exist; the quadrant blend
+            // reuses them as contributor flags for the projection backward.
+            if ((fastStage & kFastQuadrants) != 0)
+                ((Ptr<uint64_t, Access.ReadWrite>)p.counts)[i] = 0;
             uint64_t end = ((Ptr<uint64_t, Access.Read>)p.offsets)[i];
             uint64_t at = i == 0 ? 0 : ((Ptr<uint64_t, Access.Read>)p.offsets)[i - 1];
             if (end == at)
@@ -376,3 +535,5 @@ result:
         }
     }
 }
+
+#endif

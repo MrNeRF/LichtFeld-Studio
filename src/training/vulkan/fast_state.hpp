@@ -19,16 +19,21 @@ namespace lfs::training::vulkan {
         float fx, fy, cx, cy, clip_left, clip_right, clip_top, clip_bottom;
         uint64_t sh_bounds;
         uint32_t sh_format, padding;
-        uint64_t depth_order, ordered_counts;
+        uint64_t depth_order, ordered_counts, contributors;
     };
     inline uint32_t specialization(const FastPush& p, uint32_t stage) {
         return stage | (p.active_bases << 4) | (p.rest << 9) | (p.sh_format << 13) |
                (p.render_normal << 15) | (p.render_depth << 16) | ((p.mip & 1u) << 17);
     }
-    static_assert(sizeof(FastPush) == 336);
+    // Requests the quadrant blend layout (fast_common.slangh). Pipelines drop
+    // it on devices that cannot require 32-lane subgroups (dispatch.cpp).
+    inline constexpr uint32_t fast_quadrants = 1u << 25;
+    static_assert(sizeof(FastPush) == 344);
     static_assert(offsetof(FastPush, count) == 216);
     static_assert(offsetof(FastPush, fx) == 272);
     static_assert(offsetof(FastPush, depth_order) == 320);
+    static_assert(offsetof(FastPush, ordered_counts) == 328);
+    static_assert(offsetof(FastPush, contributors) == 336);
     // Dense and compact projection rows share this layout with fast_common.slangh.
     struct Projected {
         float mean[2], conic[3], opacity, color[3], depth, normal[3];
@@ -43,7 +48,7 @@ namespace lfs::training::vulkan {
             if (timer)
                 (void)timer->mark(event, core::TensorExecutionTarget::current());
         }
-        std::array<core::Tensor, 32> scratch;
+        std::array<core::Tensor, 33> scratch;
         core::Tensor temporary(size_t slot, size_t count,
                                core::DataType dtype = core::DataType::Float32, bool clear = false) {
             if (count == 0)
@@ -59,13 +64,16 @@ namespace lfs::training::vulkan {
             return result;
         }
         FastPush push{};
+        uint32_t variant(uint32_t stage) const { return specialization(push, stage) | (quadrants ? fast_quadrants : 0u); }
         std::vector<core::Tensor> inputs;
         core::Tensor projected, visibility, offsets, original_to_work, work_to_original;
         core::Tensor counts, keys_a, keys_b, values_a, values_b, ranges, transmittance, last;
-        core::Tensor depth_keys_a, depth_keys_b, depth_values_a, depth_values_b, ordered_counts;
+        core::Tensor depth_keys_a, depth_keys_b, depth_values_a, depth_values_b, ordered_counts, contributors;
         core::Tensor image, alpha, depth, normal;
         // The direct path is retained for bitwise overflow/retry regression tests.
         bool indirect = true;
+        // Tests clear this to run the subgroup-size independent blend.
+        bool quadrants = true;
         // Retain the synchronous submission order for exact state regressions.
         bool submit_before_status = true;
         bool live = false;

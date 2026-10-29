@@ -127,7 +127,10 @@ void projectionBackward(BackPush back, uint primitive_idx) {
     FastPush p = back.forward;
     uint work_idx = loadUint(p.originalToWork, primitive_idx);
     float mean_grads[3] = {0, 0, 0}, scale_grads[3] = {0, 0, 0}, rotation_grads[4] = {0, 0, 0, 0}, opacity_grads[1] = {0};
-    if (work_idx != 0xffffffffu) {
+    bool visible = work_idx != 0xffffffffu;
+    // The quadrant blend flags contributing splats in the spent tile counts.
+    bool contributed = visible && ((fastStage & kFastQuadrants) == 0 || loadUint(p.counts, 2 * work_idx) != 0);
+    if (contributed) {
         float4 w2c[3];
         [unroll] for (uint j = 0; j < 3; ++j)
             w2c[j] = ((Ptr<float4, Access.Read>)p.view)[j];
@@ -390,6 +393,10 @@ void projectionBackward(BackPush back, uint primitive_idx) {
             stats[p.count + primitive_idx] += length(dL_dmean2d * float2(0.5f * p.width, 0.5f * p.height));
         }
     } else {
+        if (visible && back.densify == 0 && back.densification != 0) {
+            Ptr<float, Access.ReadWrite> stats = (Ptr<float, Access.ReadWrite>)back.densification;
+            stats[primitive_idx] += 1.0f;
+        }
         store3(back.dcGradient, primitive_idx, float3(0));
         [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4) {
             uint cell = (primitive_idx / 32 * ((p.rest * 3 + 3) / 4) + slot) * 32 + primitive_idx % 32;
