@@ -6613,7 +6613,7 @@ namespace lfs::training {
                                     training_ops_->fast->resolve_deferred_count != nullptr &&
                                     run_fastgs_gaussian_backward &&
                                     !refining_this_step && !morton_due && !in_sparsification &&
-                                    !in_controller_phase && !bilateral_grid_ && !ppisp_ && !in_popspa;
+                                    !in_controller_phase && !in_popspa;
                                 if (training_ops_->fast->set_deferred_count != nullptr)
                                     training_ops_->fast->set_deferred_count(fast_saved_, deferred_fast_count);
                                 const auto raster_result = fast_render(
@@ -7907,8 +7907,13 @@ namespace lfs::training {
                     lfs::core::pop_gpu_range(); // End rasterize
                 }
 
-                if (retry_fast_capacity)
+                if (retry_fast_capacity) {
+                    // The appearance updates come after this return, so the replay only has to start from clean
+                    // gradients. The bilateral grid's backward overwrites its gradient; PPISP's accumulates.
+                    if (ppisp_)
+                        ppisp_->zero_grad();
                     return StepDisposition::Retry;
+                }
                 if (!resolved_fast_has_work) {
                     if (auto degenerate = check_invisible_iteration(iter))
                         return std::move(*degenerate);
