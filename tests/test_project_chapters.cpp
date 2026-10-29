@@ -832,6 +832,82 @@ namespace {
         EXPECT_FALSE(replaced.replace_nodes(records));
     }
 
+    // Autosave compares captured records with the parsed SCNG records to skip
+    // rebuilding an unchanged scene, so every field must round-trip exactly.
+    TEST(SceneGraphChapterScaleTest, CapturedRecordsRoundTripExactly) {
+        auto records = scene_records_with_cameras(20);
+        records[2].camera->radial_distortion = {0.1f, -1e-7f, 1.0f / 3.0f};
+        records[2].camera->tangential_distortion = {123456.789f, -0.0f};
+        records[3].camera->translation = {0.1f, 2.5e-9f, -7.123456f};
+        records[3].camera->mask_path = "masks/cam_00001.png";
+        records[3].camera->has_alpha = true;
+        records[3].camera->has_image = false;
+        records[3].camera->split = "eval";
+        records[3].camera->sfm_observation_count = 4321;
+        const auto root_id = records[0].uuid;
+        records.push_back({
+            .uuid = uuid_literal("54000000-0000-4000-8000-000000000001"),
+            .type = "splat",
+            .name = "Splat",
+            .parent_uuid = root_id,
+            .child_order = 1,
+            .local_transform = {0.5f, 0, 0, 0, 0, 1.0f / 3.0f, 0, 0, 0, 0, 2, 0, 0.1f, -0.2f, 0.3f, 1},
+            .visible = false,
+            .locked = true,
+            .training_enabled = false,
+            .payload_diverged = true,
+            .georef_pose = GeorefPose{.rotation = {0.5, 0.5, 0.5, 0.5}, .translation = {1.0 / 3.0, -2.0, 1e-12}},
+            .payload = PayloadBinding{.fourcc = "SPLT", .instance_uuid = uuid_literal("54000000-0000-4000-8000-000000000001"), .source_kind = "generated"},
+        });
+        records.push_back({
+            .uuid = uuid_literal("54000000-0000-4000-8000-000000000002"),
+            .type = "cropbox",
+            .name = "Box",
+            .parent_uuid = records.back().uuid,
+            .cropbox = CropBoxRecord{.min = {-0.1f, -0.2f, -0.3f}, .max = {0.4f, 0.5f, 0.6f}, .inverse = true, .enabled = true},
+        });
+        records.push_back({
+            .uuid = uuid_literal("54000000-0000-4000-8000-000000000003"),
+            .type = "ellipsoid",
+            .name = "Ellipsoid",
+            .parent_uuid = records[records.size() - 2].uuid,
+            .child_order = 1,
+            .ellipsoid = EllipsoidRecord{.radii = {0.7f, 0.8f, 0.9f}, .color = {0.2f, 0.3f, 0.4f}, .line_width = 1.5f},
+        });
+        records.push_back({
+            .uuid = uuid_literal("54000000-0000-4000-8000-000000000004"),
+            .type = "crop_polygon",
+            .name = "Polygon",
+            .parent_uuid = root_id,
+            .child_order = 2,
+            .crop_polygon = CropPolygonRecord{.vertices = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {0.0f, 1.0f / 3.0f}}, .half_depth = 0.25f},
+        });
+        records.push_back({
+            .uuid = uuid_literal("54000000-0000-4000-8000-000000000005"),
+            .type = "pointcloud",
+            .name = "Points",
+            .parent_uuid = root_id,
+            .child_order = 3,
+            .point_cloud_source = true,
+            .payload = PayloadBinding{.fourcc = "PCLD", .instance_uuid = uuid_literal("54000000-0000-4000-8000-000000000005"), .source_kind = "pointcloud"},
+        });
+
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.replace_nodes(records));
+        ASSERT_TRUE(chapter.validate_hierarchy());
+        const auto bytes = chapter.to_bytes();
+        auto reopened = SceneGraphChapter::parse(
+            std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+        ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+        for (const auto* source : {&chapter, &*reopened}) {
+            auto nodes = source->nodes();
+            ASSERT_TRUE(nodes) << lfs::format_for_developer(nodes.error());
+            ASSERT_EQ(nodes->size(), records.size());
+            for (std::size_t i = 0; i < records.size(); ++i)
+                EXPECT_EQ((*nodes)[i], records[i]) << records[i].name;
+        }
+    }
+
     // A scene graph of tens of thousands of cameras is captured on the GUI thread
     // before every save, so building it must stay linear in the node count.
     TEST(SceneGraphChapterScaleTest, ReplaceNodesBuildsTwentyThousandCamerasQuickly) {
