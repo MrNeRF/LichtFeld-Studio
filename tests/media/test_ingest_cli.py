@@ -1952,8 +1952,8 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(manifest["embedded_metadata_policy"], "jpeg-static-source-xmp-v1")
         self.assertTrue(list(directory.glob("*.jpg")))
         self.assertIn(b"Exif\0\0", next(directory.glob("*.jpg")).read_bytes())
-        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-tiff-invalid",
-                                "--format", "tiff16", "--embed-source-metadata", code=2)
+        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-exr-invalid",
+                                "--format", "exr", "--embed-source-metadata", code=2)
         self.assertEqual(result["error"]["code"], "InvalidArgument")
 
     def test_embedded_png_metadata_cli_and_md5_independence(self):
@@ -1979,6 +1979,26 @@ class IngestCLI(unittest.TestCase):
             _, _, _, catalog = reader.read(image.read_bytes())
             self.assertEqual(catalog, manifest["source_metadata"])
             self.assertGreater(image.stat().st_size, 65535)
+
+    def test_embedded_tiff_metadata_cli(self):
+        import xml.etree.ElementTree as ET
+        source = self.root / "tiff-source-tags.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()), "-map", "0:v:0",
+                        "-c:v", "copy", "-metadata", "comment=" + 'A<&"' * 4000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        result, _ = self.invoke("extract", source, "--output", self.root / "embedded-tiff", "--format", "tiff16", "--input-transfer", "linear", "--input-primaries", "bt709",
+                                "--interval", "1", "--end", "0.2", "--embed-source-metadata")
+        self.assertTrue(result["success"])
+        manifest = json.loads((self.root / "embedded-tiff/extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "tiff16-static-source-xmp-v1")
+        paths = list((self.root / "embedded-tiff").glob("*.tif"))
+        self.assertTrue(paths)
+        for path in paths:
+            _, _, packet = source_exif_fixture.read_export_tiff(path.read_bytes())
+            facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                     if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+            self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+            self.assertGreater(len(packet), 65535)
 
     def test_capabilities_and_help(self):
         result,_=self.invoke("capabilities")

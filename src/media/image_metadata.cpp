@@ -108,31 +108,32 @@ namespace lfs::media::detail {
         }
     } // namespace
     std::string_view embeddedMetadataPolicy(FrameFileFormat format) {
-        return format == FrameFileFormat::JPEG  ? std::string_view(jpeg_metadata_policy)
-               : format == FrameFileFormat::PNG ? std::string_view(png_metadata_policy)
-                                                : std::string_view{};
+        return format == FrameFileFormat::JPEG     ? std::string_view(jpeg_metadata_policy)
+               : format == FrameFileFormat::PNG    ? std::string_view(png_metadata_policy)
+               : format == FrameFileFormat::TIFF16 ? std::string_view(tiff_metadata_policy)
+                                                   : std::string_view{};
     }
-    std::string_view pngXmpSuffix() {
-        // PNG CRC protects this packet from format-unaware in-place editing.
+    std::string_view imageXmpSuffix() {
+        // Rewriting the packet requires updating the carrier lengths/structure.
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
-    Result<std::string> pngXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if (metadata.format != FrameFileFormat::PNG || width <= 0 || height <= 0)
-            return metadataError(ErrorCode::InvalidArgument, "Invalid PNG metadata input");
+    Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
+        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16) || width <= 0 || height <= 0)
+            return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
             tree += tree_start;
-            frameProperties(tree, width, height, metadata.applied_rotation, info, png_metadata_policy);
-            if (tree.size() + metadata.source_properties.size() + pngXmpSuffix().size() > max_packet_bytes)
-                return metadataError(ErrorCode::ResourceExhausted, "PNG XMP exceeds the export packet budget");
+            frameProperties(tree, width, height, metadata.applied_rotation, info, embeddedMetadataPolicy(metadata.format));
+            if (tree.size() + metadata.source_properties.size() + imageXmpSuffix().size() > max_packet_bytes)
+                return metadataError(ErrorCode::ResourceExhausted, "Image XMP exceeds the export packet budget");
             return tree;
         } catch (const std::bad_alloc&) {
-            return metadataError(ErrorCode::ResourceExhausted, "PNG frame metadata allocation failed");
+            return metadataError(ErrorCode::ResourceExhausted, "Image frame metadata allocation failed");
         }
     }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format) {
         if (embeddedMetadataPolicy(format).empty())
-            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG or PNG output");
+            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG or TIFF16 output");
         try {
             const auto summary = summarizeSourceMetadata(catalog);
             if (!summary)
@@ -152,7 +153,7 @@ namespace lfs::media::detail {
             result.format = format;
             result.applied_rotation = applied_rotation;
             property(result.source_properties, "SourceMetadata", json);
-            if (format == FrameFileFormat::PNG)
+            if (format != FrameFileFormat::JPEG)
                 return result;
             // Reserve only the largest frame envelope this writer can produce.
             // A valid Standard packet must not depend on the MD5 provider.

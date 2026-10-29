@@ -49,6 +49,8 @@ namespace lfs::media {
         // Relative scene-linear RGB/RGBA to UINT16 SDR. Explicit transfer,
         // primaries preserved, straight alpha, finite samples clamped to [0,1].
         [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions& = {});
+        // Explicit UTF-8 XMP, bounded to 32 MiB and consumed synchronously.
+        [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions&, std::string_view xmp);
         // SDR sRGB RGB8 or relative linear BT709/BT2020 Float32 RGB/RGBA.
         // Default preserves Float32. Explicit UInt16 clamps and rounds relative
         // linear float to linear/sRGB codes; lossless then applies to those codes.
