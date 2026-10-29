@@ -59,7 +59,7 @@ new provider operation to cancel in the indexing adapter.
 
 The catalog indexes JPEG/PNG/HEIF/JPEG XL EXIF block descriptions
 and observed TIFF tags, plus opaque JPEG/PNG XMP envelopes and references to
-observed TIFF XMP byte values, primary-image HEIF/AVIF XMP MIME items and JPEG XL XML boxes. It reuses existing carrier scans
+observed TIFF XMP byte values, primary-image HEIF/AVIF XMP MIME items, JPEG XL XML boxes and single-header EXR XMP string values. It reuses existing carrier scans
 and adds no vendor decoder, Python binding or metadata writer. Container/stream observations use the existing video probe as described below. HEIF remains scoped to the existing primary-image
 collector. Unsupported carriers retain the existing collector status.
 
@@ -284,7 +284,7 @@ scope is a closed enum; JSON identifiers remain unchanged.
 
 ## Opaque XMP collection
 
-`MediaIngest::sourceMetadata(path, index_limits, xmp_limits)` explicitly collects JPEG APP1, PNG iTXt, observed TIFF tag 700, primary-image HEIF/AVIF MIME XMP and JPEG XL XML boxes while using the existing EXIF carrier scan. The CLI `source-metadata INPUT` exposes the result as `metadata.image_xmp`; `source-exif`, default probing, image decoding and training do not request this additional collection. `image_exif` and the camera summary retain their existing meaning. The historical image catalog scope identifier remains unchanged.
+`MediaIngest::sourceMetadata(path, index_limits, xmp_limits)` explicitly collects JPEG APP1, PNG iTXt, observed TIFF tag 700, primary-image HEIF/AVIF MIME XMP and JPEG XL XML boxes using the existing EXIF carrier scan, and EXR `xmp` strings through a bounded header-only scan. The CLI `source-metadata INPUT` exposes the result as `metadata.image_xmp`; `source-exif`, default probing, image decoding and training do not request this additional collection. `image_exif` and the camera summary retain their existing meaning. The historical image catalog scope identifier remains unchanged.
 
 `core::image_codecs::read_source_metadata` returns the collected EXIF and XMP snapshots from that one scan. The existing `read_source_exif` still takes the EXIF-only path. `catalogSourceMetadata` can consume an already collected EXIF description and XMP snapshot without rereading the source. `imageXmp`, `xmpBlock`, `XmpBlockReference` and source-bound handles expose immutable, owning occurrences through the same catalog/index contracts as other metadata.
 
@@ -309,7 +309,7 @@ Exhausting EXIF retention freezes the retained EXIF prefix, while the combined P
 
 The enclosing scan's limited, malformed or I/O status is preserved conservatively, including partial observations and cases where a TIFF packet representation is unsupported. This can reflect a framing/EXIF problem even when an individual XMP block is intact. An index limit does not discard already collected XMP originals. A valid opaque packet does not establish its truth, uniqueness or precedence over EXIF; camera interpretation continues using EXIF/TIFF only.
 
-This increment does not collect XMP from WebP, EXR, videos or external sidecars. Those carriers report unsupported rather than absent for this XMP collector. TIFF XMP uses the existing observed tag inventory and traversal order, including main image directories and visited child directories. `XmpBlock::tiff_tag` stores directory/tag ordinals into the paired EXIF snapshot; `source_xmp_bytes` resolves a checked borrowed byte view in core, and `SourceMetadataCatalog::xmpBytes` resolves it within an immutable catalog. Keep an owning snapshot/catalog or handle alive while using the view. Catalog construction rejects invalid associations. TIFF blocks retain no second packet vector.
+XMP collection supports single-header EXR `xmp` string values. WebP, videos and external sidecars remain unsupported. Those carriers report unsupported rather than absent for this XMP collector. TIFF XMP uses the existing observed tag inventory and traversal order, including main image directories and visited child directories. `XmpBlock::tiff_tag` stores directory/tag ordinals into the paired EXIF snapshot; `source_xmp_bytes` resolves a checked borrowed byte view in core, and `SourceMetadataCatalog::xmpBytes` resolves it within an immutable catalog. Keep an owning snapshot/catalog or handle alive while using the view. Catalog construction rejects invalid associations. TIFF blocks retain no second packet vector.
 
 TIFF JSON blocks report `representation: libtiff_decoded_bytes` and `tiff_tag` with directory/tag ordinals and the original directory offset. Library-decoded bytes and sparse original source ranges remain distinct: libtiff can normalize or ignore nonconforming tags and collapse duplicate fields within one directory. Collection reports the observed inventory and enclosing warnings rather than claiming a complete raw TIFF archive. In main image directories, libtiff narrows SHORT/LONG tag 700 values that fit in a byte to BYTE. It ignores FLOAT, DOUBLE and out-of-range SHORT values with a "tag ignored" diagnostic, which the enclosing scan reports as Malformed. Child-directory inventories can retain numeric representations; the byte-view resolver reports Unsupported for those rather than interpreting numeric storage as packet bytes. Observed BYTE and UNDEFINED byte vectors preserve embedded NULs, arbitrary bytes and padding without an additional packet allocation. Zero-count TIFF tags remain observable with a Malformed block and `payload_bytes: null`. XML remains opaque.
 
@@ -511,7 +511,7 @@ identified source/consumer rather than an invented camera declaration.
 
 ### Embedded image extraction metadata
 
-JPEG, PNG and TIFF16 video extraction accept `FileFrameSinkOptions.embed_source_metadata` in C++ and
+JPEG, PNG, TIFF16 and EXR video extraction accept `FileFrameSinkOptions.embed_source_metadata` in C++ and
 Python, or `--embed-source-metadata` in the CLI. The default is false. Enabling it
 also preserves the static source catalog in `extraction_metadata.json`, using the
 same observation collected from the open demuxer. Other output formats reject
@@ -649,3 +649,50 @@ preserve the previous destination through the existing atomic file service.
 Resume binds the policy, source packet digest and frame timestamp origin before
 adopting existing images. Source metadata remains static and is observed once
 from the open source context.
+
+
+### EXR embedded source provenance and collection
+
+EXR extraction accepts the same `embed_source_metadata` opt-in. It writes the
+read-only packet to a custom `xmp` string attribute, using
+`exr-static-source-xmp-v1`. This follows a convention supported by the
+[GIMP EXR loader](https://github.com/GNOME/gimp/blob/master/plug-ins/file-exr/openexr-wrapper.cc).
+The attribute mechanism and binary layout are described in the
+[OpenEXR file layout](https://openexr.com/en/latest/OpenEXRFileLayout.html).
+
+The existing HALF/FLOAT precision, ZIP/uncompressed chunks, linear units,
+chromaticities, alpha conversion and `lfs*` output attributes are preserved.
+Source metadata is a static observation, including original locator/GPS/raw bytes
+and completeness flags. It does not replace output geometry or assign temporal
+GPS/camera measurements to frames. The manifest and checkpoint record the policy;
+source digest and per-frame timestamp origin remain part of verified recovery.
+
+Source properties are prepared once and TIFF/EXR share bounded contiguous-packet
+assembly, including `ResourceExhausted` on allocation failure. The explicit
+`ImageOutput::writeExr` and core encoder overloads borrow an owning string for the
+synchronous call so the null-terminated OpenEXR setter needs no intermediate
+string copy. OpenEXR copies the attribute into its context. The packet limit is
+32 MiB, separate from the existing generic text budget (32 values, 1 MiB + 4096
+bytes), encoded data, pixel storage and provider working memory. The original
+overloads and their budgets remain available. An explicit packet rejects a
+conflicting generic `xmp` text attribute, embedded NUL and excess size before
+header encoding; callers supply UTF-8 XML. Extraction constructs escaped XMP.
+
+`source-metadata` and `source_metadata_json` also collect raw EXR `xmp` values.
+Collection examines only a single-part, non-deep version-2 header, including the
+single-header tiled case. It does not inspect chunk tables, validate/decode
+pixels, or expose a complete EXR attribute inventory. Multipart/deep and unknown
+version flags are reported as unsupported. A 64 MiB header-extent budget, 4096
+attributes and declared 31/255-byte name/type lengths bound the scan. Unknown
+attribute values are skipped after checking extents against both the file and
+scan budget. Negative/truncated sizes, duplicate attributes and I/O failures
+remain observable; duplicates retain their bounded packets with a malformed
+header status rather than being silently collapsed.
+
+The existing XMP block/count/aggregate retention and interpretation limits apply
+independently. Large exported packets may therefore produce partial reader
+observations. The `exr_string` envelope retains exact string-value bytes, including
+malformed XML, NUL and invalid UTF-8 from external files, with no normalization or
+XML entity resolution during collection. XML interpretation remains in the shared
+bounded interpreter. Standalone EXIF collection keeps its existing unsupported
+result for EXR; the paired XMP observation has its own scope and status.

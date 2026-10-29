@@ -46,6 +46,8 @@ namespace lfs::media {
     class LFS_MEDIA_API ImageOutput {
     public:
         [[nodiscard]] static SinkResult writeExr(const std::filesystem::path&, const FrameView&, const ExrOutputOptions& = {});
+        // Explicit UTF-8 XMP, at most 32 MiB, consumed synchronously.
+        [[nodiscard]] static SinkResult writeExr(const std::filesystem::path&, const FrameView&, const ExrOutputOptions&, const std::string& xmp);
         // Relative scene-linear RGB/RGBA to UINT16 SDR. Explicit transfer,
         // primaries preserved, straight alpha, finite samples clamped to [0,1].
         [[nodiscard]] static SinkResult writeTiff16(const std::filesystem::path&, const FrameView&, const Tiff16OutputOptions& = {});

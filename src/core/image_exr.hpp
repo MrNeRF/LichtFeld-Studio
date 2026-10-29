@@ -54,4 +54,8 @@ namespace lfs::core::image_codecs {
         const ExrEncodeView&, std::vector<std::uint8_t>& output, const ExrEncodeOptions& = {},
         std::size_t max_output_bytes = 256 * 1024 * 1024);
     [[nodiscard]] LFS_IMAGE_CODECS_API Result<void> encode_exr(const ExrEncodeView&, const ExrWriteStream&, const ExrEncodeOptions&);
+    // Explicit UTF-8 XMP in the conventional "xmp" string attribute. Borrowed
+    // synchronously; OpenEXR copies it. No NUL, at most 32 MiB. Generic text keeps
+    // its existing budget; an explicit packet rejects a duplicate text key.
+    [[nodiscard]] LFS_IMAGE_CODECS_API Result<void> encode_exr(const ExrEncodeView&, const ExrWriteStream&, const ExrEncodeOptions&, const std::string& xmp);
 } // namespace lfs::core::image_codecs

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/image_codecs.hpp"
 #include "core/image_exr.hpp"
+#include "core/source_metadata.hpp"
 #include <Imath/half.h>
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
@@ -12,9 +13,11 @@
 #include <OpenEXR/ImfStringAttribute.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <gtest/gtest.h>
 #include <limits>
@@ -69,6 +72,195 @@ namespace {
         file.setFrameBuffer(frame);
         file.readPixels(0, height - 1);
         return pixels;
+    }
+
+    TEST(ExrMemory, ExplicitXmpPreservesPixelsAndKeepsGenericTextBudgets) {
+        const std::string packet =
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            "<rdf:Description rdf:about=\"\" xmlns:t=\"urn:lfs:test\"><t:value>escaped &amp; retained</t:value>"
+            "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
+        Pixels input;
+        const auto original = input.bytes;
+        std::vector<uint8_t> encoded;
+        const codec::ExrWriteStream stream{"XMP test", &encoded,
+                                           [](void* user, const void* bytes, uint64_t size, uint64_t offset) noexcept -> int64_t {
+                                               auto& out = *static_cast<std::vector<uint8_t>*>(user);
+                                               if (offset > SIZE_MAX || size > SIZE_MAX - offset)
+                                                   return -1;
+                                               try {
+                                                   if (out.size() < offset + size)
+                                                       out.resize(size_t(offset + size));
+                                                   std::memcpy(out.data() + size_t(offset), bytes, size_t(size));
+                                                   return int64_t(size);
+                                               } catch (...) { return -1; }
+                                           }};
+        for (const auto precision : {codec::ExrSampleType::Half, codec::ExrSampleType::Float})
+            for (const auto compression : {codec::ExrCompression::None, codec::ExrCompression::Zip})
+                for (const bool premultiply : {false, true}) {
+                    codec::ExrEncodeOptions options;
+                    options.precision = precision;
+                    options.compression = compression;
+                    options.premultiply_alpha = premultiply;
+                    std::vector<uint8_t> plain;
+                    ASSERT_TRUE(codec::encode_exr_memory(input.view(), plain, options));
+                    encoded.clear();
+                    ASSERT_TRUE(codec::encode_exr(input.view(), stream, options, packet));
+                    EXPECT_EQ(reference(encoded, input.width, input.height), reference(plain, input.width, input.height));
+                    const auto decoded = reference(encoded, input.width, input.height);
+                    for (int y = 0; y < input.height; ++y)
+                        for (int x = 0; x < input.width; ++x) {
+                            std::array<float, 4> values;
+                            std::memcpy(values.data(), input.bytes.data() + y * input.stride + x * 4 * sizeof(float), sizeof(values));
+                            for (int c = 0; c < 4; ++c) {
+                                float expected = premultiply && c < 3 ? values[c] * values[3] : values[c];
+                                if (precision == codec::ExrSampleType::Half)
+                                    expected = float(Imath::half(expected));
+                                EXPECT_EQ(decoded[(y * input.width + x) * 4 + c], expected);
+                            }
+                        }
+                    Input reader(encoded);
+                    exr::InputFile file(reader);
+                    EXPECT_EQ(file.header().typedAttribute<exr::StringAttribute>("xmp").value(), packet);
+                    EXPECT_EQ(input.bytes, original);
+                }
+        codec::ExrEncodeOptions options;
+        const auto previous = encoded;
+        for (const auto& bad : {std::string("x\0mp", 4), std::string(32 * 1024 * 1024 + 1, 'a')}) {
+            const auto refused = codec::encode_exr(input.view(), stream, options, bad);
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(encoded, previous);
+        }
+        const std::array<std::pair<std::string, std::string>, 1> duplicate{{{"xmp", "legacy"}}};
+        options.text = duplicate;
+        EXPECT_FALSE(codec::encode_exr(input.view(), stream, options, packet));
+        EXPECT_EQ(encoded, previous);
+        encoded.clear();
+        ASSERT_TRUE(codec::encode_exr(input.view(), stream, options));
+        const std::array<std::pair<std::string, std::string>, 1> too_large{{{"comments", std::string(1024 * 1024 + 4097, 'a')}}};
+        options.text = too_large;
+        const auto legacy = encoded;
+        EXPECT_FALSE(codec::encode_exr(input.view(), stream, options, packet));
+        EXPECT_EQ(encoded, legacy);
+        options.text = {};
+        auto boundary = packet;
+        boundary.insert(boundary.find("escaped"), 32 * 1024 * 1024 - packet.size(), 'a');
+        encoded.clear();
+        ASSERT_TRUE(codec::encode_exr(input.view(), stream, options, boundary));
+        Input reader(encoded);
+        exr::InputFile file(reader);
+        EXPECT_EQ(file.header().typedAttribute<exr::StringAttribute>("xmp").value(), boundary);
+        std::vector<uint8_t> plain;
+        ASSERT_TRUE(codec::encode_exr_memory(input.view(), plain, options));
+        EXPECT_EQ(reference(encoded, input.width, input.height), reference(plain, input.width, input.height));
+        EXPECT_EQ(input.bytes, original);
+    }
+
+    TEST(ExrMemory, MetadataHeaderCollectionKeepsOpaqueBytesAndBoundsMalformedInput) {
+        struct Temporary {
+            std::filesystem::path path = std::filesystem::temp_directory_path() / ("exr-metadata-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".exr");
+            ~Temporary() {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        } temporary;
+        // Synthetic metadata headers, not decodable images: collection ends at
+        // the header terminator and never attempts to interpret pixel chunks.
+        const std::vector<uint8_t> prefix{0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0};
+        const std::string opaque("<raw>\0\xff</raw>", 13);
+        const auto attr = [](std::vector<uint8_t>& data, std::string_view key, std::string_view type, std::string_view value) {
+            for (const auto text : {key, type}) {
+                data.insert(data.end(), text.begin(), text.end());
+                data.push_back(0);
+            }
+            for (int i = 0; i < 4; ++i)
+                data.push_back(uint8_t(value.size() >> (8 * i)));
+            data.insert(data.end(), value.begin(), value.end());
+        };
+        const auto collect = [&](std::vector<uint8_t> data, codec::XmpLimits limits = {}) {
+            data.push_back(0);
+            {
+                std::ofstream f(temporary.path, std::ios::binary);
+                f.write(reinterpret_cast<const char*>(data.data()), data.size());
+            }
+            return codec::read_source_metadata(temporary.path, {}, limits);
+        };
+        auto data = prefix;
+        attr(data, "xmp", "string", opaque);
+        auto result = collect(data);
+        ASSERT_EQ(result.xmp.status, codec::MetadataStatus::Collected);
+        ASSERT_EQ(result.xmp.blocks.size(), 1);
+        EXPECT_EQ(result.xmp.scope, "exr-single-header-string-xmp");
+        EXPECT_EQ(result.xmp.blocks[0].envelope, codec::XmpEnvelope::ExrString);
+        EXPECT_EQ(result.xmp.blocks[0].bytes, (std::vector<uint8_t>(opaque.begin(), opaque.end())));
+        EXPECT_EQ(result.exif.status, codec::MetadataStatus::Unsupported);
+        codec::XmpLimits limits;
+        limits.block_bytes = opaque.size() - 1;
+        EXPECT_EQ(collect(data, limits).xmp.status, codec::MetadataStatus::Limited);
+        limits.block_bytes = opaque.size();
+        EXPECT_EQ(collect(data, limits).xmp.status, codec::MetadataStatus::Collected);
+        attr(data, "xmp", "string", "second");
+        result = collect(data);
+        EXPECT_EQ(result.xmp.status, codec::MetadataStatus::Malformed);
+        EXPECT_EQ(result.xmp.blocks.size(), 2);
+        limits.blocks = 1;
+        EXPECT_EQ(collect(data, limits).xmp.status, codec::MetadataStatus::Limited);
+        for (size_t size = 4; size < prefix.size(); ++size)
+            EXPECT_EQ(collect({prefix.begin(), prefix.begin() + size}).xmp.status, codec::MetadataStatus::Malformed);
+        data = prefix;
+        data[5] = 0x10; // Multipart is an explicit unsupported scope.
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Unsupported);
+        data = prefix;
+        attr(data, "xmp", "int", "1234");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Unsupported);
+        data = prefix;
+        attr(data, std::string(32, 'n'), "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Malformed);
+        data = prefix;
+        data[5] = 4; // Long names.
+        attr(data, std::string(255, 'n'), "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Absent);
+        data = prefix;
+        attr(data, "xmp", "string", "payload");
+        data.resize(data.size() - 3);
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Malformed);
+        data = prefix;
+        attr(data, "xmp", "string", "");
+        data[data.size() - 1] = 0x80; // Negative signed attribute extent.
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Malformed);
+        data = prefix;
+        attr(data, "xmp", "string", "value");
+        for (size_t i = 1; i < 4096; ++i)
+            attr(data, "field" + std::to_string(i), "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Collected);
+        attr(data, "extra", "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Limited);
+        data = prefix;
+        attr(data, "xmp", "string", opaque);
+        attr(data, "xmp", "int", "1234");
+        limits.block_bytes = opaque.size() - 1;
+        EXPECT_EQ(collect(data, limits).xmp.status, codec::MetadataStatus::Limited);
+        data = prefix;
+        attr(data, "padding", "string", "");
+        data.back() = 4; // Declared 64 MiB exceeds the header budget before allocation.
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Limited);
+        for (const uint8_t flag : {uint8_t(1), uint8_t(8), uint8_t(16)}) {
+            data = prefix;
+            data[5] = flag;
+            EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Unsupported);
+        }
+        data = prefix;
+        data[5] = 2; // Single-header tiled scope needs no pixel decoding.
+        attr(data, "xmp", "string", opaque);
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Collected);
+        data = prefix;
+        attr(data, std::string(31, 'n'), "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Absent);
+        data = prefix;
+        data[5] = 4;
+        attr(data, std::string(256, 'n'), "string", "");
+        EXPECT_EQ(collect(data).xmp.status, codec::MetadataStatus::Malformed);
     }
 
     TEST(ExrMemory, SharedEncoderMatchesIndependentReaderAndStreamBytes) {

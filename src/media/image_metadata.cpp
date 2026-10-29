@@ -111,6 +111,7 @@ namespace lfs::media::detail {
         return format == FrameFileFormat::JPEG     ? std::string_view(jpeg_metadata_policy)
                : format == FrameFileFormat::PNG    ? std::string_view(png_metadata_policy)
                : format == FrameFileFormat::TIFF16 ? std::string_view(tiff_metadata_policy)
+               : format == FrameFileFormat::EXR    ? std::string_view(exr_metadata_policy)
                                                    : std::string_view{};
     }
     std::string_view imageXmpSuffix() {
@@ -118,7 +119,7 @@ namespace lfs::media::detail {
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16) || width <= 0 || height <= 0)
+        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16 && metadata.format != FrameFileFormat::EXR) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
@@ -133,7 +134,7 @@ namespace lfs::media::detail {
     }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format) {
         if (embeddedMetadataPolicy(format).empty())
-            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG or TIFF16 output");
+            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16 or EXR output");
         try {
             const auto summary = summarizeSourceMetadata(catalog);
             if (!summary)
@@ -193,6 +194,19 @@ namespace lfs::media::detail {
             return result;
         } catch (const std::bad_alloc&) {
             return metadataError(ErrorCode::ResourceExhausted, "Image metadata allocation failed");
+        }
+    }
+    Result<std::string> imageXmpPacket(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
+        auto packet = imageXmpPrefix(metadata, width, height, info);
+        if (!packet)
+            return packet.error();
+        try {
+            packet->reserve(packet->size() + metadata.source_properties.size() + imageXmpSuffix().size());
+            *packet += metadata.source_properties;
+            *packet += imageXmpSuffix();
+            return packet;
+        } catch (const std::bad_alloc&) {
+            return metadataError(ErrorCode::ResourceExhausted, "Image XMP packet allocation failed");
         }
     }
     SinkResult writeJpegMetadata(FILE* stream, std::span<const std::uint8_t> jpeg,
