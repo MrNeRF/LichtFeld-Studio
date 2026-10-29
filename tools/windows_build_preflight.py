@@ -64,6 +64,7 @@ VISUALIZER_QUALIFIED_CALL_RE = re.compile(
 EXPORT_EXEMPT_TOKENS = frozenset(
     {"constexpr", "friend", "inline", "static", "template", "typedef", "using"}
 )
+STATEMENT_TOKENS = frozenset({"case", "do", "else", "for", "if", "return", "switch", "while"})
 
 
 @dataclass(frozen=True, order=True)
@@ -267,11 +268,15 @@ def check_visualizer_test_exports(root: Path) -> list[Finding]:
                     prefix = masked_header[max(0, match.start() - 2) : match.start()]
                     if prefix.endswith("::") or prefix.endswith("->"):
                         continue
+                    if masked_header[: match.start()].rstrip()[-1:] in ("!", "=", "(", ",", "?"):
+                        continue
                     function = _function_segment(masked_header, match.start())
                     if function is None:
                         continue
                     _start, segment = function
                     tokens = set(re.findall(r"\b[A-Za-z_]\w*\b", segment))
+                    if tokens & STATEMENT_TOKENS:
+                        continue
                     if (
                         tokens & EXPORT_EXEMPT_TOKENS
                         or "operator" in tokens
