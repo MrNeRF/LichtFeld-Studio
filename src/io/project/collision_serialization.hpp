@@ -3,6 +3,7 @@
 #pragma once
 #include "chapter_binary_utils.hpp"
 #include "core/collision_volume.hpp"
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 
@@ -25,8 +26,14 @@ namespace lfs::io::project {
         static_assert(sizeof(header) == collision_payload_header_bytes);
         for (size_t i = 0; i < std::size(header); ++i)
             write_u32(result, i * sizeof(uint32_t), header[i]);
-        for (size_t i = 0; i < volume.words.size(); ++i)
-            write_u32(result, collision_payload_header_bytes + i * sizeof(uint32_t), volume.words[i]);
+        if constexpr (std::endian::native == std::endian::little) {
+            if (!volume.words.empty())
+                std::memcpy(result.data() + collision_payload_header_bytes, volume.words.data(),
+                            volume.words.size() * sizeof(uint32_t));
+        } else {
+            for (size_t i = 0; i < volume.words.size(); ++i)
+                write_u32(result, collision_payload_header_bytes + i * sizeof(uint32_t), volume.words[i]);
+        }
         return result;
     }
 
@@ -52,8 +59,13 @@ namespace lfs::io::project {
         volume->occupied_count = read_u64(bytes, 36);
         volume->settings = {read_f32(bytes, 44), read_f32(bytes, 48), read_f32(bytes, 52), automatic != 0, cleanup != 0};
         volume->words.resize(count);
-        for (uint32_t i = 0; i < count; ++i)
-            volume->words[i] = read_u32(bytes, collision_payload_header_bytes + i * sizeof(uint32_t));
+        if constexpr (std::endian::native == std::endian::little) {
+            std::memcpy(volume->words.data(), bytes.data() + collision_payload_header_bytes,
+                        count * sizeof(uint32_t));
+        } else {
+            for (uint32_t i = 0; i < count; ++i)
+                volume->words[i] = read_u32(bytes, collision_payload_header_bytes + i * sizeof(uint32_t));
+        }
         volume->validate();
         return volume;
     }

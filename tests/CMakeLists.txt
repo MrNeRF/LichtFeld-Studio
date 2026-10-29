@@ -41,6 +41,19 @@ target_link_libraries(lichtfeld_collision_preview_cache_tests PRIVATE GTest::gte
 add_test(NAME lichtfeld.collision_preview_cache COMMAND lichtfeld_collision_preview_cache_tests)
 set_tests_properties(lichtfeld.collision_preview_cache PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
 
+if(TARGET lfs_core)
+    add_executable(lichtfeld_collision_volume_tests test_collision_volume_validation.cpp)
+    target_compile_features(lichtfeld_collision_volume_tests PRIVATE cxx_std_23)
+    target_include_directories(lichtfeld_collision_volume_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
+    target_link_libraries(lichtfeld_collision_volume_tests PRIVATE lfs_core GTest::gtest_main)
+    add_test(NAME lichtfeld.collision_volume COMMAND lichtfeld_collision_volume_tests)
+    set_tests_properties(lichtfeld.collision_volume PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
+    if(WIN32)
+        set_tests_properties(lichtfeld.collision_volume PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
+endif()
+
 if(TARGET Vulkan::Vulkan)
     add_executable(lichtfeld_collision_preview_vulkan_tests test_collision_preview_vulkan.cpp)
     target_compile_features(lichtfeld_collision_preview_vulkan_tests PRIVATE cxx_std_23)
