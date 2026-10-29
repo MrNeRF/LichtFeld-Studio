@@ -196,7 +196,7 @@ namespace lfs::vis {
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
-        [[nodiscard]] bool projectOpenPending() const;
+        [[nodiscard]] bool projectOpenPending() const override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
