@@ -13,6 +13,8 @@
 
 namespace lfs::vis::detail {
     enum class CollisionUploadStatus { Ready,
+                                       Uploading,
+                                       Deferred,
                                        RetryableFailure,
                                        PermanentFailure,
                                        PendingFailure };
@@ -58,6 +60,8 @@ namespace lfs::vis::detail {
                     return resource;
                 }
             }
+            if (entry.status == CollisionUploadStatus::Uploading)
+                return {};
             if (entry.status == CollisionUploadStatus::PendingFailure) {
                 if (!retired(*entry.resident))
                     return {};
@@ -78,6 +82,15 @@ namespace lfs::vis::detail {
             const auto status = upload(resource);
             entry.bytes = bytes;
             entry.status = status;
+            if (status == CollisionUploadStatus::Deferred) {
+                --stats_.attempts;
+                entry.next_retry = now + std::chrono::milliseconds(16);
+                return {};
+            }
+            if (status == CollisionUploadStatus::Uploading) {
+                entry.resident = std::move(resource);
+                return {};
+            }
             if (status == CollisionUploadStatus::Ready) {
                 entry.failures = 0;
                 entry.next_retry = {};
@@ -91,6 +104,30 @@ namespace lfs::vis::detail {
             if (status == CollisionUploadStatus::PendingFailure)
                 entry.resident = std::move(resource);
             return {};
+        }
+
+        // Only the GUI owner publishes a completed worker result. Uploading is
+        // never drawable and does not count as a failed attempt or a retry.
+        void completeUpload(const Source* source, CollisionUploadStatus status, Time now) {
+            const auto it = entries_.find(source);
+            if (it == entries_.end() || it->second.status != CollisionUploadStatus::Uploading)
+                return;
+            auto& entry = it->second;
+            entry.status = status;
+            if (status == CollisionUploadStatus::Ready) {
+                entry.weak = entry.resident;
+                entry.failures = 0;
+                entry.next_retry = {};
+            } else if (status == CollisionUploadStatus::Deferred) {
+                entry.resident.reset();
+                entry.next_retry = now;
+            } else {
+                ++stats_.failures;
+                ++entry.failures;
+                entry.next_retry = now + std::chrono::seconds(1u << (entry.failures - 1));
+                if (status != CollisionUploadStatus::PendingFailure)
+                    entry.resident.reset();
+            }
         }
 
         std::shared_ptr<Resource> ready(const Source* source) const {
@@ -129,8 +166,12 @@ namespace lfs::vis::detail {
             for (const auto& [_, entry] : entries_) {
                 if (entry.status == CollisionUploadStatus::Ready && entry.resident && entry.last_frame != frame)
                     consider(entry.inactive_since.value_or(entry.last_used) + idle_);
+                else if (entry.status == CollisionUploadStatus::Uploading)
+                    consider(now + std::chrono::milliseconds(8));
                 else if (entry.status == CollisionUploadStatus::PendingFailure)
                     consider(now + std::chrono::milliseconds(250));
+                else if (entry.status == CollisionUploadStatus::Deferred && entry.last_frame == frame)
+                    consider(entry.next_retry);
                 else if (entry.status == CollisionUploadStatus::RetryableFailure &&
                          entry.last_frame == frame && entry.failures < max_failures)
                     consider(entry.next_retry);
@@ -140,7 +181,8 @@ namespace lfs::vis::detail {
 
         bool retryDue(uint64_t frame, Time now) const {
             for (const auto& [_, entry] : entries_)
-                if (entry.status == CollisionUploadStatus::RetryableFailure &&
+                if ((entry.status == CollisionUploadStatus::RetryableFailure ||
+                     entry.status == CollisionUploadStatus::Deferred) &&
                     entry.last_frame == frame && entry.failures < max_failures && now >= entry.next_retry)
                     return true;
             return false;
@@ -167,7 +209,8 @@ namespace lfs::vis::detail {
                     else
                         stats_.resident_bytes += entry.bytes;
                 }
-                if (entry.status == CollisionUploadStatus::PendingFailure)
+                if (entry.status == CollisionUploadStatus::PendingFailure ||
+                    entry.status == CollisionUploadStatus::Uploading)
                     stats_.pending_bytes += entry.bytes;
                 if (entry.source.expired())
                     it = entries_.erase(it);

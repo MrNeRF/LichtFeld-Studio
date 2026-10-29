@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "rendering/frame_demand.hpp"
 #include "rendering/passes/collision_preview_cache.hpp"
+#include "rendering/passes/collision_preview_upload.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 
@@ -386,6 +387,141 @@ namespace {
         EXPECT_FALSE(cache.retainFrameOwner(hidden_source.get(), frame, now));
         EXPECT_TRUE(cache.retainFrameOwner(source.get(), frame, now));
         EXPECT_EQ(cache.stats().resident_bytes, 0u);
+    }
+    TEST_F(CollisionPreviewCache, WorkerUploadIsNotDrawableAndDoesNotConsumeRetriesWhilePending) {
+        outcome = Status::Uploading;
+        EXPECT_FALSE(request(200));
+        const auto worker = last_upload.lock();
+        ASSERT_TRUE(worker);
+        for (int i = 0; i < 10; ++i) {
+            now += std::chrono::seconds(1);
+            EXPECT_FALSE(request(200));
+            cache.maintain(now, retired, frame);
+            EXPECT_FALSE(cache.ready(source.get()));
+            EXPECT_EQ(cache.stats().pending_bytes, 200u);
+        }
+        EXPECT_EQ(cache.stats().attempts, 1u);
+        EXPECT_EQ(cache.stats().failures, 0u);
+        cache.completeUpload(source.get(), Status::Ready, now);
+        EXPECT_EQ(request(200), worker);
+        EXPECT_EQ(cache.stats().attempts, 1u);
+    }
+
+    TEST_F(CollisionPreviewCache, BusyWorkerDefersOtherVolumesWithoutFailingThem) {
+        outcome = Status::Deferred;
+        EXPECT_FALSE(request());
+        EXPECT_EQ(cache.stats().attempts, 0u);
+        EXPECT_EQ(cache.stats().failures, 0u);
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_EQ(cache.nextDeadline(frame, now), now + std::chrono::milliseconds(16));
+        now += std::chrono::milliseconds(16);
+        EXPECT_TRUE(cache.retryDue(frame, now));
+        ++frame;
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.nextDeadline(frame, now));
+        outcome = Status::Ready;
+        EXPECT_TRUE(request());
+        EXPECT_EQ(cache.stats().attempts, 1u);
+    }
+
+    TEST_F(CollisionPreviewCache, CancelledUploadCanRestartWithoutBackoffWhenShownAgain) {
+        outcome = Status::Uploading;
+        EXPECT_FALSE(request());
+        ++frame;
+        cache.maintain(now, retired, frame);
+        EXPECT_TRUE(cache.nextDeadline(frame, now)); // poll cancellation, do not render
+        cache.completeUpload(source.get(), Status::Deferred, now);
+        EXPECT_EQ(cache.stats().failures, 0u);
+        EXPECT_FALSE(cache.ready(source.get()));
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        outcome = Status::Ready;
+        EXPECT_TRUE(request());
+        EXPECT_EQ(cache.stats().attempts, 2u);
+    }
+
+    TEST_F(CollisionPreviewCache, CompletedWorkerFailureKeepsTheExistingRetryBudget) {
+        outcome = Status::Uploading;
+        EXPECT_FALSE(request());
+        cache.completeUpload(source.get(), Status::RetryableFailure, now);
+        EXPECT_EQ(cache.stats().failures, 1u);
+        EXPECT_FALSE(request());
+        now += std::chrono::seconds(1);
+        EXPECT_FALSE(request());
+        EXPECT_EQ(cache.stats().attempts, 2u);
+        cache.completeUpload(source.get(), Status::Ready, now);
+        EXPECT_TRUE(cache.ready(source.get()));
+    }
+
+    TEST_F(CollisionPreviewCache, HiddenWorkerCompletionDoesNotScheduleADraw) {
+        outcome = Status::Uploading;
+        EXPECT_FALSE(request());
+        ++frame;
+        cache.maintain(now, retired, frame);
+        cache.completeUpload(source.get(), Status::Ready, now);
+        EXPECT_FALSE(cache.retryDue(frame, now));
+        EXPECT_FALSE(cache.requestedInFrame(source.get(), frame));
+        cache.maintain(now, retired, frame);
+        EXPECT_TRUE(cache.ready(source.get()));
+        now += std::chrono::seconds(5);
+        cache.maintain(now, retired, frame);
+        EXPECT_FALSE(cache.ready(source.get()));
+    }
+
+    TEST(CollisionPreviewUploadJob, PollAndCancellationNeverJoinABlockedWorker) {
+        lfs::vis::detail::CollisionPreviewUploadJob<Resource> job;
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        auto resource = std::make_shared<Resource>();
+        std::weak_ptr<Resource> weak = resource;
+        ASSERT_TRUE(job.start(resource, [&](Resource&, std::stop_token stop) {
+            entered.set_value();
+            gate.wait();
+            return stop.stop_requested() ? Status::Deferred : Status::Ready;
+        }));
+        entered.get_future().wait();
+        resource.reset();
+        EXPECT_TRUE(job.active());
+        EXPECT_FALSE(job.poll());
+        job.cancel(); // returning here while the gate is closed proves no join
+        EXPECT_FALSE(job.poll());
+        EXPECT_FALSE(weak.expired());
+        EXPECT_FALSE(job.start(std::make_shared<Resource>(), [](Resource&, std::stop_token) { return Status::Ready; }));
+        release.set_value();
+        auto completed = job.finish();
+        ASSERT_TRUE(completed);
+        EXPECT_EQ(completed->status, Status::Deferred);
+        EXPECT_FALSE(job.active());
+        EXPECT_FALSE(job.poll());
+        EXPECT_FALSE(weak.expired());
+        completed.reset();
+        EXPECT_TRUE(weak.expired());
+    }
+
+    TEST(CollisionPreviewUploadJob, CompletionIsPublishedOnceAndWorkerCanBeReused) {
+        lfs::vis::detail::CollisionPreviewUploadJob<Resource> job;
+        for (int i = 0; i < 2; ++i) {
+            auto resource = std::make_shared<Resource>();
+            ASSERT_TRUE(job.start(resource, [](Resource&, std::stop_token) { return Status::Ready; }));
+            auto completion = job.finish();
+            ASSERT_TRUE(completion);
+            EXPECT_EQ(completion->status, Status::Ready);
+            EXPECT_EQ(completion->resource, resource);
+            EXPECT_FALSE(job.finish());
+        }
+    }
+
+    TEST(CollisionPreviewUploadJob, UnexpectedWorkerExceptionKeepsItsResourceForRetirement) {
+        lfs::vis::detail::CollisionPreviewUploadJob<Resource> job;
+        auto resource = std::make_shared<Resource>();
+        resource->retired = false;
+        ASSERT_TRUE(job.start(resource, [](Resource&, std::stop_token) -> Status {
+            throw std::runtime_error("injected worker failure");
+        }));
+        auto completion = job.finish();
+        ASSERT_TRUE(completion);
+        EXPECT_EQ(completion->status, Status::PendingFailure);
+        EXPECT_EQ(completion->resource, resource);
+        EXPECT_FALSE(job.active());
     }
 } // namespace
 
