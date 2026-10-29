@@ -10,11 +10,13 @@
 #include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/backend_driver.hpp"
+#include "core/tensor/backend/deferred_target.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/native_allocation.hpp"
 #include "core/tensor/internal/expression_runtime.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_execution.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_upload.hpp"
@@ -29,9 +31,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -52,6 +56,22 @@ namespace {
     struct DeferredSizeGuard {
         DeferredSizeGuard() { lfs::core::internal::lazy_executor_set_size_heuristic_override_for_testing(false); }
         ~DeferredSizeGuard() { lfs::core::internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt); }
+    };
+
+    // Exercise failure/retry through the regular expression conversion, without
+    // adding a production API that mutates the private materializer state.
+    struct DeferredContractExpr : lfs::core::TensorExpr<DeferredContractExpr> {
+        Tensor value;
+        std::function<Tensor()> evaluate;
+        DeferredContractExpr(Tensor tensor, std::function<Tensor()> callback)
+            : value(std::move(tensor)), evaluate(std::move(callback)) {}
+        const TensorShape& shape_impl() const { return value.shape(); }
+        Device device_impl() const { return value.device(); }
+        DataType dtype_impl() const { return value.dtype(); }
+        auto gpu_backend_impl() const { return lfs::core::gpu_backend_of(value); }
+        auto stream_hint_impl() const { return value.stream(); }
+        DeferredContractExpr snapshot_impl() const { return *this; }
+        Tensor eval_impl() const { return evaluate(); }
     };
 
     TEST(TensorProcessConfigurationDeathTest, BackendAndExecutionOptionsSurviveReexec) {
@@ -147,8 +167,96 @@ namespace {
             auto& driver = internal::backend_driver(backend);
             EXPECT_EQ(driver.canonical_home_target(nullptr), nullptr);
             EXPECT_FALSE(driver.bind_tensor_target(tensor, true).has_value());
+            EXPECT_EQ(internal::canonical_deferred_home(backend, nullptr), nullptr);
+            EXPECT_FALSE(internal::deferred_home_needs_binding(backend, nullptr));
+            const auto marker = reinterpret_cast<void*>(uintptr_t{1});
+            EXPECT_EQ(internal::canonical_deferred_home(backend, marker),
+                      driver.canonical_home_target(marker));
         }
     }
+
+#if LFS_HAS_CUDA
+    TEST_P(TensorBackendSemantics, DeferredCudaHomePreservesAnExplicitCurrentStream) {
+        using namespace lfs::core;
+        if (GetParam().backend != GpuBackend::CUDA)
+            GTEST_SKIP() << "CUDA implicit home policy";
+        const DeferredSizeGuard guard;
+        TensorCudaStream home;
+        TensorCudaStream current;
+        Tensor deferred;
+        {
+            const CUDAStreamGuard scope(home.get());
+            deferred = Tensor::full({3}, 2.f, Device::GPU).add(1.f).mul(2.f).sub(3.f);
+        }
+        ASSERT_TRUE(deferred.is_deferred());
+        ASSERT_EQ(deferred.stream(), home.get());
+        EXPECT_TRUE(internal::deferred_home_needs_binding(GpuBackend::CUDA, home.get()));
+        {
+            const CUDAStreamGuard scope(current.get());
+            EXPECT_FALSE(internal::deferred_home_needs_binding(GpuBackend::CUDA, home.get()));
+            auto& driver = internal::backend_driver(GpuBackend::CUDA);
+            EXPECT_FALSE(driver.bind_tensor_target(deferred, true).has_value());
+            auto alias = deferred;
+            (void)deferred.data_ptr();
+            EXPECT_EQ(getCurrentCUDAStream(), current.get());
+            EXPECT_EQ(deferred.stream(), current.get());
+            expect_floats(host<float>(alias), {3, 3, 3});
+            EXPECT_EQ(alias.stream(), current.get());
+        }
+        EXPECT_EQ(getCurrentCUDAStream(), nullptr);
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredCudaHomeRestoresAfterMaterializerFailure) {
+        using namespace lfs::core;
+        if (GetParam().backend != GpuBackend::CUDA)
+            GTEST_SKIP() << "CUDA implicit home policy";
+        const DeferredSizeGuard guard;
+        TensorCudaStream home;
+        Tensor deferred;
+        const auto attempts = std::make_shared<int>(0);
+        {
+            const CUDAStreamGuard scope(home.get());
+            auto value = Tensor::full({3}, 2.f, Device::GPU);
+            deferred = DeferredContractExpr(value, [value, attempts, target = home.get()] {
+                EXPECT_EQ(getCurrentCUDAStream(), target);
+                if (++*attempts == 1)
+                    throw std::runtime_error("CUDA deferred contract retry");
+                return value;
+            });
+        }
+        auto alias = deferred;
+        EXPECT_THROW((void)deferred.data_ptr(), std::runtime_error);
+        EXPECT_EQ(getCurrentCUDAStream(), nullptr);
+        expect_floats(host<float>(alias), {2, 2, 2});
+        EXPECT_EQ(getCurrentCUDAStream(), nullptr);
+        EXPECT_EQ(*attempts, 2);
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredCudaRetiredHomeDoesNotBindOrSurvivePublication) {
+        using namespace lfs::core;
+        if (GetParam().backend != GpuBackend::CUDA)
+            GTEST_SKIP() << "CUDA implicit home policy";
+        const DeferredSizeGuard guard;
+        Tensor deferred;
+        cudaStream_t retired = nullptr;
+        {
+            TensorCudaStream home;
+            retired = home.get();
+            const CUDAStreamGuard scope(retired);
+            deferred = Tensor::full({3}, 2.f, Device::GPU).add(1.f).mul(2.f).sub(3.f);
+        }
+        ASSERT_TRUE(deferred.is_deferred());
+        ASSERT_TRUE(is_stream_retired(retired));
+        EXPECT_FALSE(internal::deferred_home_needs_binding(GpuBackend::CUDA, retired));
+        EXPECT_FALSE(internal::backend_driver(GpuBackend::CUDA).bind_tensor_target(deferred, true).has_value());
+        auto alias = deferred;
+        expect_floats(host<float>(deferred), {3, 3, 3});
+        expect_floats(host<float>(alias), {3, 3, 3});
+        EXPECT_EQ(deferred.stream(), nullptr);
+        EXPECT_EQ(alias.stream(), nullptr);
+        EXPECT_EQ(getCurrentCUDAStream(), nullptr);
+    }
+#endif
 
     TEST_P(TensorBackendSemantics, ConcurrentActivationAndCacheResetPreserveUsableAdapters) {
         using namespace lfs::core;
@@ -191,6 +299,57 @@ namespace {
             EXPECT_EQ(alias.stream(), nullptr);
             expect_placement(alias);
             expect_floats(host<float>(alias), {3, 5, 7});
+        }
+    }
+
+    TEST_P(TensorBackendSemantics, DeferredFailureReleasesTheGateAndPreservesSiblingRetry) {
+        const DeferredSizeGuard guard;
+        const auto value = make<float>(DataType::Float32, {3}, {2, 3, 4});
+        const auto attempts = std::make_shared<int>(0);
+        Tensor deferred = DeferredContractExpr(value, [value, attempts] {
+            if (++*attempts == 1)
+                throw std::runtime_error("deferred contract retry");
+            return value;
+        });
+        auto alias = deferred;
+        EXPECT_THROW((void)deferred.data_ptr(), std::runtime_error);
+        EXPECT_TRUE(deferred.is_deferred());
+        EXPECT_TRUE(alias.is_deferred());
+        expect_floats(host<float>(alias), {2, 3, 4});
+        expect_floats(host<float>(deferred), {2, 3, 4});
+        EXPECT_EQ(*attempts, 2);
+        EXPECT_EQ(alias.storage_ptr(), deferred.storage_ptr());
+    }
+
+    TEST_P(TensorBackendSemantics, ConcurrentDeferredAliasesShareOnePublishedResult) {
+        const DeferredSizeGuard guard;
+        for (int round = 0; round < 4; ++round) {
+            auto deferred = make<float>(DataType::Float32, {3}, {2, 3, 4}).add(1.f);
+            ASSERT_TRUE(deferred.is_deferred());
+            std::array<std::future<Tensor>, 4> workers;
+            std::promise<void> start;
+            const auto ready = start.get_future().share();
+            const auto before = lfs::core::internal::lazy_executor_diagnostics_snapshot_for_testing();
+            for (auto& worker : workers) {
+                worker = std::async(std::launch::async, [alias = deferred, ready]() mutable {
+                    ready.wait();
+                    (void)std::as_const(alias).data_ptr();
+                    return alias;
+                });
+            }
+            start.set_value();
+            const void* storage = nullptr;
+            for (auto& worker : workers) {
+                auto alias = worker.get();
+                if (!storage)
+                    storage = alias.storage_ptr();
+                EXPECT_EQ(alias.storage_ptr(), storage);
+                expect_placement(alias);
+                expect_floats(host<float>(alias), {3, 4, 5});
+            }
+            const auto after = lfs::core::internal::lazy_executor_diagnostics_snapshot_for_testing();
+            EXPECT_EQ(after.executed_nodes - before.executed_nodes, 1u);
+            EXPECT_EQ(std::as_const(deferred).data_ptr(), storage);
         }
     }
 

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "backend/backend_driver.hpp"
+#include "backend/deferred_target.hpp"
 #include "backend/native_allocation.hpp"
 #include "backend/target_lifetime.hpp"
 #include "core/checked_arithmetic.hpp"
@@ -530,10 +531,10 @@ namespace lfs::core {
             throw std::runtime_error("Recursive deferred tensor materialization detected");
         }
         const uint64_t lazy_node_id = lazy->node_id != 0 ? lazy->node_id : lazy_expr_id();
-        Tensor published;
-
+        // Production and publication use the same gate. Keep it across both
+        // phases rather than unlock/relock it for every materialized alias.
+        std::unique_lock<std::mutex> lock(lazy->gate);
         {
-            std::unique_lock<std::mutex> lock(lazy->gate);
             lazy->gate_owner.store(current_thread, std::memory_order_release);
             struct GateOwnerReset {
                 std::atomic<std::thread::id>& owner;
@@ -556,7 +557,6 @@ namespace lfs::core {
             };
 
             if (lazy->result.is_valid()) {
-                published = lazy->result;
                 unregister_published_materializer();
             } else {
                 Tensor materialized;
@@ -566,12 +566,11 @@ namespace lfs::core {
                             lazy_node_id, cached_materialized)) {
                         validate_materialized(cached_materialized);
                         lazy->result = cached_materialized;
-                        published = lazy->result;
                         unregister_published_materializer();
                     }
                 }
 
-                if (!published.is_valid()) {
+                if (!lazy->result.is_valid()) {
                     if (!lazy->materializer) {
                         throw std::runtime_error("Deferred tensor has no materializer");
                     }
@@ -581,9 +580,10 @@ namespace lfs::core {
                     try {
                         // Materializers launch on the current stream. Without one they would
                         // use the legacy stream, unordered with this tensor's declared home.
-                        std::optional<internal::TensorTargetBinding> home_stream;
-                        if (device_ == Device::GPU && stream())
-                            home_stream.emplace(internal::backend_driver(internal::gpu_backend_tag(*this)), *this, true);
+                        std::optional<internal::DeferredTargetBinding> home_stream;
+                        if (device_ == Device::GPU && stream() &&
+                            internal::deferred_home_needs_binding(internal::gpu_backend_tag(*this), stream()))
+                            home_stream.emplace(internal::gpu_backend_tag(*this), *this);
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
                         lazy->result = materialized;
@@ -596,12 +596,14 @@ namespace lfs::core {
                         }
                         throw;
                     }
-                    published = lazy->result;
                     unregister_published_materializer();
                 }
             }
         }
 
+        // The local lazy owner and the still-held gate pin this result through
+        // publication. No extra Tensor snapshot (or temporary identity) is needed.
+        const Tensor& published = lazy->result;
         const void* old_storage = data_;
         const void* new_storage = published.data_;
         const size_t storage_bytes = published.bytes();
@@ -613,7 +615,6 @@ namespace lfs::core {
 
         const size_t preserved_id = id_;
         // Sibling handles share TensorState; publish its fields under the gate their materializations share.
-        std::unique_lock<std::mutex> publish_lock(lazy->gate);
         ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
@@ -622,9 +623,9 @@ namespace lfs::core {
             state_->lazy ? std::optional<GpuBackend>(state_->lazy->backend) : std::nullopt;
 
         data_ = published.data_;
-        // Transfer this local snapshot's references; lazy->result retains its
-        // own ownership for sibling handles that have not published yet.
-        data_owner_ = std::move(published.data_owner_);
+        // Share the cached ownership directly with this handle. The cached
+        // result must retain its own references for still-deferred siblings.
+        data_owner_ = published.data_owner_;
         shape_ = published.shape_;
         strides_ = published.strides_;
         storage_offset_ = published.storage_offset_;
@@ -632,7 +633,7 @@ namespace lfs::core {
         device_ = published.device_;
         dtype_ = published.dtype_;
         is_view_ = published.is_view_;
-        storage_meta_ = std::move(published.storage_meta_);
+        storage_meta_ = published.storage_meta_;
 #ifndef NDEBUG
         view_generation_snapshot_ = published.view_generation_snapshot_;
 #endif
@@ -661,7 +662,7 @@ namespace lfs::core {
             LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
                            "deferred tensor materialized on a different GPU backend than its tag");
             if (state_->stream)
-                state_->stream = static_cast<cudaStream_t>(internal::backend_driver(backend).canonical_home_target(state_->stream));
+                state_->stream = static_cast<cudaStream_t>(internal::canonical_deferred_home(backend, state_->stream));
         }
 
         // when TensorState is shared, keep lazy->result so sibling handles
@@ -670,7 +671,7 @@ namespace lfs::core {
         if (state_.use_count() <= 1) {
             state_->lazy.reset();
         }
-        publish_lock.unlock();
+        lock.unlock();
 
         id_ = preserved_id;
         compute_alignment();
