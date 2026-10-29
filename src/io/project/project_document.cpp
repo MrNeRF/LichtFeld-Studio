@@ -180,7 +180,7 @@ namespace lfs::io::project {
                    fourcc == FOURCC_REFS || fourcc == FOURCC_SPLT ||
                    fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH || fourcc == FOURCC_COLV ||
                    fourcc == FOURCC_GUIL || fourcc == FOURCC_VIEW ||
-                   fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR ||
+                   fourcc == FOURCC_SHDR || fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR ||
                    fourcc == FOURCC_METR;
         }
 
@@ -194,7 +194,7 @@ namespace lfs::io::project {
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
                    fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
-                   fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
+                   fourcc == FOURCC_SHDR || fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
         }
 
         bool has_unknown_json_root(const Fourcc fourcc,
@@ -224,6 +224,8 @@ namespace lfs::io::project {
                 known = {"version", "render_settings", "panel_cameras",
                          "navigation", "split", "camera_bookmarks", "tools",
                          "sequencer_view", "active_camera_uuid"};
+            } else if (fourcc == FOURCC_SHDR) {
+                known = {"version", "api_version", "assets", "bindings", "contains_embedded_source"};
             } else if (fourcc == FOURCC_EDTR) {
                 known = {"version", "open_files", "active_file", "vim_mode",
                          "contains_embedded_secrets"};
@@ -913,6 +915,7 @@ namespace lfs::io::project {
         ParametersChapter parameters;
         GuiLayoutChapter gui_layout;
         ViewSessionChapter view;
+        ShaderLibraryChapter shaders;
         EditorSessionChapter editor;
         SequencerSessionChapter sequencer;
         MetricsChapter metrics;
@@ -1138,6 +1141,8 @@ namespace lfs::io::project {
             if (auto valid = view.validate(); !valid) {
                 return valid;
             }
+            if (auto valid = shaders.validate(); !valid)
+                return valid;
             if (auto valid = editor.validate(); !valid) {
                 return valid;
             }
@@ -2097,6 +2102,7 @@ namespace lfs::io::project {
         bool have_parameters = false;
         bool have_gui_layout = false;
         bool have_view = false;
+        bool have_shaders = false;
         bool have_editor = false;
         bool have_sequencer = false;
         bool have_metrics = false;
@@ -2134,6 +2140,8 @@ namespace lfs::io::project {
             const bool opaque =
                 unsupported_known_encoding ||
                 (!managed && !lazy_binary && !thumbnail);
+            if (opaque && row.key.fourcc == FOURCC_SHDR)
+                impl->missing_opaque_preservation_capability = true;
             if (opaque || thumbnail) {
                 impl->source_rows.emplace(
                     row.key,
@@ -2213,6 +2221,8 @@ namespace lfs::io::project {
             }
             const auto chapter_read_started =
                 std::chrono::steady_clock::now();
+            if (row.key.fourcc == FOURCC_SHDR && row.uncompressed_bytes > kMaxShaderChapterBytes)
+                return fail<ProjectDocument>(lfs::ErrorCode::ResourceExhausted, "Shader chapter exceeds the size limit.", "SHDR exceeds 32 MiB", "SHDR");
             auto bytes = shared_reader->read_chunk(row);
             chapter_read_ms +=
                 std::chrono::duration<double, std::milli>(
@@ -2371,6 +2381,16 @@ namespace lfs::io::project {
                     impl->missing_retained_json_capability = true;
                 }
                 have_view = true;
+            } else if (row.key.fourcc == FOURCC_SHDR) {
+                if (have_shaders)
+                    return fail<ProjectDocument>(lfs::ErrorCode::DataLoss, "Duplicate shader chapter.", "Only one SHDR is allowed", "SHDR");
+                auto chapter = ShaderLibraryChapter::from_bytes(*bytes);
+                if (!chapter)
+                    return std::move(chapter).error();
+                if (!chapter->warnings.empty())
+                    impl->normalized_source_keys.insert(row.key);
+                impl->shaders = std::move(*chapter);
+                have_shaders = true;
             } else if (row.key.fourcc == FOURCC_EDTR) {
                 if (have_editor) {
                     return fail<ProjectDocument>(
@@ -2755,6 +2775,12 @@ namespace lfs::io::project {
     ViewSessionChapter& ProjectDocument::edit_view() noexcept {
         impl_->mark(FOURCC_VIEW);
         return impl_->view;
+    }
+
+    const ShaderLibraryChapter& ProjectDocument::shaders() const noexcept { return impl_->shaders; }
+    ShaderLibraryChapter& ProjectDocument::edit_shaders() noexcept {
+        impl_->mark(FOURCC_SHDR);
+        return impl_->shaders;
     }
 
     const EditorSessionChapter& ProjectDocument::editor() const noexcept {
@@ -4073,8 +4099,8 @@ namespace lfs::io::project {
         if (impl_->missing_opaque_preservation_capability) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::Unsupported,
-                "This project is read-only because it contains opaque chapters without a preservation declaration.",
-                "safe append requires required_writer_capabilities bit 5 (OPAQUE_CHUNK_PRESERVATION)",
+                "This project is read-only because its opaque chapters cannot be safely updated.",
+                "opaque rows require writer capability bit 5 and supported encoding for managed shader state",
                 "commit.required_writer_capabilities");
         }
         if (impl_->missing_retained_json_capability) {
@@ -4164,6 +4190,16 @@ namespace lfs::io::project {
         }
 
         CommitOptions commit = options.commit;
+        const bool has_shaders = !impl_->shaders.dom().get_json("assets")->empty() || !impl_->shaders.dom().get_json("bindings")->empty();
+        const bool custom_reveal = impl_->sequencer.dom().get<int>("timeline.reveal_clip.effect") == 12;
+        commit.recompute_shader_capabilities = true;
+        commit.extra_reader_capabilities.set(USER_SHADERS_V1, custom_reveal);
+        commit.extra_writer_capabilities.set(USER_SHADERS_V1, has_shaders || custom_reveal);
+        if (has_shaders)
+            commit.extra_writer_capabilities.set(OPAQUE_CHUNK_PRESERVATION);
+        const auto files = impl_->editor.dom().get_json("open_files");
+        if (custom_reveal || (files && std::ranges::any_of(*files, [](const auto& f) { return f.contains("kind") && f["kind"] == "shader"; })))
+            commit.extra_writer_capabilities.set(RETAINED_JSON_FIELDS);
         if (auto scene_nodes = impl_->scene_graph.nodes(); scene_nodes && std::ranges::any_of(*scene_nodes, [](const auto& node) {
                                                                return node.payload && node.payload->fourcc == "DSRC";
                                                            })) {
@@ -4178,6 +4214,7 @@ namespace lfs::io::project {
             has_unknown_json_root(FOURCC_PRMS, impl_->parameters.dom()) ||
             has_unknown_json_root(FOURCC_GUIL, impl_->gui_layout.dom()) ||
             has_unknown_json_root(FOURCC_VIEW, impl_->view.dom()) ||
+            has_unknown_json_root(FOURCC_SHDR, impl_->shaders.dom()) ||
             has_unknown_json_root(FOURCC_EDTR, impl_->editor.dom()) ||
             has_unknown_json_root(FOURCC_SEQR, impl_->sequencer.dom());
         if (retains_unknown_json) {
@@ -4253,6 +4290,7 @@ namespace lfs::io::project {
         const ChunkKey parameters_key = impl_->key(FOURCC_PRMS);
         const ChunkKey gui_layout_key = impl_->key(FOURCC_GUIL);
         const ChunkKey view_key = impl_->key(FOURCC_VIEW);
+        const ChunkKey shader_key = impl_->key(FOURCC_SHDR);
         const ChunkKey editor_key = impl_->key(FOURCC_EDTR);
         const ChunkKey sequencer_key = impl_->key(FOURCC_SEQR);
         const ChunkKey metrics_key = impl_->key(FOURCC_METR);
@@ -4285,6 +4323,8 @@ namespace lfs::io::project {
             add_encoded(view_key, impl_->view.to_bytes(),
                         json_options());
         }
+        if (has_shaders && impl_->dirty_or_new(shader_key))
+            add_encoded(shader_key, impl_->shaders.to_bytes(), json_options());
         if (impl_->dirty_or_new(editor_key)) {
             add_encoded(editor_key, impl_->editor.to_bytes(),
                         json_options());
@@ -4416,6 +4456,8 @@ namespace lfs::io::project {
             sequencer_key,
             metrics_key,
         };
+        if (has_shaders)
+            desired.insert(shader_key);
         if (options.omit_metrics)
             desired.erase(metrics_key);
         for (const auto& [uuid, ignored] : impl_->splats) {
@@ -4743,8 +4785,14 @@ namespace lfs::io::project {
             const auto& source_commit = impl_->source_reader->commit();
             commit.min_reader_version = std::max(commit.min_reader_version, source_commit.min_reader_version);
             commit.min_safe_writer_version = std::max(commit.min_safe_writer_version, source_commit.min_safe_writer_version);
-            commit.extra_reader_capabilities |= source_commit.required_reader_capabilities;
-            commit.extra_writer_capabilities |= source_commit.required_writer_capabilities;
+            auto inherited_reader = source_commit.required_reader_capabilities;
+            auto inherited_writer = source_commit.required_writer_capabilities;
+            if (commit.recompute_shader_capabilities) {
+                inherited_reader.set(USER_SHADERS_V1, false);
+                inherited_writer.set(USER_SHADERS_V1, false);
+            }
+            commit.extra_reader_capabilities |= inherited_reader;
+            commit.extra_writer_capabilities |= inherited_writer;
         }
         if (auto result = writer->plan_commit(commit); !result) {
             return std::move(result).error();
@@ -5243,7 +5291,7 @@ namespace lfs::io::project {
                 lfs::ErrorCode::Unsupported,
                 "This project cannot be saved under another name by the current writer.",
                 impl_->missing_opaque_preservation_capability
-                    ? "opaque rows lack required writer capability bit 5"
+                    ? "opaque rows lack safe preservation support"
                     : "retained JSON fields lack required writer capability bit 6",
                 "commit.required_writer_capabilities");
         }
@@ -6223,6 +6271,7 @@ namespace lfs::io::project {
                 .view = impl_->view,
                 .sequencer = impl_->sequencer,
                 .metrics = impl_->metrics,
+                .shaders = impl_->shaders,
             };
 
             auto published_refs = references().records();

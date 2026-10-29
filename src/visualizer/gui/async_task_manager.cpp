@@ -571,7 +571,8 @@ namespace lfs::vis::gui {
         if (reveal_clip && scene.bounded)
             state.reveal = makeRevealRenderState(scene.bounds_min, scene.bounds_max, *reveal_clip, time);
         if (shader_snapshot)
-            state.custom_effect = shaders::makeCustomEffectState(*shader_snapshot, scene, time);
+            state.custom_effect = shaders::makeCustomEffectState(*shader_snapshot, scene, time,
+                                                                 makeCustomRevealContext(reveal_clip, time));
         return state;
     }
 
@@ -2192,6 +2193,7 @@ namespace lfs::vis::gui {
         GalleryScenePublishRequest publication;
         publication.path = path;
         publication.format = format;
+        publication.shaders_omitted = viewer_->getShaderService() && !viewer_->getShaderService()->assets().empty();
         try {
             if (lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
@@ -2324,6 +2326,10 @@ namespace lfs::vis::gui {
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {
                     jobs_.report(job, 1.0F, "Scene ready for upload");
+                    if (!source && publication.shaders_omitted && viewer_ && viewer_->getGuiManager())
+                        viewer_->getGuiManager()->enqueueToast({.title = LOC("editor.shader"),
+                                                                .message = LOC("shader.publication_omitted"),
+                                                                .level = ErrorNoticeLevel::Warning});
                 }
                 jobs_.finishWork(job, cancelled, error);
                 publishExportState();

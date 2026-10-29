@@ -669,6 +669,8 @@ namespace {
         const auto& action = pending.action;
         if (action == "shader-global") {
             editor->setShaderTarget({});
+        } else if (action == "shader-reveal") {
+            report(editor->setDocumentTarget(editor->document().id, {shaders::ShaderSlot::Kind::Reveal, {}}, *service));
         } else if (action == "shader-node") {
             auto* viewer = dynamic_cast<VisualizerImpl*>(lfs::python::get_visualizer());
             auto* scene_manager = viewer ? viewer->getSceneManager() : nullptr;
@@ -780,7 +782,9 @@ namespace {
         }
         if (!shader)
             return;
-        std::string target = LOC("shader.global");
+        std::string target = doc.target.kind == shaders::ShaderSlot::Kind::Reveal
+                                 ? LOC("sequencer.reveal_effect_custom")
+                                 : LOC("shader.global");
         if (doc.target.kind == shaders::ShaderSlot::Kind::Node) {
             target = doc.target.node.to_string();
             if (auto* viewer = dynamic_cast<VisualizerImpl*>(lfs::python::get_visualizer()); viewer && viewer->getSceneManager())

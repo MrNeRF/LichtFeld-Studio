@@ -22,6 +22,7 @@
 #include "training/checkpoint.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
+#include "user_shader_sources.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 
 #include <gtest/gtest.h>
@@ -140,6 +141,143 @@ namespace {
             }
         }
         lfs::core::save_image_u8(path, image);
+    }
+
+    TEST(ProjectDocumentTest, ShaderCapabilitiesFollowEffectiveChaptersAcrossSaveAndCopy) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "shaders.licht";
+        auto document = make_empty_document(fixed_uuid(19100), 100);
+        ASSERT_TRUE(document->save(path, save_options(19101, 200)));
+        auto reader = require_result(ProjectReader::open(path));
+        ASSERT_EQ(reader.commit().generation, 1);
+        EXPECT_FALSE(reader.find(FOURCC_SHDR, document->project_uuid()));
+        EXPECT_FALSE(reader.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        const auto id = fixed_uuid(19102).to_string();
+        ASSERT_TRUE(document->edit_shaders().dom().set_json("assets", lfs::io::JsonChapterDom::Json::array({{{"uuid", id}, {"name", "Generated"}, {"language", "slang"}, {"source", lfs::test::kIdentity}, {"parameters", {{"gain", 2}}}, {"extension", {{"retained", true}}}}})));
+        ASSERT_TRUE(document->save(path, save_options(19103, 300)));
+        reader = require_result(ProjectReader::open(path));
+        EXPECT_TRUE(reader.find(FOURCC_SHDR, document->project_uuid()));
+        EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        EXPECT_TRUE(reader.commit().required_writer_capabilities.contains(OPAQUE_CHUNK_PRESERVATION));
+        EXPECT_FALSE(reader.commit().required_reader_capabilities.contains(USER_SHADERS_V1));
+        ProjectDocumentOpenOptions old;
+        old.reader.reader_capabilities.set(USER_SHADERS_V1, false);
+        old.reader.writer_capabilities.set(USER_SHADERS_V1, false);
+        auto legacy = ProjectDocument::open(path, old);
+        ASSERT_TRUE(legacy);
+        EXPECT_FALSE(legacy->source_reader()->write_compatibility().safe);
+        const auto before = read_file_bytes(path);
+        EXPECT_FALSE(legacy->save(path));
+        EXPECT_EQ(read_file_bytes(path), before);
+        ASSERT_TRUE(document->edit_sequencer().dom().set_json("timeline.reveal_clip",
+                                                              {{"effect", 12}, {"shader_id", id}, {"start", 0}, {"end", 1}, {"softness", 0.1}}));
+        ASSERT_TRUE(document->save(path, save_options(19104, 400)));
+        auto unsupported = ProjectReader::open(path, old.reader);
+        ASSERT_FALSE(unsupported);
+        // A newer unsupported head beside a supported head must not roll back.
+        EXPECT_EQ(unsupported.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_NE(lfs::format_for_developer(unsupported.error()).find("heads.newer_unsupported_head"), std::string::npos);
+        const auto copy = temporary.path / "copy.licht";
+        ASSERT_TRUE(document->save_as(copy, save_options(19105, 500)));
+        auto unsupported_copy = ProjectReader::open(copy, old.reader);
+        ASSERT_FALSE(unsupported_copy);
+        EXPECT_EQ(unsupported_copy.error().code(), lfs::ErrorCode::Unsupported);
+        auto reopened = require_result(ProjectDocument::open(copy));
+        EXPECT_EQ(reopened.shaders().to_bytes(), document->shaders().to_bytes());
+        auto copy_reader = require_result(ProjectReader::open(copy));
+        const auto shader_offset = copy_reader.find(FOURCC_SHDR, reopened.project_uuid())->payload_offset;
+        ASSERT_TRUE(reopened.save(copy, save_options(19107, 510)));
+        EXPECT_EQ(require_result(ProjectReader::open(copy)).find(FOURCC_SHDR, reopened.project_uuid())->payload_offset, shader_offset);
+        const auto restored_copy = temporary.path / "restored-copy.licht";
+        const auto selected = require_result(restore_save(path, 2, restored_copy));
+        auto restored = require_result(ProjectDocument::open(restored_copy));
+        EXPECT_NE(restored.project_uuid(), document->project_uuid());
+        EXPECT_EQ(restored.shaders().to_bytes(), document->shaders().to_bytes());
+        EXPECT_TRUE(restored.source_reader()->find(FOURCC_SHDR, selected.project_uuid));
+        ASSERT_TRUE(ProjectWriter::compact(restored_copy, CompactionOptions{.disk_reserve_bytes = 0}));
+        EXPECT_EQ(require_result(ProjectDocument::open(restored_copy)).shaders().to_bytes(), document->shaders().to_bytes());
+        static_cast<void>(require_result(restore_save(path, 1, path)));
+        auto restored_empty = require_result(ProjectReader::open(path, old.reader));
+        EXPECT_TRUE(restored_empty.write_compatibility().safe);
+        const auto* restored_deleted = restored_empty.find(FOURCC_SHDR, document->project_uuid());
+        ASSERT_NE(restored_deleted, nullptr);
+        EXPECT_EQ(restored_deleted->row_kind, RowKind::Tombstone);
+        EXPECT_FALSE(restored_empty.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        EXPECT_FALSE(restored_empty.commit().required_reader_capabilities.contains(USER_SHADERS_V1));
+        auto restored_legacy = require_result(ProjectDocument::open(path, old));
+        ASSERT_TRUE(restored_legacy.save(path));
+        ASSERT_TRUE(ProjectWriter::compact(path, CompactionOptions{.disk_reserve_bytes = 0}));
+        restored_empty = require_result(ProjectReader::open(path, old.reader));
+        EXPECT_FALSE(restored_empty.find(FOURCC_SHDR, document->project_uuid()));
+        ASSERT_TRUE(reopened.edit_sequencer().dom().remove("timeline.reveal_clip"));
+        reopened.edit_shaders() = ShaderLibraryChapter{};
+        ASSERT_TRUE(reopened.save(copy, save_options(19106, 600)));
+        auto downgraded = ProjectReader::open(copy, old.reader);
+        ASSERT_TRUE(downgraded) << lfs::format_for_developer(downgraded.error());
+        EXPECT_TRUE(downgraded->write_compatibility().safe);
+        const auto* deleted = downgraded->find(FOURCC_SHDR, reopened.project_uuid());
+        ASSERT_NE(deleted, nullptr);
+        EXPECT_EQ(deleted->row_kind, RowKind::Tombstone);
+        EXPECT_FALSE(downgraded->commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        EXPECT_FALSE(downgraded->commit().required_reader_capabilities.contains(USER_SHADERS_V1));
+        auto downgraded_legacy = require_result(ProjectDocument::open(copy, old));
+        ASSERT_TRUE(downgraded_legacy.save(copy));
+        ASSERT_TRUE(ProjectWriter::compact(copy, CompactionOptions{.disk_reserve_bytes = 0}));
+        EXPECT_FALSE(require_result(ProjectReader::open(copy, old.reader)).find(FOURCC_SHDR, reopened.project_uuid()));
+    }
+
+    TEST(ProjectDocumentTest, ShaderCapabilitiesAreRecomputedWhenSaveRewritesContainer) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "rewrite.licht";
+        auto document = make_empty_document(fixed_uuid(19120), 100);
+        const auto id = fixed_uuid(19121).to_string();
+        ASSERT_TRUE(document->edit_shaders().dom().set_json("assets", lfs::io::JsonChapterDom::Json::array({{{"uuid", id}, {"name", "Generated"}, {"language", "slang"}, {"source", lfs::test::kIdentity}, {"parameters", lfs::io::JsonChapterDom::Json::object()}}})));
+        ASSERT_TRUE(document->edit_sequencer().dom().set_json("timeline.reveal_clip",
+                                                              {{"effect", 12}, {"shader_id", id}, {"start", 0}, {"end", 1}, {"softness", 0.1}}));
+        ASSERT_TRUE(document->save(path, save_options(19122, 200)));
+        const auto shaded = require_result(ProjectReader::open(path));
+        ASSERT_TRUE(shaded.commit().required_reader_capabilities.contains(USER_SHADERS_V1));
+        ASSERT_TRUE(shaded.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        ASSERT_TRUE(document->edit_sequencer().dom().remove("timeline.reveal_clip"));
+        document->edit_shaders() = ShaderLibraryChapter{};
+        // A missing destination is recreated from the source reader.
+        ASSERT_TRUE(lfs::core::native_fs::remove(path));
+        EXPECT_TRUE(require_result(document->save(path, save_options(19123, 300))).rewrote_container);
+        ReaderOptions old;
+        old.reader_capabilities.set(USER_SHADERS_V1, false);
+        old.writer_capabilities.set(USER_SHADERS_V1, false);
+        const auto rewritten = require_result(ProjectReader::open(path, old));
+        EXPECT_TRUE(rewritten.write_compatibility().safe);
+        EXPECT_FALSE(rewritten.commit().required_reader_capabilities.contains(USER_SHADERS_V1));
+        EXPECT_FALSE(rewritten.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+    }
+
+    TEST(ProjectDocumentTest, ShaderAutosaveCarriesOverridesAndDraftOnlyNeedsRetainedFields) {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "draft.licht";
+        auto document = make_empty_document(fixed_uuid(19110), 100);
+        ASSERT_TRUE(document->edit_editor().dom().set_json("open_files", lfs::io::JsonChapterDom::Json::array({{{"locator", "untitled://shader"}, {"kind", "shader"}, {"target", {{"kind", "global"}}}, {"modified", true}, {"embedded_buffer", "draft"}, {"share_warning", true}}})));
+        ASSERT_TRUE(document->edit_editor().dom().set("contains_embedded_secrets", true));
+        ASSERT_TRUE(document->save(path, save_options(19111, 200)));
+        auto base = require_result(ProjectReader::open(path));
+        EXPECT_TRUE(base.commit().required_writer_capabilities.contains(RETAINED_JSON_FIELDS));
+        EXPECT_FALSE(base.commit().required_writer_capabilities.contains(USER_SHADERS_V1));
+        ASSERT_TRUE(document->edit_shaders().dom().set_json("assets", lfs::io::JsonChapterDom::Json::array({{{"uuid", fixed_uuid(19112).to_string()}, {"name", "Generated"}, {"language", "future"}, {"source", "not compiled"}, {"parameters", {{"pending", lfs::io::JsonChapterDom::Json::array({1, 2, 3})}}}}})));
+        const auto sidecar = autosave_sidecar_path(path);
+        ASSERT_TRUE(document->save_autosave(sidecar, ProjectDocumentAutosaveOptions{
+                                                         .file_uuid = fixed_uuid(19113),
+                                                         .base_explicit_commit_uuid = base.commit().commit_uuid,
+                                                         .autosave_sequence = 1,
+                                                         .snapshot_uuid = {},
+                                                         .index_compression = IndexCompression::StoredForDeterministicTests,
+                                                         .disk_reserve_bytes = 0}));
+        auto overlay = require_result(ProjectReader::open(sidecar));
+        const auto* row = overlay.find(FOURCC_SHDR, document->project_uuid());
+        ASSERT_NE(row, nullptr);
+        auto chapter = require_result(ShaderLibraryChapter::from_bytes(require_result(overlay.read_chunk(*row))));
+        EXPECT_EQ(chapter.to_bytes(), document->shaders().to_bytes());
+        EXPECT_TRUE(document->dirty());
+        EXPECT_FALSE(base.find(FOURCC_SHDR, document->project_uuid()));
     }
 
     TEST(ProjectDocumentTest, SaveAsAcceptsLongDestinationFilename) {

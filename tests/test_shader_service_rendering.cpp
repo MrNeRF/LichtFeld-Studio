@@ -8,6 +8,36 @@
 #include "user_shader_test_support.hpp"
 
 namespace lfs::test::service_rendering {
+    TEST_F(ShaderServiceRenderingTest, CustomRevealResolvesIdentityAndGatesAtClipEnd) {
+        const auto normal = drawn();
+        const auto normal_preview = capture();
+        const auto asset = bound(kReveal, {.kind = Kind::Reveal});
+        const lfs::sequencer::RevealClip clip{1, 3, .25f, lfs::sequencer::RevealEffect::Custom, asset};
+        EXPECT_FALSE(lfs::vis::makeRevealRenderState(scene(), clip, 2));
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 0));
+        ASSERT_TRUE(drawing(asset));
+        const auto before = drawn();
+        EXPECT_GT(maxDifference(before, normal), .1f);
+        EXPECT_GT(maxDifference(capture(), normal_preview), .1f);
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 1));
+        EXPECT_LT(maxDifference(drawn(), before), kOneStep);
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 2));
+        const auto middle = drawn();
+        EXPECT_GT(maxDifference(middle, before), .05f);
+        EXPECT_GT(maxDifference(middle, normal), .05f);
+        const auto count = links(asset);
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 3));
+        EXPECT_LT(maxDifference(drawn(), normal), kOneStep);
+        EXPECT_LT(maxDifference(capture(), normal_preview), kOneStep);
+        EXPECT_EQ(service().boundAsset({.kind = Kind::Reveal}), asset);
+        EXPECT_FALSE(commands().removeAsset(asset));
+        auto wrong = clip;
+        wrong.shader_id = lfs::core::generate_uuid_v4();
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(wrong, 2));
+        EXPECT_LT(maxDifference(drawn(), normal), kOneStep);
+        EXPECT_EQ(links(asset), count);
+    }
+
     TEST_F(ShaderServiceRenderingTest, NothingBoundDrawsLikeNoServiceAndStartsNothing) {
         const auto counted = [&] {
             Access::binds = Access::dispatches = 0;
@@ -46,7 +76,7 @@ namespace lfs::test::service_rendering {
         EXPECT_FALSE(manager_->pollDirtyState());
     }
 
-    TEST_F(ShaderServiceRenderingTest, GlobalAndNodeBindingsChainInOrder) {
+    TEST_F(ShaderServiceRenderingTest, GlobalNodeAndRevealBindingsChainInOrder) {
         const auto masks = nodeMasks();
         const auto legacy = drawn();
         for (const auto& mask : masks)
@@ -82,6 +112,25 @@ namespace lfs::test::service_rendering {
         const auto chained = drawn();
         EXPECT_NEAR(excess(chained, &masks[0]), excess(global, &masks[0]), 0.01f);
         EXPECT_GT(excess(chained, &masks[1]), excess(global, &masks[1]) + 0.1f);
+
+        // The reveal binding runs only while a reveal is set.
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Global}));
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes_[1]}));
+        ASSERT_TRUE(commands().bind({.kind = Kind::Reveal}, asset));
+        frame();
+        EXPECT_LT(maxDifference(drawn(), legacy), kOneStep);
+        lfs::sequencer::RevealClip clip;
+        clip.end = 10.0f;
+        clip.effect = lfs::sequencer::RevealEffect::Custom;
+        clip.shader_id = asset;
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 9.9f));
+        const auto revealed = drawn();
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Reveal}));
+        ASSERT_TRUE(commands().bind({.kind = Kind::Global}, asset));
+        frame();
+        EXPECT_LT(maxDifference(drawn(), revealed), kOneStep);
+        for (const auto& mask : masks)
+            EXPECT_GT(excess(revealed, &mask), 0.2f);
         EXPECT_EQ(linkers_.load(), 1);
         EXPECT_EQ(links(asset), 1u);
     }
@@ -106,6 +155,26 @@ namespace lfs::test::service_rendering {
         const float none = 0.0f;
         set(green, "green", std::span(&none, 1));
         EXPECT_GT(excess(drawn(), &masks[1]), 0.4f);
+
+        // The reveal slot with another asset than the global one.
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes_[1]}));
+        ASSERT_TRUE(commands().bind({.kind = Kind::Reveal}, green));
+        set(green, "green", std::span(&lift, 1));
+        frame();
+        for (const auto& mask : masks)
+            EXPECT_GT(excess(drawn(), &mask), 0.4f);
+        lfs::sequencer::RevealClip clip;
+        clip.end = 10.0f;
+        clip.effect = lfs::sequencer::RevealEffect::Custom;
+        clip.shader_id = green;
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 9.9f));
+        const auto revealed = drawn();
+        for (const auto& mask : masks) {
+            EXPECT_LT(std::abs(excess(revealed, &mask)), 0.1f);
+            EXPECT_GT(excess(revealed, &mask, 2), 0.4f);
+        }
+        // The same assets in other slots compose as before: nothing linked again.
+        EXPECT_EQ(links(red), links(green));
     }
 
     TEST_F(ShaderServiceRenderingTest, AnotherAssetDrawsOnceTheShownOneIsUnbound) {
@@ -114,7 +183,25 @@ namespace lfs::test::service_rendering {
         ASSERT_TRUE(drawing(shown));
         ASSERT_TRUE(commands().unbind({.kind = Kind::Global}));
         redraw();
+        // Bound to the reveal slot before a reveal plays: frames show some
+        // programs meanwhile, never the unbound asset's in its place.
+        const auto green = bound(kGreen, {.kind = Kind::Reveal});
+        ASSERT_TRUE(settle([&] { return shownHosts() > 0; }));
+        lfs::sequencer::RevealClip clip;
+        clip.end = 10.0f;
+        clip.effect = lfs::sequencer::RevealEffect::Custom;
+        clip.shader_id = green;
+        manager_->setSequencerReveal(std::nullopt, lfs::vis::makeCustomRevealContext(clip, 9.9f));
+        ASSERT_TRUE(drawing(green));
+        const float lift = 0.6f;
+        set(green, "green", std::span(&lift, 1));
+        EXPECT_LT(excess(drawn(), nullptr, 1), -0.4f);
+        EXPECT_EQ(service().status(shown)->displayed_revision, 0u);
+
         // Bound to a node shown only once programs are.
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Reveal}));
+        manager_->setSequencerReveal(std::nullopt);
+        redraw();
         scene().setNodeVisibility(id(nodes_[0]), false);
         const auto red = bound(kShift, {.kind = Kind::Node, .node = nodes_[0]});
         ASSERT_TRUE(settle([&] { return shownHosts() > 0; }));
@@ -450,7 +537,14 @@ namespace lfs::test::service_rendering {
         EXPECT_EQ(manager_->displayedSplatMotion(), Motion::None);
         select(false);
 
-        // A binding that reaches no draw blocks nothing: a hidden node's slot.
+        // Bindings that reach no draw block nothing: the reveal slot without
+        // a reveal, and a hidden node's slot.
+        bound(kShift, {.kind = Kind::Reveal});
+        redraw();
+        redraw();
+        EXPECT_EQ(manager_->displayedSplatMotion(), Motion::None);
+        select(false);
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Reveal}));
         scene().setNodeVisibility(id(nodes_[0]), false);
         bound(kShift, {.kind = Kind::Node, .node = nodes_[0]});
         redraw();
@@ -480,8 +574,9 @@ namespace lfs::test::service_rendering {
 
     TEST_F(ShaderServiceRenderingTest, ExportFramesKeepTheSceneOfTheirStart) {
         const auto asset = bound(kObjectBounds);
+        const auto reveal = bound(kReveal, {.kind = Kind::Reveal});
         ASSERT_TRUE(applied(asset));
-        const lfs::sequencer::RevealClip clip{0, 2, .1f};
+        lfs::sequencer::RevealClip clip{0, 2, .1f, lfs::sequencer::RevealEffect::Custom, reveal};
         std::vector<std::vector<float>> reference;
         {
             const auto pin = manager_->prepareShaderExport(kFrame);
@@ -490,6 +585,8 @@ namespace lfs::test::service_rendering {
             reference = std::move(*frames);
         }
         EXPECT_GT(maxDifference(reference[1], reference[2]), 0.1f);
+        // The reveal binding runs: the effect alone keeps green above red.
+        EXPECT_GT(excess(reference[2]), 0.05f);
         // A node hidden, then another removed, mid-export: the frames keep
         // the objects, bounds and reveal of the start.
         {
@@ -497,6 +594,7 @@ namespace lfs::test::service_rendering {
             auto frames = ExportRun(*this, pin, clip).run([&](const int index) {
                 if (index == 0) {
                     scene().setNodeVisibility(id(nodes_[0]), false);
+                    EXPECT_TRUE(commands().unbind({.kind = Kind::Reveal}));
                     manager_->setSequencerReveal(std::nullopt);
                 }
                 if (index == 1)

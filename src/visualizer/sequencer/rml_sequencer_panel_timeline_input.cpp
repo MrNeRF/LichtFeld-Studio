@@ -6,6 +6,7 @@
 // trigger fatal error C1001 (msc1.cpp line 1599). Replaced with member assignment.
 
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "gui/film_strip_renderer.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -503,7 +504,8 @@ namespace lfs::vis {
                     else
                         edited.end = std::min(sequencer::MAX_SEQUENCER_TIME_SECONDS, std::max(time, edited.start + 0.01f));
                     if (edited.end > edited.start)
-                        controller_.setRevealClip(edited);
+                        if (auto changed = controller_.setRevealClip(edited); !changed)
+                            LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
                     selectReveal(true);
                 } else {
                     controller_.endRevealEdit();

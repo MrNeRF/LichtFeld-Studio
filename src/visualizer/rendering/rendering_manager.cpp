@@ -355,7 +355,7 @@ namespace lfs::vis {
     RenderingManager::ExportLease RenderingManager::prepareShaderExport(const ExportFrame frame, const core::SplatData* model, const RenderSettings* settings, const bool dynamic) {
         if (!shader_service_ || !shader_service_->hasBindings() || (settings && (settings->point_cloud_mode || ((!model || model->size() == 0) && !dynamic))))
             return {};
-        if (!model && !settings && !shader_service_->hasApplicableBindings())
+        if (!model && !settings && !shader_service_->hasApplicableBindings(sequencer_custom_reveal_))
             return {};
         auto lease = shader_service_->prepareExport({});
         lease.per_frame = dynamic || !model || !settings;
@@ -421,7 +421,7 @@ namespace lfs::vis {
         if (!snapshot || (!export_draw_ && shader_service_ && snapshot->epoch != shader_service_->projectToken()[0]))
             return;
         const auto scene = shaders::captureEffectScene(scene_manager.getScene(), state.model_transforms.size());
-        state.custom_effect = shaders::makeCustomEffectState(*snapshot, scene, time);
+        state.custom_effect = shaders::makeCustomEffectState(*snapshot, scene, time, sequencer_custom_reveal_);
     }
 
     Error RenderingManager::shaderWaitError(const Error& error, const std::stop_token& stop) {
@@ -449,8 +449,9 @@ namespace lfs::vis {
     RenderingManager::SplatMotion RenderingManager::displayedSplatMotion() const {
         if (display_record_ && display_record_->custom)
             return SplatMotion::CustomEffect;
-        if (sequencer_reveal_ &&
-            lfs::sequencer::revealMovesSplats(static_cast<lfs::sequencer::RevealEffect>(sequencer_reveal_->effect)))
+        if (sequencer_custom_reveal_ ||
+            (sequencer_reveal_ &&
+             lfs::sequencer::revealMovesSplats(static_cast<lfs::sequencer::RevealEffect>(sequencer_reveal_->effect))))
             return SplatMotion::Reveal;
         return SplatMotion::None;
     }

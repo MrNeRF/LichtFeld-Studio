@@ -3548,6 +3548,10 @@ namespace lfs::vis::editor {
             return Status::failure(documentError("Editor document is closed or unknown."));
         if (auto valid = service.validateTarget(target); !valid)
             return valid;
+        if (target.kind == shaders::ShaderSlot::Kind::Reveal) {
+            if (auto valid = service.validateRevealTarget(); !valid)
+                return valid;
+        }
         if (impl_->documents.at(buffer).info.kind != DocumentKind::Shader)
             return Status::failure(documentError("A shader target requires a shader document."));
         impl_->documents.at(buffer).info.target = target;

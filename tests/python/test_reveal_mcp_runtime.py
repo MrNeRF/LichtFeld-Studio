@@ -4,6 +4,10 @@
 import base64
 import io
 import os
+import json
+import shutil
+import subprocess
+from uuid import uuid4
 import time
 
 from runtime_test_app import isolated_app
@@ -129,3 +133,128 @@ lf.ui.export_video(320, 180, 8, 27, {str(movie)!r}, include_provenance=False)
             assert job["outcome"] == "completed", job
             assert movie.stat().st_size > 0
             assert len(callback_log.read_text().splitlines()) > 1
+
+
+def test_custom_reveal_identity_ownership_and_pinned_export(tmp_path):
+    if not os.environ.get("LFS_EXECUTABLE") or not shutil.which("ffmpeg"):
+        pytest.skip("requires LFS_EXECUTABLE, Xvfb and ffmpeg")
+    from test_shader_editor_runtime import _fixture
+    from test_render_on_demand_idle import _tool
+    fixture = tmp_path / "generated-reveal.ply"
+    _fixture(fixture)
+    with isolated_app(tmp_path) as endpoint:
+        def tool(name, args=None):
+            return _tool(endpoint, name, args)
+
+        def python(code):
+            result = tool("editor_run", {"code": code, "show_console": False, "timeout_ms": 30000})
+            assert result["completed"] and result["success"] and "Traceback" not in result["output"]["text"], result
+            return result
+
+        def rejected(name, args):
+            result = _call(endpoint, "tools/call", {"name": name, "arguments": args})
+            assert result.get("isError"), result
+
+        def capture(time):
+            tool("sequencer_scrub", {"time": time})
+            data = tool("render_capture", {"width": 320})["data"]
+            return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+
+        tool("scene_load_ply", {"path": str(fixture)})
+        tool("camera_reset")
+        source = ("import lfs;\nLfsElement effect(LfsElement e, LfsContext c) {"
+                  " e.color = lerp(float3(1, 0, 0), e.color, c.progress); return e; }\n")
+        asset = tool("shader_set_source", {"source": source, "name": "Custom reveal"})["shader_id"]
+        clip = {"start": .25, "end": 1.0, "softness": .25, "effect": 12, "shader_id": asset}
+        rejected("shader_bind", {"shader_id": asset, "target": {"kind": "reveal"}})
+        tool("sequencer_reveal_set", clip)
+        assert tool("sequencer_reveal_get")["reveal"] == clip
+        for invalid in ({**clip, "shader_id": str(uuid4())}, {**clip, "effect": 2},
+                        {k: v for k, v in clip.items() if k != "shader_id"}):
+            rejected("sequencer_reveal_set", invalid)
+            assert tool("sequencer_reveal_get")["reveal"] == clip
+        rejected("shader_remove", {"shader_id": asset})
+        python(f"""
+import lichtfeld as lf
+assert lf.ui.get_reveal_clip() == {clip!r}
+assert not lf.ui.set_reveal_clip({{**{clip!r}, 'effect': 2}})
+assert lf.ui.get_reveal_clip() == {clip!r}
+assert lf.shaders.wait({asset!r}, timeout_ms=30000)['outcome'] == 'applied'
+print('CUSTOM_REVEAL_READY')
+""")
+        normal = capture(1.0)
+        before = capture(0.0)
+        start = capture(.25)
+        middle = capture(.625)
+        assert ImageChops.difference(before, start).getbbox() is None
+        assert ImageChops.difference(before, normal).getbbox()
+        assert ImageChops.difference(middle, before).getbbox()
+        assert ImageChops.difference(middle, normal).getbbox()
+        assert tool("shader_get", {"shader_id": asset})["bindings"] == [{"kind": "reveal"}]
+        rejected("shader_remove", {"shader_id": asset})  # retained after the endpoint
+        tool("shader_unbind", {"target": {"kind": "reveal"}, "shader_id": asset})
+        assert tool("sequencer_reveal_get")["reveal"] is None
+        assert ImageChops.difference(capture(1.0), normal).getbbox() is None
+        tool("history_undo")
+        assert tool("sequencer_reveal_get")["reveal"] == clip
+        tool("history_redo")
+        assert tool("sequencer_reveal_get")["reveal"] is None
+        tool("sequencer_reveal_set", {"start": .25, "end": 1.0, "softness": .25, "effect": 2})
+        document = tool("editor_new_document", {"code": source, "mode": "shader"})["document_id"]
+        tool("editor_set_mode", {"shader_id": asset, "mode": "shader"})
+        tool("editor_set_target", {"target": {"kind": "reveal"}})
+        tool("sequencer_scrub", {"time": .625})
+        run = tool("editor_run", {"timeout_ms": 30000})
+        assert run["owns_binding"] and run["outcome"] == "applied", run
+        assert tool("sequencer_reveal_get")["reveal"] == clip
+        tool("sequencer_reveal_set", {**clip, "softness": .3})
+        assert tool("editor_get_code")["owns_binding"]  # timing-only edits preserve Run ownership
+        tool("shader_bind", {"shader_id": asset, "target": {"kind": "reveal"}})
+        assert tool("editor_get_code")["owns_binding"]  # a rebind to the same asset stays the Run's
+        tool("editor_interrupt")
+        assert tool("sequencer_reveal_get")["reveal"] is None
+        tool("history_undo")
+        assert tool("sequencer_reveal_get")["reveal"]["shader_id"] == asset
+        assert not tool("editor_get_code")["owns_binding"]
+        tool("editor_run", {"timeout_ms": 30000})
+        tool("editor_interrupt")
+        assert tool("sequencer_reveal_get")["reveal"] is None
+        tool("history_undo")
+        assert tool("sequencer_reveal_get")["reveal"]["shader_id"] == asset
+        assert not tool("editor_get_code", {"document_id": document})["owns_binding"]
+        tool("editor_new_document")
+        tool("sequencer_reveal_set", clip)
+        timeline_path = tmp_path / "short-reveal.json"
+        tool("sequencer_save_path", {"path": str(timeline_path)})
+        timeline = json.loads(timeline_path.read_text())
+        timeline["clip_duration"] = 1.25
+        timeline_path.write_text(json.dumps(timeline))
+        tool("sequencer_load_path", {"path": str(timeline_path)})
+        assert tool("sequencer_reveal_get")["reveal"] == clip
+
+        def export(path, mutate):
+            python(f"""
+lf.clear_scene_time()
+export_edits = 0
+def edit_live_reveal(t):
+    global export_edits
+    if export_edits == 0:
+        assert lf.ui.set_reveal_clip({{'start': 0.0, 'end': 2.0, 'softness': .8, 'effect': 2}})
+        lf.shaders.set_source('import lfs; LfsElement effect(LfsElement e, LfsContext c) {{ e.color = float3(0,1,0); return e; }}', shader_id={asset!r})
+    export_edits += 1
+if {mutate!r}:
+    lf.on_scene_time(edit_live_reveal)
+lf.ui.export_video(320, 180, 8, 27, {str(path)!r}, include_provenance=False)
+""")
+            job = tool("runtime_job_wait", {"job_id": "export.video", "until": "inactive", "timeout_ms": 60000})
+            assert job["outcome"] == "completed", job
+            assert path.stat().st_size > 0
+            if mutate:
+                python("lf.clear_scene_time(); assert export_edits > 1")
+            return subprocess.check_output([shutil.which("ffmpeg"), "-v", "error", "-i", str(path),
+                                            "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+
+        reference = export(tmp_path / "reference.mp4", False)
+        changed = export(tmp_path / "changed-live.mp4", True)
+        assert changed == reference, "live clip/source edits changed the pinned export"
+        assert tool("sequencer_reveal_get")["reveal"]["effect"] == 2

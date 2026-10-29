@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "由暗到亮",
     "reveal_effect_distortion": "扭曲",
     "reveal_effect_camera_light": "相机光",
+    "reveal_effect_custom": "自定义",
     "reveal_history_stale": "记录此编辑后，揭示效果已发生更改。",
     "add_reveal": "添加揭示效果",
     "change_reveal": "更改揭示效果",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "解除绑定",
   "shader.unbound": "未绑定",
   "shader.untitled": "未命名着色器",
-  "editor.documents": "Python 和着色器文档"
+  "editor.documents": "Python 和着色器文档",
+  "shader.restore_warning": "部分着色器状态无法恢复：\n{}",
+  "shader.publication_omitted": "发布时将省略用户着色器和自定义显现片段。发布的场景使用原始 splat。"
 }

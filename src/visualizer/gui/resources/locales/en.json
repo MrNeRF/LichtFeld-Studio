@@ -2522,6 +2522,7 @@
     "reveal_effect_dark_to_light": "Dark to Light",
     "reveal_effect_distortion": "Distortion",
     "reveal_effect_camera_light": "Camera Light",
+    "reveal_effect_custom": "Custom",
     "reveal_history_stale": "Reveal changed since this edit was recorded.",
     "add_reveal": "Add reveal effect",
     "change_reveal": "Change reveal effect",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Unbind",
   "shader.unbound": "Unbound",
   "shader.untitled": "Untitled shader",
-  "editor.documents": "Python and shader documents"
+  "editor.documents": "Python and shader documents",
+  "shader.restore_warning": "Some shader state could not be restored:\n{}",
+  "shader.publication_omitted": "User shaders and Custom reveal clips are omitted from publication. The published scene uses its original splats."
 }

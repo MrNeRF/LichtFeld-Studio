@@ -4,6 +4,8 @@
 #pragma once
 
 #include "animation_clip.hpp"
+#include "core/error.hpp"
+#include "core/uuid.hpp"
 #include "keyframe.hpp"
 
 #include <memory>
@@ -22,28 +24,36 @@ namespace lfs::sequencer {
 
     // A reveal is evaluated independently of camera keyframes. Its progress is
     // shared by interactive playback and offline rendering.
-    enum class RevealEffect : int { Magic = 1,
-                                    Spread = 2,
-                                    Unroll = 3,
-                                    Twister = 4,
-                                    Rain = 5,
-                                    Unveil = 6,
-                                    LightEdge = 7,
-                                    Rainbow = 8,
-                                    DarkToLight = 9,
-                                    Distortion = 10,
-                                    CameraLight = 11 };
+    enum class RevealEffect : int {
+        Magic = 1,
+        Spread = 2,
+        Unroll = 3,
+        Twister = 4,
+        Rain = 5,
+        Unveil = 6,
+        LightEdge = 7,
+        Rainbow = 8,
+        DarkToLight = 9,
+        Distortion = 10,
+        CameraLight = 11,
+        Custom = 12
+    };
     // Whether the effect moves splats away from their stored positions while it plays.
     [[nodiscard]] constexpr bool revealMovesSplats(const RevealEffect effect) {
-        return effect <= RevealEffect::Rainbow || effect == RevealEffect::Distortion;
+        return effect <= RevealEffect::Rainbow || effect == RevealEffect::Distortion || effect == RevealEffect::Custom;
     }
     struct RevealClip {
         float start = 0.0f;
         float end = 3.0f;
         float softness = 0.1f;
         RevealEffect effect = RevealEffect::Spread;
+        std::optional<core::Uuid> shader_id;
 
         [[nodiscard]] float progress(float time) const;
+        [[nodiscard]] Status validate() const;
+        [[nodiscard]] nlohmann::json toJson() const;
+        [[nodiscard]] static Result<RevealClip> fromJson(const nlohmann::json& value, bool allow_extensions = false);
+        bool operator==(const RevealClip&) const = default;
     };
 
     class Timeline {

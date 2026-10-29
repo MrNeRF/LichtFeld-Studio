@@ -32,6 +32,11 @@ LfsElement effect(LfsElement e, LfsContext ctx, Params p) {
     e.color += p.shift;
     return e;
 })";
+    inline constexpr char kReveal[] = R"(import lfs;
+LfsElement effect(LfsElement e, LfsContext ctx) {
+    e.color = lerp(float3(1.0, 0.0, 0.0), e.color, ctx.progress);
+    return e;
+})";
     inline constexpr char kGreen[] = R"(import lfs;
 struct Params { [LfsParam(0.0, 1.0, 0.0)] float green; };
 LfsElement effect(LfsElement e, LfsContext ctx, Params p) {

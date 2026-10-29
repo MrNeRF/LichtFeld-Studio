@@ -18,8 +18,9 @@ Initialize MCP, discover `tools/list`, then read `lichtfeld://shaders/catalog`,
 ```
 
 Use the returned `shader_id` with `shader_bind` and `{"target":{"kind":"global"}}`.
-For a node, use `{"kind":"node","node_uuid":"<splat node UUID>"}`. Global and node
-effects run in that order.
+For a node, use `{"kind":"node","node_uuid":"<splat node UUID>"}`. For a Custom
+reveal, call `sequencer_reveal_set` with `start`, `end`, `softness`, `effect:12`
+and `shader_id`. Global, node and reveal effects run in that order.
 
 Read `lichtfeld://shaders/assets/<shader_id>` or call `shader_get` to observe source,
 bindings and diagnostics. Shader linking is driven by visible draws, so an asset
@@ -47,8 +48,15 @@ same asset UUID. A later rebind to that same asset is released; a different asse
 a completed response can describe a failed compile. An active Python tab uses
 `editor.python`; use `editor_wait` with document identity for a Shader tab.
 
-## Output
+## Persistence and output
+
+Save the project to retain source, overrides, bindings and drafts. Reopen order
+is scene identities, shader library, sequencer, then editor. Source failure keeps
+the asset and Custom clip; only a missing or structurally rejected asset drops
+its Custom clip, with a warning. Old builds open libraries read-only and reject
+Custom projects through capability checks.
 
 `ctx.time` follows scene time and export frames, not elapsed wall time. Effects
 apply only to splats. Rendered captures/video include effects; geometry exports
-do not bake them.
+do not bake them. Portable/gallery output omits shader state and Custom clips
+with the publication disclosure. Use `.licht` project saving to retain source.

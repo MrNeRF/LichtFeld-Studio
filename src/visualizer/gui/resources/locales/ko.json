@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "어둠에서 밝음",
     "reveal_effect_distortion": "왜곡",
     "reveal_effect_camera_light": "카메라 조명",
+    "reveal_effect_custom": "사용자 지정",
     "reveal_history_stale": "이 편집을 기록한 후 드러내기 효과가 변경되었습니다.",
     "add_reveal": "드러내기 효과 추가",
     "change_reveal": "드러내기 효과 변경",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "연결 해제",
   "shader.unbound": "연결되지 않음",
   "shader.untitled": "제목 없는 셰이더",
-  "editor.documents": "Python 및 셰이더 문서"
+  "editor.documents": "Python 및 셰이더 문서",
+  "shader.restore_warning": "일부 셰이더 상태를 복원하지 못했습니다:\n{}",
+  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다."
 }

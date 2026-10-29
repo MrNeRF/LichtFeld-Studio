@@ -129,7 +129,7 @@ namespace lfs::io::project {
             return fourcc == FOURCC_PROJ || fourcc == FOURCC_PRMS ||
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
-                   fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
+                   fourcc == FOURCC_SHDR || fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
                    fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
         }
 
@@ -1456,13 +1456,18 @@ namespace lfs::io::project {
                 return std::move(appended).error();
             auto writer = std::move(*appended);
             const auto& selected_commit = lineage[generation - 1];
+            auto selected_reader_caps = reader->commit().required_reader_capabilities;
+            auto selected_writer_caps = reader->commit().required_writer_capabilities;
+            selected_reader_caps.set(USER_SHADERS_V1, selected_commit.required_reader_capabilities.contains(USER_SHADERS_V1));
+            selected_writer_caps.set(USER_SHADERS_V1, selected_commit.required_writer_capabilities.contains(USER_SHADERS_V1));
             if (auto planned = writer.plan_commit(CommitOptions{
                     .kind = CommitKind::Explicit,
                     .snapshot_uuid = selected_commit.snapshot_uuid,
                     .min_reader_version = reader->commit().min_reader_version,
                     .min_safe_writer_version = reader->commit().min_safe_writer_version,
-                    .extra_reader_capabilities = reader->commit().required_reader_capabilities,
-                    .extra_writer_capabilities = reader->commit().required_writer_capabilities,
+                    .extra_reader_capabilities = selected_reader_caps,
+                    .extra_writer_capabilities = selected_writer_caps,
+                    .recompute_shader_capabilities = true,
                 });
                 !planned)
                 return std::move(planned).error();

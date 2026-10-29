@@ -1777,7 +1777,7 @@ namespace lfs::vis {
             if (export_draw_)
                 return selectExportPrograms(prepared.hosts.host);
             else {
-                if (shader_service_ && shader_service_->hasBindings() && shader_service_->hasApplicableBindings())
+                if (shader_service_ && shader_service_->hasBindings() && shader_service_->hasApplicableBindings(sequencer_custom_reveal_))
                     shader_service_->demandLive(std::array{std::string(prepared.hosts.host)}, last_complete_);
                 vksplat_viewport_renderer_->usePrograms(live_programs_);
             }

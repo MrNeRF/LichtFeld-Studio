@@ -333,6 +333,7 @@ namespace lfs::vis {
             [this] { wakeMainLoop(); });
         gui::panels::PythonConsoleState::getInstance().setShaderChanges(shader_service_->changes());
         rendering_manager_->setShaderService(shader_service_.get());
+        gui_manager_->sequencer().setShaderService(shader_service_.get());
 
         // Set initial antialiasing
         RenderSettings initial_settings;
@@ -4262,7 +4263,7 @@ namespace lfs::vis {
     void VisualizerImpl::
         tryApplyProjectSessionRestore() {
         auto prepared =
-            gui_session_restore_.takeReady();
+            gui_session_restore_.takeReady(hydration_terminal_restore_ticket_ && gui_session_restore_.isCurrent(*hydration_terminal_restore_ticket_));
         if (!prepared)
             return;
         auto retained = prepared->chapters;
@@ -4337,6 +4338,7 @@ namespace lfs::vis {
         if (ticket == 0)
             return;
         hydration_terminal_restore_ticket_ = ticket;
+        tryApplyProjectSessionRestore();
         tryApplyProjectSessionTools(ticket);
     }
 

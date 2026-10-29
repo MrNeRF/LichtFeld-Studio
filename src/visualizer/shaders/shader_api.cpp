@@ -78,8 +78,10 @@ namespace lfs::vis::shaders {
     } // namespace
 
     json shaderTarget(const ShaderSlot& slot) {
-        const char* kind = "global";
-        if (slot.kind == ShaderSlot::Kind::Node)
+        const char* kind = "reveal";
+        if (slot.kind == ShaderSlot::Kind::Global)
+            kind = "global";
+        else if (slot.kind == ShaderSlot::Kind::Node)
             kind = "node";
         json result{{"kind", kind}};
         if (slot.kind == ShaderSlot::Kind::Node)
@@ -106,8 +108,9 @@ namespace lfs::vis::shaders {
                 return node.error();
             target = {ShaderSlot::Kind::Node, *node};
         } else {
-            if (kind != "global" || t.contains("node_uuid"))
+            if ((kind != "global" && kind != "reveal") || t.contains("node_uuid"))
                 return invalid("Invalid target.");
+            target.kind = kind == "global" ? ShaderSlot::Kind::Global : ShaderSlot::Kind::Reveal;
         }
         return target;
     }
@@ -118,7 +121,7 @@ namespace lfs::vis::shaders {
         const json target{
             {"type", "object"},
             {"properties",
-             {{"kind", {{"type", "string"}, {"enum", {"global", "node"}}}}, {"node_uuid", string}}},
+             {{"kind", {{"type", "string"}, {"enum", {"global", "node", "reveal"}}}}, {"node_uuid", string}}},
             {"required", {"kind"}}};
         return {{"list", "List shader assets and bindings", json::object(), {}, true},
 
@@ -172,8 +175,8 @@ namespace lfs::vis::shaders {
                 {"max_source_bytes", kMaxShaderSourceBytes},
                 {"max_parameters", 16},
                 {"max_bound_assets", kMaxBoundShaders},
-                {"binding_order", {"global", "node"}},
-                {"supported_targets", {"global", "node"}},
+                {"binding_order", {"global", "node", "reveal"}},
+                {"supported_targets", {"global", "node", "reveal"}},
                 {"tools", tools},
                 {"job_id", "shader.compile"},
                 {"resources",

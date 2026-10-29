@@ -58,10 +58,6 @@
 namespace lfs::vis::gui {
 
     namespace {
-        [[nodiscard]] bool sameReveal(const std::optional<sequencer::RevealClip>& a, const std::optional<sequencer::RevealClip>& b) {
-            return (!a && !b) || (a && b && a->start == b->start && a->end == b->end &&
-                                  a->softness == b->softness && a->effect == b->effect);
-        }
 
         class RevealUndoEntry final : public op::UndoEntry {
         public:
@@ -78,10 +74,11 @@ namespace lfs::vis::gui {
             void apply(const std::optional<sequencer::RevealClip>& expected, const std::optional<sequencer::RevealClip>& desired,
                        float expected_duration, float desired_duration) {
                 if (lifetime_.expired() || controller_.timelineGeneration() != generation_ ||
-                    !sameReveal(controller_.timeline().revealClip(), expected))
+                    controller_.timeline().revealClip() != expected)
                     throw op::HistoryStaleEntryError(lfs::event::LocalizationManager::getInstance().get("sequencer.reveal_history_stale"));
                 const bool restore_duration = controller_.clipDuration() == expected_duration;
-                controller_.setRevealClip(desired);
+                if (auto restored = controller_.setRevealClip(desired, true); !restored)
+                    throw op::HistoryStaleEntryError(std::string(restored.error().user_message()));
                 if (restore_duration && desired_duration != expected_duration)
                     controller_.setClipDuration(desired_duration);
             }
@@ -1586,7 +1583,8 @@ namespace lfs::vis::gui {
                 return;
             const auto& clip = controller_.timeline().revealClip();
             rm->setSequencerReveal(clip && sm ? makeRevealRenderState(sm->getScene(), *clip, controller_.playhead())
-                                              : std::nullopt);
+                                              : std::nullopt,
+                                   makeCustomRevealContext(clip, controller_.playhead()));
             rm->setSceneTime(controller_.playhead());
         };
         if (export_ply_frame_) {
@@ -2095,8 +2093,12 @@ namespace lfs::vis::gui {
                 break;
             }
             case Target::REVEAL:
-                for (size_t i = 0; i < reveal_effect_keys.size(); ++i)
+                for (size_t i = 0; i + 1 < reveal_effect_keys.size(); ++i)
                     items.push_back({LOC(reveal_effect_keys[i]), std::format("reveal_{}", i + 1)});
+                items.push_back({LOC("sequencer.reveal_effect_custom"), "", true, true});
+                if (auto* service = controller_.shaderService())
+                    for (const auto& asset : service->assets())
+                        items.push_back({asset.name, "reveal_asset_" + asset.id.to_string(), false, false, true});
                 break;
             default:
                 break;
@@ -2198,20 +2200,28 @@ namespace lfs::vis::gui {
                                case Target::REVEAL: {
                                    if (!action.starts_with("reveal_"))
                                        break;
-                                   const int effect = std::stoi(std::string(action.substr(7)));
-                                   if (effect < 1 || effect > 11)
+                                   const auto asset = action.starts_with("reveal_asset_")
+                                                          ? core::Uuid::from_string(action.substr(13))
+                                                          : std::nullopt;
+                                   const int effect = asset ? 12 : std::stoi(std::string(action.substr(7)));
+                                   if (effect < 1 || effect > 12 || (effect == 12 && !asset))
                                        break;
                                    controller_.beginRevealEdit();
                                    auto clip = controller_.timeline().revealClip();
+                                   const bool shorten =
+                                       !clip && controller_.timeline().realKeyframeCount() == 0 &&
+                                       !controller_.hasPlySequence() &&
+                                       controller_.clipDuration() == sequencer::DEFAULT_CLIP_DURATION_SECONDS;
                                    if (!clip) {
                                        const float start = std::min(controller_.playhead(), sequencer::MAX_SEQUENCER_TIME_SECONDS - 3.0f);
                                        clip = sequencer::RevealClip{start, start + 3.0f, 0.1f};
-                                       if (controller_.timeline().realKeyframeCount() == 0 && !controller_.hasPlySequence() &&
-                                           controller_.clipDuration() == sequencer::DEFAULT_CLIP_DURATION_SECONDS)
-                                           controller_.setClipDuration(start + 3.0f);
                                    }
                                    clip->effect = static_cast<sequencer::RevealEffect>(effect);
-                                   controller_.setRevealClip(clip);
+                                   clip->shader_id = asset;
+                                   if (auto changed = controller_.setRevealClip(clip); !changed)
+                                       LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
+                                   else if (shorten)
+                                       controller_.setClipDuration(clip->end);
                                    controller_.endRevealEdit();
                                    break;
                                }
@@ -3056,7 +3066,8 @@ namespace lfs::vis::gui {
         while (auto action = overlay_->consumeAction()) {
             switch (action->action) {
             case Action::REMOVE_REVEAL:
-                controller_.setRevealClip(std::nullopt);
+                if (auto changed = controller_.setRevealClip(std::nullopt); !changed)
+                    LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
                 break;
             case Action::ADD_KEYFRAME: {
                 const auto& cam = viewer_->getViewport().camera;

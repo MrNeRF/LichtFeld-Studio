@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "Donker naar licht",
     "reveal_effect_distortion": "Vervorming",
     "reveal_effect_camera_light": "Cameralicht",
+    "reveal_effect_custom": "Aangepast",
     "reveal_history_stale": "Het onthullingseffect is gewijzigd sinds deze bewerking is vastgelegd.",
     "add_reveal": "Onthullingseffect toevoegen",
     "change_reveal": "Onthullingseffect wijzigen",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Ontkoppelen",
   "shader.unbound": "Niet gekoppeld",
   "shader.untitled": "Naamloze shader",
-  "editor.documents": "Python- en shaderdocumenten"
+  "editor.documents": "Python- en shaderdocumenten",
+  "shader.restore_warning": "Een deel van de shaderstatus kon niet worden hersteld:\n{}",
+  "shader.publication_omitted": "Gebruikersshaders en aangepaste onthullingsclips worden niet gepubliceerd. De gepubliceerde scène gebruikt de oorspronkelijke splats."
 }

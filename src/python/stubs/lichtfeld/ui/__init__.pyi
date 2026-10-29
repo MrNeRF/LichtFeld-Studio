@@ -2635,10 +2635,14 @@ def get_sequencer_state() -> SequencerUIState:
     """Get sequencer UI state for modification"""
 
 def get_reveal_clip() -> object:
-    """Read the live sequencer reveal clip, or None if absent"""
+    """
+    Read the live sequencer reveal clip, including shader_id for Custom, or None if absent
+    """
 
 def set_reveal_clip(value: dict) -> bool:
-    """Set the live sequencer reveal clip; returns false for invalid input"""
+    """
+    Set the live sequencer reveal clip; Custom (effect 12) requires shader_id; returns false for invalid input
+    """
 
 def remove_reveal_clip() -> bool:
     """Remove the live sequencer reveal clip"""

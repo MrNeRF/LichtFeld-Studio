@@ -315,6 +315,8 @@ namespace lfs::io::project {
         [[nodiscard]] ViewSessionChapter& edit_view() noexcept;
         [[nodiscard]] const EditorSessionChapter& editor() const noexcept;
         [[nodiscard]] EditorSessionChapter& edit_editor() noexcept;
+        [[nodiscard]] const ShaderLibraryChapter& shaders() const noexcept;
+        [[nodiscard]] ShaderLibraryChapter& edit_shaders() noexcept;
         [[nodiscard]] const SequencerSessionChapter& sequencer() const noexcept;
         [[nodiscard]] SequencerSessionChapter& edit_sequencer() noexcept;
         [[nodiscard]] const MetricsChapter& metrics() const noexcept;

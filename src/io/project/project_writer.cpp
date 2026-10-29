@@ -2860,13 +2860,21 @@ namespace lfs::io::project {
         reader_capabilities |= options.extra_reader_capabilities;
         writer_capabilities |= options.extra_writer_capabilities;
         if (impl_->prior_reader.has_value()) {
-            reader_capabilities |=
-                impl_->prior_reader->commit().required_reader_capabilities;
+            auto inherited_reader_capabilities = impl_->prior_reader->commit().required_reader_capabilities;
+            if (options.recompute_shader_capabilities)
+                inherited_reader_capabilities.set(USER_SHADERS_V1, false);
+            reader_capabilities |= inherited_reader_capabilities;
             CapabilitySet inherited_writer_capabilities =
                 impl_->prior_reader->commit().required_writer_capabilities;
+            if (options.recompute_shader_capabilities)
+                inherited_writer_capabilities.set(USER_SHADERS_V1, false);
             inherited_writer_capabilities.set(OPAQUE_CHUNK_PRESERVATION, false);
             inherited_writer_capabilities.set(CLEAN_PROOF_REUSE, false);
             writer_capabilities |= inherited_writer_capabilities;
+        }
+        if (std::ranges::any_of(impl_->rows, [](const auto& item) { return item.first.fourcc == FOURCC_SHDR && item.second.row_kind != RowKind::Tombstone; })) {
+            writer_capabilities.set(USER_SHADERS_V1);
+            writer_capabilities.set(OPAQUE_CHUNK_PRESERVATION);
         }
         if (impl_->index_compression == IndexCompression::Zstd) {
             if (options.min_reader_version > CURRENT_CONTAINER_VERSION ||

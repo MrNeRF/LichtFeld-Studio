@@ -949,3 +949,6 @@ body {
     #btn-export .export-label { display: none; }
     #btn-export .export-icon { margin-right: 0; }
 }
+
+#reveal-shader { width: 130dp; height: 20dp; font-size: 11dp; }
+#reveal-shader.hidden { display: none; }

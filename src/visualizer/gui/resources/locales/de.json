@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "Dunkel zu Hell",
     "reveal_effect_distortion": "Verzerrung",
     "reveal_effect_camera_light": "Kameralicht",
+    "reveal_effect_custom": "Benutzerdefiniert",
     "reveal_history_stale": "Der Enthüllungseffekt wurde seit dieser Änderung verändert.",
     "add_reveal": "Enthüllungseffekt hinzufügen",
     "change_reveal": "Enthüllungseffekt ändern",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Bindung lösen",
   "shader.unbound": "Nicht gebunden",
   "shader.untitled": "Unbenannter Shader",
-  "editor.documents": "Python- und Shader-Dokumente"
+  "editor.documents": "Python- und Shader-Dokumente",
+  "shader.restore_warning": "Einige Shader-Daten konnten nicht wiederhergestellt werden:\n{}",
+  "shader.publication_omitted": "Benutzer-Shader und benutzerdefinierte Einblendungsclips werden nicht veröffentlicht. Die veröffentlichte Szene verwendet die ursprünglichen Splats."
 }

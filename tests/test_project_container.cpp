@@ -295,10 +295,11 @@ namespace {
     TEST(ProjectContainerFormat, SupportedCapabilitiesReserveTilesetsAndIncludeCollision) {
         EXPECT_EQ(TILESET_REFERENCES, 10);
         EXPECT_EQ(COLLISION_VOLUMES_V1, 11);
+        EXPECT_EQ(USER_SHADERS_V1, 12);
         const auto reader = supported_reader_capabilities();
         const auto writer = supported_writer_capabilities();
         for (std::uint8_t bit = 0; bit < 128; ++bit) {
-            const bool supported = bit < 10 || bit == 11;
+            const bool supported = bit < 10 || bit == 11 || bit == 12;
             EXPECT_EQ(reader.contains(bit), supported) << "reader bit " << int(bit);
             EXPECT_EQ(writer.contains(bit), supported) << "writer bit " << int(bit);
         }

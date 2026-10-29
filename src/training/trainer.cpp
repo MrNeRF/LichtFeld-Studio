@@ -5257,6 +5257,7 @@ namespace lfs::training {
                                 document->edit_view() =
                                     document_context
                                         ->view;
+                                document->edit_shaders() = document_context->shaders;
                                 document->edit_editor() =
                                     document_context
                                         ->editor;

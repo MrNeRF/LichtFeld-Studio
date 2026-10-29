@@ -133,3 +133,64 @@ Version major/minor fields and commit minimum-reader fields are the compatibilit
 old 1.0 readers reject a 1.1 multi-checkpoint commit before validation with an unsupported
 version error rather than reporting data loss. The framed payload layout is guarded by
 reader/writer tests; no compatibility promise is made for pre-framed development files.
+
+## User shader state
+
+`SHDR` is an optional singleton JSON chapter keyed by the project UUID. It uses
+the existing JSON chunk encoding and this payload (UUIDs shown are examples):
+
+```json
+{
+  "version": 1, "api_version": 1, "contains_embedded_source": true,
+  "assets": [{
+    "uuid": "11111111-1111-4111-8111-111111111111",
+    "name": "Identity", "language": "slang",
+    "source": "import lfs; LfsElement effect(LfsElement e, LfsContext c) { return e; }",
+    "parameters": {}
+  }],
+  "bindings": [{"target": "global", "shader_uuid": "11111111-1111-4111-8111-111111111111"}]
+}
+```
+
+Node bindings additionally use `target:"node"` and `node_uuid`. There is no
+SHDR reveal binding: `SEQR.timeline.reveal_clip` owns `effect:12` and `shader_id`.
+All referenced assets belong to SHDR. Empty libraries/bindings omit the chapter;
+removing the last entry tombstones it. Programs, diagnostics and process revisions
+are never persisted. Unknown root/asset/binding fields are retained by identity;
+explicit deletion removes the matching entry.
+
+Limits are 256 assets, 1 MiB UTF-8 source per asset, 16 MiB aggregate source,
+32 MiB logical chapter, 65,536 bindings, 256-byte names and parameter names,
+64-byte language tags, and 256 named overrides per asset. Overrides are finite
+float32-representable scalars or vectors of 2–4 components. Duplicate identities
+or slots reject every ambiguous entry. Bad parameters are skipped individually;
+invalid assets/bindings are skipped with warnings. Scene-aware restore checks splat
+node identities and the eight-distinct-bound-assets limit before applying bindings.
+Pending overrides retain their representation when saving before reflection.
+
+Unknown languages and invalid source remain available for editing; compilation
+failure never removes a clip. A missing/rejected Custom asset removes only its
+clip before timeline restore. Malformed JSON, oversized chapters and future
+payload/API versions fail opening under the existing JSON-session policy. An
+unsupported SHDR chunk encoding follows the existing document read-only guard
+so a later save cannot erase it.
+
+Capability bit 12 (`USER_SHADERS_V1`) is writer-required for SHDR, with bit 5
+for opaque preservation. It is reader- and writer-required for Custom SEQR,
+so old readers reject that feature before parsing its timeline. Effective document
+saves recompute only bit 12; unrelated inherited requirements survive. Copy and
+compaction preserve requirements. Removing shader state clears bit 12 on save.
+
+EDTR remains version 2. A Shader entry adds `kind:"shader"`, `target`
+(`kind:global|node|reveal`, plus `node_uuid` for a node), and optional `shader_id`.
+`embedded_buffer` and `share_warning` hold text only if it differs from the asset
+source, or has no associated asset. Legacy `modified` describes presence of that
+draft; optional `file_modified` preserves the filesystem dirty state when it
+differs. This keeps old EDTR parsers valid without duplicating associated source.
+These additive fields require retained-JSON writer bit 6. A draft without an
+asset does not require bit 12. Python entries retain their existing representation.
+SEQR remains version 1; switching a Custom clip to a built-in removes `shader_id`.
+
+Normal saves, autosaves/recovery, Save As and training snapshots carry SHDR.
+Portable and gallery publication omit SHDR, Shader drafts and Custom clips,
+preserve other timeline tracks, and disclose the omission.

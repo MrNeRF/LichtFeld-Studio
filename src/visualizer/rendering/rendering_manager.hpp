@@ -316,10 +316,12 @@ namespace lfs::vis {
         }
 
         void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
-        void setSequencerReveal(std::optional<lfs::rendering::GaussianRevealState> reveal) {
-            if (sequencer_reveal_ == reveal)
+        void setSequencerReveal(std::optional<lfs::rendering::GaussianRevealState> reveal,
+                                std::optional<shaders::CustomRevealContext> custom = {}) {
+            if (sequencer_reveal_ == reveal && sequencer_custom_reveal_ == custom)
                 return;
             sequencer_reveal_ = reveal;
+            sequencer_custom_reveal_ = custom;
             markDirty(DirtyFlag::SPLATS, FrameReason::SettingsChange);
         }
 
@@ -1142,6 +1144,7 @@ namespace lfs::vis {
 
         RenderAnimationState animation_state_;
         std::optional<lfs::rendering::GaussianRevealState> sequencer_reveal_;
+        std::optional<shaders::CustomRevealContext> sequencer_custom_reveal_;
         shaders::ShaderService* shader_service_ = nullptr;
         std::uint64_t shader_sync_generation_ = 0;
         std::shared_ptr<const shaders::ShaderFrameSnapshot> custom_effect_snapshot_;

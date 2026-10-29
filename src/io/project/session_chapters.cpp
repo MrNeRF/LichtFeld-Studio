@@ -5,6 +5,7 @@
 
 #include "io/session_chapters.hpp"
 
+#include "core/uuid.hpp"
 #include "rendering/coordinate_conventions.hpp"
 
 #include <algorithm>
@@ -1145,10 +1146,94 @@ namespace lfs::io::project {
 
     } // namespace
 
+    lfs::Result<std::vector<std::string>> recover_shader_chapter(JsonChapterDom& dom) {
+        auto parsed = root_copy(dom, "SHDR");
+        if (!parsed)
+            return std::move(parsed).error();
+        auto& root = *parsed;
+        if (!root.contains("version") || root["version"] != 1 || !root.contains("api_version") || root["api_version"] != 1)
+            return fail<std::vector<std::string>>(ErrorCode::Unsupported, "Unsupported shader chapter version", "SHDR.version");
+        if (!root.contains("assets") || !root["assets"].is_array() || !root.contains("bindings") || !root["bindings"].is_array() ||
+            !root.contains("contains_embedded_source") || root["contains_embedded_source"] != true)
+            return fail<std::vector<std::string>>(ErrorCode::DataLoss, "Invalid shader chapter envelope", "SHDR");
+        std::vector<std::string> warnings;
+        const auto string = [](const Json& value, const char* key) {
+            return value.is_object() && value.contains(key) && value[key].is_string() ? value[key].get<std::string>() : std::string{};
+        };
+        const auto uuid = [](const std::string& value) { auto id = core::Uuid::from_string(value); return id && !id->is_nil(); };
+        const auto canonical = [](Json& entry, const char* key) {
+            if (entry.is_object() && entry.contains(key) && entry[key].is_string())
+                if (auto id = core::Uuid::from_string(entry[key].get<std::string>()))
+                    entry[key] = id->to_string();
+        };
+        for (auto& asset : root["assets"])
+            canonical(asset, "uuid");
+        for (auto& binding : root["bindings"]) {
+            canonical(binding, "shader_uuid");
+            canonical(binding, "node_uuid");
+        }
+        std::map<std::string, std::size_t> ids, slots;
+        for (const auto& asset : root["assets"])
+            ++ids[string(asset, "uuid")];
+        const auto slot = [&](const Json& binding) { return string(binding, "target") + ":" + string(binding, "node_uuid"); };
+        for (const auto& binding : root["bindings"])
+            ++slots[slot(binding)];
+        Json assets = Json::array(), bindings = Json::array();
+        std::set<std::string> accepted;
+        std::size_t source_bytes = 0;
+        for (auto asset : root["assets"]) {
+            const auto id = string(asset, "uuid"), name = string(asset, "name"), language = string(asset, "language");
+            if (!uuid(id) || ids[id] != 1 || name.empty() || name.size() > kMaxShaderNames || !asset.contains("name") || !asset["name"].is_string() ||
+                language.empty() || language.size() > 64 || !asset.contains("source") || !asset["source"].is_string() ||
+                !asset.contains("parameters") || !asset["parameters"].is_object() || assets.size() >= kMaxShaderAssets) {
+                warnings.push_back("SHDR.assets: invalid or duplicate asset " + id);
+                continue;
+            }
+            const auto size = asset["source"].get_ref<const std::string&>().size();
+            if (size > kMaxShaderSourceBytes || source_bytes + size > kMaxShaderTotalSourceBytes) {
+                warnings.push_back("SHDR.assets: source limit for " + id);
+                continue;
+            }
+            Json parameters = Json::object();
+            for (const auto& [name, value] : asset["parameters"].items()) {
+                const auto number = [](const Json& v) { return v.is_number() && std::isfinite(v.get<double>()) && std::abs(v.get<double>()) <= std::numeric_limits<float>::max(); };
+                if (name.empty() || name.size() > kMaxShaderNames || parameters.size() >= kMaxShaderNames ||
+                    !(number(value) || (value.is_array() && value.size() >= 2 && value.size() <= 4 && std::ranges::all_of(value, number)))) {
+                    warnings.push_back("SHDR.parameters: invalid override " + id + ":" + name);
+                    continue;
+                }
+                parameters[name] = value;
+            }
+            asset["parameters"] = std::move(parameters);
+            source_bytes += size;
+            accepted.insert(id);
+            assets.push_back(std::move(asset));
+        }
+        for (auto binding : root["bindings"]) {
+            const auto target = string(binding, "target"), node = string(binding, "node_uuid"), asset = string(binding, "shader_uuid");
+            if (slots[slot(binding)] != 1 || !accepted.contains(asset) || bindings.size() >= kMaxShaderBindings ||
+                !((target == "global" && !binding.contains("node_uuid")) || (target == "node" && uuid(node)))) {
+                warnings.push_back("SHDR.bindings: invalid or duplicate binding " + slot(binding));
+                continue;
+            }
+            bindings.push_back(std::move(binding));
+        }
+        root["assets"] = std::move(assets);
+        root["bindings"] = std::move(bindings);
+        auto recovered = JsonChapterDom::parse(root.dump());
+        if (!recovered)
+            return std::move(recovered).error();
+        dom = std::move(*recovered);
+        return warnings;
+    }
+
     JsonChapterDom default_session_chapter_dom(
         const SessionJsonChapterKind kind) {
         Json root;
         switch (kind) {
+        case SessionJsonChapterKind::Shaders:
+            root = {{"version", 1}, {"api_version", 1}, {"assets", Json::array()}, {"bindings", Json::array()}, {"contains_embedded_source", true}};
+            break;
         case SessionJsonChapterKind::GuiLayout:
             root = default_gui_layout();
             break;
@@ -1204,6 +1289,17 @@ namespace lfs::io::project {
                 std::move(root).error());
         }
         switch (kind) {
+        case SessionJsonChapterKind::Shaders: {
+            if (dom.dump().size() > kMaxShaderChapterBytes)
+                return fail<void>(lfs::ErrorCode::ResourceExhausted, "Shader chapter exceeds the size limit.", "SHDR");
+            auto copy = dom;
+            auto recovered = recover_shader_chapter(copy);
+            if (!recovered)
+                return lfs::Status::failure(std::move(recovered).error());
+            if (!recovered->empty())
+                return fail<void>(ErrorCode::DataLoss, recovered->front(), "SHDR");
+            return {};
+        }
         case SessionJsonChapterKind::GuiLayout:
             return validate_gui(*root);
         case SessionJsonChapterKind::Editor:

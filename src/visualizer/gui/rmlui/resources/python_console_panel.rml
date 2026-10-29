@@ -36,6 +36,7 @@
                         <div class="shader-row">
                             <span id="shader-target-label">@tr:shader.target</span><span id="shader-target"></span>
                             <button id="shader-global" type="button" data-action="shader-global">@tr:shader.global</button>
+                            <button id="shader-reveal" type="button" data-action="shader-reveal">@tr:sequencer.reveal_effect_custom</button>
                             <button id="shader-node" type="button" data-action="shader-node">@tr:shader.selected_node</button>
                             <select id="shader-assets"></select>
                             <button id="shader-open" type="button" data-action="shader-open">@tr:shader.open_asset</button>

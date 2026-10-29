@@ -89,6 +89,7 @@ The sequence above assumes a Python document. A Shader document uses the same
 `editor_run` tool but applies shader source instead of executing Python. Pass its
 `document_id` to `editor_wait` and inspect `outcome` and `shader_status`;
 `editor.python` does not describe shader compilation. See [User shaders](user-shaders.md).
+Shader associations and unapplied drafts persist with the project.
 
 ## AprilTag calibration
 

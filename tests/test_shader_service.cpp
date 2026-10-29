@@ -21,6 +21,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/reveal_render_state.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "shaders/shader_service.hpp"
 
 #include "custom_effect_hosts.hpp"
@@ -233,6 +234,110 @@ namespace {
         Uuid group_;
         std::unique_ptr<ShaderService> service_;
     };
+
+    TEST_F(ShaderServiceTest, ProjectLiveLimitsRejectBeforeChangingState) {
+        const auto id = create();
+        const auto before = service().captureProject({});
+        ASSERT_TRUE(before);
+        EXPECT_FALSE(commands().updateSource(id, std::string("\xC0\x80", 2)));
+        EXPECT_FALSE(commands().renameAsset(id, std::string("\xED\xA0\x80", 3)));
+        EXPECT_FALSE(commands().updateSource(id, std::string(shaders::kMaxShaderSourceBytes + 1, ' ')));
+        EXPECT_EQ(service().captureProject({})->chapter.to_bytes(), before->chapter.to_bytes());
+        EXPECT_EQ(service().projectToken(), before->token);
+        for (std::size_t i = 1; i < lfs::io::project::kMaxShaderAssets; ++i)
+            ASSERT_TRUE(commands().createAsset("Generated", ""));
+        EXPECT_FALSE(commands().createAsset("Excess", ""));
+        EXPECT_TRUE(service().captureProject({}));
+    }
+
+    TEST_F(ShaderServiceTest, ProjectSnapshotPreservesPendingOverridesAndSaveRaceToken) {
+        using namespace lfs::io::project;
+        using Json = lfs::io::JsonChapterDom::Json;
+        const auto id = create(lfs::test::kIdentity);
+        auto state = service().captureProject({});
+        ASSERT_TRUE(state);
+        auto assets = *state->chapter.dom().get_json("assets");
+        assets[0]["parameters"] = {{"gain", 2}, {"tint", Json::array({0.2, 0.4, 0.6})}, {"old_name", 9}};
+        assets[0]["extension"] = "kept";
+        ASSERT_TRUE(state->chapter.dom().set_json("assets", assets));
+        EXPECT_TRUE(service().restoreProject(state->chapter, {}).empty());
+        auto pending = service().captureProject(state->chapter);
+        ASSERT_TRUE(pending);
+        EXPECT_EQ(pending->chapter.to_bytes(), state->chapter.to_bytes());
+        bind({}, id);
+        demand(kHost);
+        ASSERT_TRUE(waitLinks(id, 1));
+        show();
+        EXPECT_FLOAT_EQ(service().status(id)->values[0].x, 2.0f);
+        auto captured = service().captureProject(state->chapter);
+        ASSERT_TRUE(captured);
+        service().clearDirtyIfUnchanged(captured->token);
+        EXPECT_FALSE(service().dirty());
+        ASSERT_TRUE(commands().setParameter(id, "gain", std::array{0.5f}));
+        service().clearDirtyIfUnchanged(captured->token);
+        EXPECT_TRUE(service().dirty());
+        auto changed = service().captureProject(state->chapter);
+        ASSERT_TRUE(changed);
+        auto saved = changed->chapter.dom().get_json("assets")->front();
+        EXPECT_EQ(saved["parameters"]["old_name"], 9);
+        EXPECT_EQ(saved["extension"], "kept");
+        EXPECT_EQ(saved["parameters"]["gain"], 0.5f);
+        EXPECT_EQ(links(id), 1u);
+        const auto old_display = display_;
+        service().clear();
+        EXPECT_TRUE(service().restoreProject(state->chapter, {}).empty());
+        service().observeDisplay(old_display);
+        EXPECT_EQ(service().status(id)->displayed_revision, 0u);
+        EXPECT_EQ(service().candidate(), nullptr);
+        ASSERT_TRUE(commands().updateSource(id, "new source"));
+        service().clearDirtyIfUnchanged(changed->token);
+        EXPECT_TRUE(service().dirty());
+    }
+
+    TEST_F(ShaderServiceTest, ProjectReloadWithSameUuidRejectsOldWorkerCountersAndPrograms) {
+        schedule_.gate(true);
+        const auto id = requireGlobal();
+        ASSERT_TRUE(schedule_.waitStarted(1));
+        auto saved = service().captureProject({});
+        ASSERT_TRUE(saved);
+        EXPECT_TRUE(service().restoreProject(saved->chapter, {}).empty());
+        demand(kHost);
+        schedule_.gate(false);
+        ASSERT_TRUE(waitLinks(id, 1));
+        auto program = show();
+        ASSERT_NE(program, nullptr);
+        EXPECT_EQ(links(id), 1u);
+        EXPECT_EQ(service().status(id)->schema_revision, 1u);
+        EXPECT_FALSE(service().dirty());
+    }
+
+    TEST_F(ShaderServiceTest, ProjectUnavailableLanguageAndOmittedNodesKeepLibrary) {
+        using Json = lfs::io::JsonChapterDom::Json;
+        const auto id = create();
+        bind({Kind::Node, nodes_[0]}, id);
+        auto saved = service().captureProject({});
+        ASSERT_TRUE(saved);
+        auto assets = *saved->chapter.dom().get_json("assets");
+        assets[0]["language"] = "future";
+        ASSERT_TRUE(saved->chapter.dom().set_json("assets", assets));
+        auto bindings = *saved->chapter.dom().get_json("bindings");
+        bindings.push_back({{"target", "node"}, {"node_uuid", group_.to_string()}, {"shader_uuid", id.to_string()}});
+        ASSERT_TRUE(saved->chapter.dom().set_json("bindings", bindings));
+        EXPECT_EQ(service().restoreProject(saved->chapter, id).size(), 1u);
+        demand(kHost);
+        EXPECT_EQ(readyPrograms(), nullptr);
+        EXPECT_EQ(service().status(id)->state, ShaderState::Failed);
+        EXPECT_FALSE(service().status(id)->diagnostics.entries.empty());
+        auto filtered = service().captureProject(saved->chapter, std::array{nodes_[0]});
+        ASSERT_TRUE(filtered);
+        EXPECT_TRUE(filtered->chapter.dom().get_json("bindings")->empty());
+        EXPECT_EQ(filtered->chapter.dom().get_json("assets")->size(), 1u);
+        EXPECT_EQ(filtered->chapter.dom().get_json("assets")->front()["language"], "future");
+        ASSERT_TRUE(commands().updateSource(id, "fixed"));
+        demand(kHost);
+        ASSERT_TRUE(waitLinks(id, 1));
+        ASSERT_NE(show(), nullptr);
+    }
 
     TEST_F(ShaderServiceTest, CommandsValidateBeforeMutationAndUndoWithMonotonicRevisions) {
         auto created = service().command(shaders::SetShaderSource{{}, "first", "Effect", {}});
@@ -517,12 +622,13 @@ namespace {
         EXPECT_EQ(commands().createAsset("", "x").error().code(), lfs::ErrorCode::InvalidArgument);
         bind({.kind = Kind::Global}, a);
         bind({.kind = Kind::Node, .node = nodes_[1]}, a);
+        bind({.kind = Kind::Reveal}, a);
         // One asset in several slots runs one effect, a binding each.
         demand(kHost);
         ASSERT_TRUE(waitIdle());
         auto snapshot = service().candidate();
         ASSERT_NE(snapshot, nullptr);
-        ASSERT_EQ(snapshot->bindings.size(), 2u);
+        ASSERT_EQ(snapshot->bindings.size(), 3u);
         EXPECT_TRUE(std::ranges::all_of(snapshot->bindings, [](const auto& binding) { return binding.effect == 0; }));
         ASSERT_EQ(snapshot->nodes.size(), 1u);
         EXPECT_EQ(snapshot->nodes.begin()->first, nodes_[1]);
@@ -530,7 +636,7 @@ namespace {
         bind({.kind = Kind::Node, .node = nodes_[0]}, b);
         ASSERT_TRUE(waitIdle());
         snapshot = service().candidate();
-        EXPECT_EQ(snapshot->bindings.size(), 3u);
+        EXPECT_EQ(snapshot->bindings.size(), 4u);
         ASSERT_EQ(snapshot->nodes.size(), 2u);
         EXPECT_EQ(links(a), 2u);
         EXPECT_EQ(links(b), 1u); // one new host link carries both members
@@ -542,7 +648,7 @@ namespace {
         const std::pair<const char*, std::function<void()>> rows[] = {
             {"two parameter blocks", [] {}},
             {"source edit", [&] { EXPECT_TRUE(commands().updateSource(b, "b2")); }},
-            {"third member", [&] { bind({Kind::Global}, c); members.push_back(c); }}};
+            {"third member", [&] { bind({Kind::Reveal}, c); members.push_back(c); }}};
         for (std::size_t row = 0; row < std::size(rows); ++row) {
             SCOPED_TRACE(rows[row].first);
             rows[row].second();
@@ -561,9 +667,10 @@ namespace {
             EXPECT_EQ(schedule_.started.size(), row + 2);
             snapshot = service().candidate();
             for (const auto& [binding, member] : std::vector<std::pair<std::uint32_t, Uuid>>{
-                     {snapshot->global, row == 2 ? c : a},
+                     {snapshot->global, a},
                      {snapshot->nodes.at(nodes_[1]), a},
-                     {snapshot->nodes.at(nodes_[0]), b}}) {
+                     {snapshot->nodes.at(nodes_[0]), b},
+                     {snapshot->reveal, row == 2 ? c : a}}) {
                 EXPECT_EQ(snapshot->bindings[binding].effect, effectIndex(members, member));
                 EXPECT_FLOAT_EQ(snapshot->bindings[binding].values[0].x, member == a ? a_gain : member == b ? b_gain
                                                                                                             : 1.f);
@@ -577,6 +684,7 @@ namespace {
         EXPECT_EQ(commands().removeAsset(a).error().code(), lfs::ErrorCode::FailedPrecondition);
 
         ASSERT_TRUE(commands().unbind({.kind = Kind::Global}));
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Reveal}));
         ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes_[1]}));
         EXPECT_EQ(commands().unbind({.kind = Kind::Global}).error().code(), lfs::ErrorCode::FailedPrecondition);
         EXPECT_EQ(state(a), ShaderState::Unbound);
@@ -585,6 +693,7 @@ namespace {
         EXPECT_EQ(service().candidate()->bindings.size(), 1u);
         EXPECT_EQ(service().candidate()->nodes, (NodeBindings{{nodes_[0], 0u}}));
         EXPECT_EQ(service().candidate()->global, shaders::ShaderFrameSnapshot::kNone);
+        EXPECT_EQ(service().candidate()->reveal, shaders::ShaderFrameSnapshot::kNone);
         ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes_[0]}));
         EXPECT_EQ(service().candidate(), nullptr);
         ASSERT_TRUE(commands().renameAsset(a, "Renamed"));
@@ -685,6 +794,48 @@ namespace {
         }
         EXPECT_NE(service().status(healthy)->diagnostics.entries[0].message,
                   service().status(broken)->diagnostics.entries[0].message);
+    }
+
+    TEST_F(ShaderServiceTest, RevealRunPreflightsCapacityAndSourceBeforeChangingAnything) {
+        lfs::vis::SequencerController controller;
+        controller.setShaderService(&service());
+        ASSERT_TRUE(controller.setRevealClip(lfs::sequencer::RevealClip{}));
+        const auto nodes = capacityNodes(shaders::kMaxBoundShaders);
+        ASSERT_FALSE(HasFailure());
+        for (const auto& node : nodes)
+            bind({.kind = Kind::Node, .node = node}, create());
+        const auto count = service().assets().size();
+        const auto before = controller.saveToJson();
+        const shaders::ShaderSlot target{Kind::Reveal, {}};
+        EXPECT_FALSE(service().command(shaders::RunShader{{}, "new", target}));
+        EXPECT_EQ(service().assets().size(), count);
+        EXPECT_EQ(controller.saveToJson(), before);
+        EXPECT_FALSE(service().boundAsset(target));
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes.back()}));
+        EXPECT_FALSE(
+            service().command(shaders::RunShader{{}, std::string(shaders::kMaxShaderSourceBytes + 1, 'x'), target}));
+        EXPECT_EQ(service().assets().size(), count);
+        EXPECT_EQ(controller.saveToJson(), before);
+        const auto asset = create("valid");
+        auto& history = lfs::vis::op::undoHistory();
+        history.clear();
+        ASSERT_TRUE(service().command(shaders::SetShaderSource{asset, "edited", {}, {}}, target));
+        ASSERT_TRUE(history.undo().success);
+        const auto revision = service().status(asset)->revision;
+        bind({.kind = Kind::Node, .node = nodes.back()}, create());
+        EXPECT_FALSE(history.redo().success);
+        EXPECT_EQ(service().status(asset)->revision, revision);
+        EXPECT_EQ(controller.saveToJson(), before);
+        ASSERT_TRUE(commands().unbind({.kind = Kind::Node, .node = nodes.back()}));
+        history.clear();
+        ASSERT_TRUE(service().command(shaders::BindShader{target, asset}));
+        const auto saved = controller.saveToJson();
+        ASSERT_TRUE(controller.setRevealClip(std::nullopt));
+        ASSERT_TRUE(controller.loadFromJson(saved));
+        EXPECT_EQ(service().boundAsset(target), asset);
+        controller.clear();
+        EXPECT_FALSE(service().boundAsset(target));
+        EXPECT_FALSE(controller.timeline().revealClip());
     }
 
     TEST_F(ShaderServiceTest, BoundShadersAreCapped) {
@@ -793,7 +944,7 @@ namespace {
         GaussianCustomEffectState::Parameters block{};
         block[3] = glm::vec4(0.25f);
         const shaders::ShaderFrameSnapshot snapshot{.bindings = {{block}}, .global = 0u, .nodes = {{nodes_[2], 0u}}};
-        auto state = shaders::makeCustomEffectState(snapshot, shaders::captureEffectScene(scene(), 3), 1.5f);
+        auto state = shaders::makeCustomEffectState(snapshot, shaders::captureEffectScene(scene(), 3), 1.5f, {});
         ASSERT_TRUE(state);
         EXPECT_EQ(state->time, 1.5f);
         ASSERT_EQ(state->bindings.size(), 1u);
@@ -824,7 +975,7 @@ namespace {
         scene().setNodeVisibility(scene().getNodeByUuid(nodes_[0])->id, false);
         slots = scene().getVisibleSplatNodeSlots();
         ASSERT_EQ(slots.size(), 2u);
-        state = shaders::makeCustomEffectState(snapshot, shaders::captureEffectScene(scene(), 3), 0.0f);
+        state = shaders::makeCustomEffectState(snapshot, shaders::captureEffectScene(scene(), 3), 0.0f, {});
         ASSERT_TRUE(state);
         EXPECT_EQ(state->objects[slots[0].slot_index].id, 0u);
         EXPECT_EQ(state->objects[slots[1].slot_index].id, 1u);
@@ -838,11 +989,24 @@ namespace {
     TEST_F(ShaderServiceTest, EffectStateOnlyWhereABindingApplies) {
         const GaussianCustomEffectState::Parameters block{};
         const auto scene_state = shaders::captureEffectScene(scene(), 3);
+        // The reveal slot applies while a reveal draws.
+        const auto asset = lfs::core::generate_uuid_v4();
+        const shaders::ShaderFrameSnapshot reveal{.bindings = {{block}}, .reveal = 0u, .reveal_asset = asset};
+        EXPECT_FALSE(shaders::makeCustomEffectState(reveal, scene_state, 0.0f, {}));
+        const auto revealed =
+            shaders::makeCustomEffectState(reveal, scene_state, 0.0f, shaders::CustomRevealContext{asset, .5f, .2f});
+        ASSERT_TRUE(revealed);
+        EXPECT_EQ(revealed->reveal_binding, 0u);
+        EXPECT_FLOAT_EQ(revealed->reveal_progress, .5f);
+        EXPECT_FLOAT_EQ(revealed->reveal_softness, .2f);
+        EXPECT_FALSE(shaders::makeCustomEffectState(
+            reveal, scene_state, 0.0f, shaders::CustomRevealContext{lfs::core::generate_uuid_v4(), .5f, .2f}));
+        EXPECT_EQ(revealed->global_binding, GaussianCustomEffectState::kNone);
         // A node's slot applies while the node is visible.
         const shaders::ShaderFrameSnapshot node{.bindings = {{block}}, .nodes = {{nodes_[1], 0u}}};
-        EXPECT_TRUE(shaders::makeCustomEffectState(node, scene_state, 0.0f));
+        EXPECT_TRUE(shaders::makeCustomEffectState(node, scene_state, 0.0f, {}));
         scene().setNodeVisibility(scene().getNodeByUuid(nodes_[1])->id, false);
-        EXPECT_FALSE(shaders::makeCustomEffectState(node, shaders::captureEffectScene(scene(), 3), 0.0f));
+        EXPECT_FALSE(shaders::makeCustomEffectState(node, shaders::captureEffectScene(scene(), 3), 0.0f, {}));
     }
 
     TEST_F(ShaderServiceTest, WholeCompositionAdoptionAndFailure) {
@@ -993,6 +1157,48 @@ namespace {
         EXPECT_TRUE(second.ended());
     }
 
+    TEST_F(ShaderServiceTest, StaleStartAndFinishDoNotReachNewComposition) {
+        schedule_.gate(true);
+        const auto id = requireGlobal("old");
+        ASSERT_TRUE(schedule_.waitStarted(1));
+        // Do not accept the queued Started message before changing the project.
+        const auto saved = service().captureProject({});
+        ASSERT_TRUE(saved);
+        EXPECT_TRUE(service().restoreProject(saved->chapter, {}).empty());
+        std::vector<shaders::ShaderEvent> events;
+        lfs::event::ScopedHandler handler;
+        handler.subscribe<shaders::ShaderEvent>([&](const auto& event) { events.push_back(event); });
+        schedule_.gate(false);
+        ASSERT_TRUE(waitIdle());
+        EXPECT_EQ(service().status(id)->links, 0u);
+        EXPECT_TRUE(events.empty());
+
+        demand(kHost);
+        ASSERT_TRUE(waitLinks(id, 1));
+        const auto first = show();
+        ASSERT_NE(first, nullptr);
+        schedule_.gate(true);
+        ASSERT_TRUE(commands().updateSource(id, "obsolete"));
+        ASSERT_TRUE(schedule_.waitStarted(3));
+        ASSERT_TRUE(commands().updateSource(id, "skipped"));
+        ASSERT_TRUE(commands().updateSource(id, "latest"));
+        EXPECT_EQ(readyPrograms(), first);
+        EXPECT_EQ(state(id), ShaderState::Pending);
+        events.clear();
+        schedule_.gate(false);
+        ASSERT_TRUE(waitIdle());
+        EXPECT_EQ(service().status(id)->links, 2u);
+        ASSERT_NE(show(), nullptr);
+        EXPECT_EQ(display_->snapshot->programs->effects[0].revision, 4u);
+        EXPECT_EQ(state(id), ShaderState::Applied);
+        EXPECT_EQ(schedule_.started, (std::vector<std::string>{
+                                         std::string("old@") + kHost, std::string("old@") + kHost,
+                                         std::string("obsolete@") + kHost, std::string("latest@") + kHost}));
+        for (const auto& event : events)
+            for (const auto& member : event.members)
+                EXPECT_TRUE(member.revision != 2u && member.revision != 3u);
+    }
+
     TEST_F(ShaderServiceTest, OuterWorkerFailureCancelsWaiters) {
         const auto owner = std::this_thread::get_id();
         service_ = std::make_unique<ShaderService>(scene(), [this] { return std::make_unique<FakeLinker>(schedule_); }, [owner] {
@@ -1022,6 +1228,23 @@ namespace {
         demand(kHost);
         ASSERT_TRUE(waitIdle());
         EXPECT_EQ(service().status(id)->links, 2u);
+    }
+
+    TEST_F(ShaderServiceTest, EscapedSizeCacheTracksSourceUndoAndProjectRestore) {
+        const auto escaped = std::string(shaders::kMaxShaderSourceBytes, '\x01');
+        std::vector<Uuid> ids;
+        for (int i = 0; i < 5; ++i)
+            ids.push_back(create(escaped));
+        EXPECT_FALSE(commands().createAsset("Too much escaping", escaped));
+        ASSERT_TRUE(service().command(shaders::SetShaderSource{ids[0], "small", {}, {}}));
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_FALSE(commands().createAsset("Still too much escaping", escaped));
+        const auto saved = service().captureProject({});
+        ASSERT_TRUE(saved);
+        EXPECT_TRUE(service().restoreProject(saved->chapter, {}).empty());
+        EXPECT_FALSE(commands().createAsset("Restored escaping", escaped));
+        ASSERT_TRUE(commands().updateSource(ids[0], "small"));
+        EXPECT_TRUE(commands().createAsset("Freed space", escaped));
     }
 
     TEST(ShaderChanges, NotificationsBeforeWaitCancellationAndClosureCannotBeLost) {

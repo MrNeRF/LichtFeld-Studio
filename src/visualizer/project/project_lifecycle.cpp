@@ -6,6 +6,8 @@
 #include "project_lifecycle.hpp"
 #include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
+#include "gui/editor/python_editor.hpp"
+#include "gui/panels/python_console_panel.hpp"
 #include "io/project_operations.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
@@ -1768,6 +1770,7 @@ namespace lfs::vis::project {
                             session->gui_layout),
                     .view =
                         std::move(session->view),
+                    .shaders = std::move(session->shaders),
                     .editor =
                         std::move(session->editor),
                     .sequencer =
@@ -1781,6 +1784,7 @@ namespace lfs::vis::project {
                         std::move(*parameters),
                     .durable_commit_kind =
                         durable_commit_kind,
+                    .shader_token = session->shader_token,
                     .writer_lock_lease =
                         std::move(
                             writer_lock_lease),
@@ -1981,6 +1985,9 @@ namespace lfs::vis::project {
         [[nodiscard]] bool hasUntitledCrashDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
+            const auto files = document.editor().dom().get_json("open_files");
+            if (files && std::ranges::any_of(*files, [](const auto& file) { return file.contains("kind") && file["kind"] == "shader"; }))
+                return true;
             for (const auto& chapter : document.dirty_chapters()) {
                 if (!isSessionSoftDirtyChapter(chapter)) {
                     return true;
@@ -3904,6 +3911,7 @@ namespace lfs::vis::project {
         }
         project_write_job_ = *handle;
         project_write_purpose_ = purpose;
+        project_write_shader_token_ = captured_shader_token_;
         project_write_destination_ =
             destination;
         project_write_scene_serial_ =
@@ -4451,6 +4459,7 @@ namespace lfs::vis::project {
         }
         project_write_job_ = *handle;
         project_write_purpose_ = purpose;
+        project_write_shader_token_ = captured_shader_token_;
         project_write_destination_ =
             std::move(master_path);
         project_write_dirty_epoch_ =
@@ -4601,6 +4610,7 @@ namespace lfs::vis::project {
                             context.error()));
                     return std::nullopt;
                 }
+                captured_shader_token_ = context->shader_token;
                 context->allow_existing_destination_replacement =
                     allow_existing_destination_replacement;
                 return std::move(*context);
@@ -5043,6 +5053,7 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(context).error());
         }
+        captured_shader_token_ = context->shader_token;
         auto preview = explicitSavePreviewPng(regenerate_preview);
         if (!preview) {
             return lfs::Status::failure(
@@ -5843,6 +5854,8 @@ namespace lfs::vis::project {
                 ProjectWritePurpose::TrainingCloseSave;
         if (error.empty()) {
             if (rebases_project_dirty_state) {
+                if (auto* service = viewer_.getShaderService())
+                    service->clearDirtyIfUnchanged(project_write_shader_token_);
                 const bool write_inputs_unchanged =
                     scene_mutation_serial_.load(
                         std::memory_order_acquire) ==
@@ -5862,6 +5875,7 @@ namespace lfs::vis::project {
             jobs.completed(*project_write_job_);
             clearAutosaveFailureBackoff();
             if (was_autosave) {
+                last_autosaved_shader_token_ = project_write_shader_token_;
                 autosave_sequence_ = std::max(
                     autosave_sequence_,
                     project_write_autosave_sequence_);
@@ -6147,14 +6161,16 @@ namespace lfs::vis::project {
             parameter_manager
                 ? parameter_manager->dirtySerial()
                 : 0;
-        const bool plausibly_dirty =
-            scene_dirty_.load(
-                std::memory_order_acquire) ||
-            payload_dirty_.load(
-                std::memory_order_acquire) ||
-            (parameter_manager &&
-             parameter_manager->isDirty()) ||
-            dirty_chapters.hard || dirty_chapters.soft;
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
+        const bool plausibly_dirty = (shaders && shaders->dirty()) ||
+                                     scene_dirty_.load(
+                                         std::memory_order_acquire) ||
+                                     payload_dirty_.load(
+                                         std::memory_order_acquire) ||
+                                     (parameter_manager &&
+                                      parameter_manager->isDirty()) ||
+                                     dirty_chapters.hard || dirty_chapters.soft;
         if (!plausibly_dirty) {
             return;
         }
@@ -6186,7 +6202,7 @@ namespace lfs::vis::project {
         if (!(timer_due || epoch_due)) {
             return;
         }
-        if (last_autosaved_parameter_serial_ &&
+        if (shader_token == last_autosaved_shader_token_ && last_autosaved_parameter_serial_ &&
             document_->dirty_epoch() ==
                 last_autosaved_dirty_epoch_ &&
             scene_serial ==
@@ -7267,6 +7283,9 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(session).error());
             }
+            captured_shader_token_ = session->shader_token;
+            if (!sameBytes(document_->shaders().to_bytes(), session->shaders.to_bytes()))
+                document_->edit_shaders() = std::move(session->shaders);
             if (!sameBytes(
                     document_->gui_layout().to_bytes(),
                     session->gui_layout.to_bytes())) {
@@ -7700,6 +7719,7 @@ namespace lfs::vis::project {
             }
             context->allow_existing_destination_replacement =
                 allow_existing_destination_replacement;
+            captured_shader_token_ = context->shader_token;
             context->save_as_project_uuid =
                 save_as_project_uuid;
             auto preview = explicitSavePreviewPng(regenerate_preview);
@@ -8132,6 +8152,7 @@ namespace lfs::vis::project {
                     .sequencer =
                         candidate->sequencer(),
                     .metrics = candidate->metrics(),
+                    .shaders = candidate->shaders(),
                 },
                 &candidate->references(),
                 project_root);
@@ -9422,6 +9443,8 @@ namespace lfs::vis::project {
     }
 
     std::optional<bool> ProjectLifecycle::dirtyProjectPreflight() const {
+        if (const auto* shaders = viewer_.getShaderService(); shaders && shaders->dirty())
+            return true;
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -11062,6 +11085,11 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::isBlankUntitledSession()
         const {
+        if (const auto* service = viewer_.getShaderService(); service && (service->dirty() || !service->assets().empty()))
+            return false;
+        if (const auto* console = gui::panels::PythonConsoleState::tryGetInstance(); console && console->getEditor())
+            if (std::ranges::any_of(console->getEditor()->documents(), [](const auto& doc) { return doc.kind == editor::DocumentKind::Shader; }))
+                return false;
         if (!document_ || document_->source_path()) {
             return false;
         }

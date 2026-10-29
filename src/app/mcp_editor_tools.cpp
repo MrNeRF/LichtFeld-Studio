@@ -366,7 +366,7 @@ namespace lfs::app {
         const json target{
             {"type", "object"},
             {"properties",
-             {{"kind", {{"type", "string"}, {"enum", {"global", "node"}}}}, {"node_uuid", string}}},
+             {{"kind", {{"type", "string"}, {"enum", {"global", "node", "reveal"}}}}, {"node_uuid", string}}},
             {"required", {"kind"}}};
         const json waits{{"wait_for_completion", boolean},
                          {"wait_for_output", boolean},

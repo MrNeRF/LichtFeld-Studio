@@ -2524,6 +2524,7 @@
     "reveal_effect_dark_to_light": "Da scuro a chiaro",
     "reveal_effect_distortion": "Distorsione",
     "reveal_effect_camera_light": "Luce della camera",
+    "reveal_effect_custom": "Personalizzato",
     "reveal_history_stale": "L’effetto di svelamento è cambiato dopo questa modifica.",
     "add_reveal": "Aggiungi effetto di svelamento",
     "change_reveal": "Cambia effetto di svelamento",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Dissocia",
   "shader.unbound": "Non associato",
   "shader.untitled": "Shader senza titolo",
-  "editor.documents": "Documenti Python e shader"
+  "editor.documents": "Documenti Python e shader",
+  "shader.restore_warning": "Impossibile ripristinare parte dello stato degli shader:\n{}",
+  "shader.publication_omitted": "Gli shader utente e le clip di rivelazione personalizzate sono esclusi dalla pubblicazione. La scena pubblicata usa gli splat originali."
 }

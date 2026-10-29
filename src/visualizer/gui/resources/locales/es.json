@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "Oscuro a claro",
     "reveal_effect_distortion": "Distorsión",
     "reveal_effect_camera_light": "Luz de cámara",
+    "reveal_effect_custom": "Personalizado",
     "reveal_history_stale": "El efecto de revelado cambió desde que se registró esta edición.",
     "add_reveal": "Añadir efecto de revelado",
     "change_reveal": "Cambiar efecto de revelado",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Desvincular",
   "shader.unbound": "Sin vincular",
   "shader.untitled": "Sombreador sin título",
-  "editor.documents": "Documentos de Python y sombreadores"
+  "editor.documents": "Documentos de Python y sombreadores",
+  "shader.restore_warning": "No se pudo restaurar parte del estado de los shaders:\n{}",
+  "shader.publication_omitted": "Los shaders de usuario y los clips de revelado personalizados se omiten al publicar. La escena publicada usa los splats originales."
 }

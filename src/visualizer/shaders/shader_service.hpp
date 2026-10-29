@@ -36,6 +36,10 @@ namespace lfs::core {
 } // namespace lfs::core
 
 namespace lfs::vis {
+    class SequencerController;
+}
+
+namespace lfs::vis {
     struct ShaderCommands;
 }
 
@@ -85,9 +89,10 @@ namespace lfs::vis::shaders {
         std::vector<std::shared_ptr<const HostProgram>> hosts;
     };
 
-    // A binding slot: the global slot or a splat node's own.
+    // A binding slot: the global slot, the reveal slot or a splat node's own.
     struct ShaderSlot {
         enum class Kind : std::uint8_t { Global,
+                                         Reveal,
                                          Node };
         Kind kind = Kind::Global;
         core::Uuid node; // Kind::Node only
@@ -110,8 +115,17 @@ namespace lfs::vis::shaders {
         static constexpr std::uint32_t kNone = rendering::GaussianCustomEffectState::kNone;
         std::vector<rendering::GaussianCustomEffectState::Binding> bindings;
         std::shared_ptr<const std::vector<rendering::GaussianCustomEffectState::Binding>> parameters;
-        std::uint32_t global = kNone;                        // binding of the global slot
+        std::uint32_t global = kNone; // binding of the global slot
+        std::uint32_t reveal = kNone;
+        std::optional<core::Uuid> reveal_asset;
         std::unordered_map<core::Uuid, std::uint32_t> nodes; // splat nodes and the binding of their slot
+    };
+
+    struct CustomRevealContext {
+        core::Uuid shader_id;
+        float progress = 0.0f;
+        float softness = 0.1f;
+        bool operator==(const CustomRevealContext&) const = default;
     };
 
     // Draw-local object ids and original visible bounds, in model-slot order.
@@ -127,11 +141,16 @@ namespace lfs::vis::shaders {
     };
     [[nodiscard]] LFS_VIS_API EffectScene captureEffectScene(const core::Scene& scene, std::size_t slots);
 
-    // Apply the snapshot only to visible slots.
+    // Apply the snapshot only to visible slots and the matching active reveal.
     [[nodiscard]] LFS_VIS_API std::optional<rendering::GaussianCustomEffectState>
-    makeCustomEffectState(const ShaderFrameSnapshot& snapshot, const EffectScene& scene, float time);
+    makeCustomEffectState(const ShaderFrameSnapshot& snapshot, const EffectScene& scene, float time,
+                          const std::optional<CustomRevealContext>& reveal = {});
 
     using ShaderProjectToken = std::array<std::uint64_t, 2>;
+    struct ShaderProjectState {
+        io::project::ShaderLibraryChapter chapter;
+        ShaderProjectToken token;
+    };
 
     struct ShaderAsset {
         core::Uuid id;
@@ -302,11 +321,13 @@ namespace lfs::vis::shaders {
         [[nodiscard]] std::shared_ptr<ShaderChanges> changes() const { return changes_; }
         // Viewer-side acceptance of tagged worker messages, before external callbacks.
         void acceptResults();
+        void setRevealController(SequencerController* controller) { reveal_controller_ = controller; }
+        [[nodiscard]] Status validateRevealTarget() const;
         [[nodiscard]] Status validateBinding(const ShaderSlot& slot, const core::Uuid& asset) const;
         [[nodiscard]] ShaderInspection inspect(bool include_source = true) const;
         [[nodiscard]] Result<ShaderInspection> asset(const core::Uuid&, bool include_source = false) const;
         [[nodiscard]] ShaderInspection work() const;
-        [[nodiscard]] bool hasApplicableBindings() const;
+        [[nodiscard]] bool hasApplicableBindings(const std::optional<CustomRevealContext>& reveal) const;
         [[nodiscard]] bool hasBindings() const { return has_bindings_.load(std::memory_order_acquire); }
         [[nodiscard]] Result<core::Uuid> command(const ShaderCommand& command,
                                                  std::optional<ShaderSlot> redo_binding = {});
@@ -321,6 +342,12 @@ namespace lfs::vis::shaders {
         [[nodiscard]] std::vector<ShaderAsset> assets(bool include_source = true) const;
         // Include undo-held node bindings when observing document Stop targets.
         [[nodiscard]] std::optional<core::Uuid> boundAsset(const ShaderSlot& slot, bool include_detached = false) const;
+        [[nodiscard]] bool dirty() const;
+        [[nodiscard]] Result<ShaderProjectState> captureProject(const io::project::ShaderLibraryChapter& retained,
+                                                                std::span<const core::Uuid> omitted = {}) const;
+        [[nodiscard]] std::vector<std::string> restoreProject(const io::project::ShaderLibraryChapter& chapter,
+                                                              std::optional<core::Uuid> reveal);
+        void clearDirtyIfUnchanged(ShaderProjectToken token);
         [[nodiscard]] ShaderProjectToken projectToken() const;
         [[nodiscard]] Result<ShaderStatus> status(const core::Uuid& asset) const;
 
@@ -345,6 +372,9 @@ namespace lfs::vis::shaders {
         friend struct UserShaderMeasureAccess;
         friend struct lfs::vis::ShaderCommands;
         Result<core::Uuid> applyCommand(const ShaderCommand&, std::optional<ShaderSlot>, bool authoring);
+        SequencerController* reveal_controller_ = nullptr;
+        friend class lfs::vis::SequencerController;
+        [[nodiscard]] Status setRevealBinding(std::optional<core::Uuid>);
         struct AssetContent;
         struct Asset;
         struct EditState;
@@ -364,6 +394,7 @@ namespace lfs::vis::shaders {
         bool currentLocked(const WorkerMessage&) const;
         struct Bindings {
             std::optional<core::Uuid> global;
+            std::optional<core::Uuid> reveal;
             std::unordered_map<core::Uuid, core::Uuid> nodes; // node -> asset
             // The distinct bound assets in composition order.
             [[nodiscard]] std::vector<core::Uuid> assets() const;
@@ -400,8 +431,10 @@ namespace lfs::vis::shaders {
 
         std::unordered_map<core::Uuid, Asset> assets_;
         Bindings bindings_;
+        bool dirty_ = false;
         ShaderProjectToken project_token_{1, 0};
         void markDirtyLocked() {
+            dirty_ = true;
             ++project_token_[1];
             changes_->notify();
         }

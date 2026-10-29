@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "Sombre à clair",
     "reveal_effect_distortion": "Distorsion",
     "reveal_effect_camera_light": "Lumière de caméra",
+    "reveal_effect_custom": "Personnalisé",
     "reveal_history_stale": "L’effet de dévoilement a changé depuis cet enregistrement.",
     "add_reveal": "Ajouter un effet de dévoilement",
     "change_reveal": "Modifier l’effet de dévoilement",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Dissocier",
   "shader.unbound": "Non associé",
   "shader.untitled": "Shader sans titre",
-  "editor.documents": "Documents Python et shaders"
+  "editor.documents": "Documents Python et shaders",
+  "shader.restore_warning": "Certains éléments des shaders n’ont pas pu être restaurés :\n{}",
+  "shader.publication_omitted": "Les shaders utilisateur et les clips de révélation personnalisés sont exclus de la publication. La scène publiée utilise les splats d’origine."
 }

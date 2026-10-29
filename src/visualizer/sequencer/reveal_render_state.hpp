@@ -7,15 +7,23 @@
 #include "rendering/rendering.hpp"
 #include "scene/visible_splat_bounds.hpp"
 #include "sequencer/timeline.hpp"
+#include "shaders/shader_service.hpp"
 #include <algorithm>
 #include <cmath>
 #include <optional>
 
 namespace lfs::vis {
+    inline std::optional<shaders::CustomRevealContext>
+    makeCustomRevealContext(const std::optional<sequencer::RevealClip>& clip, const float time) {
+        if (!clip || clip->effect != sequencer::RevealEffect::Custom || !clip->shader_id || time >= clip->end)
+            return std::nullopt;
+        return shaders::CustomRevealContext{*clip->shader_id, clip->progress(time), clip->softness};
+    }
+
     // The reveal of `clip` at `time` over geometry bounded by `lo` and `hi`.
     inline std::optional<rendering::GaussianRevealState> makeRevealRenderState(
         const glm::vec3& lo, const glm::vec3& hi, const sequencer::RevealClip& clip, const float time) {
-        if (time >= clip.end)
+        if (clip.effect == sequencer::RevealEffect::Custom || time >= clip.end)
             return std::nullopt;
         // The spread starts at the scene's world origin, independently of the
         // positions or transforms of the visible splats.

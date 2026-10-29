@@ -2688,7 +2688,7 @@ namespace lfs::vis {
         configureSurfacePicking(frame_ctx);
 
         // Resolve every visible family's inputs before choosing the frame's immutable publication.
-        if (shader_service_ && shader_service_->hasBindings() && (frame_ctx.scene_state.custom_effect || shader_service_->hasApplicableBindings()) && (model || (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode))) && context.vulkan_context && !frame_settings.point_cloud_mode) {
+        if (shader_service_ && shader_service_->hasBindings() && (frame_ctx.scene_state.custom_effect || shader_service_->hasApplicableBindings(sequencer_custom_reveal_)) && (model || (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode))) && context.vulkan_context && !frame_settings.point_cloud_mode) {
             auto base = buildViewportRenderRequest(frame_ctx, render_size);
             std::vector<const core::SplatData*> models{model};
             if (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
@@ -2751,7 +2751,7 @@ namespace lfs::vis {
                 attachCustomEffect(frame_ctx.scene_state, *scene_manager, scene_time_);
         }
 
-        if (shader_service_ && shader_service_->hasBindings() && (frame_settings.point_cloud_mode || (!frame_ctx.scene_state.custom_effect && !shader_service_->hasApplicableBindings())))
+        if (shader_service_ && shader_service_->hasBindings() && (frame_settings.point_cloud_mode || (!frame_ctx.scene_state.custom_effect && !shader_service_->hasApplicableBindings(sequencer_custom_reveal_))))
             shader_service_->demandLive({}, last_complete_);
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;

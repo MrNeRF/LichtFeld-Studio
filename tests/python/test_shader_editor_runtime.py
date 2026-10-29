@@ -338,6 +338,90 @@ print('F1_API_VERIFIED')
         assert shader_id not in {a['shader_id'] for a in _tool(endpoint, 'shader_list')['assets']}
 
 
+def test_shader_project_fresh_process_restores_source_override_clip_and_draft(tmp_path):
+    if not os.environ.get('LFS_EXECUTABLE'):
+        pytest.skip('requires LFS_EXECUTABLE and Xvfb')
+    fixture = tmp_path / 'generated.ply'
+    _fixture(fixture)
+    project = tmp_path / 'shaders.licht'
+    source = ('import lfs;\nstruct Params { [LfsParam(0, 1, 0.5)] float strength; };\n'
+              'LfsElement effect(LfsElement e, LfsContext c, Params p) '
+              '{ e.color *= p.strength; return e; }\n')
+    draft = source + '// draft not applied\n'
+    creator = tmp_path / 'creator'
+    creator.mkdir()
+    with isolated_app(creator) as endpoint:
+        _tool(endpoint, 'scene_load_ply', {'path': str(fixture)})
+        doc = _tool(endpoint, 'editor_new_document', {'mode': 'shader', 'code': source})
+        run = _tool(endpoint, 'editor_run', {'document_id': doc['document_id'], 'timeout_ms': 30000})
+        if not run.get('completed'):
+            run = _tool(endpoint, 'editor_wait', {'document_id': doc['document_id'], 'timeout_ms': 30000})
+        assert run['applied'], run
+        asset = run['shader_id']
+        _tool(endpoint, 'shader_set_param', {'shader_id': asset, 'name': 'strength', 'value': .75})
+        _tool(endpoint, 'sequencer_reveal_set', {'start': 0, 'end': 3, 'softness': .2,
+                                                'effect': 12, 'shader_id': asset})
+        _tool(endpoint, 'editor_set_code', {'document_id': doc['document_id'], 'code': draft})
+        _tool(endpoint, 'editor_new_document', {'mode': 'python', 'code': "print('persistence')"})
+        saved = _tool(endpoint, 'editor_run', {'code': f'import lichtfeld as lf\nassert lf.project_save_as({str(project)!r}, wait=True)',
+                                              'timeout_ms': 30000})
+        if not saved.get('completed'):
+            saved = _tool(endpoint, 'editor_wait', {'timeout_ms': 30000})
+        assert saved['success'] and saved['completed'], saved
+    reader = tmp_path / 'reader'
+    reader.mkdir()
+    with isolated_app(reader) as endpoint:
+        _tool(endpoint, 'project_open', {'path': str(project), 'discard_changes': True})
+        deadline = time.monotonic() + 90
+        while _tool(endpoint, 'project_get_info')['hydration_state'] != 'complete':
+            assert time.monotonic() < deadline, 'Project hydration timed out'
+            time.sleep(.1)
+        deadline = time.monotonic() + 30
+        while True:
+            docs = _tool(endpoint, 'editor_list_documents')['documents']
+            restored = [d for d in docs if d.get('document_kind') == 'shader']
+            if restored:
+                break
+            assert time.monotonic() < deadline, docs
+            time.sleep(.1)
+        document = _tool(endpoint, 'editor_get_code', {'document_id': restored[0]['document_id']})
+        assert document['text'] == draft and document['shader_id'] == asset
+        assert not document['owns_binding']
+        assert _tool(endpoint, 'shader_get', {'shader_id': asset})['source'] == source
+        assert _tool(endpoint, 'sequencer_reveal_get')['reveal']['shader_id'] == asset
+        deadline = time.monotonic() + 90
+        while True:
+            status = _tool(endpoint, 'shader_get', {'shader_id': asset})['status']
+            if status['state'] == 'applied':
+                break
+            assert status['state'] != 'failed' and time.monotonic() < deadline, status
+            time.sleep(.1)
+        assert status['values']['strength'] == .75
+        _tool(endpoint, 'shader_set_source', {'shader_id': asset, 'source': 'invalid shader source'})
+        saved = _tool(endpoint, 'editor_run', {'code': 'import lichtfeld as lf\nassert lf.project_save(wait=True)',
+                                              'timeout_ms': 30000})
+        if not saved.get('completed'):
+            saved = _tool(endpoint, 'editor_wait', {'timeout_ms': 30000})
+        assert saved['success'] and saved['completed'], saved
+    failed_reader = tmp_path / 'failed-reader'
+    failed_reader.mkdir()
+    with isolated_app(failed_reader) as endpoint:
+        _tool(endpoint, 'project_open', {'path': str(project), 'discard_changes': True})
+        deadline = time.monotonic() + 90
+        while _tool(endpoint, 'project_get_info')['hydration_state'] != 'complete':
+            assert time.monotonic() < deadline
+            time.sleep(.1)
+        deadline = time.monotonic() + 90
+        while True:
+            state = _tool(endpoint, 'shader_get', {'shader_id': asset})
+            if state.get('status', {}).get('state') == 'failed':
+                break
+            assert time.monotonic() < deadline, state
+            time.sleep(.1)
+        assert state['source'] == 'invalid shader source'
+        assert _tool(endpoint, 'sequencer_reveal_get')['reveal']['shader_id'] == asset
+
+
 def test_editor_wait_output_notification_precedes_completion(tmp_path):
     """A socket gate holds the script open after output; no sleep decides readiness."""
     import socket

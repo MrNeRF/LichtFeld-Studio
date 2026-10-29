@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "Od ciemności do światła",
     "reveal_effect_distortion": "Zniekształcenie",
     "reveal_effect_camera_light": "Światło kamery",
+    "reveal_effect_custom": "Niestandardowy",
     "reveal_history_stale": "Efekt odsłaniania zmienił się od zapisania tej edycji.",
     "add_reveal": "Dodaj efekt odsłaniania",
     "change_reveal": "Zmień efekt odsłaniania",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "Odłącz",
   "shader.unbound": "Niepowiązany",
   "shader.untitled": "Shader bez nazwy",
-  "editor.documents": "Dokumenty Pythona i shaderów"
+  "editor.documents": "Dokumenty Pythona i shaderów",
+  "shader.restore_warning": "Nie udało się przywrócić części stanu shaderów:\n{}",
+  "shader.publication_omitted": "Shadery użytkownika i niestandardowe klipy odsłaniania są pomijane podczas publikacji. Opublikowana scena używa oryginalnych splatów."
 }

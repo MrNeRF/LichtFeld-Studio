@@ -172,6 +172,7 @@ namespace {
         EXPECT_FALSE(editor.setDocumentText(id, oversized));
         EXPECT_FALSE(editor.runShader(service, id, oversized));
         EXPECT_FALSE(editor.setDocumentTarget(id, {shader::ShaderSlot::Kind::Node, {}}, service));
+        EXPECT_FALSE(editor.setDocumentTarget(id, {shader::ShaderSlot::Kind::Reveal, {}}, service));
         EXPECT_EQ(editor.inspectDocument(id, &service)->document, before->document);
         EXPECT_EQ(editor.inspectDocument(id, &service)->text, before->text);
         EXPECT_EQ(editor.inspectDocument(id, &service)->owned_bindings, before->owned_bindings);
@@ -313,11 +314,13 @@ namespace {
         ASSERT_TRUE(lfs::vis::ShaderCommands{service}.setParameter(asset, "strength", value));
         EXPECT_EQ(service.status(asset)->values[0].x, 0.75f);
         EXPECT_EQ(service.status(asset)->links, links);
+        EXPECT_TRUE(service.dirty());
         EXPECT_FALSE(lfs::vis::ShaderCommands{service}.removeAsset(asset));
         ASSERT_TRUE(lfs::vis::ShaderCommands{service}.bind({}, asset));
         editor.stopShader(service);
         EXPECT_FALSE(service.boundAsset({}));
         EXPECT_FALSE(editor.hasShaderBinding(service));
+        EXPECT_TRUE(service.dirty());
         ASSERT_TRUE(lfs::vis::ShaderCommands{service}.renameAsset(asset, "Renamed fixture"));
         editor.openShaderAsset(service.assets().front());
         EXPECT_EQ(editor.getText(), "valid");

@@ -2511,6 +2511,7 @@
     "reveal_effect_dark_to_light": "暗から明",
     "reveal_effect_distortion": "歪み",
     "reveal_effect_camera_light": "カメラライト",
+    "reveal_effect_custom": "カスタム",
     "reveal_history_stale": "この編集の記録後に表示エフェクトが変更されました。",
     "add_reveal": "表示エフェクトを追加",
     "change_reveal": "表示エフェクトを変更",
@@ -3744,5 +3745,7 @@
   "shader.unbind": "割り当て解除",
   "shader.unbound": "未割り当て",
   "shader.untitled": "無題のシェーダー",
-  "editor.documents": "Python とシェーダーのドキュメント"
+  "editor.documents": "Python とシェーダーのドキュメント",
+  "shader.restore_warning": "一部のシェーダー状態を復元できませんでした：\n{}",
+  "shader.publication_omitted": "ユーザーシェーダーとカスタム表示クリップは公開対象外です。公開されたシーンには元のスプラットが使用されます。"
 }

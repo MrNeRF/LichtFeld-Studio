@@ -10,11 +10,13 @@
 #include "io/project/chapter_binary_utils.hpp"
 #include "operation/undo_history.hpp"
 #include "scene/visible_splat_bounds.hpp"
+#include "sequencer/sequencer_controller.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <format>
 #include <source_location>
+#include <unordered_set>
 #include <utility>
 
 namespace lfs::vis::shaders {
@@ -115,11 +117,17 @@ namespace lfs::vis::shaders {
     }
 
     std::optional<rendering::GaussianCustomEffectState>
-    makeCustomEffectState(const ShaderFrameSnapshot& snapshot, const EffectScene& scene, const float time) {
+    makeCustomEffectState(const ShaderFrameSnapshot& snapshot, const EffectScene& scene, const float time,
+                          const std::optional<CustomRevealContext>& reveal) {
         using State = rendering::GaussianCustomEffectState;
         State state;
         state.global_binding = snapshot.global;
-        bool applies = state.global_binding != State::kNone;
+        if (reveal && snapshot.reveal_asset == reveal->shader_id) {
+            state.reveal_binding = snapshot.reveal;
+            state.reveal_progress = reveal->progress;
+            state.reveal_softness = reveal->softness;
+        }
+        bool applies = state.global_binding != State::kNone || state.reveal_binding != State::kNone;
         state.objects.resize(scene.objects.size());
         for (std::size_t i = 0; i < scene.objects.size(); ++i) {
             const auto& object = scene.objects[i];
@@ -251,8 +259,10 @@ namespace lfs::vis::shaders {
 
     std::vector<core::Uuid> ShaderService::Bindings::assets() const {
         std::vector<core::Uuid> assets;
-        if (global)
-            assets.push_back(*global);
+        for (const auto& bound : {global, reveal}) {
+            if (bound)
+                assets.push_back(*bound);
+        }
         for (const auto& entry : nodes)
             assets.push_back(entry.second);
         std::ranges::sort(assets, {}, &core::Uuid::bytes);
@@ -262,13 +272,14 @@ namespace lfs::vis::shaders {
     }
 
     bool ShaderService::Bindings::binds(const core::Uuid& asset) const {
-        return global == asset ||
+        return global == asset || reveal == asset ||
                std::ranges::any_of(nodes, [&](const auto& entry) { return entry.second == asset; });
     }
 
     std::optional<core::Uuid> ShaderService::Bindings::get(const ShaderSlot& slot) const {
         switch (slot.kind) {
         case ShaderSlot::Kind::Global: return global;
+        case ShaderSlot::Kind::Reveal: return reveal;
         case ShaderSlot::Kind::Node:
             if (const auto found = nodes.find(slot.node); found != nodes.end())
                 return found->second;
@@ -279,6 +290,8 @@ namespace lfs::vis::shaders {
     void ShaderService::Bindings::set(const ShaderSlot& slot, std::optional<core::Uuid> asset) {
         if (slot.kind == ShaderSlot::Kind::Global)
             global = asset;
+        else if (slot.kind == ShaderSlot::Kind::Reveal)
+            reveal = asset;
         else if (asset)
             nodes[slot.node] = *asset;
         else
@@ -302,6 +315,9 @@ namespace lfs::vis::shaders {
                 return static_cast<std::uint32_t>(snapshot.bindings.size() - 1);
             };
             snapshot.global = bind({}, bindings.global);
+            snapshot.reveal = bind({ShaderSlot::Kind::Reveal, {}}, bindings.reveal);
+            if (snapshot.reveal != ShaderFrameSnapshot::kNone)
+                snapshot.reveal_asset = bindings.reveal;
             for (const auto& [node, asset] : bindings.nodes) {
                 if (const auto binding = bind({ShaderSlot::Kind::Node, node}, asset); binding != ShaderFrameSnapshot::kNone)
                     snapshot.nodes.emplace(node, binding);
@@ -323,6 +339,8 @@ namespace lfs::vis::shaders {
     }
 
     ShaderService::~ShaderService() {
+        if (reveal_controller_)
+            reveal_controller_->setShaderService(nullptr);
         stop();
         if (worker_.joinable())
             worker_.join();
@@ -342,7 +360,8 @@ namespace lfs::vis::shaders {
     }
 
     Status ShaderService::validateTarget(const ShaderSlot& slot) const {
-        if ((slot.kind != ShaderSlot::Kind::Global && slot.kind != ShaderSlot::Kind::Node) ||
+        if ((slot.kind != ShaderSlot::Kind::Global && slot.kind != ShaderSlot::Kind::Node &&
+             slot.kind != ShaderSlot::Kind::Reveal) ||
             (slot.kind != ShaderSlot::Kind::Node && !slot.node.is_nil()))
             return Status::failure(serviceError(ErrorCode::InvalidArgument, "Invalid shader target."));
         if (slot.kind == ShaderSlot::Kind::Node) {
@@ -354,6 +373,12 @@ namespace lfs::vis::shaders {
                     serviceError(ErrorCode::InvalidArgument, std::format("'{}' is not a splat node.", node->name)));
             }
         }
+        return {};
+    }
+
+    Status ShaderService::validateRevealTarget() const {
+        if (!reveal_controller_ || !reveal_controller_->timeline().revealClip())
+            return Status::failure(serviceError(ErrorCode::FailedPrecondition, "A reveal clip is required."));
         return {};
     }
 
@@ -435,11 +460,119 @@ namespace lfs::vis::shaders {
         return total <= io::project::kMaxShaderTotalSourceBytes;
     }
 
+    Result<ShaderProjectState> ShaderService::captureProject(const io::project::ShaderLibraryChapter& retained,
+                                                             const std::span<const core::Uuid> omitted) const {
+        using Json = io::JsonChapterDom::Json;
+        const std::lock_guard lock(mutex_);
+        ShaderProjectState result{retained, project_token_};
+        const auto root = Json::parse(retained.dom().dump());
+        std::map<std::string, Json> assets, bindings;
+        for (const auto& entry : root["assets"])
+            assets.emplace(entry["uuid"].get<std::string>(), entry);
+        for (const auto& entry : root["bindings"])
+            bindings.emplace(entry.value("target", "") + ":" + entry.value("node_uuid", ""), entry);
+        Json saved_assets = Json::array(), saved_bindings = Json::array();
+        std::vector<core::Uuid> ids;
+        for (const auto& [id, asset] : assets_)
+            ids.push_back(id);
+        std::ranges::sort(ids, {}, [](const auto& id) { return id.bytes; });
+        for (const auto& id : ids) {
+            const auto& asset = assets_.at(id);
+            auto entry = assets.contains(id.to_string()) ? assets.at(id.to_string()) : Json::object();
+            auto parameters = asset.pending;
+            for (const auto& [name, value] : asset.values)
+                if (!parameters.contains(name))
+                    parameters[name] = value.size() == 1 ? Json(value.front()) : Json(value);
+            entry.update(Json{{"uuid", id.to_string()}, {"name", asset.name}, {"language", asset.language}, {"source", *asset.source}, {"parameters", parameters}});
+            saved_assets.push_back(std::move(entry));
+        }
+        for (const auto& binding : bindingsLocked()) {
+            if (binding.target.kind == ShaderSlot::Kind::Reveal || std::ranges::contains(omitted, binding.target.node))
+                continue;
+            const bool node = binding.target.kind == ShaderSlot::Kind::Node;
+            const std::string key = node ? "node:" + binding.target.node.to_string() : "global:";
+            auto entry = bindings.contains(key) ? bindings.at(key) : Json::object();
+            entry["target"] = node ? "node" : "global";
+            entry["shader_uuid"] = binding.asset.to_string();
+            if (node)
+                entry["node_uuid"] = binding.target.node.to_string();
+            saved_bindings.push_back(std::move(entry));
+        }
+        std::sort(saved_bindings.begin(), saved_bindings.end(), [](const auto& a, const auto& b) { return a.dump() < b.dump(); });
+        if (auto set = result.chapter.dom().set_json("assets", saved_assets); !set)
+            return std::move(set).error();
+        if (auto set = result.chapter.dom().set_json("bindings", saved_bindings); !set)
+            return std::move(set).error();
+        if (auto valid = result.chapter.validate(); !valid)
+            return std::move(valid).error();
+        return result;
+    }
+
+    std::vector<std::string> ShaderService::restoreProject(const io::project::ShaderLibraryChapter& chapter,
+                                                           const std::optional<core::Uuid> reveal) {
+        clear();
+        auto warnings = chapter.warnings;
+        const auto root = io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        const std::lock_guard lock(mutex_);
+        for (const auto& entry : root["assets"]) {
+            Asset asset;
+            asset.name = entry["name"];
+            asset.source = std::make_shared<const std::string>(entry["source"].get<std::string>());
+            asset.language = entry["language"];
+            asset.pending = entry["parameters"];
+            asset.cacheSize();
+            for (const auto& [name, value] : asset.pending.items())
+                asset.values[name] = value.is_number() ? std::vector<float>{value.get<float>()} : value.get<std::vector<float>>();
+            installContentLocked(*core::Uuid::from_string(entry["uuid"].get<std::string>()), std::move(asset));
+        }
+        Bindings staged;
+        std::unordered_set<core::Uuid> bound;
+        if (reveal && assets_.contains(*reveal))
+            bound.insert(*reveal);
+        for (const auto& entry : root["bindings"]) {
+            ShaderSlot slot;
+            if (entry["target"] == "node")
+                slot = {ShaderSlot::Kind::Node, *core::Uuid::from_string(entry["node_uuid"].get<std::string>())};
+            const auto id = *core::Uuid::from_string(entry["shader_uuid"].get<std::string>());
+            if (auto valid = validateTarget(slot); !valid) {
+                warnings.push_back(std::string(valid.error().user_message()));
+                continue;
+            }
+            if (!bound.contains(id) && bound.size() >= kMaxBoundShaders) {
+                warnings.push_back("SHDR.bindings: more than eight bound assets");
+                continue;
+            }
+            bound.insert(id);
+            if (slot.kind == ShaderSlot::Kind::Node)
+                staged.nodes[slot.node] = id;
+            else
+                staged.global = id;
+        }
+        staged.reveal.reset(); // SEQR installs the canonical clip transaction.
+        bindings_ = std::move(staged);
+        retargetLocked();
+        refreshSnapshotLocked();
+        return warnings;
+    }
+
+    void ShaderService::clearDirtyIfUnchanged(const ShaderProjectToken token) {
+        const std::lock_guard lock(mutex_);
+        if (token == project_token_)
+            dirty_ = false;
+    }
+
     ShaderProjectToken ShaderService::projectToken() const {
         if (std::this_thread::get_id() == owner_)
             return project_token_;
         const std::lock_guard lock(mutex_);
         return project_token_;
+    }
+
+    bool ShaderService::dirty() const {
+        if (std::this_thread::get_id() == owner_)
+            return dirty_;
+        const std::lock_guard lock(mutex_);
+        return dirty_;
     }
 
     Result<ShaderStatus> ShaderService::status(const core::Uuid& asset) const {
@@ -513,6 +646,10 @@ namespace lfs::vis::shaders {
     }
 
     void ShaderService::clear() {
+        if (reveal_controller_) {
+            if (auto cleared = reveal_controller_->setRevealClip(std::nullopt, false, false); !cleared)
+                return;
+        }
         {
             const std::lock_guard lock(mutex_);
             ++project_token_[0];
@@ -520,6 +657,7 @@ namespace lfs::vis::shaders {
             assets_.clear();
             removed_revisions_.clear();
             history_lifetime_ = std::make_shared<int>(0);
+            dirty_ = false;
             changes_->notify(false, true);
             bindings_ = {};
             has_bindings_.store(false, std::memory_order_release);
@@ -538,9 +676,9 @@ namespace lfs::vis::shaders {
         wake();
     }
 
-    bool ShaderService::hasApplicableBindings() const {
+    bool ShaderService::hasApplicableBindings(const std::optional<CustomRevealContext>& reveal) const {
         const std::lock_guard lock(mutex_);
-        if (bindings_.global)
+        if (bindings_.global || (reveal && bindings_.reveal == reveal->shader_id))
             return true;
         for (const auto& slot : scene_.getVisibleSplatNodeSlots())
             if (slot.node && bindings_.nodes.contains(slot.node->uuid))
@@ -622,7 +760,8 @@ namespace lfs::vis::shaders {
             return {};
         const auto programs = retained_ && retained_->epoch == retained->epoch && retained_->revision == retained->content->revision && !retained_->waiting() && !retained_->anyFailed() ? retained_->programs : retained->programs;
         const auto removed = [&](const ShaderBinding& slot) {
-            return slot.target.kind == ShaderSlot::Kind::Global ? !bindings_.global : !bindings_.nodes.contains(slot.target.node);
+            return slot.target.kind == ShaderSlot::Kind::Global ? !bindings_.global : slot.target.kind == ShaderSlot::Kind::Reveal ? !bindings_.reveal
+                                                                                                                                   : !bindings_.nodes.contains(slot.target.node);
         };
         if (std::ranges::all_of(retained->slots, removed))
             return {};
@@ -633,6 +772,10 @@ namespace lfs::vis::shaders {
         std::erase_if(next->slots, removed);
         if (!bindings_.global)
             next->global = ShaderFrameSnapshot::kNone;
+        if (!bindings_.reveal) {
+            next->reveal = ShaderFrameSnapshot::kNone;
+            next->reveal_asset.reset();
+        }
         std::erase_if(next->nodes, [&](const auto& node) { return !bindings_.nodes.contains(node.first); });
         ++next->revision;
         return next;
@@ -654,7 +797,7 @@ namespace lfs::vis::shaders {
     }
 
     void ShaderService::retargetLocked() {
-        has_bindings_.store(bindings_.global || !bindings_.nodes.empty(), std::memory_order_release);
+        has_bindings_.store(bindings_.global || bindings_.reveal || !bindings_.nodes.empty(), std::memory_order_release);
         std::vector<ShaderMember> members;
         for (const auto& asset : bindings_.assets())
             if (assets_.at(asset).language == "slang")
@@ -875,6 +1018,8 @@ namespace lfs::vis::shaders {
         std::vector<ShaderBinding> result;
         if (bindings_.global)
             result.push_back({{}, *bindings_.global});
+        if (bindings_.reveal)
+            result.push_back({{ShaderSlot::Kind::Reveal, {}}, *bindings_.reveal});
         for (const auto& [node, asset] : bindings_.nodes)
             result.push_back({{ShaderSlot::Kind::Node, node}, asset});
         return result;
@@ -1016,6 +1161,10 @@ namespace lfs::vis::shaders {
     };
 
     Status ShaderService::installEdit(const EditState& expected, const EditState& desired) {
+        if (!desired.asset && reveal_controller_ && reveal_controller_->timeline().revealClip() &&
+            reveal_controller_->timeline().revealClip()->shader_id == desired.id)
+            return Status::failure(
+                serviceError(ErrorCode::FailedPrecondition, "The reveal clip references this shader."));
         {
             if (desired.asset && (((!expected.asset || desired.asset->source != expected.asset->source) && !sourceFitsLocked(*desired.asset->source, desired.id)) ||
                                   (!assets_.contains(desired.id) && assets_.size() >= io::project::kMaxShaderAssets)))
@@ -1124,6 +1273,16 @@ namespace lfs::vis::shaders {
         if (slot) {
             if (auto valid = validateTarget(*slot); !valid)
                 return valid.error();
+            if (authoring && slot->kind == ShaderSlot::Kind::Reveal) {
+                if (auto valid = validateRevealTarget(); !valid)
+                    return valid.error();
+                {
+                    const std::lock_guard lock(mutex_);
+                    if (auto prepared = prepareEdit(command); !prepared)
+                        return prepared.error();
+                }
+                return reveal_controller_->revealCommand(command);
+            }
         }
         EditState before, after;
         core::Uuid id;
@@ -1239,6 +1398,20 @@ namespace lfs::vis::shaders {
             return next;
         },
                           command);
+    }
+
+    Status ShaderService::setRevealBinding(std::optional<core::Uuid> asset) {
+        const ShaderSlot slot{ShaderSlot::Kind::Reveal, {}};
+        {
+            const std::lock_guard lock(mutex_);
+            auto before = editStateLocked({}, slot), after = before;
+            after.binding = asset;
+            if (auto result = installEdit(before, after); !result)
+                return result;
+        }
+        bindingsChanged();
+        wake();
+        return {};
     }
 
     ShaderService::ExportLease ShaderService::prepareExport(const std::span<const std::string> hosts) {

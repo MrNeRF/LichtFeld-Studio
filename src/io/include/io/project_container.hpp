@@ -95,6 +95,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_GUIL = make_fourcc('G', 'U', 'I', 'L');
     inline constexpr Fourcc FOURCC_VIEW = make_fourcc('V', 'I', 'E', 'W');
     inline constexpr Fourcc FOURCC_EDTR = make_fourcc('E', 'D', 'T', 'R');
+    inline constexpr Fourcc FOURCC_SHDR = make_fourcc('S', 'H', 'D', 'R');
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
@@ -153,6 +154,7 @@ namespace lfs::io::project {
         // "tiles3d"); readers without it report an unsupported feature.
         TILESET_REFERENCES = 10,
         COLLISION_VOLUMES_V1 = 11,
+        USER_SHADERS_V1 = 12,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -620,6 +622,7 @@ namespace lfs::io::project {
         Version min_safe_writer_version{1, 0};
         CapabilitySet extra_reader_capabilities;
         CapabilitySet extra_writer_capabilities;
+        bool recompute_shader_capabilities = false;
     };
 
     struct CompactionOptions {
