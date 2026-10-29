@@ -53,8 +53,8 @@ namespace lfs::media {
         source_metadata_.reset();
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata) {
-            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR)
-                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16 or EXR output");
+            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::JXL)
+                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR or JXL output");
             if (!session.source_metadata)
                 return sinkError(ErrorCode::InvalidArgument, "Image metadata requires an explicit source observation");
             // GPU extraction writes its encoded batch directly. Keep only the
@@ -133,8 +133,14 @@ namespace lfs::media {
             return exr ? ImageOutput::writeExr(filename, frame, options_.exr, *packet)
                        : ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
         }
-        if (options_.format == FrameFileFormat::JXL)
-            return ImageOutput::writeJxl(filename, frame, options_.jxl);
+        if (options_.format == FrameFileFormat::JXL) {
+            if (!options_.embed_source_metadata)
+                return ImageOutput::writeJxl(filename, frame, options_.jxl);
+            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+            if (!packet)
+                return SinkResult::failure(packet.error());
+            return ImageOutput::writeJxl(filename, frame, options_.jxl, *packet);
+        }
         if (options_.format == FrameFileFormat::AVIF)
             return ImageOutput::writeAvif(filename, frame, options_.avif);
         // Legacy extraction is already packed: no additional pixel copy.

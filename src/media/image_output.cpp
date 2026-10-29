@@ -174,6 +174,9 @@ namespace lfs::media {
                                                                                                                                                                                     : core::image_codecs::SampleType::Float32);
     }
     SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options) {
+        return writeJxl(path, frame, options, {});
+    }
+    SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options, std::string_view xmp) {
         return outputBoundary([&]() -> SinkResult {
             if (auto valid = validateJxlOutputOptions(options, frame.layout.format); !valid)
                 return valid;
@@ -217,7 +220,7 @@ namespace lfs::media {
                                      rgb8 ? codecs::SampleType::UInt8 : options.precision == JxlPrecision::UInt16 ? codecs::SampleType::UInt16
                                                                                                                   : codecs::SampleType::Float32,
                                      stride, encoding,
-                                     {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
+                                     {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled}, xmp);
         },
                               "ImageOutput.writeJxl");
     }

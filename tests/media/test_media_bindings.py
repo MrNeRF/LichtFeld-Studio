@@ -1292,9 +1292,64 @@ class MediaBindings(unittest.TestCase):
     def test_exr_embedded_metadata_resume_policy_and_replay(self):
         self._check_embedded_metadata_resume(media.FrameFileFormat.EXR, ".exr")
 
+    def test_jxl_embedded_metadata_roundtrip_and_unchanged_codestream(self):
+        import xml.etree.ElementTree as ET
+        request = self.metadata_request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        request.geometry.clockwise_rotation = 90
+        request.end_seconds = 0.01
+        for precision in (media.JxlPrecision.UInt16, media.JxlPrecision.Float32):
+            with self.subTest(precision=precision):
+                plain = media.FileExtraction()
+                plain.files.format = media.FrameFileFormat.JXL
+                plain.files.jxl.precision = precision
+                plain.files.output_directory = self.root / f"jxl-plain-{precision}"
+                self.assertGreater(media.MediaIngest.extract_files(request, plain).frames_accepted, 0)
+                output = media.FileExtraction()
+                output.files.format = media.FrameFileFormat.JXL
+                output.files.jxl.precision = precision
+                output.files.embed_source_metadata = True
+                output.files.output_directory = self.root / f"jxl é 日本語-{precision}"
+                self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+                manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["embedded_metadata_policy"], "jxl-static-source-xmp-v1")
+                paths = list(output.files.output_directory.glob("*.jxl"))
+                self.assertTrue(paths)
+                for image in paths:
+                    data = image.read_bytes()
+                    _, codestream, packets = source_exif_fixture.read_export_jxl(data)
+                    original = (plain.files.output_directory / image.name).read_bytes()
+                    if original.startswith(b"\xff\x0a"):
+                        original_stream = original
+                    else:
+                        _, original_stream, absent = source_exif_fixture.read_export_jxl(original)
+                        self.assertEqual(absent, [])
+                    self.assertEqual(codestream, original_stream)
+                    self.assertEqual(len(packets), 1)
+                    packet = packets[0]
+                    facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                             if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                    self.assertEqual(facts["MetadataPolicy"], "jxl-static-source-xmp-v1")
+                    self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), ("32", "64"))
+                    self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+                    self.assertEqual(facts["TimestampOrigin"], "best_effort")
+                    self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+                    observed = json.loads(media.MediaIngest.source_metadata_json(image))
+                    self.assertTrue(observed["success"])
+                    blocks = observed["metadata"]["image_xmp"]["blocks"]
+                    self.assertEqual([block["envelope"] for block in blocks], ["jxl_xml"])
+                    self.assertEqual([bytes.fromhex(block["bytes"]) for block in blocks], packets)
+                    with self.assertRaises(AssertionError):
+                        source_exif_fixture.read_export_jxl(data[:12])
+
+    def test_jxl_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.JXL, ".jxl")
+
     def _check_embedded_metadata_resume(self, file_format, extension):
         request = self.metadata_request()
-        if file_format in (media.FrameFileFormat.TIFF16, media.FrameFileFormat.EXR):
+        if file_format in (media.FrameFileFormat.TIFF16, media.FrameFileFormat.EXR, media.FrameFileFormat.JXL):
             request.output_format = media.FramePixelFormat.RGBFloat32
             request.input_color.transfer = media.ColorTransfer.Linear
             request.input_color.primaries = media.ColorPrimaries.Bt709

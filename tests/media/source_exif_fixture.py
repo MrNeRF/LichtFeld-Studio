@@ -601,3 +601,37 @@ def read_export_exr(data):
     if packet is not None and packet[0] != "string":
         raise AssertionError("XMP must use an EXR string attribute")
     return {key: value for key, value in attrs.items() if key != "xmp"}, tuple(payload), None if packet is None else packet[1]
+
+
+def read_export_jxl(data):
+    """Independent JPEG XL container framing; retain exact codestream and XMP."""
+    assert data.startswith(b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a")
+    offset = 0
+    packets, codestream, other = [], [], []
+    while offset < len(data):
+        assert len(data) - offset >= 8
+        size = int.from_bytes(data[offset:offset + 4], "big")
+        kind = data[offset + 4:offset + 8]
+        header = 8
+        if size == 1:
+            assert len(data) - offset >= 16
+            size = int.from_bytes(data[offset + 8:offset + 16], "big")
+            header = 16
+        elif size == 0:
+            size = len(data) - offset
+        assert header <= size <= len(data) - offset
+        payload = data[offset + header:offset + size]
+        if kind == b"xml ":
+            packets.append(payload)
+        elif kind == b"jxlc":
+            codestream.append(payload)
+        elif kind == b"jxlp":
+            assert len(payload) >= 4
+            index = int.from_bytes(payload[:4], "big")
+            assert index & 0x7fffffff == len(codestream)
+            codestream.append(payload[4:])
+        else:
+            other.append((kind, payload))
+        offset += size
+    assert codestream
+    return other, b"".join(codestream), packets

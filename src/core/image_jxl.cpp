@@ -153,13 +153,15 @@ namespace lfs::core::image_codecs {
 
         template <class Writer>
         Status encode_image(std::span<const uint8_t> input, int width, int height, int channels,
-                            SampleType type, size_t stride, const JxlEncodeOptions& options, Writer&& write) {
+                            SampleType type, size_t stride, const JxlEncodeOptions& options, std::string_view xmp, Writer&& write) {
             try {
                 const auto cancelled = [&] { return options.cancelled && options.cancelled(); };
                 if (cancelled())
                     return encode_error(ErrorCode::Cancelled, "cancelled before encoding");
                 if (auto valid = validate_jxl_encode_options(options, type); !valid)
                     return valid;
+                if (xmp.size() > 32u * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                    return encode_error(ErrorCode::InvalidArgument, "XMP exceeds 32 MiB or contains NUL");
                 const bool floating = type == SampleType::Float32;
                 const bool alpha = channels == 2 || channels == 4;
                 if (width <= 0 || height <= 0 || channels < 1 || channels > 4 ||
@@ -277,6 +279,15 @@ namespace lfs::core::image_codecs {
                     // keeps the full bit pattern without a lossy fallback.
                     if (auto result = check(JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR, 1)); !result)
                         return result;
+                if (!xmp.empty()) {
+                    if (auto result = check(JxlEncoderUseContainer(encoder.get(), JXL_TRUE), "metadata container"); !result)
+                        return result;
+                    if (auto result = check(JxlEncoderUseBoxes(encoder.get()), "metadata configuration"); !result)
+                        return result;
+                    const JxlBoxType box{'x', 'm', 'l', ' '};
+                    if (auto result = check(JxlEncoderAddBox(encoder.get(), box, reinterpret_cast<const uint8_t*>(xmp.data()), xmp.size(), JXL_FALSE), "XMP submission"); !result)
+                        return result;
+                }
                 const JxlPixelFormat format{static_cast<uint32_t>(channels), floating ? JXL_TYPE_FLOAT : type == SampleType::UInt16 ? JXL_TYPE_UINT16
                                                                                                                                     : JXL_TYPE_UINT8,
                                             JXL_NATIVE_ENDIAN, 0};
@@ -856,8 +867,13 @@ namespace lfs::core::image_codecs {
 
     Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
                              size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options) {
+        return encode_jxl_memory(input, width, height, channels, type, stride, output, options, {});
+    }
+
+    Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
+                             size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options, std::string_view xmp) {
         std::vector<uint8_t> candidate;
-        auto status = encode_image(input, width, height, channels, type, stride, options, [&](std::span<const uint8_t> bytes) -> Status {
+        auto status = encode_image(input, width, height, channels, type, stride, options, xmp, [&](std::span<const uint8_t> bytes) -> Status {
             candidate.insert(candidate.end(), bytes.begin(), bytes.end());
             return {};
         });
@@ -868,6 +884,11 @@ namespace lfs::core::image_codecs {
 
     Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,
                      int channels, SampleType type, size_t stride, const JxlEncodeOptions& options, const AtomicFileOptions& publication) {
+        return write_jxl(path, input, width, height, channels, type, stride, options, publication, {});
+    }
+
+    Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,
+                     int channels, SampleType type, size_t stride, const JxlEncodeOptions& options, const AtomicFileOptions& publication, std::string_view xmp) {
         try {
             if (auto valid = validate_jxl_encode_options(options, type); !valid)
                 return valid;
@@ -886,7 +907,7 @@ namespace lfs::core::image_codecs {
                 }
             }
             encoding.cancelled = [a = options.cancelled, b = publication.cancelled] { return (a && a()) || (b && b()); };
-            return writeFileAtomically(path, [&](FILE* stream) { return encode_image(input, width, height, channels, type, stride, encoding, [&](std::span<const uint8_t> bytes) -> Status {
+            return writeFileAtomically(path, [&](FILE* stream) { return encode_image(input, width, height, channels, type, stride, encoding, xmp, [&](std::span<const uint8_t> bytes) -> Status {
                                                                      if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {
                                                                          const int native = errno;
                                                                          return Status::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = "Cannot write JXL output (errno=" + std::to_string(native) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, native, "stdio"}}));
