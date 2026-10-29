@@ -410,7 +410,6 @@ namespace {
         EXPECT_EQ(destination, (std::array<float, 2>{-7, -8}));
     }
 
-
     TEST_P(TensorOperationContracts, CompiledExpressionsUseHostParametersAndTerminalFolds) {
         if (!GetParam().backend)
             GTEST_SKIP() << "Compiled expression kernels target GPU backends";

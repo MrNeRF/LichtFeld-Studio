@@ -35,6 +35,11 @@ namespace lfs::core::internal {
     enum class BackendActivationScope { Process,
                                         Thread };
     class BackendDriver {
+        const bool preserves_home_;
+
+    protected:
+        explicit BackendDriver(bool preserves_home = false) : preserves_home_(preserves_home) {}
+
     public:
         virtual ~BackendDriver() = default;
         virtual const char* name() const noexcept = 0;
@@ -74,7 +79,7 @@ namespace lfs::core::internal {
         virtual SplatPublication publication() const;
         virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
         // A null home remains null, and implicit binding with no home is a no-op.
-        virtual void* canonical_home_target(void*) const noexcept { return nullptr; }
+        void* canonical_home_target(void* home) const noexcept { return preserves_home_ ? home : nullptr; }
         virtual std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) { return std::nullopt; }
         virtual void synchronize_tensor_target(const Tensor&, void*) {}
         virtual void shutdown_compatibility_pool() {}
@@ -96,7 +101,6 @@ namespace lfs::core::internal {
         TensorTargetBinding(const TensorTargetBinding&) = delete;
         TensorTargetBinding& operator=(const TensorTargetBinding&) = delete;
     };
-    MemoryInfo backend_pressure_memory_info(BackendDriver&);
     using BackendRegistry = std::array<BackendDriver*, kGpuBackendCount>;
     void register_compiled_backends(BackendRegistry&);
     LFS_CORE_API BackendDriver& backend_driver(GpuBackend);

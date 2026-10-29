@@ -3,6 +3,7 @@
 #include "../prepared_readback.hpp"
 
 #include "../../internal/expression_runtime.hpp"
+#include "../tensor_completion.hpp"
 #include "../tensor_vulkan_interop.hpp"
 
 #include "../gpu_backend_ops.hpp"
@@ -190,7 +191,6 @@ namespace lfs::core::internal {
                                       cudaMemcpyDeviceToHost, execution.cuda_stream));
             }
             bool prefers_recycled_host_staging() const noexcept override { return false; }
-
         };
     } // namespace
     std::unique_ptr<BackendReadbackSlot> CudaBackendOps::create_readback_slot(size_t bytes) {
@@ -236,21 +236,16 @@ namespace lfs::core::internal {
                 return true;
             }
             void wait() override {
-                std::exception_ptr failure;
+                CompletionDrain drain;
                 for (const auto& [stream, event] : events_) {
-                    try {
+                    drain.settle([&] {
                         ensure_cuda_success(cudaEventSynchronize(event), "cudaEventSynchronize(completion)", {}, LFS_SOURCE_SITE_CURRENT());
                         device_fault_registry_consume_or_throw(LFS_SOURCE_SITE_CURRENT(), false);
-                    } catch (...) {
-                        // LFS-CENSUS-OK(empty-catch): Release every captured event before rethrowing the first failure.
-                        if (!failure)
-                            failure = std::current_exception();
-                    }
+                    });
                     CudaEventPool::instance().release(event);
                 }
                 events_.clear();
-                if (failure)
-                    std::rethrow_exception(failure);
+                drain.rethrow();
             }
         };
     } // namespace

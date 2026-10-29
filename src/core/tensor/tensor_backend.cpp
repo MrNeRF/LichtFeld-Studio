@@ -482,24 +482,14 @@ namespace lfs::core {
         }
         void wait() {
             std::lock_guard lock(mutex);
-            std::exception_ptr failure;
-            const auto settle = [&](auto&& operation) {
-                try {
-                    operation();
-                } catch (...) {
-                    // LFS-CENSUS-OK(empty-catch): Settle every obligation before rethrowing its first failure.
-                    if (!failure)
-                        failure = std::current_exception();
-                }
-            };
+            internal::CompletionDrain drain;
             for (size_t i = 0; i < backends.size(); ++i)
                 if (std::exchange(backends[i], false))
-                    settle([&] { internal::backend_ops(kGpuBackends[i]).synchronize_device(); });
+                    drain.settle([&] { internal::backend_ops(kGpuBackends[i]).synchronize_device(); });
             for (auto& capture : captures)
                 if (capture)
-                    settle([&] { capture->wait(); });
-            if (failure)
-                std::rethrow_exception(failure);
+                    drain.settle([&] { capture->wait(); });
+            drain.rethrow();
         }
         ~Impl() {
             if (!settle_on_release)
@@ -645,79 +635,40 @@ namespace lfs::core {
             return backend;
         }
 
-        Tensor allocate_like(const Tensor& input,
-                             const TensorShape& shape,
-                             const DataType dtype) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::empty(shape, Device::CPU, dtype);
+        namespace {
+            template <class Allocate>
+            Tensor allocate_like_on_backend(const Tensor& input, const char* validation, Allocate&& allocate) {
+                LFS_ASSERT_MSG(input.is_valid(), validation);
+                if (input.device() == Device::CPU)
+                    return allocate(Device::CPU);
+                const GpuBackendScope scope(gpu_backend_of(input).value());
+                return allocate(Device::GPU);
             }
+        } // namespace
 
-            const GpuBackend backend = gpu_backend_of(input).value();
-            GpuBackendScope scope(backend);
-            return Tensor::empty(shape, Device::GPU, dtype);
+        Tensor allocate_like(const Tensor& input, const TensorShape& shape, DataType dtype) {
+            return allocate_like_on_backend(input, "allocate_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::empty(shape, device, dtype); });
         }
-
-        Tensor allocate_like(const Tensor& input,
-                             const TensorShape& shape,
-                             const DataType dtype,
-                             const float value) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::full(shape, value, Device::CPU, dtype);
-            }
-
-            const GpuBackend backend = gpu_backend_of(input).value();
-            GpuBackendScope scope(backend);
-            return Tensor::full(shape, value, Device::GPU, dtype);
+        Tensor allocate_like(const Tensor& input, const TensorShape& shape, DataType dtype, float value) {
+            return allocate_like_on_backend(input, "allocate_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::full(shape, value, device, dtype); });
         }
-
-        Tensor allocate_zeros_like(const Tensor& input,
-                                   const TensorShape& shape,
-                                   const DataType dtype) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_zeros_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::zeros(shape, Device::CPU, dtype);
-            }
-
-            GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::zeros(shape, Device::GPU, dtype);
+        Tensor allocate_zeros_like(const Tensor& input, const TensorShape& shape, DataType dtype) {
+            return allocate_like_on_backend(input, "allocate_zeros_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::zeros(shape, device, dtype); });
         }
-
-        Tensor allocate_ones_like(const Tensor& input,
-                                  const TensorShape& shape,
-                                  const DataType dtype) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_ones_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::ones(shape, Device::CPU, dtype);
-            }
-
-            GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::ones(shape, Device::GPU, dtype);
+        Tensor allocate_ones_like(const Tensor& input, const TensorShape& shape, DataType dtype) {
+            return allocate_like_on_backend(input, "allocate_ones_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::ones(shape, device, dtype); });
         }
-
-        Tensor allocate_rand_like(const Tensor& input,
-                                  const TensorShape& shape,
-                                  const DataType dtype) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_rand_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::rand(shape, Device::CPU, dtype);
-            }
-
-            GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::rand(shape, Device::GPU, dtype);
+        Tensor allocate_rand_like(const Tensor& input, const TensorShape& shape, DataType dtype) {
+            return allocate_like_on_backend(input, "allocate_rand_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::rand(shape, device, dtype); });
         }
-
-        Tensor allocate_randn_like(const Tensor& input,
-                                   const TensorShape& shape,
-                                   const DataType dtype) {
-            LFS_ASSERT_MSG(input.is_valid(), "allocate_randn_like requires a valid input tensor");
-            if (input.device() == Device::CPU) {
-                return Tensor::randn(shape, Device::CPU, dtype);
-            }
-
-            GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::randn(shape, Device::GPU, dtype);
+        Tensor allocate_randn_like(const Tensor& input, const TensorShape& shape, DataType dtype) {
+            return allocate_like_on_backend(input, "allocate_randn_like requires a valid input tensor",
+                                            [&](Device device) { return Tensor::randn(shape, device, dtype); });
         }
 
         Tensor copy_to_backend(const Tensor& source, const GpuBackend target) {

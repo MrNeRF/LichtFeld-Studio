@@ -11,10 +11,22 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace lfs::core {
+    namespace {
+        void validate_upload(const Tensor& destination, const Tensor& source) {
+            if (!gpu_backend_of(destination) || source.device() != Device::CPU || !source.is_contiguous() ||
+                !destination.is_contiguous() || destination.dtype() != source.dtype() || destination.bytes() != source.bytes())
+                throw std::invalid_argument("TensorUpload requires matching contiguous CPU and GPU tensors");
+        }
+        void validate_upload(const Tensor& destination, std::span<const std::byte> source) {
+            if (!gpu_backend_of(destination) || !destination.is_contiguous() || destination.bytes() != source.size())
+                throw std::invalid_argument("TensorUpload byte span must match a contiguous destination");
+        }
+    } // namespace
     struct TensorUpload::Impl {
         Tensor source, destination;
         internal::GpuBackendOps* ops = nullptr;
@@ -50,26 +62,29 @@ namespace lfs::core {
             upload.reset();
             ops = nullptr;
         }
-        void enqueue(Tensor&& target, const Tensor& input, internal::BackendQueueTarget queue) {
-            prepare(std::move(target));
-            source = input;
-            pin_operands({&source, &destination});
-            pending = true;
-            try {
-                finish(upload->enqueue(destination, source, queue, false));
-            } catch (...) {
-                failed_enqueue();
-                throw;
+        template <class Input>
+        static void enqueue(std::unique_ptr<Impl>& impl, Tensor&& target, const Input& input,
+                            internal::BackendQueueTarget queue, bool in_batch = false) {
+            if (impl && impl->pending)
+                throw std::logic_error("TensorUpload already pending");
+            validate_upload(target, input);
+            if (!impl)
+                impl = std::make_unique<Impl>();
+            impl->prepare(std::move(target));
+            if constexpr (std::is_same_v<Input, Tensor>) {
+                impl->source = input;
+                pin_operands({&impl->source, &impl->destination});
+            } else {
+                pin_operands({&impl->destination});
             }
-        }
-        void enqueue_bytes(Tensor&& target, std::span<const std::byte> input, internal::BackendQueueTarget queue, bool in_batch) {
-            prepare(std::move(target));
-            pin_operands({&destination});
-            pending = true;
+            impl->pending = true;
             try {
-                finish(upload->enqueue_bytes(destination, input, queue, in_batch));
+                if constexpr (std::is_same_v<Input, Tensor>)
+                    impl->finish(impl->upload->enqueue(impl->destination, impl->source, queue, false));
+                else
+                    impl->finish(impl->upload->enqueue_bytes(impl->destination, input, queue, in_batch));
             } catch (...) {
-                failed_enqueue();
+                impl->failed_enqueue();
                 throw;
             }
         }
@@ -93,17 +108,6 @@ namespace lfs::core {
         return *this;
     }
     bool TensorUpload::pending() const noexcept { return impl_ && impl_->pending; }
-    namespace {
-        void validate_upload(const Tensor& destination, const Tensor& source) {
-            if (!gpu_backend_of(destination) || source.device() != Device::CPU || !source.is_contiguous() ||
-                !destination.is_contiguous() || destination.dtype() != source.dtype() || destination.bytes() != source.bytes())
-                throw std::invalid_argument("TensorUpload requires matching contiguous CPU and GPU tensors");
-        }
-        void validate_upload(const Tensor& destination, std::span<const std::byte> source) {
-            if (!gpu_backend_of(destination) || !destination.is_contiguous() || destination.bytes() != source.size())
-                throw std::invalid_argument("TensorUpload byte span must match a contiguous destination");
-        }
-    } // namespace
     void TensorUpload::enqueue(Tensor destination, const Tensor& source, TensorExecutionTarget target) {
         if (gpu_backend_of(destination) != target.backend())
             throw std::invalid_argument("TensorUpload queue backend mismatch");
@@ -115,36 +119,16 @@ namespace lfs::core {
         enqueue(std::move(destination), source, target.native_handle());
     }
     void TensorUpload::enqueue_in_batch(Tensor destination, std::span<const std::byte> source) {
-        if (pending())
-            throw std::logic_error("TensorUpload already pending");
-        validate_upload(destination, source);
-        if (!impl_)
-            impl_ = std::make_unique<Impl>();
-        impl_->enqueue_bytes(std::move(destination), source, {nullptr, false}, true);
+        Impl::enqueue(impl_, std::move(destination), source, {nullptr, false}, true);
     }
     void TensorUpload::enqueue(Tensor destination, const Tensor& source) {
-        if (pending())
-            throw std::logic_error("TensorUpload already pending");
-        validate_upload(destination, source);
-        if (!impl_)
-            impl_ = std::make_unique<Impl>();
-        impl_->enqueue(std::move(destination), source, {});
+        Impl::enqueue(impl_, std::move(destination), source, {});
     }
     void TensorUpload::enqueue(Tensor destination, const Tensor& source, void* target) {
-        if (pending())
-            throw std::logic_error("TensorUpload already pending");
-        validate_upload(destination, source);
-        if (!impl_)
-            impl_ = std::make_unique<Impl>();
-        impl_->enqueue(std::move(destination), source, {target, false});
+        Impl::enqueue(impl_, std::move(destination), source, {target, false});
     }
     void TensorUpload::enqueue(Tensor destination, std::span<const std::byte> source, void* target) {
-        if (pending())
-            throw std::logic_error("TensorUpload already pending");
-        validate_upload(destination, source);
-        if (!impl_)
-            impl_ = std::make_unique<Impl>();
-        impl_->enqueue_bytes(std::move(destination), source, {target, false}, false);
+        Impl::enqueue(impl_, std::move(destination), source, {target, false});
     }
     bool TensorUpload::poll() {
         if (!pending())

@@ -507,6 +507,7 @@ namespace lfs::core {
             throw std::runtime_error("Recursive deferred tensor materialization detected");
         }
         const uint64_t lazy_node_id = lazy->node_id != 0 ? lazy->node_id : lazy_expr_id();
+        internal::BackendDriver* home_driver = nullptr;
         // Production and publication use the same gate. Keep it across both
         // phases rather than unlock/relock it for every materialized alias.
         std::unique_lock<std::mutex> lock(lazy->gate);
@@ -556,10 +557,11 @@ namespace lfs::core {
                     try {
                         // Materializers launch on the current stream. Without one they would
                         // use the legacy stream, unordered with this tensor's declared home.
-                        std::optional<internal::DeferredTargetBinding> home_stream;
-                        if (device_ == Device::GPU && stream() &&
-                            internal::deferred_home_needs_binding(internal::gpu_backend_tag(*this), stream()))
-                            home_stream.emplace(internal::gpu_backend_tag(*this), *this);
+                        std::optional<internal::TensorTargetBinding> home_stream;
+                        if (device_ == Device::GPU && stream()) {
+                            home_driver = &internal::deferred_target_driver(lazy->backend);
+                            home_stream.emplace(*home_driver, *this, true);
+                        }
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
                         lazy->result = materialized;
@@ -637,8 +639,11 @@ namespace lfs::core {
             const GpuBackend backend = internal::gpu_backend_tag(*this);
             LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
                            "deferred tensor materialized on a different GPU backend than its tag");
-            if (state_->stream)
-                state_->stream = static_cast<cudaStream_t>(internal::canonical_deferred_home(backend, state_->stream));
+            if (state_->stream) {
+                if (!home_driver)
+                    home_driver = &internal::deferred_target_driver(backend);
+                state_->stream = static_cast<cudaStream_t>(home_driver->canonical_home_target(state_->stream));
+            }
         }
 
         // when TensorState is shared, keep lazy->result so sibling handles

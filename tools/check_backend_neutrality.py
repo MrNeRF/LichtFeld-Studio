@@ -146,6 +146,7 @@ SHARED_TENSOR_DISPATCH = {
     "src/core/tensor/tensor_factory.cpp", "src/core/tensor/tensor_unified_ops.cpp",
     "src/core/tensor/tensor_masking_ops.cpp", "src/core/tensor/tensor_random_ops.cpp",
     "src/core/tensor/tensor_readback.cpp", "src/core/tensor/expression_program.cpp",
+    "src/core/tensor/backend/deferred_target.hpp",
     "src/core/tensor/backend/tensor_upload.cpp", "src/core/tensor/tensor_fused.cpp",
 }
 

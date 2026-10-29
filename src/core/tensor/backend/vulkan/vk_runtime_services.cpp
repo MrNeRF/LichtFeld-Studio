@@ -206,7 +206,6 @@ namespace lfs::core::internal {
                 (void)context_->memory().copy_to_readback(source, output, bytes);
             }
             bool prefers_recycled_host_staging() const noexcept override { return false; }
-
         };
     } // namespace
     std::unique_ptr<BackendReadbackSlot> VulkanBackendOps::create_readback_slot(size_t bytes) {
@@ -266,9 +265,9 @@ namespace lfs::core::internal {
                 return true;
             }
             void wait() override {
-                std::exception_ptr failure;
+                CompletionDrain drain;
                 if (external_device_ && external_point_.value) {
-                    try {
+                    drain.settle([&] {
                         const auto semaphore = static_cast<VkSemaphore>(external_point_.semaphore);
                         VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
                         info.semaphoreCount = 1;
@@ -281,24 +280,16 @@ namespace lfs::core::internal {
                         if (status != VK_SUCCESS)
                             throw TensorError("Cannot wait for tensor completion timeline");
                         external_device_ = nullptr;
-                    } catch (...) {
-                        // LFS-CENSUS-OK(empty-catch): Settle the storage timeline too before rethrowing the external wait failure.
-                        failure = std::current_exception();
-                    }
+                    });
                 }
                 if (const auto value = std::exchange(value_, 0)) {
-                    try {
+                    drain.settle([&] {
                         context_->wait(value);
                         context_->check_fault_buffer();
-                    } catch (...) {
-                        // LFS-CENSUS-OK(empty-catch): Release the captured context before rethrowing the first wait failure.
-                        if (!failure)
-                            failure = std::current_exception();
-                    }
+                    });
                 }
                 context_.reset();
-                if (failure)
-                    std::rethrow_exception(failure);
+                drain.rethrow();
             }
         };
     } // namespace

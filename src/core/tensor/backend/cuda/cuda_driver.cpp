@@ -31,14 +31,12 @@ namespace lfs::core::internal {
 
         public:
             BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Thread; }
-            void* canonical_home_target(void* target) const noexcept override { return target; }
+            CudaDriver() : BackendDriver(true) {}
             std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor& tensor, bool implicit) override {
                 const auto target = implicit ? tensor.stream() : prepare_inputs_for_stream({&tensor});
                 if (implicit && (!target || getCurrentCUDAStream() || is_stream_retired(target)))
                     return std::nullopt;
-                const auto previous = reinterpret_cast<uintptr_t>(getCurrentCUDAStream());
-                setCurrentCUDAStream(target);
-                return std::array<uintptr_t, 2>{previous, 0};
+                return bind_target(target);
             }
             void synchronize_tensor_target(const Tensor& tensor, void* target) override {
                 const auto consumer = static_cast<cudaStream_t>(target);

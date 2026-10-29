@@ -17,7 +17,6 @@ namespace lfs::core::internal {
         throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
     }
     MemoryInfo BackendDriver::memory_info(bool) { return activate().stats(); }
-    MemoryInfo BackendDriver::pressure_memory_info(bool) { return backend_pressure_memory_info(*this); }
     TensorExportDevice BackendDriver::dlpack_device(const Tensor&) { reject_dlpack_export(name()); }
     Tensor BackendDriver::prepare_dlpack_export(const Tensor&, std::optional<int64_t>) { reject_dlpack_export(name()); }
     std::shared_ptr<TensorVulkanInteropBackend> BackendDriver::make_vulkan_interop(VulkanInteropDevice) {
@@ -130,14 +129,14 @@ namespace lfs::core::internal {
 } // namespace lfs::core::internal
 
 namespace lfs::core::internal {
-    MemoryInfo backend_pressure_memory_info(BackendDriver& driver) {
-        if (const auto device = driver.device_info(-1); device && device->supports_process_memory_budget) {
+    MemoryInfo BackendDriver::pressure_memory_info(bool) {
+        if (const auto device = device_info(-1); device && device->supports_process_memory_budget) {
             MemoryInfo result;
             result.total_bytes = device->process_memory_budget_bytes;
             result.allocated_bytes = device->process_memory_used_bytes;
             result.free_bytes = result.total_bytes > result.allocated_bytes ? result.total_bytes - result.allocated_bytes : 0;
             return result;
         }
-        return driver.memory_info(false);
+        return memory_info(false);
     }
 } // namespace lfs::core::internal

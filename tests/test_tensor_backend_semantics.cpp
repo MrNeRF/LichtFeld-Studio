@@ -168,11 +168,10 @@ namespace {
             auto& driver = internal::backend_driver(backend);
             EXPECT_EQ(driver.canonical_home_target(nullptr), nullptr);
             EXPECT_FALSE(driver.bind_tensor_target(tensor, true).has_value());
-            EXPECT_EQ(internal::canonical_deferred_home(backend, nullptr), nullptr);
-            EXPECT_FALSE(internal::deferred_home_needs_binding(backend, nullptr));
-            const auto marker = reinterpret_cast<void*>(uintptr_t{1});
-            EXPECT_EQ(internal::canonical_deferred_home(backend, marker),
-                      driver.canonical_home_target(marker));
+            EXPECT_EQ(&internal::deferred_target_driver(backend), &driver);
+            const auto home = reinterpret_cast<void*>(uintptr_t{1});
+            EXPECT_EQ(driver.canonical_home_target(home),
+                      backend == GpuBackend::CUDA && gpu_backend_compiled(backend) ? home : nullptr);
         }
     }
 
@@ -191,10 +190,13 @@ namespace {
         }
         ASSERT_TRUE(deferred.is_deferred());
         ASSERT_EQ(deferred.stream(), home.get());
-        EXPECT_TRUE(internal::deferred_home_needs_binding(GpuBackend::CUDA, home.get()));
+        {
+            const internal::TensorTargetBinding binding(internal::deferred_target_driver(GpuBackend::CUDA), deferred, true);
+            EXPECT_EQ(getCurrentCUDAStream(), home.get());
+        }
+        EXPECT_EQ(getCurrentCUDAStream(), nullptr);
         {
             const CUDAStreamGuard scope(current.get());
-            EXPECT_FALSE(internal::deferred_home_needs_binding(GpuBackend::CUDA, home.get()));
             auto& driver = internal::backend_driver(GpuBackend::CUDA);
             EXPECT_FALSE(driver.bind_tensor_target(deferred, true).has_value());
             auto alias = deferred;
@@ -248,7 +250,6 @@ namespace {
         }
         ASSERT_TRUE(deferred.is_deferred());
         ASSERT_TRUE(is_stream_retired(retired));
-        EXPECT_FALSE(internal::deferred_home_needs_binding(GpuBackend::CUDA, retired));
         EXPECT_FALSE(internal::backend_driver(GpuBackend::CUDA).bind_tensor_target(deferred, true).has_value());
         auto alias = deferred;
         expect_floats(host<float>(deferred), {3, 3, 3});

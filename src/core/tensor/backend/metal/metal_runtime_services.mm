@@ -171,7 +171,6 @@ namespace {
             ops_.copy_device_to_device({ .src = source, .dst = output, .bytes = bytes });
         }
         bool prefers_recycled_host_staging() const noexcept override { return true; }
-
     };
 }
 std::unique_ptr<BackendReadbackSlot> MetalBackendOps::create_readback_slot(size_t bytes)
@@ -214,7 +213,7 @@ void MetalBackendOps::name_queue(ExecContext, const char*) { }
 std::unique_ptr<PreparedReadback> MetalBackendOps::prepare_readback(const Tensor& source, const Tensor& destination)
 {
     return std::make_unique<BufferedPreparedReadback>(source, destination,
-        source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) { });
+        source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) {});
 }
 void MetalBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
 NativeTensorAllocation MetalBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
