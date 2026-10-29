@@ -2973,9 +2973,19 @@ dataset options work as in training; see the Evaluation page of the docs.
     std::optional<lfs::core::args::ParsedArgs> parseLichtArgs(
         const int argc, const char* const argv[], std::string& error) {
         namespace core_args = lfs::core::args;
+        using Action = core_args::LichtMode::Action;
         constexpr std::string_view usage =
             "Usage: LichtFeld-Studio licht <project.licht> --embed [dataset]\n"
-            "       LichtFeld-Studio licht --help\n";
+            "       LichtFeld-Studio licht <project.licht> --checkpoints\n"
+            "       LichtFeld-Studio licht <project.licht> --prune-checkpoints [--keep N]\n"
+            "       LichtFeld-Studio licht <project.licht> --remove-checkpoints <iteration>[,<iteration>...]\n"
+            "       LichtFeld-Studio licht --help\n"
+            "\n"
+            "  --embed [dataset]        Embed the referenced dataset, or the given dataset folder.\n"
+            "  --checkpoints            List the training checkpoints stored in the project.\n"
+            "  --prune-checkpoints      Remove every checkpoint except the one training resumes from;\n"
+            "                           --keep N also keeps the N newest other checkpoints.\n"
+            "  --remove-checkpoints     Remove the checkpoints saved at these iterations.\n";
         const auto invalid = [&](const std::string_view detail) {
             error = std::format("{}\n{}", detail, usage);
             return std::optional<core_args::ParsedArgs>{};
@@ -2988,11 +2998,15 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (argc < 3 || std::string_view(argv[2]) == "--help") {
             return invalid("Missing .licht project path.");
         }
-        if (argc < 4 || std::string_view(argv[3]) != "--embed") {
-            return invalid("The licht command currently requires --embed.");
+        if (argc < 4) {
+            return invalid("Missing licht action.");
         }
-        if (argc > 5) {
-            return invalid("Unexpected argument: " + std::string(argv[5]));
+        const std::string_view action = argv[3];
+        const auto max_arguments = action == "--embed" || action == "--remove-checkpoints" ? 5
+                                   : action == "--prune-checkpoints"                       ? 6
+                                                                                           : 4;
+        if (argc > max_arguments) {
+            return invalid("Unexpected argument: " + std::string(argv[max_arguments]));
         }
         const auto project = lfs::core::utf8_to_path(argv[2]);
         if (project.extension() != ".licht") {
@@ -3001,18 +3015,58 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (!lfs::core::native_fs::is_regular_file(project)) {
             return invalid("The .licht project file could not be found.");
         }
-        std::optional<std::filesystem::path> dataset;
-        if (argc == 5) {
-            if (std::string_view(argv[4]).starts_with('-')) {
-                return invalid(std::format("Unknown licht argument: {}", argv[4]));
+        core_args::LichtMode mode{.project_path = project};
+        if (action == "--embed") {
+            if (argc == 5) {
+                if (std::string_view(argv[4]).starts_with('-')) {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                auto override_path = lfs::core::utf8_to_path(argv[4]);
+                if (override_path.is_relative()) {
+                    override_path = lfs::core::native_fs::current_path() / override_path;
+                }
+                mode.dataset_path = override_path.lexically_normal();
             }
-            auto override_path = lfs::core::utf8_to_path(argv[4]);
-            if (override_path.is_relative()) {
-                override_path = lfs::core::native_fs::current_path() / override_path;
+        } else if (action == "--checkpoints") {
+            mode.action = Action::LIST_CHECKPOINTS;
+        } else if (action == "--prune-checkpoints") {
+            mode.action = Action::PRUNE_CHECKPOINTS;
+            if (argc > 4) {
+                if (std::string_view(argv[4]) != "--keep") {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                const std::string_view count = argc == 6 ? argv[5] : "";
+                const auto [end, parse_error] = std::from_chars(
+                    count.data(), count.data() + count.size(), mode.keep_checkpoints);
+                if (count.empty() || parse_error != std::errc{} || end != count.data() + count.size()) {
+                    return invalid("--keep needs a checkpoint count, e.g. --keep 2.");
+                }
             }
-            dataset = override_path.lexically_normal();
+        } else if (action == "--remove-checkpoints") {
+            mode.action = Action::REMOVE_CHECKPOINTS;
+            std::string_view rest = argc == 5 ? argv[4] : "";
+            while (true) {
+                const auto comma = rest.find(',');
+                const auto token = rest.substr(0, comma);
+                std::int32_t iteration = 0;
+                const auto [end, parse_error] = std::from_chars(
+                    token.data(), token.data() + token.size(), iteration);
+                if (token.empty() || parse_error != std::errc{} ||
+                    end != token.data() + token.size() || iteration < 0) {
+                    return invalid("--remove-checkpoints needs checkpoint iterations, e.g. 7000,15000.");
+                }
+                mode.checkpoint_iterations.push_back(iteration);
+                if (comma == std::string_view::npos)
+                    break;
+                rest.remove_prefix(comma + 1);
+            }
+            std::ranges::sort(mode.checkpoint_iterations);
+            const auto duplicates = std::ranges::unique(mode.checkpoint_iterations);
+            mode.checkpoint_iterations.erase(duplicates.begin(), duplicates.end());
+        } else {
+            return invalid(std::format("Unknown licht argument: {}", action));
         }
-        return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
+        return core_args::ParsedArgs{std::move(mode)};
     }
 
     std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(

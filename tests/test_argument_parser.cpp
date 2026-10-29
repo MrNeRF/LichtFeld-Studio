@@ -1159,6 +1159,63 @@ TEST(ArgumentParserTest, LichtRejectsMissingArgumentsAndAcceptsHelp) {
     }
 }
 
+TEST(ArgumentParserTest, LichtParsesCheckpointActions) {
+    const auto root = std::filesystem::path(
+        make_test_path("lfs_arg_parser_licht_checkpoints"));
+    const auto project = root / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    using Action = lfs::core::args::LichtMode::Action;
+    const auto parse = [&](std::vector<const char*> arguments) {
+        arguments.insert(arguments.begin(), {"LichtFeld-Studio", "licht", project_text.c_str()});
+        return lfs::core::args::parse_args(static_cast<int>(arguments.size()), arguments.data());
+    };
+    const auto mode = [](const auto& parsed) {
+        return std::get_if<lfs::core::args::LichtMode>(&*parsed);
+    };
+    {
+        const auto parsed = parse({"--checkpoints"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        ASSERT_NE(mode(parsed), nullptr);
+        EXPECT_EQ(mode(parsed)->action, Action::LIST_CHECKPOINTS);
+    }
+    {
+        const auto parsed = parse({"--prune-checkpoints"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        ASSERT_NE(mode(parsed), nullptr);
+        EXPECT_EQ(mode(parsed)->action, Action::PRUNE_CHECKPOINTS);
+        EXPECT_EQ(mode(parsed)->keep_checkpoints, 0u);
+    }
+    {
+        const auto parsed = parse({"--prune-checkpoints", "--keep", "2"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        ASSERT_NE(mode(parsed), nullptr);
+        EXPECT_EQ(mode(parsed)->keep_checkpoints, 2u);
+    }
+    {
+        const auto parsed = parse({"--remove-checkpoints", "15000,7000,15000"});
+        ASSERT_TRUE(parsed) << parsed.error();
+        ASSERT_NE(mode(parsed), nullptr);
+        EXPECT_EQ(mode(parsed)->action, Action::REMOVE_CHECKPOINTS);
+        EXPECT_EQ(mode(parsed)->checkpoint_iterations, (std::vector<std::int32_t>{7000, 15000}));
+    }
+    for (const auto& arguments : std::vector<std::vector<const char*>>{
+             {"--prune-checkpoints", "--keep"},
+             {"--prune-checkpoints", "--keep", "-1"},
+             {"--prune-checkpoints", "--keep", "two"},
+             {"--prune-checkpoints", "--keep", "1", "extra"},
+             {"--prune-checkpoints", "7000"},
+             {"--remove-checkpoints"},
+             {"--remove-checkpoints", "7000,,15000"},
+             {"--remove-checkpoints", "7000x"},
+             {"--checkpoints", "extra"},
+             {"--compact"},
+         }) {
+        const auto parsed = parse(arguments);
+        EXPECT_FALSE(parsed) << arguments.front();
+    }
+}
+
 TEST(ArgumentParserTest, Mesh2SplatRejectsOutputSuffixThatConflictsWithFormat) {
     const auto directory = std::filesystem::path(
         make_test_path("lfs_arg_parser_mesh2splat_suffix"));

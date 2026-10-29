@@ -94,7 +94,7 @@ namespace lfs::io::project {
     // Explicit Contents actions append removals. Legacy reduction still compacts.
     struct ProjectReduceSelection {
         bool compact = true;
-        std::optional<lfs::core::Uuid> checkpoint;
+        std::vector<lfs::core::Uuid> checkpoints;
         std::uint64_t save_generation = 0;
         bool thumbnail = false;
         bool metrics = false;
