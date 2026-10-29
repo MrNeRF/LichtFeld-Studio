@@ -717,8 +717,9 @@ namespace {
     }
 
     TEST_P(PortableFastRaster, DepthTiesAndVisibilityChangesPreserveOrder) {
-        // Cross depth-sort blocks with equal keys and interspersed culled primitives.
-        Scene s = make_scene(65537, 0, 65, 37, 91u, -4.5f, -3.0f);
+        // Cross depth-sort blocks with equal keys and interspersed culled primitives. The
+        // count takes both the Metal (>= 65536) and Vulkan (>= 131072) depth-ordered path.
+        Scene s = make_scene(131073, 0, 65, 37, 91u, -4.5f, -3.0f);
         s.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 4, 0, 0, 0, 1};
         s.camera = {0, 0, -4};
         for (int i = 0; i < s.count; ++i) {
