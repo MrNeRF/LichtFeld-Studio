@@ -49,7 +49,6 @@ namespace lfs::core::internal {
             }
             void shutdown_compatibility_pool() override { shutdown_cuda_tensor_pool(); }
             void set_pool_iteration(int value) override { CudaMemoryPool::instance().set_iteration(value); }
-            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
 
             NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
                 const bool direct = kind == TensorAllocationKind::Direct;
@@ -66,7 +65,9 @@ namespace lfs::core::internal {
             void* current_target() const noexcept override { return getCurrentCUDAStream(); }
             BackendRendererAccess renderer_access() const noexcept override { return {true, true, false}; }
 
+#if defined(LFS_TENSOR_VULKAN) && LFS_TENSOR_VULKAN
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_cuda_driver_vulkan_interop(device); }
+#endif
             SplatPublication publication() const override { return cuda_vulkan_direct_interop() ? SplatPublication::RendererStorage : SplatPublication::Copied; }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_cuda_work_queue(info); }
             std::array<uintptr_t, 2> bind_target(void* target) override {
@@ -97,9 +98,6 @@ namespace lfs::core::internal {
                 return cudaGetDevice(&ordinal) == cudaSuccess &&
                        LFS_CUDA_DRIVER(cuDeviceGet)(&device, ordinal) == CUDA_SUCCESS &&
                        LFS_CUDA_DRIVER(cuDevicePrimaryCtxGetState)(device, &flags, &active) == CUDA_SUCCESS && active != 0;
-            }
-            [[noreturn]] void throw_unavailable() override {
-                throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
             }
             int device_count() override {
                 int count = 0;
@@ -150,7 +148,6 @@ namespace lfs::core::internal {
                     (void)cudaGetLastError();
                 return current;
             }
-            bool needs_thread_binding() const noexcept override { return true; }
             void bind_thread() override {
 
                 const int selected = selection_.load(std::memory_order_acquire);
@@ -217,10 +214,9 @@ namespace lfs::core::internal {
                 return *ops;
             }
             size_t allocation_bytes(size_t bytes) override { return cuda_allocation_size(bytes); }
-            lfs::Status shutdown() override { return {}; }
             TensorExportDevice dlpack_device(const Tensor& tensor) override { return cuda_dlpack_device(tensor); }
             Tensor prepare_dlpack_export(const Tensor& tensor, std::optional<int64_t> consumer) override { return cuda_prepare_dlpack_export(tensor, consumer); }
-            BackendExportCapabilities export_capabilities() const noexcept override { return {.dlpack = true}; }
+            TensorExportCapabilities export_capabilities() const noexcept override { return {.dlpack = true}; }
         };
     } // namespace
     void register_cuda_backend(BackendRegistry& registry) {

@@ -65,7 +65,7 @@ namespace lfs::core::internal {
                 }
                 return true;
             }
-            bool abandon_after_failure() noexcept override { return false; }
+
             void settle_enqueue_failure() override { check(cudaStreamSynchronize(stream_)); }
         };
         class CudaTimestamps final : public BackendTimestamps {
@@ -130,9 +130,6 @@ namespace lfs::core::internal {
     std::unique_ptr<BackendUploadBuffer> CudaBackendOps::create_upload_buffer() {
         return std::make_unique<CudaUpload>(*this);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class CudaFence final : public BackendFence {
             cudaEvent_t event_ = nullptr;
@@ -165,16 +162,10 @@ namespace lfs::core::internal {
             return {};
         return std::make_unique<CudaFence>(imported);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void CudaBackendOps::where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) {
         cuda_where_into(output, mask, value, source);
     }
     ExpressionCacheStats CudaBackendOps::expression_cache_stats() { return cuda_expression_cache().stats(); }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class CudaReadbackSlot final : public BackendReadbackSlot {
             void* host_ = nullptr;
@@ -199,18 +190,12 @@ namespace lfs::core::internal {
                                       cudaMemcpyDeviceToHost, execution.cuda_stream));
             }
             bool prefers_recycled_host_staging() const noexcept override { return false; }
-            // The ring's fence owns completion; these slots have no extra host publication.
-            bool ready() override { return true; }
-            void wait() override {}
-            void release() override {}
+
         };
     } // namespace
     std::unique_ptr<BackendReadbackSlot> CudaBackendOps::create_readback_slot(size_t bytes) {
         return std::make_unique<CudaReadbackSlot>(bytes);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class CudaCompletion final : public BackendCompletion {
             std::vector<std::pair<cudaStream_t, cudaEvent_t>> events_;
@@ -240,7 +225,7 @@ namespace lfs::core::internal {
                 }
                 ensure_cuda_success(cudaEventRecord(found->second, stream), "cudaEventRecord(completion)", {}, LFS_SOURCE_SITE_CURRENT());
             }
-            VulkanTimelinePoint timeline() const override { return {}; }
+
             bool ready() override {
                 for (const auto& [stream, event] : events_) {
                     const auto status = cudaEventQuery(event);
@@ -274,16 +259,7 @@ namespace lfs::core::internal {
             return {};
         return std::make_unique<CudaCompletion>();
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
-    StorageRef CudaBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return {GpuBackend::CUDA, pointer, 0, DataType::Float32, nullptr, allocation_flags(StorageAccountingKind::CudaExternal, false, false, false)}; }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
-}
-
-namespace lfs::core::internal {
+    StorageRef CudaBackendOps::borrow_native_range(void* pointer, size_t) { return {GpuBackend::CUDA, pointer, 0, DataType::Float32, nullptr, allocation_flags(StorageAccountingKind::CudaExternal, false, false, false)}; }
     namespace {
         class CudaPreparedReadback final : public PreparedReadback {
             Tensor source_, destination_;

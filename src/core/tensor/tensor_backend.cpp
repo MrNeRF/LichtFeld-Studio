@@ -437,7 +437,7 @@ namespace lfs::core {
         auto& binding = scope_bindings[index];
         if (!binding) {
             auto& driver = internal::backend_driver(backend);
-            binding = driver.needs_thread_binding() ? &driver : nullptr;
+            binding = driver.activation_scope() == internal::BackendActivationScope::Thread ? &driver : nullptr;
         }
         if (*binding)
             (*binding)->bind_thread();

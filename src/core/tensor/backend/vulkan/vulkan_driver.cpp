@@ -22,25 +22,11 @@ namespace lfs::core::internal {
     namespace {
         class VulkanDriver final : public BackendDriver {
         public:
-            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
-            void* canonical_home_target(void*) const noexcept override { return nullptr; }
-            std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
-            void synchronize_tensor_target(const Tensor&, void*) override {}
-            void shutdown_compatibility_pool() override {}
-            void set_pool_iteration(int) override {}
-            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
-
             NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
                 const bool direct = kind == TensorAllocationKind::Direct;
                 return {.storage = {.backend = GpuBackend::Vulkan, .flags = allocation_flags(StorageAccountingKind::VulkanOwned, direct, false, false, AllocationLabel::None)}, .target = nullptr, .external_kind = ""};
             }
 
-            void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
-            MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
-            bool pressure_recovery_blocked() const noexcept override { return false; }
-            void register_pressure_clients(MemoryPressureCoordinator&) override {}
-
-            void* current_target() const noexcept override { return nullptr; }
             BackendRendererAccess renderer_access() const noexcept override {
 #ifdef __APPLE__
                 return {true, false, true};
@@ -88,23 +74,16 @@ namespace lfs::core::internal {
                 throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
             }
             int device_count() override { return vulkan_device_count(); }
-            int selected_device() override { return 0; }
-            bool needs_thread_binding() const noexcept override { return false; }
-            void bind_thread() override {}
-            void set_selection(int) noexcept override {}
-            std::optional<std::string> validate_options(const TensorBackendOptions&, int& ordinal) override {
-                ordinal = -1;
-                return {};
-            }
             GpuBackendOps& activate() override {
                 static VulkanBackendOps* const ops = new VulkanBackendOps();
                 return *ops;
             }
-            MemoryInfo memory_info(bool) override { return activate().stats(); }
             size_t allocation_bytes(size_t) override { throw std::invalid_argument("Allocation sizes are unknown on the Vulkan backend"); }
+#if LFS_HAS_CUDA
             TensorExportDevice dlpack_device(const Tensor& tensor) override { return vulkan_dlpack_device(tensor); }
             Tensor prepare_dlpack_export(const Tensor& tensor, std::optional<int64_t> consumer) override { return vulkan_prepare_dlpack_export(tensor, consumer); }
-            BackendExportCapabilities export_capabilities() const noexcept override { return vulkan_dlpack_capabilities(); }
+            TensorExportCapabilities export_capabilities() const noexcept override { return vulkan_dlpack_capabilities(); }
+#endif
             std::vector<VulkanHardwareDevice> enumerate_hardware() override {
 
                 std::vector<VulkanHardwareDevice> result;

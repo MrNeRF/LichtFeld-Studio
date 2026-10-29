@@ -5,7 +5,12 @@
 
 #include "core/cuda_vulkan_interop.hpp"
 #include "core/tensor_backend.hpp"
-#include "internal/tensor_impl.hpp"
+#include "../../internal/tensor_impl.hpp"
+#include "../native_pressure.hpp"
+#include "../random_state.hpp"
+#include "../reduction_tuning.hpp"
+#include "../target_lifetime.hpp"
+#include "core/pinned_allocator_stats.hpp"
 
 #include <stdexcept>
 
@@ -45,6 +50,9 @@ namespace lfs::core {
         return nullptr;
     }
 
+    PinnedAllocatorStats pinned_allocator_stats() { return {}; }
+    void* allocate_cuda_storage(size_t, cudaStream_t, CudaStorageMode, const char*, const char*) { throw_cuda_unavailable(); }
+    bool is_stream_retired(cudaStream_t) noexcept { return false; }
     size_t cuda_allocation_size(size_t) { return 0; }
     void trim_cuda_memory_pool() {}
     size_t cuda_bucket_cached_bytes() noexcept { return 0; }
@@ -60,3 +68,12 @@ namespace lfs::core::cuda {
     ExternalMemoryImportScope::~ExternalMemoryImportScope() noexcept {}
     bool ExternalMemoryImportScope::active() noexcept { return false; }
 } // namespace lfs::core::cuda
+
+namespace lfs::core::internal {
+    void record_pressure_breadcrumb() {}
+    std::unique_ptr<NativeRandomState> make_native_random_state(uint64_t, const char* message) { throw TensorError(message); }
+    void observe_native_target(cudaStream_t) noexcept {}
+    ReductionTuningPath reduction_tuning_override() noexcept { return ReductionTuningPath::None; }
+    bool prefer_strided_reduction(size_t, size_t, size_t) noexcept { return true; }
+    void record_reduction_tuning_path(ReductionTuningPath) noexcept {}
+} // namespace lfs::core::internal

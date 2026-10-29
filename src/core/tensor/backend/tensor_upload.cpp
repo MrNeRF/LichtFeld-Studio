@@ -35,12 +35,10 @@ namespace lfs::core {
             pending = false;
         }
         void finish(internal::BackendUploadSubmission status) {
-            if (status.source_consumed)
+            if (status.source_consumed || status.complete)
                 source = {};
             if (status.complete) {
                 pending = false;
-                if (!status.source_consumed)
-                    source = {};
                 destination = {};
             }
         }
@@ -81,12 +79,8 @@ namespace lfs::core {
         try {
             wait();
         } catch (const std::exception& error) {
-            if (impl_ && impl_->upload && impl_->upload->abandon_after_failure()) {
-                LOG_ERROR("Tensor upload failed; cleanup delegated to native ownership: {}", error.what());
-            } else {
-                LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", error.what());
-                (void)impl_.release();
-            }
+            LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", error.what());
+            (void)impl_.release();
         }
     }
     TensorUpload::TensorUpload(TensorUpload&&) noexcept = default;
@@ -356,30 +350,24 @@ namespace lfs::core {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before polling");
-        if (!slot.fence->ready())
-            return false;
-        return slot.native->ready();
+        return slot.fence->ready();
     }
     void TensorReadbackRing::wait(size_t index) const {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before waiting");
         slot.fence->wait();
-        slot.native->wait();
     }
     void TensorReadbackRing::release(size_t index) {
         auto& slot = impl_->slots.at(index);
         if ((slot.sealed && !slot.fence->ready()) ||
             (!slot.sealed && !slot.sources.empty() && !impl_->queue->ready()))
             throw std::logic_error("Cannot release a pending readback slot");
-        slot.native->release();
         slot.sources.clear();
         slot.sealed = false;
     }
     std::span<std::byte> TensorReadbackRing::slot_bytes(size_t index) {
         auto& slot = impl_->slots.at(index);
-        if (!slot.native->ready())
-            throw std::logic_error("Packed readback bytes are not complete");
         return {static_cast<std::byte*>(slot.native->data()), impl_->bytes};
     }
 } // namespace lfs::core

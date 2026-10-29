@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -409,8 +410,15 @@ namespace {
     TEST_P(TensorBackendSemantics, UncompiledDriversDoNotAdvertiseNativeTargetsOrOwnership) {
         using namespace lfs::core;
         for (const auto backend : kGpuBackends) {
-            if (gpu_backend_compiled(backend))
+            const bool advertised = std::find(kCompiledGpuBackends.begin(), kCompiledGpuBackends.end(), backend) != kCompiledGpuBackends.end();
+            EXPECT_EQ(gpu_backend_compiled(backend), advertised);
+            if (advertised)
                 continue;
+            EXPECT_FALSE(gpu_backend_available(backend));
+            EXPECT_FALSE(gpu_backend_live(backend));
+            EXPECT_EQ(gpu_device_count(backend), 0);
+            EXPECT_FALSE(gpu_backend_device_info(backend).has_value());
+            EXPECT_FALSE(gpu_backend_device_info(backend, 0).has_value());
             auto& driver = internal::backend_driver(backend);
             EXPECT_EQ(driver.current_target(), nullptr);
             EXPECT_EQ(driver.canonical_home_target(reinterpret_cast<void*>(uintptr_t{1})), nullptr);
@@ -418,7 +426,7 @@ namespace {
             EXPECT_FALSE(access.shares_vulkan);
             EXPECT_FALSE(access.needs_vulkan_interop);
             EXPECT_FALSE(access.metal);
-            EXPECT_FALSE(driver.needs_thread_binding());
+            EXPECT_EQ(driver.activation_scope(), internal::BackendActivationScope::Process);
             EXPECT_THROW((void)driver.selected_device(), TensorError);
             EXPECT_THROW((void)driver.allocation_bytes(16), TensorError);
             const auto empty = driver.empty_tensor_allocation(internal::TensorAllocationKind::Direct);
@@ -538,13 +546,6 @@ namespace {
         EXPECT_TRUE(empty.is_valid());
         EXPECT_EQ(empty.numel(), 0);
         expect_placement(empty);
-    }
-
-    TEST_P(TensorBackendSemantics, FloatBoolConversionUsesNonzeroIncludingNan) {
-        const auto source = make<float>(DataType::Float32, {6}, {0.f, -0.f, 0.25f, -0.25f, kNan, kInf});
-        const auto output = source.to(DataType::Bool);
-        expect_placement(output);
-        EXPECT_EQ(host<uint8_t>(output), (std::vector<uint8_t>{0, 0, 1, 1, 1, 1}));
     }
 
     TEST_P(TensorBackendSemantics, FusedOutputsRetainTheirQueueOrdering) {
@@ -734,13 +735,19 @@ namespace {
     }
 
     TEST_P(TensorBackendSemantics, BoolCastsUseNonzeroSemantics) {
-        const Tensor floats = make<float>(DataType::Float32, {6}, {-1.f, -0.f, 0.f, 1.f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()});
-        const std::vector<uint8_t> expected{1, 0, 0, 1, 1, 1};
-        EXPECT_EQ(host<uint8_t>(floats.to(DataType::Bool)), expected);
+        const Tensor floats = make<float>(DataType::Float32, {8}, {-1.f, -0.f, 0.f, 1.f, -0.25f, 0.25f, kNan, kInf});
+        const std::vector<uint8_t> expected{1, 0, 0, 1, 1, 1, 1, 1};
+        const auto flags = floats.to(DataType::Bool);
+        expect_placement(flags);
+        EXPECT_EQ(host<uint8_t>(flags), expected);
         EXPECT_EQ(host<uint8_t>(floats.to(DataType::Float16).to(DataType::Bool)), expected);
-        const Tensor integers = make<int32_t>(DataType::Int32, {3}, {-7, 0, 9});
-        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1}));
-        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Int64).to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1}));
+        const Tensor integers = make<int32_t>(DataType::Int32, {9}, {-7, 0, 9, 1, -1, 256, -256, INT32_MAX, INT32_MIN});
+        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1, 1, 1, 1, 1, 1, 1}));
+        EXPECT_EQ(host<uint8_t>(integers.to(DataType::Int64).to(DataType::Bool)), (std::vector<uint8_t>{1, 0, 1, 1, 1, 1, 1, 1, 1}));
+        const auto converted = integers.to(DataType::Bool).to(DataType::Int32);
+        expect_placement(converted);
+        EXPECT_EQ(converted.dtype(), DataType::Int32);
+        EXPECT_EQ(converted.to_vector_int(), (std::vector<int>{1, 0, 1, 1, 1, 1, 1, 1, 1}));
         const Tensor bytes = make<uint8_t>(DataType::UInt8, {4}, {0, 1, 2, 255});
         EXPECT_EQ(host<uint8_t>(bytes.to(DataType::Bool)), (std::vector<uint8_t>{0, 1, 1, 1}));
     }

@@ -13,24 +13,29 @@
 #include <format>
 
 namespace lfs::core::internal {
+    void BackendDriver::throw_unavailable() {
+        throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
+    }
+    MemoryInfo BackendDriver::memory_info(bool) { return activate().stats(); }
+    MemoryInfo BackendDriver::pressure_memory_info(bool) { return backend_pressure_memory_info(*this); }
+    TensorExportDevice BackendDriver::dlpack_device(const Tensor&) { reject_dlpack_export(name()); }
+    Tensor BackendDriver::prepare_dlpack_export(const Tensor&, std::optional<int64_t>) { reject_dlpack_export(name()); }
+    std::shared_ptr<TensorVulkanInteropBackend> BackendDriver::make_vulkan_interop(VulkanInteropDevice) {
+        throw TensorError("Vulkan tensor interop is unavailable in this build");
+    }
+    SplatPublication BackendDriver::publication() const { return SplatPublication::Copied; }
+    void BackendDriver::complete_checked_index(void* target, SourceSite) {
+        activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)});
+    }
     namespace {
         class UnavailableDriver final : public BackendDriver {
             GpuBackend backend_;
             const char* name_;
 
         public:
-            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
-            void* canonical_home_target(void*) const noexcept override { return nullptr; }
-            std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
-            void synchronize_tensor_target(const Tensor&, void*) override {}
-            void shutdown_compatibility_pool() override {}
-            void set_pool_iteration(int) override {}
-            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
-
             explicit UnavailableDriver(GpuBackend backend, const char* name)
                 : backend_(backend), name_(name) {}
             std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) override { throw_unavailable(); }
-            SplatPublication publication() const override { return SplatPublication::Copied; }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) override { throw_unavailable(); }
             NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind) override { return {.storage = {.backend = backend_}}; }
             void complete_checked_index(void*, SourceSite) override { throw_unavailable(); }
@@ -40,39 +45,20 @@ namespace lfs::core::internal {
             const char* name() const noexcept override { return name_; }
             bool available() override { return false; }
             bool live() noexcept override { return false; }
-            [[noreturn]] void throw_unavailable() override {
-                throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
-            }
             int device_count() override { return 0; }
             std::optional<GpuDeviceInfo> device_info(int) override { return std::nullopt; }
-            std::vector<VulkanHardwareDevice> enumerate_hardware() override { return {}; }
-            std::optional<std::string> validate_options(const TensorBackendOptions&, int& selection) override {
-                selection = -1;
-                return {};
-            }
-            void set_selection(int) noexcept override {}
             int selected_device() override {
                 throw TensorError(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
-            bool needs_thread_binding() const noexcept override { return false; }
-            void bind_thread() override {}
-            void* current_target() const noexcept override { return nullptr; }
-            BackendRendererAccess renderer_access() const noexcept override { return {}; }
             GpuBackendOps& activate() override {
                 LFS_ASSERT_MSG(false, std::format("GPU backend '{}' is not compiled into this build", name_));
                 std::unreachable();
             }
             MemoryInfo memory_info(bool) override { return {}; }
             MemoryInfo pressure_memory_info(bool) override { return {}; }
-            bool pressure_recovery_blocked() const noexcept override { return false; }
-            void register_pressure_clients(MemoryPressureCoordinator&) override {}
             size_t allocation_bytes(size_t) override {
                 throw TensorError(std::format("GPU backend '{}' is not compiled into this build", name_));
             }
-            lfs::Status shutdown() override { return {}; }
-            TensorExportDevice dlpack_device(const Tensor&) override { reject_dlpack_export(name()); }
-            Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>) override { reject_dlpack_export(name()); }
-            BackendExportCapabilities export_capabilities() const noexcept override { return {}; }
         };
         const BackendRegistry& drivers() {
             static const BackendRegistry registry = [] {

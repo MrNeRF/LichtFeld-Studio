@@ -26,11 +26,6 @@ namespace lfs::core::internal {
     };
     // Backend-owned execution primitives. Implementations and SDK types stay
     // in backend directories; shared Tensor code sees only these contracts.
-    struct BackendQueueLease {
-        std::shared_ptr<void> keep_alive;
-        uint64_t native_queue = 0;
-        int32_t device = -1;
-    };
     struct BackendCompletionTarget {
         void* external_device = nullptr;
         VulkanTimelinePoint external_point;
@@ -40,7 +35,7 @@ namespace lfs::core::internal {
         virtual ~BackendCompletion() = default;
         virtual void capture(std::span<const Tensor* const>) = 0;
         virtual void record(ExecContext, uint64_t native_value) = 0;
-        virtual VulkanTimelinePoint timeline() const = 0;
+        virtual VulkanTimelinePoint timeline() const { return {}; }
         virtual bool ready() = 0;
         virtual void wait() = 0;
     };
@@ -61,9 +56,6 @@ namespace lfs::core::internal {
         virtual bool begin_append(const Tensor&, size_t source_offset, size_t bytes, size_t destination_offset, ExecContext) = 0;
         virtual void append(StorageRef, size_t bytes, size_t destination_offset, ExecContext) = 0;
         virtual bool prefers_recycled_host_staging() const noexcept = 0;
-        virtual bool ready() = 0;
-        virtual void wait() = 0;
-        virtual void release() = 0;
     };
     class BackendUploadBuffer {
     public:
@@ -73,8 +65,6 @@ namespace lfs::core::internal {
         virtual void wait() = 0;
         virtual bool poll() = 0;
         virtual void settle_enqueue_failure() = 0;
-        // True only when native ownership safely retires failed resources.
-        virtual bool abandon_after_failure() noexcept = 0;
     };
     class BackendTimestamps {
     public:

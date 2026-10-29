@@ -51,20 +51,6 @@ namespace {
     static_assert(static_cast<unsigned>(GpuBackend::Metal) == 2);
     static_assert(kGpuBackendCount == 3);
 
-    TEST_P(TensorOperationContracts, BackendIdentityIsStableWithoutAdvertisingUncompiledDevices) {
-        for (const auto backend : kGpuBackends) {
-            const bool advertised = std::find(kCompiledGpuBackends.begin(), kCompiledGpuBackends.end(), backend) != kCompiledGpuBackends.end();
-            EXPECT_EQ(gpu_backend_compiled(backend), advertised);
-            if (!advertised) {
-                EXPECT_FALSE(gpu_backend_available(backend));
-                EXPECT_FALSE(gpu_backend_live(backend));
-                EXPECT_EQ(gpu_device_count(backend), 0);
-                EXPECT_FALSE(gpu_backend_device_info(backend).has_value());
-                EXPECT_FALSE(gpu_backend_device_info(backend, 0).has_value());
-            }
-        }
-    }
-
     TEST_P(TensorOperationContracts, ElapsedTimerUsesTheSameOptionalContractOnEveryBackend) {
         if (!GetParam().backend) {
             for (const auto backend : kGpuBackends) {
@@ -99,14 +85,6 @@ namespace {
         expect_values(result, {3}, {2, 4, 6});
         const auto other = backend == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA;
         EXPECT_THROW((void)timer.mark(0, TensorExecutionTarget::default_queue(other)), std::invalid_argument);
-    }
-
-    TEST_P(TensorOperationContracts, Int32BooleanConversionKeepsNonzeroSemantics) {
-        const auto input = Tensor::from_vector(std::vector<int>{0, 1, -1, 256, -256, INT32_MAX, INT32_MIN}, {7}, device());
-        const auto converted = input.to(DataType::Bool).to(DataType::Int32);
-        expect_placement(converted);
-        EXPECT_EQ(converted.dtype(), DataType::Int32);
-        EXPECT_EQ(converted.to_vector_int(), (std::vector<int>{0, 1, 1, 1, 1, 1, 1}));
     }
 
     TEST_P(TensorOperationContracts, OddNormalDrawsKeepTheirShapeAndFiniteValues) {

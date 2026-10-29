@@ -340,22 +340,6 @@ namespace lfs::core {
         append("cuda_direct", state.cuda_direct);
         oss << "; ";
         append("vulkan_external", state.vulkan_external);
-        const std::array entries{
-            std::tuple{StorageAccountingKind::CudaDirect, "cuda_direct", &state.cuda_direct},
-            std::tuple{StorageAccountingKind::VulkanOwned, "vulkan_owned", &state.vulkan_owned},
-            std::tuple{StorageAccountingKind::VulkanExternal, "vulkan_external", &state.vulkan_external},
-        };
-        for (const auto backend : kCompiledGpuBackends) {
-            if (const auto kind = internal::backend_driver(backend).supplementary_accounting()) {
-                for (const auto& [entry_kind, label, counter] : entries) {
-                    if (entry_kind != *kind)
-                        continue;
-                    oss << "; ";
-                    append(label, *counter);
-                    break;
-                }
-            }
-        }
         return oss.str();
     }
 

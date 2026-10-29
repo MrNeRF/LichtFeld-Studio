@@ -66,7 +66,7 @@ namespace lfs::core::internal {
                 context_->recorders().flush_storage(destination_);
                 return completion_.ready();
             }
-            bool abandon_after_failure() noexcept override { return false; }
+
             void settle_enqueue_failure() override {
                 if (context_)
                     context_->recorders().queue_wait(queue_);
@@ -158,9 +158,6 @@ namespace lfs::core::internal {
     std::unique_ptr<BackendUploadBuffer> VulkanBackendOps::create_upload_buffer() {
         return std::make_unique<VulkanUpload>(*this);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class VulkanFence final : public BackendFence {
             std::shared_ptr<VulkanContext> context_ = acquire_vulkan_context();
@@ -189,16 +186,10 @@ namespace lfs::core::internal {
     std::unique_ptr<BackendFence> VulkanBackendOps::create_fence(std::optional<void*> imported) {
         return std::make_unique<VulkanFence>(imported);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void VulkanBackendOps::where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) {
         vulkan_where_into(output, mask, value, source);
     }
     ExpressionCacheStats VulkanBackendOps::expression_cache_stats() { return acquire_vulkan_context()->pipelines().expressions().stats(); }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class VulkanReadbackSlot final : public BackendReadbackSlot {
             std::shared_ptr<VulkanContext> context_ = acquire_vulkan_context();
@@ -215,17 +206,12 @@ namespace lfs::core::internal {
                 (void)context_->memory().copy_to_readback(source, output, bytes);
             }
             bool prefers_recycled_host_staging() const noexcept override { return false; }
-            bool ready() override { return true; }
-            void wait() override {}
-            void release() override {}
+
         };
     } // namespace
     std::unique_ptr<BackendReadbackSlot> VulkanBackendOps::create_readback_slot(size_t bytes) {
         return std::make_unique<VulkanReadbackSlot>(bytes);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     namespace {
         class VulkanCompletion final : public BackendCompletion {
             std::shared_ptr<VulkanContext> context_;
@@ -319,12 +305,6 @@ namespace lfs::core::internal {
     std::unique_ptr<BackendCompletion> VulkanBackendOps::create_completion(BackendCompletionTarget target) {
         return std::make_unique<VulkanCompletion>(std::move(target));
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
-    StorageRef VulkanBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { return acquire_vulkan_context()->memory().borrow_address(pointer, bytes); }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
+    StorageRef VulkanBackendOps::borrow_native_range(void* pointer, size_t bytes) { return acquire_vulkan_context()->memory().borrow_address(pointer, bytes); }
     void VulkanBackendOps::name_queue(ExecContext, const char*) {}
 } // namespace lfs::core::internal

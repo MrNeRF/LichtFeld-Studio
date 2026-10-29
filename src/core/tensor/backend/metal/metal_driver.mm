@@ -21,14 +21,6 @@ namespace lfs::core::internal {
 namespace {
     class MetalDriver final : public BackendDriver {
     public:
-        BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
-        void* canonical_home_target(void*) const noexcept override { return nullptr; }
-        std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
-        void synchronize_tensor_target(const Tensor&, void*) override { }
-        void shutdown_compatibility_pool() override { }
-        void set_pool_iteration(int) override { }
-        std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return std::nullopt; }
-
         NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override
         {
             const bool direct = kind == TensorAllocationKind::Direct;
@@ -36,16 +28,11 @@ namespace {
             return { .storage = storage, .target = nullptr, .external_kind = allocation_label(storage) };
         }
 
-        void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext { static_cast<cudaStream_t>(target) }); }
-        MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
-        bool pressure_recovery_blocked() const noexcept override { return false; }
-        void register_pressure_clients(MemoryPressureCoordinator&) override { }
-
-        void* current_target() const noexcept override { return nullptr; }
         BackendRendererAccess renderer_access() const noexcept override { return { false, false, true }; }
 
+#if defined(LFS_TENSOR_VULKAN) && LFS_TENSOR_VULKAN
         std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_metal_vulkan_interop(device); }
-        SplatPublication publication() const override { return SplatPublication::Copied; }
+#endif
         std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_metal_backend_work_queue(info); }
         std::array<uintptr_t, 2> bind_target(void* target) override
         {
@@ -62,20 +49,7 @@ namespace {
         const char* name() const noexcept override { return "Metal"; }
         bool available() override { return metal_backend_available(); }
         bool live() noexcept override { return metal_backend_live(); }
-        [[noreturn]] void throw_unavailable() override
-        {
-            throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
-        }
         int device_count() override { return available() ? 1 : 0; }
-        int selected_device() override { return 0; }
-        bool needs_thread_binding() const noexcept override { return false; }
-        void bind_thread() override { }
-        void set_selection(int) noexcept override { }
-        std::optional<std::string> validate_options(const TensorBackendOptions&, int& ordinal) override
-        {
-            ordinal = -1;
-            return {};
-        }
         GpuBackendOps& activate() override
         {
             if (__builtin_available(macOS 26.0, *)) {
@@ -105,11 +79,7 @@ namespace {
         {
             return ordinal <= 0 ? metal_device_info() : std::nullopt;
         }
-        MemoryInfo memory_info(bool) override { return activate().stats(); }
         size_t allocation_bytes(size_t bytes) override { return metal_allocation_bytes(bytes); }
-        TensorExportDevice dlpack_device(const Tensor&) override { reject_dlpack_export(name()); }
-        Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>) override { reject_dlpack_export(name()); }
-        BackendExportCapabilities export_capabilities() const noexcept override { return {}; }
         lfs::Status shutdown() override
         {
 

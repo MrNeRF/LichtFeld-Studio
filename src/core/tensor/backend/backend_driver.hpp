@@ -16,7 +16,6 @@ namespace lfs::core {
     struct VulkanInteropDevice;
     class MemoryPressureCoordinator;
     enum class SplatPublication : uint8_t;
-    enum class StorageAccountingKind : uint8_t;
 } // namespace lfs::core
 
 namespace lfs::core::internal {
@@ -26,7 +25,6 @@ namespace lfs::core::internal {
     struct NativeTensorAllocation;
     enum class TensorAllocationKind;
     struct BackendQueueCreateInfo;
-    using BackendExportCapabilities = TensorExportCapabilities;
     // Inventory/selection never activates Tensor storage. Activation is cold:
     // backend_ops caches the resulting pointer at the driver's requested scope.
     // Registered drivers have process lifetime, like the activated ops, so late exit hooks
@@ -42,46 +40,47 @@ namespace lfs::core::internal {
         virtual const char* name() const noexcept = 0;
         virtual bool available() = 0;
         virtual bool live() noexcept = 0;
-        [[noreturn]] virtual void throw_unavailable() = 0;
+        [[noreturn]] virtual void throw_unavailable();
         virtual int device_count() = 0;
         virtual std::optional<GpuDeviceInfo> device_info(int ordinal) = 0;
-        virtual std::vector<VulkanHardwareDevice> enumerate_hardware() = 0;
-        virtual std::optional<std::string> validate_options(const TensorBackendOptions&, int& selection) = 0;
-        virtual void set_selection(int selection) noexcept = 0;
-        virtual int selected_device() = 0;
-        virtual bool needs_thread_binding() const noexcept = 0;
-        virtual void bind_thread() = 0;
-        virtual void* current_target() const noexcept = 0;
-        virtual BackendRendererAccess renderer_access() const noexcept = 0;
+        virtual std::vector<VulkanHardwareDevice> enumerate_hardware() { return {}; }
+        virtual std::optional<std::string> validate_options(const TensorBackendOptions&, int& selection) {
+            selection = -1;
+            return {};
+        }
+        virtual void set_selection(int) noexcept {}
+        virtual int selected_device() { return 0; }
+        virtual void bind_thread() {}
+        virtual void* current_target() const noexcept { return nullptr; }
+        virtual BackendRendererAccess renderer_access() const noexcept { return {}; }
         virtual std::array<uintptr_t, 2> bind_target(void*) = 0;
         virtual void unbind_target(std::array<uintptr_t, 2>) noexcept = 0;
         virtual void bridge_targets(void* consumer, void* producer) = 0;
         virtual GpuBackendOps& activate() = 0;
-        // This immutable policy is consulted only on an activation cache miss.
+        // This immutable policy is consulted only when filling activation or binding caches.
         // Process-scoped activation must be safe to publish to other threads;
         // thread-scoped activation may also establish native thread state.
-        virtual BackendActivationScope activation_scope() const noexcept = 0;
-        virtual MemoryInfo memory_info(bool include_pool_stats) = 0;
-        virtual MemoryInfo pressure_memory_info(bool free_query) = 0;
-        virtual bool pressure_recovery_blocked() const noexcept = 0;
-        virtual void register_pressure_clients(MemoryPressureCoordinator&) = 0;
+        virtual BackendActivationScope activation_scope() const noexcept { return BackendActivationScope::Process; }
+        virtual MemoryInfo memory_info(bool include_pool_stats);
+        virtual MemoryInfo pressure_memory_info(bool free_query);
+        virtual bool pressure_recovery_blocked() const noexcept { return false; }
+        virtual void register_pressure_clients(MemoryPressureCoordinator&) {}
         virtual size_t allocation_bytes(size_t bytes) = 0;
-        virtual lfs::Status shutdown() = 0;
-        virtual BackendExportCapabilities export_capabilities() const noexcept = 0;
-        virtual TensorExportDevice dlpack_device(const Tensor&) = 0;
-        virtual Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>) = 0;
-        virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice) = 0;
-        virtual SplatPublication publication() const = 0;
+        virtual lfs::Status shutdown() { return {}; }
+        virtual TensorExportCapabilities export_capabilities() const noexcept { return {}; }
+        virtual TensorExportDevice dlpack_device(const Tensor&);
+        virtual Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>);
+        virtual std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice);
+        virtual SplatPublication publication() const;
         virtual std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo&) = 0;
         // A null home remains null, and implicit binding with no home is a no-op.
-        virtual void* canonical_home_target(void*) const noexcept = 0;
-        virtual std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool implicit) = 0;
-        virtual void synchronize_tensor_target(const Tensor&, void*) = 0;
-        virtual void shutdown_compatibility_pool() = 0;
-        virtual void set_pool_iteration(int) = 0;
-        virtual std::optional<StorageAccountingKind> supplementary_accounting() const noexcept = 0;
+        virtual void* canonical_home_target(void*) const noexcept { return nullptr; }
+        virtual std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) { return std::nullopt; }
+        virtual void synchronize_tensor_target(const Tensor&, void*) {}
+        virtual void shutdown_compatibility_pool() {}
+        virtual void set_pool_iteration(int) {}
         virtual NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind) = 0;
-        virtual void complete_checked_index(void* target, SourceSite location) = 0;
+        virtual void complete_checked_index(void* target, SourceSite location);
     };
     class TensorTargetBinding {
         BackendDriver& driver_;

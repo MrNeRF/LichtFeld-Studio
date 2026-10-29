@@ -51,7 +51,9 @@ namespace lfs::core {
         const size_t allocation_bytes = storage_allocation_bytes(shape, effective_capacity, dtype);
         internal::StorageRef imported_storage;
         if (device == Device::GPU) {
-            const auto backend = internal::resolve_new_gpu_storage_backend();
+            // Raw external pointers follow the compatibility storage contract,
+            // independently of the scope used for new allocations.
+            constexpr auto backend = kCompatibilityRawStorageBackend;
             const GpuBackendScope scope(backend);
             const TensorExecutionTarget::Scope target({backend, stream});
             auto& ops = internal::backend_ops(backend);
@@ -62,11 +64,7 @@ namespace lfs::core {
                     throw std::invalid_argument("External ownership requires an allocation base");
                 Tensor result = from_blob(data, std::move(shape), Device::GPU, dtype,
                                           TensorExecutionTarget{backend, stream});
-                auto owner_box = std::make_shared<std::shared_ptr<void>>(owner);
-                result.data_owner_ = std::shared_ptr<void>(data,
-                                                           [owner_box = std::move(owner_box)](void*) mutable {
-                                                               owner_box->reset();
-                                                           });
+                result.data_owner_ = std::shared_ptr<void>(owner, data);
                 // Do not put an owning context lease in its own allocation registry:
                 // that would create context -> metadata -> context ownership cycles.
                 result.init_storage_meta();
@@ -82,15 +80,14 @@ namespace lfs::core {
             }
         }
         auto external_owner = owner;
-        auto owner_box = std::make_shared<std::shared_ptr<void>>(std::move(owner));
         record_storage_allocation(StorageAccountingKind::VulkanExternal, allocation_bytes);
 
         Tensor t;
         t.data_ = data;
         t.data_owner_ = std::shared_ptr<void>(
             data,
-            [owner_box = std::move(owner_box), allocation_bytes](void*) mutable {
-                owner_box->reset();
+            [owner = std::move(owner), allocation_bytes](void*) mutable {
+                owner.reset();
                 Tensor::record_storage_deallocation(
                     StorageAccountingKind::VulkanExternal,
                     allocation_bytes);

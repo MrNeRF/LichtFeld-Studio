@@ -52,7 +52,7 @@ namespace {
         }
         void wait() override { completion_.wait(); }
         bool poll() override { return in_batch_ ? metal_queue::completed(serial_) : completion_.ready(); }
-        bool abandon_after_failure() noexcept override { return false; }
+
         void settle_enqueue_failure() override { ops_.synchronize_stream({}); }
     };
     class MetalTimestamps final : public BackendTimestamps {
@@ -108,9 +108,6 @@ std::unique_ptr<BackendUploadBuffer> MetalBackendOps::create_upload_buffer()
 {
     return std::make_unique<MetalUpload>(*this);
 }
-}
-
-namespace lfs::core::internal {
 namespace {
     class MetalFence final : public BackendFence {
         uint64_t value_ = 0;
@@ -142,17 +139,11 @@ std::unique_ptr<BackendFence> MetalBackendOps::create_fence(std::optional<void*>
         return {};
     return std::make_unique<MetalFence>(imported);
 }
-}
-
-namespace lfs::core::internal {
 void MetalBackendOps::where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source)
 {
     metal_where_into(output, mask, value, source);
 }
 ExpressionCacheStats MetalBackendOps::expression_cache_stats() { return metal_expression_cache_stats(); }
-}
-
-namespace lfs::core::internal {
 namespace {
     class MetalReadbackSlot final : public BackendReadbackSlot {
         MetalBackendOps& ops_;
@@ -180,18 +171,13 @@ namespace {
             ops_.copy_device_to_device({ .src = source, .dst = output, .bytes = bytes });
         }
         bool prefers_recycled_host_staging() const noexcept override { return true; }
-        bool ready() override { return true; }
-        void wait() override { }
-        void release() override { }
+
     };
 }
 std::unique_ptr<BackendReadbackSlot> MetalBackendOps::create_readback_slot(size_t bytes)
 {
     return std::make_unique<MetalReadbackSlot>(*this, bytes);
 }
-}
-
-namespace lfs::core::internal {
 namespace {
     class MetalCompletion final : public BackendCompletion {
         uint64_t value_ = 0;
@@ -208,7 +194,7 @@ namespace {
                 metal_flush();
         }
         void record(ExecContext, uint64_t value) override { value_ = value; }
-        VulkanTimelinePoint timeline() const override { return {}; }
+
         bool ready() override { return !value_ || metal_completed_serial() >= value_; }
         void wait() override
         {
@@ -223,33 +209,15 @@ std::unique_ptr<BackendCompletion> MetalBackendOps::create_completion(BackendCom
         return {};
     return std::make_unique<MetalCompletion>();
 }
-}
-
-namespace lfs::core::internal {
-StorageRef MetalBackendOps::borrow_native_range([[maybe_unused]] void* pointer, [[maybe_unused]] size_t bytes) { throw std::runtime_error("Raw device tensor views are unsupported on this backend"); }
-}
-
-namespace lfs::core::internal {
+StorageRef MetalBackendOps::borrow_native_range(void*, size_t) { throw std::runtime_error("Raw device tensor views are unsupported on this backend"); }
 void MetalBackendOps::name_queue(ExecContext, const char*) { }
-}
-
-namespace lfs::core::internal {
 std::unique_ptr<PreparedReadback> MetalBackendOps::prepare_readback(const Tensor& source, const Tensor& destination)
 {
     return std::make_unique<BufferedPreparedReadback>(source, destination,
         source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) { });
 }
-}
-
-namespace lfs::core::internal {
 void MetalBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
-}
-
-namespace lfs::core::internal {
 NativeTensorAllocation MetalBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
-}
-
-namespace lfs::core::internal {
 uint64_t MetalBackendOps::expression_device_address(StorageRef storage) const { return descriptor_expression_address(storage); }
 void MetalBackendOps::optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) { }
 }
