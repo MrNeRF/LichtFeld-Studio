@@ -39,6 +39,7 @@ namespace {
             c.io_threads = 1;
             c.cold_process_threads = 1;
             c.max_cache_bytes = 8 * 1024 * 1024;
+            c.min_spill_free_bytes = 0; // the spilled visit must not depend on free space in the temp dir
             return c;
         }
         auto request() {

@@ -195,6 +195,9 @@ def read_project(source):
            'Private selection state cannot be published.')
     _check(chapters[b'PRMS'].get('dataset', {}).get('timelapse_images') == []
            and 'embedded_dataset' not in chapters[b'PRMS'], 'Training images cannot be published.')
+    reveal = chapters[b'SEQR'].get('timeline', {}).get('reveal_clip')
+    _check(not isinstance(reveal, dict) or reveal.get('effect') != 12,
+           'Custom shader clips cannot be published.')
     editor = chapters[b'EDTR']
     _check(editor.get('open_files') == [] and editor.get('active_file') is None and editor.get('contains_embedded_secrets') is False,
            'Editor files and buffers cannot be published.')

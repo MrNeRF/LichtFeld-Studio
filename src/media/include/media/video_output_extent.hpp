@@ -11,9 +11,19 @@
 
 namespace lfs::io::video {
 
-    [[nodiscard]] inline std::optional<std::string> videoEncodingRangeError(int framerate, int crf) {
-        if (framerate <= 0 || framerate > 1000)
-            return std::format("Video framerate must be between 1 and 1000 (got {})", framerate);
+    // framerate / denominator frames per second, e.g. 30000 / 1001.
+    [[nodiscard]] inline std::optional<std::string> videoFrameRateError(const int framerate, const int denominator = 1) {
+        if (denominator <= 0 || framerate < denominator ||
+            static_cast<std::int64_t>(framerate) > 1000LL * denominator)
+            return denominator == 1 ? std::format("Video framerate must be between 1 and 1000 (got {})", framerate)
+                                    : std::format("Video framerate must be between 1 and 1000 (got {}/{})", framerate, denominator);
+        return std::nullopt;
+    }
+
+    [[nodiscard]] inline std::optional<std::string> videoEncodingRangeError(int framerate, int crf,
+                                                                            int framerate_denominator = 1) {
+        if (auto error = videoFrameRateError(framerate, framerate_denominator))
+            return error;
         if (crf < 0 || crf > 51)
             return std::format("Video CRF must be between 0 and 51 (got {})", crf);
         return std::nullopt;

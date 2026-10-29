@@ -51,6 +51,7 @@ def license_id_from_text(text: str, fallback: str) -> str:
         if normalized in label_ids:
             return label_ids[normalized]
     patterns = [
+        (r"(?i)Apache-2\.0 WITH LLVM-exception", "Apache-2.0 WITH LLVM-exception"),
         (r"(?i)Apache License(?:,? Version)?\s*2\.0|Apache-2\.0", "Apache-2.0"),
         (r"(?i)MIT License", "MIT"),
         (r"(?i)BSD 3-Clause|BSD-3-Clause", "BSD-3-Clause"),

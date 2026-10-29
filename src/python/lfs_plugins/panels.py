@@ -223,7 +223,7 @@ def _register_lazy_panel(lf, name):
 
         _delegated_instance_methods = frozenset({
             "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
-            "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+            "on_update", "on_scene_changed", "on_visibility_changed", "capture_chrome", "apply_chrome",
             "on_host_geometry_changed",
         })
 

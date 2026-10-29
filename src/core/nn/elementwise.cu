@@ -8,12 +8,121 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
 
 namespace lfs::core::nn::kernels {
     namespace {
+
+        __global__ void resample_pil_axis_kernel(const float* input, float* output, const int* bounds,
+                                                 const int* coefficients, int taps, int count,
+                                                 int in_h, int in_w, int out_h, int out_w, bool horizontal) {
+            const int index = int(blockIdx.x * blockDim.x + threadIdx.x);
+            if (index >= count)
+                return;
+            const int x = index % out_w, y = index / out_w % out_h, plane = index / (out_h * out_w);
+            const int target = horizontal ? x : y;
+            const int first = bounds[2 * target], length = bounds[2 * target + 1];
+            int sum = 1 << 21;
+            for (int i = 0; i < length; ++i) {
+                const int source = plane * in_h * in_w + (horizontal ? y * in_w + first + i : (first + i) * in_w + x);
+                sum += __float2int_rn(input[source] * 255.0f) * coefficients[target * taps + i];
+            }
+            output[index] = float(max(0, min(255, sum >> 22))) / 255.0f;
+        }
+
+        __global__ void horizontal_distance_kernel(const float* input, float* distance, int count, int width, int radius) {
+            const int i = int(blockIdx.x * blockDim.x + threadIdx.x);
+            if (i >= count)
+                return;
+            const int x = i % width;
+            int nearest = radius + 1;
+            for (int dx = -radius; dx <= radius; ++dx)
+                if (x + dx >= 0 && x + dx < width && input[i + dx] > 0)
+                    nearest = min(nearest, abs(dx));
+            distance[i] = float(nearest * nearest);
+        }
+
+        __global__ void disk_distance_kernel(const float* distance, float* output, int count, int height, int width, int radius) {
+            const int i = int(blockIdx.x * blockDim.x + threadIdx.x);
+            if (i >= count)
+                return;
+            const int y = i / width % height;
+            bool inside = false;
+            for (int dy = -radius; dy <= radius; ++dy)
+                if (y + dy >= 0 && y + dy < height && distance[i + dy * width] + dy * dy <= radius * radius) {
+                    inside = true;
+                    break;
+                }
+            output[i] = inside ? 1.0f : 0.0f;
+        }
+
+        __global__ void round_bfloat16_kernel(const float* input, float* output, size_t count) {
+            const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+            if (i < count)
+                output[i] = __bfloat162float(__float2bfloat16_rn(input[i]));
+        }
+
+        // Each pixel of the chosen side (background: score <= 0, foreground: score > 0) searches its own 8-connected
+        // component and stops once it exceeds eight pixels; components are maximal, so every pixel of a small
+        // component reaches the same verdict.
+        template <bool kForeground>
+        __global__ void replace_small_components_kernel(const float* input, float* output, int count, int height,
+                                                        int width, float fill) {
+            const int pixel = int(blockIdx.x * blockDim.x + threadIdx.x);
+            if (pixel >= count)
+                return;
+            const float value = input[pixel];
+            output[pixel] = value;
+            if ((value > 0.0f) != kForeground)
+                return;
+            constexpr int kMaxPixels = 8;
+            const int plane = pixel - pixel % (height * width);
+            int component[kMaxPixels];
+            int size = 1;
+            component[0] = pixel - plane;
+            for (int cursor = 0; cursor < size; ++cursor) {
+                const int x = component[cursor] % width, y = component[cursor] / width;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || nx >= width || ny < 0 || ny >= height ||
+                            (input[plane + ny * width + nx] > 0.0f) != kForeground)
+                            continue;
+                        const int neighbor = ny * width + nx;
+                        bool known = false;
+                        for (int i = 0; i < size && !known; ++i)
+                            known = component[i] == neighbor;
+                        if (known)
+                            continue;
+                        if (size == kMaxPixels)
+                            return;
+                        component[size++] = neighbor;
+                    }
+            }
+            output[pixel] = fill;
+        }
+
+        __global__ void rotary_embedding_2d_kernel(const void* input, void* output, int count, int tokens,
+                                                   int dim, int height, int width, int excluded, bool is_half) {
+            const int pair = int(blockIdx.x * blockDim.x + threadIdx.x);
+            if (pair >= count / 2)
+                return;
+            const int index = pair * 2, token = index / dim % tokens, channel = index % dim;
+            const float real = device::ld_strided(input, index, is_half);
+            const float imaginary = device::ld_strided(input, index + 1, is_half);
+            float cosine = 1, sine = 0;
+            if (token < tokens - excluded) {
+                const int spatial = token % (height * width);
+                const int axis = channel < dim / 2 ? spatial % width : spatial / width;
+                const float frequency = 1.0f / powf(10000.0f, float((channel / 2) % (dim / 4) * 4) / dim);
+                sincosf(axis * frequency, &sine, &cosine);
+            }
+            device::st_strided(output, index, real * cosine - imaginary * sine, is_half);
+            device::st_strided(output, index + 1, real * sine + imaginary * cosine, is_half);
+        }
 
         __device__ __forceinline__ float warp_sum(float v) {
 #pragma unroll
@@ -249,6 +358,35 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        __global__ void resize_bilinear_antialiased_axis_kernel(
+            const void* __restrict__ input, void* __restrict__ output, const int total,
+            const int in_h, const int in_w, const int out_h, const int out_w,
+            const bool horizontal, const bool is_half) {
+            const int input_size = horizontal ? in_w : in_h;
+            const int output_size = horizontal ? out_w : out_h;
+            const float scale = static_cast<float>(input_size) / output_size;
+            const float support = fmaxf(scale, 1.0f);
+            for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < total;
+                 index += blockDim.x * gridDim.x) {
+                const int x = index % out_w;
+                const int y = (index / out_w) % out_h;
+                const int plane = index / (out_w * out_h);
+                const float center = ((horizontal ? x : y) + 0.5f) * scale;
+                const int first = max(0, static_cast<int>(center - support + 0.5f));
+                const int end = min(input_size, static_cast<int>(center + support + 0.5f));
+                float sum = 0.0f;
+                float weight_sum = 0.0f;
+                for (int source = first; source < end; ++source) {
+                    const float weight = fmaxf(0.0f, 1.0f - fabsf((source + 0.5f - center) / support));
+                    const int offset = horizontal ? (plane * in_h + y) * in_w + source
+                                                  : (plane * in_h + source) * in_w + x;
+                    sum += weight * device::ld_strided(input, offset, is_half);
+                    weight_sum += weight;
+                }
+                device::st_strided(output, index, sum / weight_sum, is_half);
+            }
+        }
+
         int unary_grid(const std::size_t n) {
             const int block = 256;
             const int max_blocks = 2048;
@@ -334,6 +472,66 @@ namespace lfs::core::nn::kernels {
         channel_bias_kernel<<<grid, block, 0, stream>>>(nchw, bias, n, c, spatial,
                                                         dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.bias.channel");
+    }
+
+    void resample_pil_axis(const float* input, float* output, const int* bounds, const int* coefficients,
+                           int taps, int planes, int in_h, int in_w, int out_h, int out_w,
+                           bool horizontal, cudaStream_t stream) {
+        const int count = planes * out_h * out_w;
+        resample_pil_axis_kernel<<<(count + 255) / 256, 256, 0, stream>>>(
+            input, output, bounds, coefficients, taps, count, in_h, in_w, out_h, out_w, horizontal);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.resample_pil_axis");
+    }
+
+    void dilate_binary_disk(const float* input, float* horizontal_distance, float* output,
+                            int planes, int height, int width, int radius, cudaStream_t stream) {
+        const int count = planes * height * width;
+        horizontal_distance_kernel<<<(count + 255) / 256, 256, 0, stream>>>(input, horizontal_distance, count, width, radius);
+        disk_distance_kernel<<<(count + 255) / 256, 256, 0, stream>>>(horizontal_distance, output, count, height, width, radius);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.dilate_binary_disk");
+    }
+
+    void round_bfloat16(const float* input, float* output, size_t count, cudaStream_t stream) {
+        round_bfloat16_kernel<<<(count + 255) / 256, 256, 0, stream>>>(input, output, count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.round_bfloat16");
+    }
+
+    void fill_small_background(const float* input, float* output, int planes, int height, int width, float fill,
+                               cudaStream_t stream) {
+        const int count = planes * height * width;
+        replace_small_components_kernel<false><<<(count + 255) / 256, 256, 0, stream>>>(
+            input, output, count, height, width, fill);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.fill_small_background");
+    }
+
+    void remove_small_foreground(const float* input, float* output, int planes, int height, int width, float fill,
+                                 cudaStream_t stream) {
+        const int count = planes * height * width;
+        replace_small_components_kernel<true><<<(count + 255) / 256, 256, 0, stream>>>(
+            input, output, count, height, width, fill);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.remove_small_foreground");
+    }
+
+    void rotary_embedding_2d(const void* input, void* output, int sequences, int tokens, int dim,
+                             int height, int width, int excluded_tokens, DataType dtype, cudaStream_t stream) {
+        const int count = sequences * tokens * dim;
+        rotary_embedding_2d_kernel<<<(count / 2 + 255) / 256, 256, 0, stream>>>(
+            input, output, count, tokens, dim, height, width, excluded_tokens, dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.rotary_embedding_2d");
+    }
+
+    void resize_bilinear_antialiased_axis(const void* input, void* output, const int planes,
+                                          const int in_h, const int in_w, const int out_h, const int out_w,
+                                          const bool horizontal, const DataType dtype, const cudaStream_t stream) {
+        const int total = planes * out_h * out_w;
+        if (total <= 0) {
+            return;
+        }
+        const int block = 256;
+        const int grid = std::min(2048, (total + block - 1) / block);
+        resize_bilinear_antialiased_axis_kernel<<<grid, block, 0, stream>>>(
+            input, output, total, in_h, in_w, out_h, out_w, horizontal, dtype == DataType::Float16);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.resize_bilinear_antialiased_axis");
     }
 
     void resize2d(const void* input, void* output, int n, int c, int in_h, int in_w, int out_h,

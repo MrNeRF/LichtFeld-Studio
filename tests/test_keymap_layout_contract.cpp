@@ -131,13 +131,49 @@ namespace lfs::vis::input {
                         SCOPED_TRACE(entry.path().filename().string() + " " +
                                      getActionName(binding.action) + " mode " +
                                      std::to_string(static_cast<int>(mode)));
+                        // A mode binding with the same key replaces the inherited action.
+                        const auto local = std::ranges::find_if(defaults.bindings, [&](const Binding& b) {
+                            const auto* key = std::get_if<KeyTrigger>(&b.trigger);
+                            return b.mode == mode && key && key->key == trigger->key &&
+                                   key->modifiers == trigger->modifiers;
+                        });
                         EXPECT_EQ(bindings.getActionForShortcut(mode, physical, logical,
                                                                 trigger->modifiers),
-                                  mode == ToolMode::WALK && binding.action == Action::CANCEL_POLYGON
-                                      ? Action::EXIT_WALK
-                                      : binding.action);
+                                  local != defaults.bindings.end() ? local->action : binding.action);
                     }
                 }
+            }
+            EXPECT_EQ(layouts, 19u);
+        }
+
+        TEST_F(KeymapTest, EditorDefaultsDispatchAcrossSavedLayouts) {
+            const auto root = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/keymap_layouts";
+            const InputBindings bindings;
+            const auto defaults = InputBindings::createDefaultProfile();
+            size_t layouts = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(root)) {
+                if (entry.path().extension() != ".json")
+                    continue;
+                ++layouts;
+                const auto layout = readLayout(entry.path());
+                size_t checked = 0;
+                for (const auto& binding : defaults.bindings) {
+                    if (binding.mode != ToolMode::EDITOR)
+                        continue;
+                    const auto* trigger = std::get_if<KeyTrigger>(&binding.trigger);
+                    ASSERT_NE(trigger, nullptr);
+                    const auto scancode = positionForDefaultKey(layout, trigger->key);
+                    ASSERT_NE(scancode, SDL_SCANCODE_UNKNOWN);
+                    const auto keycode = keycodeAt(layout, scancode, (trigger->modifiers & MODIFIER_SHIFT) != 0);
+                    SCOPED_TRACE(entry.path().filename().string() + " " + getActionName(binding.action));
+                    EXPECT_EQ(bindings.getActionForShortcut(ToolMode::EDITOR,
+                                                            sdlScancodeToAppKey(scancode),
+                                                            sdlShortcutKeyToAppKey(scancode, keycode, keycodeAt(layout, scancode, false)),
+                                                            trigger->modifiers),
+                              binding.action);
+                    ++checked;
+                }
+                EXPECT_EQ(checked, 4u);
             }
             EXPECT_EQ(layouts, 19u);
         }

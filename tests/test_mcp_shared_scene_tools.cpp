@@ -88,6 +88,23 @@ namespace {
 
 } // namespace
 
+TEST(McpSharedSceneToolsTest, CapturePreservesTypedExportFailure) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend stub;
+    auto backend = stub.backend();
+    backend.render_capture = [](std::optional<int>, int, int, bool) -> lfs::Result<std::string> {
+        return lfs::make_error(lfs::ErrorInit{.code = lfs::ErrorCode::Cancelled,
+                                              .domain = lfs::ErrorDomain::Rendering,
+                                              .user_message = "Export stopped",
+                                              .detection = LFS_SOURCE_SITE_CURRENT()});
+    };
+    lfs::mcp::register_shared_scene_tools(backend);
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool("render.capture", json{{"camera_index", 0}});
+    EXPECT_EQ(result["error"]["code"], "Cancelled");
+    EXPECT_EQ(result["error"]["domain"], "Rendering");
+    EXPECT_EQ(result["error_message"], "Export stopped");
+}
+
 TEST(McpSharedSceneToolsTest, LoadDatasetDefaultsOutputPathAndStrategyAlias) {
     ScopedSharedSceneToolRegistration cleanup;
     FakeSharedSceneBackend backend;

@@ -1807,5 +1807,115 @@ namespace lfs::core {
             return dataset;
         }
 
+        std::expected<BatchTrainingParameters, lfs::Error> read_batch_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const BatchTrainingParameters& defaults) {
+            auto json_result = read_json_file(path);
+            if (!json_result) {
+                return std::unexpected(config_import_error(std::move(json_result.error()), path));
+            }
+
+            const auto& j = *json_result;
+            BatchTrainingParameters params = defaults;
+            params.config_file = path;
+
+            const auto fail = [&](std::string detail) {
+                return std::unexpected(config_import_error(std::move(detail), path));
+            };
+            // Training options only come through "args", parsed like the command line.
+            const auto read_args = [](const nlohmann::json& value, std::vector<std::string>& out) {
+                if (!value.is_array())
+                    return false;
+                for (const auto& arg : value) {
+                    if (!arg.is_string())
+                        return false;
+                    out.push_back(arg.get<std::string>());
+                }
+                return true;
+            };
+            const auto near_manifest = [&](const nlohmann::json& value) {
+                auto resolved = utf8_to_path(value.get<std::string>());
+                if (resolved.is_relative())
+                    return (lfs::core::native_fs::current_path() / path.parent_path() / resolved).lexically_normal();
+                return resolved;
+            };
+
+            const auto parse_job_item = [&](const nlohmann::json& job_json) -> std::expected<BatchJobItem, lfs::Error> {
+                if (!job_json.is_object())
+                    return fail("Batch job entry must be a JSON object");
+                static constexpr std::string_view job_keys[] = {"dataset", "name", "output", "config", "args"};
+                BatchJobItem item;
+                for (const auto& [key, value] : job_json.items()) {
+                    if (std::ranges::find(job_keys, key) == std::end(job_keys))
+                        return fail(std::format("Unknown batch job key \"{}\". Pass training options in \"args\"", key));
+                    if (key == "args" ? !read_args(value, item.extra_args) : !value.is_string())
+                        return fail(std::format("Batch job \"{}\" has the wrong type", key));
+                }
+                if (!job_json.contains("dataset"))
+                    return fail("Batch job is missing \"dataset\"");
+                if (job_json["dataset"].get<std::string>().empty())
+                    return fail("Batch job dataset must not be empty");
+                item.dataset_path = near_manifest(job_json["dataset"]);
+                if (job_json.contains("name"))
+                    item.name = job_json["name"].get<std::string>();
+                if (job_json.contains("output"))
+                    item.output_path = near_manifest(job_json["output"]);
+                if (job_json.contains("config"))
+                    item.config_file = near_manifest(job_json["config"]);
+                return item;
+            };
+            const auto read_jobs = [&](const nlohmann::json& jobs) -> std::expected<void, lfs::Error> {
+                for (const auto& item_json : jobs) {
+                    auto job = parse_job_item(item_json);
+                    if (!job)
+                        return std::unexpected(job.error());
+                    params.jobs.push_back(std::move(*job));
+                }
+                return {};
+            };
+
+            if (j.is_array()) {
+                if (auto read = read_jobs(j); !read)
+                    return std::unexpected(read.error());
+                return params;
+            }
+            if (!j.is_object())
+                return fail("Batch configuration must be a JSON object or array");
+
+            static constexpr std::string_view keys[] = {"args", "jobs", "output_dir", "summary_file", "report_file",
+                                                        "continue_on_failure", "recursive", "dry_run", "timeout_minutes"};
+            for (const auto& [key, value] : j.items()) {
+                if (std::ranges::find(keys, key) == std::end(keys))
+                    return fail(std::format("Unknown batch configuration key \"{}\". Pass training options in \"args\"", key));
+                const bool valid = key == "args"              ? read_args(value, params.shared_args)
+                                   : key == "jobs"            ? value.is_array()
+                                   : key == "timeout_minutes" ? value.is_number_integer() && value.get<int64_t>() >= 0 &&
+                                                                    value.get<int64_t>() <= std::numeric_limits<int>::max()
+                                   : key.ends_with("_dir") || key.ends_with("_file") ? value.is_string()
+                                                                                     : value.is_boolean();
+                if (!valid)
+                    return fail(std::format("Batch configuration \"{}\" has the wrong type", key));
+            }
+            if (j.contains("output_dir"))
+                params.output_dir = near_manifest(j["output_dir"]);
+            if (j.contains("continue_on_failure"))
+                params.continue_on_failure = j["continue_on_failure"].get<bool>();
+            if (j.contains("recursive"))
+                params.recursive = j["recursive"].get<bool>();
+            if (j.contains("dry_run"))
+                params.dry_run = j["dry_run"].get<bool>();
+            if (j.contains("timeout_minutes"))
+                params.timeout_minutes = static_cast<int>(j["timeout_minutes"].get<int64_t>());
+            if (j.contains("summary_file"))
+                params.summary_file = near_manifest(j["summary_file"]);
+            if (j.contains("report_file"))
+                params.report_file = near_manifest(j["report_file"]);
+            if (j.contains("jobs")) {
+                if (auto read = read_jobs(j["jobs"]); !read)
+                    return std::unexpected(read.error());
+            }
+            return params;
+        }
+
     } // namespace param
 } // namespace lfs::core

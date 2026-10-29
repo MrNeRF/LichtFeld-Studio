@@ -1,173 +1,164 @@
 <rml>
-<head>
-    <link type="text/rcss" href="sequencer.rcss"/>
-</head>
-<body id="body" class="docked-panel">
-    <div id="panel">
-        <div id="floating-header" class="hidden">
-            <span id="floating-title">@tr:toolbar.sequencer</span>
-            <div id="floating-actions">
-                <div id="btn-close-panel" class="transport-btn text wide floating-header-action" data-tooltip="common.close">
-                    <span id="close-panel-label" class="transport-label">@tr:common.close</span>
+    <head>
+        <link type="text/rcss" href="sequencer.rcss" />
+    </head>
+    <body id="body" class="docked-panel">
+        <div id="panel">
+            <div id="floating-header" class="hidden">
+                <span id="floating-title">@tr:toolbar.sequencer</span>
+                <div id="floating-actions">
+                    <div id="btn-close-panel" class="transport-btn text wide floating-header-action" data-tooltip="common.close">
+                        <img class="transport-icon" src="../icon/scene/x.png" />
+                    </div>
                 </div>
             </div>
-        </div>
-        <div id="transport-row">
-            <div id="left-controls">
-                <div id="btn-camera-path" class="transport-btn toggle text" data-tooltip="tooltip.seq_camera_path">
-                    <img class="transport-icon cam-path-icon" src="../icon/sequencer/camera-path.png" />
-                    <span class="transport-label cam-path-label">@tr:ui.path</span>
+            <div id="transport-row">
+                <div id="playback-controls" class="toolbar-group">
+                    <div id="transport">
+                        <div id="btn-skip-back" class="transport-btn" data-tooltip="tooltip.seq_first">
+                            <img class="transport-icon" src="../icon/sequencer/skip-back.png" />
+                        </div>
+                        <div id="btn-prev-keyframe" class="transport-btn" data-tooltip="tooltip.seq_prev_keyframe">
+                            <img class="transport-icon" src="../icon/sequencer/step-back.png" />
+                        </div>
+                        <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
+                            <img class="transport-icon" src="../icon/sequencer/stop.png" />
+                        </div>
+                        <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play" data-action="sequencer_play_pause">
+                            <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
+                        </div>
+                        <div id="btn-next-keyframe" class="transport-btn" data-tooltip="tooltip.seq_next_keyframe">
+                            <img class="transport-icon" src="../icon/sequencer/step-forward.png" />
+                        </div>
+                        <div id="btn-skip-forward" class="transport-btn" data-tooltip="tooltip.seq_last">
+                            <img class="transport-icon" src="../icon/sequencer/skip-forward.png" />
+                        </div>
+                        <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
+                            <img class="transport-icon" src="../icon/sequencer/loop.png" />
+                        </div>
+                    </div>
+                    <div id="time-display">
+                        <span id="current-time">0:00.00</span>
+                        <div id="duration-field" data-tooltip="tooltip.seq_clip_duration">
+                            <span id="duration" />
+                            <input id="duration-input" type="text" />
+                        </div>
+                    </div>
+                    <div id="btn-speed" class="transport-btn text speed-group" data-tooltip="tooltip.seq_speed">
+                        <span id="speed-label" class="speed-val">1x</span>
+                        <img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
                 </div>
-                <div class="transport-sep"></div>
-                <div id="transport">
-                    <div id="btn-skip-back" class="transport-btn" data-tooltip="tooltip.seq_first">
-                        <img class="transport-icon" src="../icon/sequencer/skip-back.png" />
-                    </div>
-                    <div id="btn-prev-keyframe" class="transport-btn" data-tooltip="tooltip.seq_prev_keyframe">
-                        <img class="transport-icon" src="../icon/sequencer/step-back.png" />
-                    </div>
-                    <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
-                        <img class="transport-icon" src="../icon/sequencer/stop.png" />
-                    </div>
-                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play" data-action="sequencer_play_pause">
-                        <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
-                    </div>
-                    <div id="btn-next-keyframe" class="transport-btn" data-tooltip="tooltip.seq_next_keyframe">
-                        <img class="transport-icon" src="../icon/sequencer/step-forward.png" />
-                    </div>
-                    <div id="btn-skip-forward" class="transport-btn" data-tooltip="tooltip.seq_last">
-                        <img class="transport-icon" src="../icon/sequencer/skip-forward.png" />
-                    </div>
-                    <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
-                        <img class="transport-icon" src="../icon/sequencer/loop.png" />
-                    </div>
+                <div id="editing-controls" class="toolbar-group">
                     <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add" data-action="sequencer_add_keyframe">
                         <img class="transport-icon" src="../icon/sequencer/plus.png" />
                     </div>
-                </div>
-                <div id="time-display">
-                    <span id="current-time">0:00.00</span>
-                    <div id="duration-field" data-tooltip="tooltip.seq_clip_duration">
-                        <span id="duration"></span>
-                        <input id="duration-input" type="text" />
+                    <div id="btn-add-reveal" class="transport-btn text"><span id="reveal-button-label" class="transport-label">@tr:sequencer.add_reveal</span></div>
+                    <div id="btn-snap" class="transport-btn toggle" data-tooltip="tooltip.seq_snap">
+                        <img class="transport-icon" src="../icon/magnet.png" />
+                    </div>
+                    <div id="btn-snap-options" class="transport-btn text menu-button" data-tooltip="tooltip.seq_snap_options">
+                        <img class="menu-chevron" src="../icon/dropdown-arrow.png" />
                     </div>
                 </div>
-                <div class="transport-sep"></div>
-                <div id="btn-speed" class="transport-btn text speed-group" data-tooltip="tooltip.seq_speed">
-                    <span id="speed-label" class="speed-val">1x</span>
-                    <span class="speed-text">@tr:ui.speed</span>
-                    <span class="dropdown-arrow">&#x25be;</span>
-                </div>
-                <div id="sequence-fps-field" class="sequence-fps-field" data-tooltip="tooltip.seq_sequence_fps">
-                    <span id="sequence-fps-display">24 fps</span>
-                    <input id="sequence-fps-input" type="text" />
-                </div>
-                <div id="btn-snap" class="transport-btn toggle text snap-toggle" data-tooltip="tooltip.seq_snap">
-                    <div class="snap-check"></div>
-                    <span class="transport-label">@tr:ui.snap</span>
-                    <span class="ctx-indicator">&#x25E2;</span>
-                </div>
-                <div class="transport-sep"></div>
-                <div id="btn-follow" class="transport-btn toggle" data-tooltip="tooltip.seq_follow">
-                    <img class="transport-icon" src="../icon/sequencer/follow.png" />
-                </div>
-                <div id="btn-film-strip" class="transport-btn toggle" data-tooltip="tooltip.seq_film_strip">
-                    <img class="transport-icon" src="../icon/sequencer/film-strip.png" />
-                </div>
-                <div id="btn-preview" class="transport-btn toggle" data-tooltip="tooltip.seq_pip_preview">
-                    <img class="transport-icon" src="../icon/sequencer/preview.png" />
-                    <span class="ctx-indicator">&#x25E2;</span>
-                </div>
-                <div id="btn-equirect" class="transport-btn toggle text wide" data-tooltip="tooltip.equirectangular">
-                    <span class="transport-label">@tr:ui.pano</span>
-                </div>
-            </div>
-            <div id="right-controls">
-                <div id="btn-save-path" class="transport-btn text" data-tooltip="tooltip.seq_save_path">
-                    <span class="transport-label transport-label-full">@tr:ui.save_path</span>
-                    <span class="transport-label transport-label-short">@tr:common.save</span>
-                </div>
-                <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
-                    <span class="transport-label transport-label-full">@tr:ui.load_path</span>
-                    <span class="transport-label transport-label-short">@tr:common.load</span>
-                </div>
-                <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
-                    <span class="transport-label">@tr:ui.load_sequence</span>
-                </div>
-                <div class="transport-sep"></div>
-                <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
-                    <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
-                    <span class="dropdown-arrow">&#x25be;</span>
-                    <span class="ctx-indicator">&#x25E2;</span>
-                </div>
-                <div id="resolution-field" class="transport-info" data-tooltip="tooltip.seq_resolution">
-                    <span id="resolution-info">1920x1080</span>
-                    <input id="resolution-input" type="text" />
-                </div>
-                <span class="transport-info quality-group">Q</span>
-                <div id="quality-scrub" class="scrub-field" data-tooltip="tooltip.seq_quality">
-                    <div id="quality-fill" class="scrub-field-fill"></div>
-                    <span id="quality-display" class="scrub-field-display">18</span>
-                    <input id="quality-input" class="scrub-field-input" type="text" />
-                </div>
-                <div class="transport-sep"></div>
-                <div id="btn-export" class="transport-btn text primary" data-tooltip="tooltip.seq_export">
-                    <img class="transport-icon export-icon" src="../icon/sequencer/export.png" />
-                    <span class="transport-label export-label">@tr:export.export</span>
-                </div>
-                <div class="transport-sep"></div>
-                <div id="btn-clear" class="transport-btn text error" data-tooltip="tooltip.seq_clear">
-                    <img class="transport-icon clear-icon" src="../icon/scene/trash.png" />
-                    <span class="transport-label clear-label">@tr:main_panel.clear</span>
-                    <span class="ctx-indicator">&#x25E2;</span>
-                </div>
-                <div id="dock-toggle-sep" class="transport-sep"></div>
-                <div id="btn-dock-toggle" class="transport-btn text wide" data-tooltip="tooltip.seq_undock">
-                    <span id="dock-toggle-label" class="transport-label">@tr:ui.undock</span>
-                </div>
-            </div>
-        </div>
-        <div id="header">
-            <div id="timeline">
-                <div id="ruler" data-tooltip="tooltip.seq_ruler"></div>
-                <div id="track-area">
-                    <div id="track-bar">
-                        <span id="hint"></span>
+                <div id="view-controls" class="toolbar-group">
+                    <div id="btn-camera-path" class="transport-btn toggle" data-tooltip="tooltip.seq_camera_path">
+                        <img class="transport-icon" src="../icon/sequencer/camera-path.png" />
                     </div>
-                    <div id="sequence-strip"></div>
-                    <div id="keyframes"></div>
-                    <div id="playhead">
-                        <div id="playhead-handle"></div>
+                    <div id="btn-follow" class="transport-btn toggle" data-tooltip="tooltip.seq_follow">
+                        <img class="transport-icon" src="../icon/sequencer/follow.png" />
                     </div>
-                    <div id="timeline-scrollbar" data-tooltip="tooltip.seq_timeline_scroll">
-                        <div id="timeline-scrollbar-thumb"></div>
+                    <div id="btn-film-strip" class="transport-btn toggle" data-tooltip="tooltip.seq_film_strip">
+                        <img class="transport-icon" src="../icon/sequencer/film-strip.png" />
+                    </div>
+                    <div id="btn-preview" class="transport-btn toggle" data-tooltip="tooltip.seq_pip_preview">
+                        <img class="transport-icon" src="../icon/sequencer/preview.png" />
+                    </div>
+                    <div id="btn-preview-options" class="transport-btn text menu-button" data-tooltip="tooltip.seq_preview_options">
+                        <img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
+                    <div id="btn-equirect" class="transport-btn text menu-button" data-tooltip="tooltip.seq_projection">
+                        <img class="transport-icon" src="../icon/world.png" /><img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
+                    <div id="btn-camera-aspect" class="transport-btn text menu-button" data-tooltip="tooltip.seq_camera_aspect">
+                        <img class="transport-icon" src="../icon/bounds.png" /><span id="camera-aspect-label">16:9</span><img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
+                </div>
+                <div id="file-controls" class="toolbar-group">
+                    <div id="btn-path-menu" class="transport-btn text menu-button" data-tooltip="tooltip.seq_path_menu">
+                        <img class="transport-icon" src="../icon/scene/camera.png" />
+                        <img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
+                    <div id="btn-load-sequence" class="transport-btn text menu-button" data-tooltip="tooltip.seq_ply_menu">
+                        <img class="transport-icon" src="../icon/sequencer/film-strip.png" />
+                        <span class="transport-label">PLY</span>
+                        <img class="menu-chevron" src="../icon/dropdown-arrow.png" />
+                    </div>
+                    <div id="sequence-fps-field" class="sequence-fps-field hidden" data-tooltip="tooltip.seq_sequence_fps">
+                        <span class="transport-label">@tr:sequencer.ply_fps</span>
+                        <span id="sequence-fps-display">24</span>
+                        <input id="sequence-fps-input" type="text" />
+                    </div>
+                </div>
+                <div id="output-controls" class="toolbar-group">
+                    <div id="btn-export" class="transport-btn text primary" data-tooltip="tooltip.seq_export">
+                        <img class="transport-icon export-icon" src="../icon/sequencer/export.png" />
+                        <span class="transport-label export-label">@tr:scene.export</span>
+                    </div>
+                    <div id="btn-dock-toggle" class="transport-btn text wide" data-tooltip="tooltip.seq_undock">
+                        <img class="transport-icon" src="../icon/arrows-maximize.png" />
                     </div>
                 </div>
             </div>
-        </div>
-        <div id="generic-tracks"></div>
-        <div id="easing-stripe">
-            <div id="easing-segments"></div>
-            <div id="easing-curves"></div>
-            <div id="easing-indicators"></div>
-        </div>
-        <div id="film-strip-panel">
-            <div id="film-strip-groove">
-                <div id="film-strip-gaps"></div>
-                <div id="film-strip-thumbs"></div>
-                <div id="film-strip-dividers"></div>
-                <div id="film-strip-markers"></div>
-                <div id="film-strip-sprockets-top"></div>
-                <div id="film-strip-sprockets-bottom"></div>
+            <div id="header">
+                <div id="timeline">
+                    <div id="ruler" data-tooltip="tooltip.seq_ruler" />
+                    <div id="track-area">
+                        <div id="track-bar">
+                            <span id="hint" />
+                        </div>
+                        <div id="reveal-strip" />
+                        <div id="sequence-strip" />
+                        <div id="keyframes" />
+                        <div id="playhead">
+                            <div id="playhead-handle" />
+                        </div>
+                        <div id="timeline-scrollbar" data-tooltip="tooltip.seq_timeline_scroll">
+                            <div id="timeline-scrollbar-thumb" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="generic-tracks" />
+            <div id="easing-stripe">
+                <div id="easing-segments" />
+                <div id="easing-curves" />
+                <div id="easing-indicators" />
+            </div>
+            <div id="film-strip-panel">
+                <div id="film-strip-groove">
+                    <div id="film-strip-gaps" />
+                    <div id="film-strip-thumbs" />
+                    <div id="film-strip-dividers" />
+                    <div id="film-strip-markers" />
+                    <div id="film-strip-sprockets-top" />
+                    <div id="film-strip-sprockets-bottom" />
+                </div>
+            </div>
+            <div id="reveal-settings" class="hidden">
+                <span>@tr:sequencer.reveal_start</span><input id="reveal-start" type="text" />
+                <span>@tr:sequencer.reveal_end</span><input id="reveal-end" type="text" />
+                <span data-tooltip="sequencer.reveal_softness_hint">@tr:sequencer.reveal_softness</span><input id="reveal-softness" type="text" data-tooltip="sequencer.reveal_softness_hint" />
+                <select id="reveal-shader" class="hidden" data-tooltip="shader.open_asset" />
+                <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">@tr:common.remove</span></div>
             </div>
         </div>
-    </div>
-    <div id="panel-guides">
-        <div id="guide-playhead" class="timeline-guide playhead"></div>
-        <div id="guide-selected" class="timeline-guide selected"></div>
-        <div id="guide-hovered" class="timeline-guide hovered"></div>
-        <div id="guide-strip-hover" class="timeline-guide strip-hover"></div>
-    </div>
-    <div id="timeline-tooltip"></div>
-</body>
+        <div id="panel-guides">
+            <div id="guide-playhead" class="timeline-guide playhead" />
+            <div id="guide-selected" class="timeline-guide selected" />
+            <div id="guide-hovered" class="timeline-guide hovered" />
+            <div id="guide-strip-hover" class="timeline-guide strip-hover" />
+        </div>
+        <div id="timeline-tooltip" />
+    </body>
 </rml>

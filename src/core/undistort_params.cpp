@@ -6,6 +6,7 @@
 // distorted one, and its rescaling to the image size actually loaded. The lens
 // inverse itself runs only on the GPU (inverse_distortion_sample_map).
 
+#include "core/camera_distortion_layout.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_image.hpp"
@@ -189,35 +190,19 @@ namespace lfs::core {
         params.src_height = height;
         params.model_type = model;
 
-        // Coefficient layout per model:
-        // PINHOLE polynomial: [k1, k2, k3, p1, p2]               indices 0-4
-        // PINHOLE rational:   [k1, k2, k3, k4, k5, k6, p1, p2]  indices 0-7
-        // FISHEYE:            [k1, k2, k3, k4]                   indices 0-3
-        // THIN_PRISM_FISHEYE: [k1, k2, k3, k4, p1, p2, sx1, sx2, sy1, sy2]  indices 0-9
-        std::memset(params.distortion, 0, sizeof(params.distortion));
-        params.num_distortion = 0;
-
-        std::vector<float> rad_vec, tan_vec;
-        if (radial.is_valid() && radial.numel() > 0) {
-            assert(radial.ndim() == 1);
-            auto rad_cpu = radial.cpu();
-            auto rad_acc = rad_cpu.accessor<float, 1>();
-            for (size_t i = 0; i < rad_cpu.numel(); ++i)
-                rad_vec.push_back(rad_acc(i));
-        }
-        if (tangential.is_valid() && tangential.numel() > 0) {
-            assert(tangential.ndim() == 1);
-            auto tan_cpu = tangential.cpu();
-            auto tan_acc = tan_cpu.accessor<float, 1>();
-            for (size_t i = 0; i < tan_cpu.numel(); ++i)
-                tan_vec.push_back(tan_acc(i));
-        }
-
-        const auto place = [&](int idx, float val) {
-            assert(idx < 12);
-            params.distortion[idx] = val;
-            params.num_distortion = std::max(params.num_distortion, idx + 1);
+        const auto coefficients = [](const Tensor& tensor) {
+            std::vector<float> values;
+            if (tensor.is_valid() && tensor.numel() > 0) {
+                assert(tensor.ndim() == 1);
+                auto cpu = tensor.cpu();
+                auto acc = cpu.accessor<float, 1>();
+                for (size_t i = 0; i < cpu.numel(); ++i)
+                    values.push_back(acc(i));
+            }
+            return values;
         };
+        const auto rad_vec = coefficients(radial);
+        const auto tan_vec = coefficients(tangential);
 
         switch (model) {
         case CameraModelType::PINHOLE: {
@@ -229,15 +214,6 @@ namespace lfs::core {
                 throw std::invalid_argument(
                     "Pinhole distortion supports exactly two tangential coefficients");
             }
-            const bool rational =
-                rad_vec.size() == 6 &&
-                (rad_vec[3] != 0.0f || rad_vec[4] != 0.0f || rad_vec[5] != 0.0f);
-            const size_t radial_count = rational ? rad_vec.size() : std::min<size_t>(rad_vec.size(), 3);
-            for (size_t i = 0; i < radial_count; ++i)
-                place(static_cast<int>(i), rad_vec[i]);
-            const int tangential_offset = rational ? 6 : 3;
-            for (size_t i = 0; i < tan_vec.size(); ++i)
-                place(tangential_offset + static_cast<int>(i), tan_vec[i]);
             break;
         }
 
@@ -252,21 +228,13 @@ namespace lfs::core {
                 throw std::invalid_argument(
                     "Fisheye distortion does not support tangential coefficients");
             }
-            for (size_t i = 0; i < rad_vec.size(); ++i)
-                place(static_cast<int>(i), rad_vec[i]);
             break;
 
         case CameraModelType::THIN_PRISM_FISHEYE: {
-            // Tangential tuple in COLMAP order {p1, p2, sx1, sy1}, optionally extended by {sx2, sy2}.
-            constexpr std::array<int, 6> thin_prism_slots = {4, 5, 6, 8, 7, 9};
-            if (rad_vec.size() > 4 || tan_vec.size() > thin_prism_slots.size()) {
+            if (rad_vec.size() > 4 || tan_vec.size() > 6) {
                 throw std::invalid_argument(
                     "Thin prism fisheye distortion supports four radial and six tangential or prism coefficients");
             }
-            for (size_t i = 0; i < rad_vec.size(); ++i)
-                place(static_cast<int>(i), rad_vec[i]);
-            for (size_t i = 0; i < tan_vec.size(); ++i)
-                place(thin_prism_slots[i], tan_vec[i]);
             break;
         }
 
@@ -277,6 +245,8 @@ namespace lfs::core {
             }
             break;
         }
+
+        params.num_distortion = packCameraDistortion(model, rad_vec, tan_vec, std::span(params.distortion));
 
         params.dst_fx = fx;
         params.dst_fy = fy;

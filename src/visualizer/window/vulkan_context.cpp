@@ -615,7 +615,9 @@ namespace lfs::vis {
         return createAllocator() && createPipelineCache() && createCommandPool();
     }
 
-    bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
+    bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height,
+                             VulkanDeviceHooks hooks) {
+        device_hooks_ = std::move(hooks);
         transparent_surface_ = (SDL_GetWindowFlags(window) & SDL_WINDOW_TRANSPARENT) != 0;
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
@@ -638,6 +640,7 @@ namespace lfs::vis {
             timed("vulkan_init.createCommandPool", [&] { return createCommandPool(); }) &&
             timed("vulkan_init.createCommandBuffers", [&] { return createCommandBuffers(); }) &&
             timed("vulkan_init.createSyncObjects", [&] { return createSyncObjects(); });
+        device_hooks_ = {};
         return initialized;
     }
 
@@ -2363,8 +2366,14 @@ namespace lfs::vis {
         }
 
         const void* next = validation_enabled_ ? &debug_create_info : nullptr;
+        lfs::core::VulkanInstanceCreator create_instance;
+        if (device_hooks_.create_instance) {
+            create_instance = [this](const VkInstanceCreateInfo& info, VkInstance* instance) {
+                return device_hooks_.create_instance(info, *instance);
+            };
+        }
         const VkResult result = lfs::core::create_vulkan_instance(
-            app_info, extensions, layers, next, 0, &instance_);
+            app_info, extensions, layers, next, 0, &instance_, create_instance);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateInstance failed: {}", vkResultToString(result)), result);
         }
@@ -2669,6 +2678,10 @@ namespace lfs::vis {
         }
         if (physical_device_ == VK_NULL_HANDLE) {
             return fail("No selected Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
+        }
+        if (device_hooks_.required_physical_device &&
+            device_hooks_.required_physical_device(instance_) != physical_device_) {
+            return fail("The device hooks require a different GPU than the one selected for rendering");
         }
 
         VkPhysicalDeviceProperties props{};
@@ -3081,8 +3094,14 @@ namespace lfs::vis {
         features2.features.sparseBinding =
             (sparse_binding_supported && graphics_queue_sparse) ? VK_TRUE : VK_FALSE;
 
+        lfs::core::VulkanDeviceCreator create_device;
+        if (device_hooks_.create_device) {
+            create_device = [this](VkPhysicalDevice physical, const VkDeviceCreateInfo& info, VkDevice* device) {
+                return device_hooks_.create_device(physical, info, *device);
+            };
+        }
         const VkResult result = lfs::core::create_vulkan_device(
-            physical_device_, queue_infos, extensions, &features2, nullptr, &device_);
+            physical_device_, queue_infos, extensions, &features2, nullptr, &device_, create_device);
         if (result != VK_SUCCESS) {
             return setVkFailure(std::format("vkCreateDevice failed: {}", vkResultToString(result)), result);
         }

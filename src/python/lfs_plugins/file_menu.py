@@ -442,8 +442,7 @@ class CollisionOperator(Operator):
     label = "collision.title"
 
     def execute(self, context) -> set:
-        from .collision_rendering import open_collision
-        open_collision(export=True)
+        lf.ui.get_panel_object("lfs.collision").show(True)
         return {"FINISHED"}
 
 

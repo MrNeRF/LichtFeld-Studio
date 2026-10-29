@@ -38,16 +38,19 @@ namespace lfs::vis {
 
     VksplatViewportRenderer::StochasticFrame VksplatViewportRenderer::prepareStochasticFrame(
         VulkanGSRendererUniforms& uniforms, const lfs::core::SplatData& model,
-        const RenderTargetId slot, const bool content_changed) {
+        const RenderTargetId slot, const bool content_changed, StochasticEffect effect) {
         const auto& history = stochastic_histories_[slot];
         StochasticFrame frame{.camera = cameraKey(uniforms),
                               .model = &model,
+                              .effect = std::move(effect),
                               .generation = stochastic_history_generation_,
                               .enabled = uniforms.stochastic_mode != 0u};
         if (!frame.enabled)
             return frame;
+        // A custom effect's program, time or parameters change the projected
+        // splats like a content edit does.
         const bool compatible = history.valid && !content_changed && history.model == &model &&
-                                history.generation == frame.generation &&
+                                history.effect == frame.effect && history.generation == frame.generation &&
                                 history.camera.image_width == uniforms.image_width &&
                                 history.camera.image_height == uniforms.image_height &&
                                 history.camera.num_splats == uniforms.num_splats &&
@@ -107,6 +110,7 @@ namespace lfs::vis {
         auto& history = stochastic_histories_[slot];
         history.camera = frame.camera;
         history.model = frame.model;
+        history.effect = frame.effect;
         history.generation = frame.generation;
         history.samples = frame.samples + 1u;
         history.last_color = frame.output_color;
@@ -119,7 +123,8 @@ namespace lfs::vis {
         const StochasticFrame& frame, const RenderTargetId slot, const StochasticProjectionCache& cache) {
         return frame.enabled && frame.history_valid && frame.samples > 0u &&
                cache.first_submission != 0u && cache.slot == slot &&
-               cache.frame.model == frame.model && cache.frame.generation == frame.generation &&
+               cache.frame.model == frame.model && cache.frame.effect == frame.effect &&
+               cache.frame.generation == frame.generation &&
                std::memcmp(&cache.frame.camera, &frame.camera, sizeof(frame.camera)) == 0;
     }
 

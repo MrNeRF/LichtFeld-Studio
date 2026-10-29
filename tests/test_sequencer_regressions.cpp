@@ -328,15 +328,17 @@ namespace {
         EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
     }
 
-    TEST_F(SequencerHistoryRegressionTest, ProtectedAndMissingDeleteCommandsDoNotCreateHistory) {
+    TEST_F(SequencerHistoryRegressionTest, FirstKeyDeleteIsOneUndoStepAndMissingDeleteAddsNone) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& controller = viewer.getGuiManager()->sequencerUI().controller();
         const auto first = controller.addKeyframe(makeKeyframe(0.0f));
         auto& history = lfs::vis::op::undoHistory();
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 0}.emit();
+        EXPECT_EQ(controller.timeline().getKeyframeById(first), nullptr);
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 99}.emit();
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
         EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
-        EXPECT_EQ(history.undoCount(), 0u);
     }
 
     TEST_F(SequencerHistoryRegressionTest, GroupedControllerDeletionIsOneUndoStep) {
@@ -1088,6 +1090,80 @@ namespace {
                 }
             }
         }
+    }
+
+    TEST(SequencerTimelineRegressionTest, RevealClipRoundTripsAndClampsProgress) {
+        Timeline timeline;
+        timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f});
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(1.0f), 0.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(3.5f), 0.5f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->progress(6.0f), 1.0f);
+        EXPECT_FLOAT_EQ(loaded.revealClip()->softness, 0.2f);
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        for (const auto effect : {lfs::sequencer::RevealEffect::Magic, lfs::sequencer::RevealEffect::Spread,
+                                  lfs::sequencer::RevealEffect::Unroll, lfs::sequencer::RevealEffect::Twister,
+                                  lfs::sequencer::RevealEffect::Rain, lfs::sequencer::RevealEffect::Unveil,
+                                  lfs::sequencer::RevealEffect::LightEdge, lfs::sequencer::RevealEffect::Rainbow,
+                                  lfs::sequencer::RevealEffect::DarkToLight, lfs::sequencer::RevealEffect::Distortion,
+                                  lfs::sequencer::RevealEffect::CameraLight}) {
+            timeline.setRevealClip(lfs::sequencer::RevealClip{2.0f, 5.0f, 0.2f, effect});
+            ASSERT_TRUE(loaded.loadFromJson(timeline.saveToJson()));
+            EXPECT_EQ(loaded.revealClip()->effect, effect);
+        }
+        auto legacy = timeline.saveToJson();
+        legacy["reveal_clip"]["extension"] = true;
+        legacy["reveal_clip"].erase("effect");
+        ASSERT_TRUE(loaded.loadFromJson(legacy));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid_effect = legacy;
+        invalid_effect["reveal_clip"]["effect"] = 12;
+        EXPECT_FALSE(loaded.loadFromJson(invalid_effect));
+        EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
+        auto invalid = loaded.saveToJson();
+        invalid["reveal_clip"]["end"] = 1.0f;
+        EXPECT_FALSE(loaded.loadFromJson(invalid));
+        ASSERT_TRUE(loaded.revealClip().has_value());
+        EXPECT_FLOAT_EQ(loaded.revealClip()->end, 5.0f);
+        loaded.setClipDuration(1.0f);
+        EXPECT_FLOAT_EQ(loaded.clipDuration(), 5.0f);
+        loaded.clear();
+        EXPECT_FALSE(loaded.revealClip().has_value());
+    }
+
+    TEST(SequencerTimelineRegressionTest, CustomRevealRequiresExactlyOneValidAssetAndLoadsAtomically) {
+        const auto asset = lfs::core::generate_uuid_v4();
+        lfs::sequencer::RevealClip clip{1.0f, 4.0f, 0.2f, lfs::sequencer::RevealEffect::Custom, asset};
+        Timeline timeline;
+        timeline.setRevealClip(clip);
+        const auto saved = timeline.saveToJson();
+        EXPECT_EQ(saved["reveal_clip"]["shader_id"], asset.to_string());
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(saved));
+        EXPECT_EQ(loaded.revealClip(), clip);
+        for (const auto& bad : std::vector<nlohmann::json>{{{"effect", 12}},
+                                                           {{"shader_id", "invalid"}},
+                                                           {{"shader_id", nullptr}},
+                                                           {{"shader_id", lfs::core::Uuid{}.to_string()}},
+                                                           {{"effect", 2}},
+                                                           {{"effect", 13}},
+                                                           {{"effect", 12.5}},
+                                                           {{"softness", 0}},
+                                                           {{"start", 5}}}) {
+            auto invalid = saved;
+            invalid["reveal_clip"].update(bad);
+            if (bad == nlohmann::json{{"effect", 12}})
+                invalid["reveal_clip"].erase("shader_id");
+            EXPECT_FALSE(loaded.loadFromJson(invalid)) << invalid.dump();
+            EXPECT_EQ(loaded.saveToJson(), saved);
+        }
+        clip.effect = lfs::sequencer::RevealEffect::Spread;
+        EXPECT_FALSE(clip.validate());
+        clip.shader_id.reset();
+        EXPECT_TRUE(clip.validate());
+        EXPECT_FALSE(clip.toJson().contains("shader_id"));
     }
 
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
@@ -2480,10 +2556,12 @@ namespace {
             auto* element = document_->GetElementById(id);
             ASSERT_NE(element, nullptr);
             ASSERT_TRUE(element->IsVisible(true));
-            const auto origin = row()->GetAbsoluteOffset();
-            const auto x = element->GetAbsoluteOffset(Rml::BoxArea::Border).x;
-            row()->SetScrollLeft(row()->GetScrollLeft() + x - origin.x);
+            auto origin = row()->GetAbsoluteOffset();
+            auto* body = document_->GetElementById("body");
+            const auto y = element->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+            body->SetScrollTop(body->GetScrollTop() + y - body->GetAbsoluteOffset().y);
             context_->Update();
+            origin = row()->GetAbsoluteOffset();
             EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).x, origin.x - 1.0f);
             EXPECT_LE(right(element), origin.x + row()->GetClientWidth() + 1.0f);
             EXPECT_GE(element->GetAbsoluteOffset(Rml::BoxArea::Border).y, origin.y - 1.0f);
@@ -2495,15 +2573,13 @@ namespace {
         Rml::ElementDocument* document_ = nullptr;
     };
 
-    TEST_F(SequencerToolbarLayoutTest, OverflowControlsRemainReachable) {
+    TEST_F(SequencerToolbarLayoutTest, GroupedControlsRemainReachableWithoutHorizontalScrolling) {
         for (const auto& language : {"en", "de"}) {
             for (const auto [width, scale] : {std::pair{1240, 1.0f}, {600, 1.0f}, {1240, 2.0f}}) {
                 SCOPED_TRACE(std::format("{} width={} scale={}", language, width, scale));
                 load(width, scale, language);
-                ASSERT_GT(row()->GetScrollWidth(), row()->GetClientWidth());
-                // A scroll range without a visible affordance still leaves these controls unreachable.
-                ASSERT_GT(row()->GetOffsetHeight() - row()->GetClientHeight(), 2.0f * scale);
-                for (const auto* id : {"quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle", "btn-play"})
+                EXPECT_LE(row()->GetScrollWidth(), row()->GetClientWidth() + 1.0f);
+                for (const auto* id : {"btn-export", "btn-path-menu", "btn-dock-toggle", "btn-play"})
                     expectReachable(id);
             }
         }
@@ -2513,15 +2589,15 @@ namespace {
         load(1040, 2.0f, "en", 286);
         document_->GetElementById("duration")->SetInnerRML(" / 0:01.00");
         context_->Update();
-        for (const auto* id : {"btn-play", "btn-speed", "sequence-fps-field", "quality-scrub",
-                               "btn-export", "btn-clear", "btn-dock-toggle"})
+        for (const auto* id : {"btn-play", "btn-speed", "btn-load-sequence",
+                               "btn-export", "btn-path-menu", "btn-dock-toggle"})
             expectReachable(id);
-        auto* last_transport_button = document_->GetElementById("btn-add");
+        auto* last_transport_button = document_->GetElementById("transport");
         auto* display = document_->GetElementById("time-display");
         EXPECT_LE(right(last_transport_button), display->GetAbsoluteOffset(Rml::BoxArea::Border).x);
         EXPECT_LE(right(display), document_->GetElementById("btn-speed")->GetAbsoluteOffset(Rml::BoxArea::Border).x);
 
-        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 112.0f);
+        EXPECT_GE(document_->GetElementById("timeline")->GetOffsetHeight(), 56.0f * 2.0f - 1.0f);
         auto* panel = document_->GetElementById("body");
         auto* strip = document_->GetElementById("film-strip-panel");
         ASSERT_GT(panel->GetScrollHeight(), panel->GetClientHeight());
@@ -2535,17 +2611,46 @@ namespace {
         EXPECT_FLOAT_EQ(strip->GetOffsetHeight(), 112.0f);
     }
 
+    TEST_F(SequencerToolbarLayoutTest, ExportPreferencesDoNotOccupyTheTransportRow) {
+        load(1240);
+        for (const char* id : {"btn-format", "resolution-field", "quality-scrub"})
+            EXPECT_EQ(document_->GetElementById(id), nullptr);
+        ASSERT_NE(document_->GetElementById("btn-export"), nullptr);
+        EXPECT_FALSE(document_->GetElementById("btn-export")->IsClassSet("disabled"));
+        expectReachable("btn-export");
+    }
+
     TEST_F(SequencerToolbarLayoutTest, WideToolbarNeedsNoScrollingAndKeepsTimelinePosition) {
         load(2400);
         EXPECT_FLOAT_EQ(row()->GetScrollWidth(), row()->GetClientWidth());
         EXPECT_FLOAT_EQ(row()->GetScrollLeft(), 0.0f);
-        EXPECT_FLOAT_EQ(row()->GetBox().GetSize(Rml::BoxArea::Content).y, 36.0f);
+        EXPECT_LE(row()->GetOffsetHeight(), 40.0f);
         const auto timeline_y = document_->GetElementById("timeline")->GetAbsoluteOffset().y;
-        for (const auto* id : {"btn-play", "quality-scrub", "btn-export", "btn-clear", "btn-dock-toggle"})
+        for (const auto* id : {"btn-play", "btn-export", "btn-path-menu", "btn-dock-toggle"})
             expectReachable(id);
         load(1240);
-        EXPECT_FLOAT_EQ(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+        EXPECT_GE(document_->GetElementById("timeline")->GetAbsoluteOffset().y, timeline_y);
+        load(600);
+        EXPECT_GT(row()->GetOffsetHeight(), 40.0f);
+        EXPECT_GE(document_->GetElementById("timeline")->GetAbsoluteOffset().y,
+                  row()->GetAbsoluteOffset().y + row()->GetOffsetHeight());
     }
+    TEST_F(SequencerToolbarLayoutTest, AllLocalesKeepSemanticGroupsAndOptionsReachable) {
+        for (const auto* language : {"en", "it", "de", "es", "fr", "ja", "ko", "nl", "pl", "zh"}) {
+            for (const auto [width, scale] : {std::pair{600, 1.0f}, {1040, 2.0f}, {2400, 1.0f}}) {
+                SCOPED_TRACE(std::format("{} {} {}", language, width, scale));
+                load(width, scale, language, 640);
+                EXPECT_EQ(document_->GetElementById("btn-speed")->GetParentNode()->GetId(), "playback-controls");
+                EXPECT_EQ(document_->GetElementById("btn-add")->GetParentNode()->GetId(), "editing-controls");
+                EXPECT_EQ(document_->GetElementById("sequence-fps-field")->GetParentNode()->GetId(), "file-controls");
+                EXPECT_LE(row()->GetScrollWidth(), row()->GetClientWidth() + 1.0f);
+                for (const auto* id : {"btn-play", "btn-speed", "btn-add", "btn-snap-options", "btn-preview-options",
+                                       "btn-camera-aspect", "btn-path-menu", "btn-load-sequence", "btn-export"})
+                    expectReachable(id);
+            }
+        }
+    }
+
     TEST_F(SequencerToolbarLayoutTest, RecordsLayoutUpdateCost) {
         load(1240);
         std::array<double, 7> batches;

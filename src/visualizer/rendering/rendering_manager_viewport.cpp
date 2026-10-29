@@ -4,6 +4,7 @@
 
 #include "core/camera.hpp"
 #include "core/logger.hpp"
+#include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "mesh_offscreen_renderer.hpp"
 #include "model_renderability.hpp"
@@ -18,11 +19,14 @@
 #include "training/trainer.hpp"
 #endif
 #include "core/training_manager.hpp"
+#include "scene_custom_effects.hpp"
 #include "scene_renderer.hpp"
+#include "scene_training_interop.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "window/graphics_context.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -179,6 +183,55 @@ namespace lfs::vis {
                 return {};
             }
             return {begin, end - begin};
+        }
+
+        // The meshes a viewport export composites, and the pixels they cover; none when off screen.
+        struct ExportMeshPass {
+            ViewportMeshPassDesc params;
+            glm::mat4 projection{1.0f};
+            glm::mat4 view_matrix{1.0f};
+            PixelRect rect;
+        };
+        [[nodiscard]] std::optional<ExportMeshPass> exportMeshPass(const SceneRenderState& state,
+                                                                   const RenderSettings& settings,
+                                                                   const RenderingManager::ExportImageRequest& request,
+                                                                   const float rasterization_scale,
+                                                                   const std::optional<float> ortho_scale) {
+            const lfs::rendering::ViewportData view{
+                .rotation = request.rotation,
+                .translation = request.translation,
+                .size = {request.width, request.height},
+                .focal_length_mm = std::clamp(request.focal_length_mm,
+                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                              lfs::rendering::MAX_FOCAL_LENGTH_MM),
+                .orthographic = request.orthographic_override.value_or(settings.orthographic),
+                .ortho_scale = ortho_scale && std::isfinite(*ortho_scale) && *ortho_scale > 0.0f ? *ortho_scale
+                                                                                                 : settings.ortho_scale,
+            };
+            ExportMeshPass pass{
+                .params = {
+                    .view_projection = {},
+                    .camera_position = view.translation,
+                    .camera_backward = view.rotation[2],
+                    .items = buildViewportMeshDrawItems(state, settings, view.rotation[2]),
+                    .panels = {},
+                },
+            };
+            if (pass.params.items.empty()) {
+                return std::nullopt;
+            }
+            for (auto& item : pass.params.items) {
+                item.wireframe_width *= rasterization_scale;
+            }
+            pass.projection = view.getProjectionMatrix();
+            pass.view_matrix = view.getViewMatrix();
+            const int line_margin = static_cast<int>(std::ceil(settings.mesh_wireframe_width * rasterization_scale)) + 1;
+            pass.rect = meshScreenRect(pass.params.items, pass.projection * pass.view_matrix,
+                                       {request.width, request.height}, line_margin);
+            if (pass.rect.size.x <= 0 || pass.rect.size.y <= 0) {
+                return std::nullopt;
+            }
+            return pass;
         }
 
         [[nodiscard]] lfs::Error meshExportError(std::string detail) {
@@ -467,7 +520,9 @@ namespace lfs::vis {
                                                                             std::optional<glm::vec3> background_color_override,
                                                                             std::optional<bool> orthographic_override,
                                                                             std::optional<float> ortho_scale_override,
-                                                                            const bool equirectangular) {
+                                                                            const bool equirectangular,
+                                                                            const bool deterministic_export,
+                                                                            const std::optional<float> scene_time) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -477,6 +532,7 @@ namespace lfs::vis {
         if (!hasRenderableGaussians(model)) {
             return {};
         }
+        attachCustomEffect(render_state, *scene_manager, scene_time.value_or(scene_time_));
 
         if (previewRenderNeedsTiling(width, height)) {
             return legacyPreviewImage(renderPreviewImageTiledWithState(
@@ -492,7 +548,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
+                PreviewImageReadback::FloatRgb, 1.0f, equirectangular, deterministic_export));
         }
 
         return legacyPreviewImage(renderPreviewImageWithState(
@@ -509,7 +565,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
+            PreviewImageReadback::FloatRgb, 1.0f, equirectangular, nullptr, true, deterministic_export));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderDatasetCameraImage(SceneManager* const scene_manager,
@@ -637,6 +693,7 @@ namespace lfs::vis {
         if (!hasRenderableGaussians(model)) {
             return result;
         }
+        attachCustomEffect(render_state, *scene_manager, scene_time_);
 
         auto rendered = renderDepthCaptureToPreviewSlotWithState(
             getSettings(),
@@ -724,6 +781,7 @@ namespace lfs::vis {
         if (!hasRenderableGaussians(model)) {
             return {};
         }
+        attachCustomEffect(render_state, *scene_manager, scene_time_);
 
         if (previewRenderNeedsTiling(width, height)) {
             return legacyPreviewImage(renderPreviewImageTiledWithState(
@@ -776,6 +834,7 @@ namespace lfs::vis {
         const auto* model = state.combined_model;
         if (!hasRenderableGaussians(model))
             return {};
+        attachCustomEffect(state, *scene_manager, scene_time_);
 
         auto settings = getSettings();
         settings.scaling_modifier = 1.0f;
@@ -828,6 +887,7 @@ namespace lfs::vis {
         if (!hasRenderableGaussians(model)) {
             return {};
         }
+        attachCustomEffect(render_state, *scene_manager, scene_time_);
 
         if (previewRenderNeedsTiling(width, height)) {
             return legacyPreviewImage(renderPreviewImageTiledWithState(
@@ -875,7 +935,8 @@ namespace lfs::vis {
                                                                             std::optional<glm::vec3> background_color_override,
                                                                             std::optional<bool> orthographic_override,
                                                                             std::optional<float> ortho_scale_override,
-                                                                            const bool equirectangular) {
+                                                                            const bool equirectangular,
+                                                                            const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return {};
         }
@@ -893,7 +954,7 @@ namespace lfs::vis {
                 background_color_override,
                 orthographic_override,
                 ortho_scale_override,
-                PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
+                PreviewImageReadback::FloatRgb, 1.0f, equirectangular, deterministic_export));
         }
 
         return legacyPreviewImage(renderPreviewImageWithState(
@@ -910,7 +971,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::FloatRgb, 1.0f, equirectangular));
+            PreviewImageReadback::FloatRgb, 1.0f, equirectangular, nullptr, true, deterministic_export));
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgb8(const lfs::core::SplatData& model,
@@ -1029,6 +1090,79 @@ namespace lfs::vis {
             lod_leaf_view_source_ = nullptr;
             lod_leaf_view_tree_ = nullptr;
         }
+    }
+
+    Result<bool> RenderingManager::prepareShaderExport(const ExportLease& lease, const core::SplatData* model, const RenderSettings* settings) {
+        if (lease.error)
+            return *lease.error;
+        if (lease.ended())
+            return make_error(ErrorInit{.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering, .user_message = "The export was cancelled.", .detection = LFS_SOURCE_SITE_CURRENT()});
+        if (!lease.request)
+            return true;
+        if (lease.per_frame && !settings) {
+            auto* scene = services().sceneOrNull();
+            if (!scene)
+                return shadersNotReady();
+            auto lock = acquireLiveModelRenderLock(scene);
+            const auto state = scene->buildRenderState({.current_geometry = true});
+            const auto current = getSettings();
+            return prepareShaderExport(lease, state.combined_model, &current);
+        }
+        const auto failure = [](std::string message) { return make_error(ErrorInit{.code = ErrorCode::Unavailable, .domain = ErrorDomain::Rendering, .user_message = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()}); };
+        if (!last_graphics_context_)
+            return failure("No graphics context is available for shader export.");
+        if (!scene_renderer_)
+            scene_renderer_ = createSceneRenderer(*last_graphics_context_);
+        auto* const effects = customEffects();
+        if (!effects)
+            return failure("User shaders need the Vulkan viewport renderer.");
+        if (auto initialized = effects->initializePrograms(); !initialized)
+            return std::move(initialized).error();
+        std::vector<std::string> hosts;
+        if (settings && (settings->point_cloud_mode || !model || model->size() == 0))
+            return true;
+        const auto& frame = lease.frame;
+        const bool framed = frame.width > 0 && frame.height > 0;
+        if (model && settings && framed) {
+            const auto leaf_view = lodLeafRenderView(*model);
+            if (leaf_view)
+                model = leaf_view.get();
+            rendering::ViewportRenderRequest request;
+            request.gut = rendering::isGutBackend(rendering::normalizeViewerRasterBackend(settings->raster_backend, settings->gut));
+            request.sh_degree = settings->sh_degree;
+            request.frame_view.size = {1, 1};
+            request.deterministic_export = true; // exports and scripted previews keep stable ties
+            if (auto prepared = effects->plan(*model, request, preview_render_target_); !prepared)
+                return std::move(prepared).error();
+            const auto plan = [&](const bool banded, const bool capture) {
+                request.frame_view.subregion_full_size = banded ? glm::ivec2(1) : glm::ivec2(0);
+                const auto host = effects->planHost(request, preview_render_target_, false, capture, false);
+                if (!host.empty() && !std::ranges::contains(hosts, host))
+                    hosts.emplace_back(host);
+            };
+            // The size alone decides banding; a depth capture is never tiled.
+            plan(!frame.depth && previewRenderNeedsTiling(frame.width, frame.height), frame.depth);
+            if (frame.bands)
+                plan(true, false);
+        }
+        if (!lease.missing.empty()) {
+            for (auto& host : std::exchange(lease.missing, {}))
+                if (!std::ranges::contains(hosts, host))
+                    hosts.push_back(std::move(host));
+            lease.snapshot.reset(); // the draw found it incomplete
+            lease.discovered = true;
+        }
+        if (!framed && !lease.discovered)
+            return true; // nothing planned: the draw links what it finds missing
+        if (!lease.snapshot || !hosts.empty()) {
+            auto snapshot = shader_service_->exportSnapshot(lease, hosts);
+            if (!snapshot)
+                return snapshot.error();
+            if (!*snapshot)
+                return false;
+            lease.snapshot = *snapshot;
+        }
+        return effects->preparePrograms(lease.snapshot->programs, lease.programs, [changes = lease.changes] { changes->notify(); });
     }
 
     std::shared_ptr<const lfs::core::SplatData> RenderingManager::lodLeafRenderView(
@@ -1283,6 +1417,78 @@ namespace lfs::vis {
         return processed;
     }
 
+    Result<core::Tensor> RenderingManager::renderTransparentExportFallback(
+        SceneManager* const scene_manager, const ExportImageRequest& request) {
+        const auto pass = [&](const float background) {
+            return renderPreviewImageRgb8(scene_manager, request.rotation, request.translation,
+                                          request.focal_length_mm, request.width, request.height,
+                                          glm::vec3{background}, request.orthographic_override,
+                                          request.ortho_scale_override, request.reference_height);
+        };
+        const auto black_rgb = pass(0.0f);
+        const auto white_rgb = pass(1.0f);
+        if (!black_rgb || !white_rgb || !black_rgb->is_valid() || !white_rgb->is_valid() ||
+            black_rgb->shape() != white_rgb->shape() || black_rgb->ndim() != 3 || black_rgb->shape()[2] != 3) {
+            return make_error(ErrorInit{
+                .code = ErrorCode::FailedPrecondition,
+                .domain = ErrorDomain::Rendering,
+                .user_message = "transparent viewport export expected matching RGB images",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        auto rgba = core::Tensor::empty({black_rgb->shape()[0], black_rgb->shape()[1], std::size_t{4}},
+                                        core::Device::CPU, core::DataType::UInt8);
+        const auto* const black = black_rgb->ptr<uint8_t>();
+        const auto* const white = white_rgb->ptr<uint8_t>();
+        auto* const out = rgba.ptr<uint8_t>();
+        for (std::size_t i = 0; i < black_rgb->numel() / 3; ++i) {
+            const auto src = i * 3;
+            const auto dst = i * 4;
+            const float delta = (static_cast<float>(white[src]) - static_cast<float>(black[src]) +
+                                 static_cast<float>(white[src + 1]) - static_cast<float>(black[src + 1]) +
+                                 static_cast<float>(white[src + 2]) - static_cast<float>(black[src + 2])) /
+                                (3.0f * 255.0f);
+            const float alpha = std::clamp(1.0f - delta, 0.0f, 1.0f);
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                const float recovered = alpha > 1.0e-6f ? static_cast<float>(black[src + channel]) / alpha : 0.0f;
+                out[dst + channel] = static_cast<uint8_t>(std::lround(std::clamp(recovered, 0.0f, 255.0f)));
+            }
+            out[dst + 3] = static_cast<uint8_t>(std::lround(alpha * 255.0f));
+        }
+        const auto settings = getSettings();
+        const ExportPostProcessView view{
+            .rotation = request.rotation,
+            .focal_length_mm = request.focal_length_mm,
+            .equirectangular_view = settings.equirectangular,
+            .controller_predict_size = this->state().frame_lifecycle_service_.lastViewportSize(),
+        };
+        return from_legacy_expected(
+            applyExportPostProcess(std::move(rgba), scene_manager, settings, getCurrentCameraId(),
+                                   ExportPostProcessMode::Transparent, view),
+            LegacyErrorContext{
+                .code = ErrorCode::FailedPrecondition,
+                .domain = ErrorDomain::Rendering,
+                .operation = "Post-process transparent export",
+                .source = LFS_SOURCE_SITE_CURRENT(),
+            });
+    }
+
+    RenderingManager::ExportFrame RenderingManager::exportImageFrame(SceneManager* const scene_manager,
+                                                                     const ExportImageRequest& request) {
+        ExportFrame frame{.width = request.width, .height = request.height};
+        if (!scene_manager) {
+            return frame;
+        }
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        const auto render_state = scene_manager->buildRenderState({.current_geometry = true});
+        const int height = request.height;
+        frame.bands = hasRenderableGaussians(render_state.combined_model) &&
+                      exportMeshPass(render_state, getSettings(), request,
+                                     exportRasterizationScale(height, request.reference_height),
+                                     exportOrthoScale(request.ortho_scale_override, height, request.reference_height));
+        return frame;
+    }
+
     lfs::Status RenderingManager::compositeExportMeshes(
         SceneManager* const scene_manager,
         const ExportImageRequest& request,
@@ -1302,37 +1508,14 @@ namespace lfs::vis {
         const auto settings = getSettings();
         const float rasterization_scale = exportRasterizationScale(height, request.reference_height);
         const auto ortho_scale = exportOrthoScale(request.ortho_scale_override, height, request.reference_height);
-        const lfs::rendering::ViewportData view{
-            .rotation = request.rotation,
-            .translation = request.translation,
-            .size = {width, height},
-            .focal_length_mm = std::clamp(request.focal_length_mm,
-                                          lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                          lfs::rendering::MAX_FOCAL_LENGTH_MM),
-            .orthographic = request.orthographic_override.value_or(settings.orthographic),
-            .ortho_scale = ortho_scale && std::isfinite(*ortho_scale) && *ortho_scale > 0.0f ? *ortho_scale
-                                                                                             : settings.ortho_scale,
-        };
-        ViewportMeshPassDesc mesh_params{
-            .view_projection = {},
-            .camera_position = view.translation,
-            .camera_backward = view.rotation[2],
-            .items = buildViewportMeshDrawItems(render_state, settings, view.rotation[2]),
-            .panels = {},
-        };
-        if (mesh_params.items.empty()) {
+        auto pass = exportMeshPass(render_state, settings, request, rasterization_scale, ortho_scale);
+        if (!pass) {
             return {};
         }
-        for (auto& item : mesh_params.items) {
-            item.wireframe_width *= rasterization_scale;
-        }
-        const glm::mat4 projection = view.getProjectionMatrix();
-        const glm::mat4 view_matrix = view.getViewMatrix();
-        const int line_margin = static_cast<int>(std::ceil(settings.mesh_wireframe_width * rasterization_scale)) + 1;
-        const auto mesh_rect = meshScreenRect(mesh_params.items, projection * view_matrix, {width, height}, line_margin);
-        if (mesh_rect.size.x <= 0 || mesh_rect.size.y <= 0) {
-            return {};
-        }
+        auto& mesh_params = pass->params;
+        const glm::mat4& projection = pass->projection;
+        const glm::mat4& view_matrix = pass->view_matrix;
+        const auto mesh_rect = pass->rect;
         const int rows_begin = mesh_rect.origin.y;
         const int rows_end = mesh_rect.origin.y + mesh_rect.size.y;
 
@@ -1419,6 +1602,99 @@ namespace lfs::vis {
         return {};
     }
 
+    void RenderingManager::releaseVrResources() {
+        for (auto& target : vr_render_targets_) {
+            if (!target.valid())
+                continue;
+            if (scene_renderer_ && scene_renderer_->hasRenderTarget(target) && !scene_renderer_->releaseRenderTarget(target))
+                continue;
+            render_targets_.release(target);
+            target = {};
+        }
+    }
+
+    RenderSettings RenderingManager::vrRenderSettings(RenderSettings settings) {
+        settings.split_view_mode = SplitViewMode::Disabled;
+        settings.orthographic = settings.equirectangular = settings.depth_view = false;
+        settings.point_cloud_mode = false;
+        settings.show_grid = settings.show_coord_axes = settings.show_pivot = false;
+        settings.show_camera_frustums = settings.show_rings = settings.show_center_markers = false;
+        settings.desaturate_unselected = false;
+        return settings;
+    }
+
+    lfs::Result<std::array<vr::EyeFrame, 2>> RenderingManager::renderVrEyes(
+        GraphicsContext& context, SceneManager& scene,
+        const std::array<lfs::rendering::FrameView, 2>& views) {
+        const auto unavailable = [](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        };
+        last_graphics_context_ = &context;
+        // The desktop mirror of the previous frame still samples the eye images.
+        if (!context.waitForSubmittedFrames())
+            return unavailable("Could not retire the desktop VR mirror.");
+        auto snapshot = scene.buildRenderState({.current_geometry = true});
+        if (!hasRenderableGaussians(snapshot.combined_model))
+            return unavailable("VR requires a visible Gaussian model in edit mode.");
+        // LoD files hold hierarchy nodes besides the renderable leaves.
+        const auto leaves = lodLeafRenderView(*snapshot.combined_model);
+        const auto& model = leaves ? *leaves : *snapshot.combined_model;
+        if (!scene_renderer_)
+            scene_renderer_ = createSceneRenderer(context);
+        if (!scene_renderer_)
+            return unavailable("VR needs the Vulkan viewport renderer.");
+        rendererTrainingInterop(*scene_renderer_).setLiveSubmitCallback({});
+        const auto settings = vrRenderSettings(getSettings());
+        std::array<vr::EyeFrame, 2> eyes{};
+        for (std::size_t i = 0; i < eyes.size(); ++i) {
+            if (!vr_render_targets_[i].valid())
+                vr_render_targets_[i] = render_targets_.allocate();
+            Viewport viewport(static_cast<std::size_t>(views[i].size.x), static_cast<std::size_t>(views[i].size.y));
+            viewport.setViewMatrix(views[i].rotation, views[i].translation);
+            const FrameContext frame{
+                .viewport = viewport,
+                .scene_manager = &scene,
+                .model = &model,
+                .scene_state = snapshot,
+                .settings = settings,
+                .render_size = views[i].size,
+                .viewport_pos = {0, 0},
+                .gaussian_selection_visible = false,
+                .cursor_preview = {},
+                .gizmo = {},
+                .view_panels = {},
+            };
+            auto request = buildViewportRenderRequest(frame, views[i].size);
+            request.frame_view = views[i];
+            request.frame_view.background_color = settings.background_color;
+            request.overlay = {};
+            request.transparent_background = false;
+            request.require_exact_depth = false;
+            request.raster_backend = lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+            request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+            const auto result = scene_renderer_->render(model, request, false, vr_render_targets_[i]);
+            if (!result)
+                return unavailable(result.error());
+            eyes[i] = {.image = result->image,
+                       .image_view = result->image_view,
+                       .image_layout = result->image_layout,
+                       .image_generation = result->generation,
+                       .completion_timeline = result->completion_semaphore,
+                       .completion_value = result->completion_value,
+                       .size = result->size,
+                       .alloc_size = result->alloc_size,
+                       .flip_y = result->flip_y,
+                       .rendered = true};
+        }
+        retainVksplatScratch();
+        return eyes;
+    }
+
     Result<std::shared_ptr<core::Tensor>> RenderingManager::renderPreviewImageWithState(
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
@@ -1437,12 +1713,13 @@ namespace lfs::vis {
         const float rasterization_scale,
         const bool equirectangular,
         const RenderSettings* settings_override,
-        const bool gaussian_selection_visible) {
+        const bool gaussian_selection_visible,
+        const bool deterministic_export) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
-        // Image exports need stable ties. Float previews (including sequencer
-        // thumbnails) keep the interactive sort and cold-frame warmup.
+        // Output purpose, not pixel format, selects stable ties. Interactive
+        // thumbnails explicitly retain the fast sort and cold-frame warmup.
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             settings_override ? *settings_override : getSettings(),
             scene_manager,
@@ -1462,7 +1739,7 @@ namespace lfs::vis {
             background_color_override,
             readback_config.transparent_background_override,
             rasterization_scale,
-            readback != PreviewImageReadback::FloatRgb, readback_config.capture_float_color, equirectangular,
+            deterministic_export, readback_config.capture_float_color, equirectangular,
             gaussian_selection_visible);
         if (!rendered) {
             if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
@@ -1481,7 +1758,7 @@ namespace lfs::vis {
                     orthographic_override,
                     ortho_scale_override,
                     readback,
-                    rasterization_scale, equirectangular);
+                    rasterization_scale, equirectangular, deterministic_export);
             }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return previewImageFailure(ErrorCode::InvalidArgument, "Invalid preview dimensions");
@@ -1594,6 +1871,7 @@ namespace lfs::vis {
             request.transparent_background = *transparent_background_override;
         }
         const auto supplied_intrinsics_override = intrinsics_override;
+        request.deterministic_export = deterministic_export;
         request.frame_view.intrinsics_override = std::move(intrinsics_override);
         if (supplied_intrinsics_override) {
             request.frame_view.containment_intrinsics = *supplied_intrinsics_override;
@@ -1614,6 +1892,17 @@ namespace lfs::vis {
             scene_renderer_ = createSceneRenderer(*last_graphics_context_);
         }
 
+        if (auto* const effects = customEffects()) {
+            effects->select_programs = [this, effects](const std::string_view host,
+                                                       const lfs::rendering::ViewportRenderRequest&) -> Status {
+                if (export_draw_)
+                    return selectExportPrograms(host);
+                if (shader_service_ && shader_service_->hasBindings() && shader_service_->hasApplicableBindings(sequencer_custom_reveal_))
+                    shader_service_->demandLive(std::array{std::string(host)}, last_complete_);
+                effects->usePrograms(live_programs_);
+                return {};
+            };
+        }
         // Preview/export output is read back right after this call, so the
         // renderer returns only a complete frame for this view.
         auto render_result = scene_renderer_->render(
@@ -1644,7 +1933,8 @@ namespace lfs::vis {
         std::optional<float> ortho_scale_override,
         const PreviewImageReadback readback,
         const float rasterization_scale,
-        const bool equirectangular) {
+        const bool equirectangular,
+        const bool deterministic_export) {
         if (width <= 0 || height <= 0) {
             return previewImageFailure(ErrorCode::InvalidArgument, "Invalid tiled preview dimensions");
         }
@@ -1704,7 +1994,7 @@ namespace lfs::vis {
                     background_color_override,
                     readback_config.transparent_background_override,
                     rasterization_scale,
-                    true, readback_config.capture_float_color, equirectangular);
+                    deterministic_export, readback_config.capture_float_color, equirectangular);
                 if (rendered) {
                     break;
                 }
@@ -1822,6 +2112,7 @@ namespace lfs::vis {
         const lfs::core::SplatData* model = nullptr;
         if (splitViewUsesPLYComparison(settings.split_view_mode)) {
             scene_state = request.scene_manager->buildRenderState({.metadata_only = true});
+            attachCustomEffect(scene_state, *request.scene_manager, scene_time_);
             const auto& scene = request.scene_manager->getScene();
             const auto sample = resolvePlyComparisonDepthSample(
                 scene,
@@ -1847,6 +2138,7 @@ namespace lfs::vis {
             }
         } else {
             scene_state = request.scene_manager->buildRenderState();
+            attachCustomEffect(scene_state, *request.scene_manager, scene_time_);
             model = scene_state.combined_model;
         }
         if (!hasRenderableGaussians(model)) {

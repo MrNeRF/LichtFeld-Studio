@@ -1,16 +1,23 @@
 #pragma once
+#include "rendering/program_set_handle.hpp"
+#include <deque>
 
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -27,6 +34,11 @@
 // Read generated VkSplat shader blobs ahead of renderer construction. The
 // cache is process-local and also serves the normal loadSpirv path.
 void preloadSpirvFiles(const std::vector<std::string>& paths);
+// A generated shader blob through that cache; throws lfs::Exception.
+std::vector<uint32_t> loadSpirv(std::string spirv_path);
+
+// Error for compute program setup; `detail` names the program.
+[[nodiscard]] lfs::Error vksplatProgramError(lfs::ErrorCode code, std::string detail, lfs::core::SourceSite site);
 
 class VulkanGSPipeline {
 public:
@@ -113,6 +125,17 @@ public:
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
     void setBandedExport(bool enabled);
+    void setRevealEffect(bool enabled);
+
+    // A custom effect draw (user shaders) runs the published program set's
+    // projection host and the offline custom cull and 3DGUT raster variants in
+    // place of the built-in programs. A draw that lacks one of them renders
+    // with the built-in programs.
+    struct CustomEffectDraw {
+        bool active = false; // it runs them; else it lacks one
+    };
+    // Changes whenever draws start using other hosts: at publication, release and cleanup.
+    [[nodiscard]] std::uint64_t programSetSerial() const noexcept { return program_set_serial_; }
 
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
@@ -206,10 +229,14 @@ protected:
         VkSemaphore semaphore = VK_NULL_HANDLE;
         std::uint64_t value = 0;
     };
+    // Timeline values of every batch in flight when something was retired. The
+    // command batch ring may grow, so the count has no fixed bound.
+    struct RetireKeys {
+        std::vector<BufferRetireKey> keys;
+    };
     struct RetiredBufferShell {
         _VulkanBuffer shell;
-        std::vector<BufferRetireKey> keys;
-        std::uint32_t key_count = 0;
+        RetireKeys keys;
     };
     std::vector<RetiredBufferShell> retired_buffer_shells_;
     MemoryReleaseGate memory_release_gate_;
@@ -243,6 +270,7 @@ protected:
     PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
     lfs::rendering::VulkanDebugNameWriter debug_name_writer_;
 
+    // Zero in a limit below means unknown; validation then skips that check.
     struct DeviceInfo {
         uint32_t subgroupSize;
         uint32_t sharedSize;
@@ -250,6 +278,11 @@ protected:
         uint32_t maxGroupsY;
         uint32_t maxGroupsZ;
         VkDeviceSize maxStorageBufferRange = std::numeric_limits<VkDeviceSize>::max();
+        std::array<uint32_t, 3> maxWorkGroupSize = {};
+        uint32_t maxWorkGroupInvocations = 0;
+        uint32_t minSubgroupSize = 0;
+        uint32_t maxSubgroupSize = 0;
+        VkShaderStageFlags requiredSubgroupSizeStages = 0;
     } deviceInfo;
 
     // Compute pipeline. Storage-buffer bindings are pushed via
@@ -263,7 +296,7 @@ protected:
         std::vector<int> buffer_layouts;
         std::string diagnostic_name;
         std::string spirv_path;
-        bool compatible_subgroup_size = true;
+        uint32_t required_subgroup_size = 0; // pinned when the device default differs; 0 = none
         uint32_t expected_workgroup_size_x = 0;
 
         _ComputePipeline(
@@ -282,6 +315,12 @@ protected:
             for (int i = 0; i < num_buffers; i++)
                 buffer_layouts[i] = i;
         }
+        void swapProgram(_ComputePipeline& other) {
+            std::swap(shader, other.shader);
+            std::swap(descriptor_set_layout, other.descriptor_set_layout);
+            std::swap(pipeline_layout, other.pipeline_layout);
+            std::swap(pipeline, other.pipeline);
+        }
     };
 
     struct _ComputePipelinePair {
@@ -297,6 +336,11 @@ protected:
     std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> banded_export_pipelines_;
     bool banded_export_initialized_ = false;
     bool banded_export_active_ = false;
+    std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> reveal_pipelines_;
+    bool reveal_initialized_ = false;
+    bool reveal_active_ = false;
+    bool custom_effect_active_ = false;
+    void initializeLegacyVariants(bool reveal);
 
     uint32_t queue_family_index;
 
@@ -306,7 +350,6 @@ protected:
     void createQueryPools();
     void waitForPendingBatchSlot(CommandBatchSlot& slot);
     void collectTimestampResults(CommandBatchSlot& slot, std::uint32_t timestamp_count);
-    void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule);
     void validateBufferRange(const _VulkanBuffer& buffer,
                              VkDeviceSize relative_offset,
                              VkDeviceSize size,
@@ -324,12 +367,102 @@ protected:
         setDebugObjectName(type, lfs::rendering::vkHandleValue(handle), name);
     }
 
-    void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
+    // The host side of one compute program: what the shader must declare and
+    // how the renderer binds it.
+    struct ComputeProgramSpec {
+        std::string label;                      // stable diagnostic name
+        std::vector<int> bindings;              // storage buffers of descriptor set 0
+        std::array<uint32_t, 3> workgroup = {}; // exact LocalSize; all zero skips the check
+        uint32_t required_subgroup_size = 0;    // pinned when the device default differs; 0 = none
+    };
+
+    // Everything program construction reads, captured by value so a worker
+    // never touches the live renderer.
+    struct ComputeBuildContext {
+        VkDevice device = VK_NULL_HANDLE;
+        DeviceInfo limits{};
+        lfs::rendering::VulkanDebugNameWriter names;
+        lfs::rendering::VulkanDispatch dispatch;
+    };
+    [[nodiscard]] ComputeBuildContext computeBuildContext() const;
+
+    // Checks SPIR-V against `spec` and the device, then creates the shader
+    // module and layouts into `program`. On failure nothing stays created and
+    // `program` is untouched.
+    [[nodiscard]] static lfs::Status prepareComputeProgram(const ComputeBuildContext& context,
+                                                           _ComputePipeline& program,
+                                                           const ComputeProgramSpec& spec,
+                                                           std::span<const uint32_t> spirv);
+    // Creates the VkPipelines of prepared programs in one batch, all or none.
+    [[nodiscard]] static lfs::Status createComputePrograms(const ComputeBuildContext& context,
+                                                           VkPipelineCache cache,
+                                                           std::span<_ComputePipeline* const> programs);
+    static void destroyComputeProgram(VkDevice device,
+                                      const lfs::rendering::VulkanDispatch& dispatch,
+                                      _ComputePipeline& program) noexcept;
+
+    // Prepares a program from in-memory SPIR-V and queues it for
+    // createPendingComputePipelines, which registers it once its VkPipeline
+    // exists. The path overload reads a generated file and delegates here.
+    [[nodiscard]] lfs::Status createComputePipeline(_ComputePipeline& pipeline,
+                                                    const ComputeProgramSpec& spec,
+                                                    std::span<const uint32_t> spirv);
     void createComputePipeline(_ComputePipeline& pipeline,
                                const std::string& spirv_path,
                                bool compatible_subgroup_size = true,
                                uint32_t expected_workgroup_size_x = 0);
     void createPendingComputePipelines();
+
+    // Custom program sets (user shaders). A worker builds each requested set
+    // off the frame thread with its own pipeline cache. The owner thread
+    // adopts finished sets at a render boundary; replaced sets are destroyed
+    // once no batch that was in flight at their replacement can use them.
+    struct ComputeProgramSource {
+        ComputeProgramSpec spec;
+        std::vector<uint32_t> spirv;
+    };
+    struct ComputeProgramSet {
+        ComputeProgramSet() = default;
+        ComputeProgramSet(const ComputeProgramSet&) = delete;
+        ComputeProgramSet& operator=(const ComputeProgramSet&) = delete;
+        ~ComputeProgramSet();
+
+        ComputeBuildContext context;
+        std::vector<_ComputePipeline> programs; // request order
+        // Offline custom variants the hosts' draws also run, built from SPIR-V
+        // until one publication adopts them for the renderer's lifetime.
+        std::vector<_ComputePipeline> fixed;
+    };
+    using ProgramSetKey = lfs::rendering::ProgramSetKey;
+    using ProgramSetHandle = lfs::rendering::ProgramSetHandle;
+    [[nodiscard]] lfs::Result<ProgramSetHandle> prepareProgramSet(std::vector<ComputeProgramSource> programs, std::function<void()> finished = {}, bool live = false);
+    [[nodiscard]] lfs::Result<bool> programSetReady(const ProgramSetHandle& handle);
+    void useProgramSet(const ProgramSetHandle& handle);
+    [[nodiscard]] std::uint64_t deviceGeneration() const { return program_sets_.generation.load(); }
+    void waitForProgramSetBuilds();
+    [[nodiscard]] ComputeProgramSet* programSet(const ProgramSetHandle& handle) const {
+        const auto& store = program_sets_;
+        return handle && handle->generation == deviceGeneration() && store.sets.contains(handle->id) ? store.sets.at(handle->id).get() : nullptr;
+    }
+    // Results of builds requested before this call are rejected at publication.
+    void invalidateProgramSets() noexcept;
+    [[nodiscard]] std::size_t retiredProgramSetCount() const noexcept {
+        return program_sets_.retired.size();
+    }
+    // Frees the retired sets no submission uses anymore. Owner thread.
+    void drainRetiredProgramSets();
+    // Starts a custom effect draw that runs `programs`, the projection first,
+    // or ends one. It is active only while the published set and the adopted
+    // variants hold a host for every one of them.
+    CustomEffectDraw setCustomEffect(bool enabled, std::span<_ComputePipeline* const> programs);
+    [[nodiscard]] bool customEffectActive() const noexcept { return custom_effect_active_; }
+    // The host that replaces `program` in a custom effect draw, else `program`.
+    [[nodiscard]] _ComputePipeline& customVariant(_ComputePipeline& program);
+    // Move a live owned buffer into the retire queue (or free immediately if nothing is in flight).
+    void retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer);
+    // Retire a buffer no longer needed, splitting a recording batch first as growth does.
+    void releaseDeviceBuffer(_VulkanBuffer& deviceBuffer);
+
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
         const void* uniformsPtr, size_t uniformSize,
@@ -352,13 +485,70 @@ protected:
         const std::vector<TaggedBinding>& bindings);
 
 private:
+    // An offline custom variant: its SPIR-V file and its base program's contract.
+    struct FixedProgramSource {
+        ComputeProgramSpec spec;
+        std::string path;
+    };
+    struct ProgramSetJob {
+        ComputeBuildContext context;
+        std::vector<ComputeProgramSource> programs;
+        std::vector<FixedProgramSource> fixed;
+        std::uint64_t generation = 0;
+        std::function<void()> finished;
+        std::uint64_t key = 0;
+        bool live = false;
+        std::weak_ptr<const ProgramSetKey> owner;
+    };
+    struct RetiredProgramSet {
+        std::unique_ptr<ComputeProgramSet> set;
+        RetireKeys keys;
+    };
+    // The worker reaches only the queue, the outcome and the generation, under
+    // the mutex; it never sees the live pipelines or the shared pipeline cache.
+    struct ProgramSetStore {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::thread worker;
+        std::deque<ProgramSetJob> queued;
+        std::unordered_map<std::uint64_t, lfs::Result<std::unique_ptr<ComputeProgramSet>>> built;
+        bool building = false;
+        bool stopping = false;
+        std::atomic<std::uint64_t> generation{1};
+        // Owner thread only.
+        std::unordered_map<std::uint64_t, std::unique_ptr<ComputeProgramSet>> sets;
+        ComputeProgramSet* current = nullptr;
+        std::uint64_t next_key = 0;
+        std::shared_ptr<std::pair<std::mutex, std::vector<std::uint64_t>>> releases = std::make_shared<std::pair<std::mutex, std::vector<std::uint64_t>>>();
+        std::vector<RetiredProgramSet> retired;
+    } program_sets_;
+    static constexpr std::size_t kMaxRetiredProgramSets = 4;
+    std::uint64_t program_set_serial_ = 0;
+    // Offline custom variants adopted from published sets; they never change.
+    std::unique_ptr<ComputeProgramSet> custom_fixed_;
+    // Each program with effect variants -> its hosts, by banded export, and
+    // their labels; resolved at publication and release, not per dispatch.
+    struct CustomVariant {
+        std::array<_ComputePipeline*, 2> hosts{};
+        std::array<std::string, 2> labels;
+    };
+    std::unordered_map<const _ComputePipeline*, CustomVariant> custom_variants_;
+
+    [[nodiscard]] RetireKeys inFlightRetireKeys() const noexcept;
+    [[nodiscard]] bool retireKeysComplete(const RetireKeys& keys) const;
+    static void runProgramSetWorker(ProgramSetStore& store);
+    // Bumps the generation and joins the worker; unpublished results are dropped.
+    void stopProgramSetWorker() noexcept;
+    // The offline variants that draws with `hosts` also run and that are not adopted yet.
+    [[nodiscard]] std::vector<FixedProgramSource> missingFixedVariants(std::span<const ComputeProgramSource> hosts) const;
+    [[nodiscard]] _ComputePipeline* adoptedFixedVariant(std::string_view label) const;
+    void resolveCustomVariants();
+
     void destroyComputePipeline(_ComputePipeline& pipeline);
     // Shared destroy path for destroyBuffer (wait) / destroyBufferRetired (no wait).
     void destroyBufferImpl(_VulkanBuffer& buffer, bool wait_for_pending_batch, const char* caller_name);
     void createBufferRetireTimeline();
     void destroyBufferRetireTimeline();
-    // Move a live owned buffer into the retire queue (or free immediately if nothing is in flight).
-    void retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer);
 
     // Shared bind / push-descriptor / push-constants / dispatch recording (batch must be active).
     void recordComputeDispatch(

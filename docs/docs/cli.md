@@ -11,14 +11,11 @@ LichtFeld-Studio voxelize scene.ply -o scene.voxel.json --voxel-size 0.05
 LichtFeld-Studio voxelize scene.sog scene.voxel.json --auto --overwrite
 ```
 
-Writes a SuperSplat v1.1 `.voxel.json` / `.voxel.bin` pair.
-
 `--voxel-opacity` sets accumulated opacity (default 0.1, range [0,1)). `--filter cleanup` rejects
 outliers; `--filter none` disables cleanup. `--max-gaussian-area` is a three-sigma projected area in
 squared scene units (0 disables the manual cap). Cleanup may still apply its automatic limit.
 
-See [Collision](features/collision.md) for Auto resolution, full-source coverage, memory/format limits
-and cancellation guarantees. Overwrite approval covers both outputs once.
+See [Collision](features/collision.md) for the pair format, Auto resolution, limits and overwrite approval.
 
 Python: `lichtfeld.io.generate_voxels(path, settings)` and `lichtfeld.io.save_voxels(volume, path,
 overwrite=False, transform=[])`. `VoxelSettings` exposes these controls; a progress callback
@@ -36,6 +33,24 @@ LichtFeld-Studio licht scene.licht --embed ./dataset
 
 Relative dataset paths are resolved from the current working directory. COLMAP datasets with a supported sparse or
 flat layout and Transforms datasets are accepted. The project is updated in place; the source dataset is left on disk.
+
+## Remove checkpoints from a project
+
+A project trained with `--keep-all-checkpoints` keeps one training checkpoint per save. `--checkpoints` lists them, newest
+first, and marks the one training resumes from:
+
+```sh
+LichtFeld-Studio licht scene.licht --checkpoints
+LichtFeld-Studio licht scene.licht --prune-checkpoints
+LichtFeld-Studio licht scene.licht --prune-checkpoints --keep 2
+LichtFeld-Studio licht scene.licht --remove-checkpoints 7000,15000
+```
+
+`--prune-checkpoints` removes every checkpoint except the resume checkpoint; `--keep N` also keeps the N newest other
+checkpoints. `--remove-checkpoints` removes the checkpoints saved at the listed iterations. If that includes the resume
+checkpoint, the trained model stays in the project, but training can no longer resume from it. The project is compacted
+in place, and a recovery copy of the previous file is written to the LichtFeld Studio backup folder; its path is
+printed.
 
 Run `LichtFeld-Studio licht --help` for command usage.
 

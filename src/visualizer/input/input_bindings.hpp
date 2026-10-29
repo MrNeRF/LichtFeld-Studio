@@ -32,6 +32,8 @@ namespace lfs::vis::input {
         ALIGN = 6,
         CROP_BOX = 7,
         WALK = 8,
+        VR = 9,
+        EDITOR = 10,
     };
 
     enum class SelectionOp : uint8_t {
@@ -40,10 +42,12 @@ namespace lfs::vis::input {
         Intersect,
     };
 
-    // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
-    inline constexpr size_t kToolModeCount = 9;
-    inline constexpr std::array<ToolMode, 8> kAllToolModes = {
+    // Highest viewport ToolMode value plus one. Value 2 was the removed brush tool mode.
+    inline constexpr size_t kToolModeCount = 10;
+    // Viewport tool modes; the persisted EDITOR scope is resolved by the editor panel.
+    inline constexpr std::array<ToolMode, 9> kAllToolModes = {
         ToolMode::WALK,
+        ToolMode::VR,
         ToolMode::GLOBAL,
         ToolMode::SELECTION,
         ToolMode::ALIGN,
@@ -51,6 +55,19 @@ namespace lfs::vis::input {
         ToolMode::TRANSLATE,
         ToolMode::ROTATE,
         ToolMode::SCALE,
+    };
+
+    inline constexpr std::array<ToolMode, 10> kAllKeymapScopes = {
+        ToolMode::WALK,
+        ToolMode::VR,
+        ToolMode::GLOBAL,
+        ToolMode::SELECTION,
+        ToolMode::ALIGN,
+        ToolMode::CROP_BOX,
+        ToolMode::TRANSLATE,
+        ToolMode::ROTATE,
+        ToolMode::SCALE,
+        ToolMode::EDITOR,
     };
 
     enum class Action {
@@ -180,6 +197,14 @@ namespace lfs::vis::input {
         INSERT_CROP_POLYGON_VERTEX,
         REMOVE_CROP_POLYGON_VERTEX,
         EXIT_WALK,
+        TOOL_SCALE_DISTANCE,
+        VR_SNAP_TURN_LEFT,
+        VR_SNAP_TURN_RIGHT,
+        VR_RECENTER,
+        EXIT_VR,
+        EDITOR_TOGGLE_KIND,
+        EDITOR_RUN,
+        EDITOR_STOP,
     };
 
     enum class ShortcutScope : uint8_t {

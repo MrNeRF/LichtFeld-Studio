@@ -60,6 +60,13 @@ if(LFS_GRAPHICS_BACKEND STREQUAL "Vulkan")
 else()
     set(LFS_GRAPHICS_VULKAN_BUILD OFF)
 endif()
+# User shaders and VR draw with the vksplat viewport rasterizer, which Metal
+# tensor builds do not use.
+if(LFS_GRAPHICS_VULKAN_BUILD AND NOT LFS_TENSOR_METAL)
+    set(LFS_VKSPLAT_VIEWPORT_BUILD ON)
+else()
+    set(LFS_VKSPLAT_VIEWPORT_BUILD OFF)
+endif()
 unset(_lfs_default_graphics_backend)
 unset(_lfs_default_tensor_vulkan)
 
@@ -650,6 +657,7 @@ find_package(libdeflate CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(slang CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
@@ -816,9 +824,11 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_node_resources.cpp
     src/app/mcp_node_editor_tools.cpp
     src/app/mcp_pointer_tool.cpp
+    src/app/mcp_shader_tools.cpp
+    src/app/mcp_editor_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
-    src/app/voxelizer.cpp
+    src/app/batch_trainer.cpp
     src/app/licht_command.cpp
     src/app/converter_output_paths.cpp
     src/app/converter_overwrite.cpp
@@ -1563,6 +1573,18 @@ install(TARGETS lfs_event_bridge
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+# Runtime shader compiler plus the one backend it loads: spirv-opt lives in
+# slang-glslang, which Slang looks for beside its own library. The build tree
+# uses both in place (vcpkg RPATH on Linux, the vcpkg DLL copy on Windows).
+if(WIN32)
+    set(_lfs_slang_runtime_dir ${CMAKE_INSTALL_BINDIR})
+else()
+    set(_lfs_slang_runtime_dir ${CMAKE_INSTALL_LIBDIR})
+endif()
+install(IMPORTED_RUNTIME_ARTIFACTS slang::slang slang::slang-glslang
+    RUNTIME DESTINATION ${_lfs_slang_runtime_dir}
+    LIBRARY DESTINATION ${_lfs_slang_runtime_dir})
+
 install(TARGETS lfs_visualizer
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -1628,7 +1650,9 @@ if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
     install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
             DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
             FILES_MATCHING
-            PATTERN "*.spv")
+            PATTERN "*.spv"
+            PATTERN "*.slang-module"
+            PATTERN "manifest.json")
 endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
@@ -1734,7 +1758,8 @@ if(BUILD_PORTABLE)
             "${CMAKE_BINARY_DIR}/lib"
             "${CMAKE_BINARY_DIR}/external/nvImageCodec"
             "${CUDAToolkit_BIN_DIR}"
-            "${CUDAToolkit_LIBRARY_DIR}")
+            "${CUDAToolkit_LIBRARY_DIR}"
+            "$<TARGET_FILE_DIR:slang::slang>")
     if(DEFINED VCPKG_TARGET_TRIPLET)
         list(APPEND _RUNTIME_SEARCH_DIRS
                 "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"

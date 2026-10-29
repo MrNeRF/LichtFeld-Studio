@@ -2446,14 +2446,16 @@ body {
 }
 
 /* Leave room for the tool strip and corner axis control in each pane. */
-.toolbar-hcenter.align-active {
+.toolbar-hcenter.align-active,
+.toolbar-hcenter.scale-distance-active {
     padding-left: 44dp;
     padding-right: 121dp;
     box-sizing: border-box;
 }
 
 /* Keep labeled alignment options inside narrow viewport panes. */
-.toolbar-hcenter .align-toolbar {
+.toolbar-hcenter .align-toolbar,
+.toolbar-hcenter .scale-distance-toolbar {
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: center;
@@ -2497,6 +2499,42 @@ body {
 }
 .node-preview-banner.hidden { display: none; }
 
+/* Scale distance toolbar styling */
+.toolbar-hcenter .scale-distance-toolbar {
+    gap: 6dp;
+    padding: 4dp 10dp;
+}
+
+.scale-distance-title,
+.scale-distance-label,
+.scale-distance-value {
+    font-size: 13dp;
+    white-space: nowrap;
+    align-self: center;
+}
+
+.scale-distance-title,
+.scale-distance-value {
+    font-weight: bold;
+}
+
+.scale-distance-value {
+    min-width: 44dp;
+}
+
+/* Outranks the global input[type="text"] size, like the depth field. */
+.scale-distance-toolbar > .number-input.scale-distance-input {
+    width: 68dp;
+    min-width: 68dp;
+    height: 24dp;
+    min-height: 24dp;
+    padding: 2dp 6dp;
+    line-height: 18dp;
+    font-size: 13dp;
+    box-sizing: border-box;
+    text-align: right;
+}
+
 /* Depth keeps its controls inside the reserved span, including narrow views. */
 #depth-view-block .viewport-depth-header {
     flex-wrap: wrap;
@@ -2524,3 +2562,21 @@ body {
     text-overflow: ellipsis;
     pointer-events: none;
 }
+
+.gamepad-navigation-indicator {
+    left: 12dp;
+    bottom: 12dp;
+    max-width: 320dp;
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    white-space: normal;
+}
+.gamepad-indicator-heading { display: flex; align-items: center; gap: 7dp; }
+.gamepad-indicator-dot { width: 6dp; height: 6dp; border-radius: 3dp; flex-shrink: 0; }
+.gamepad-indicator-label { font-size: 11dp; }
+.gamepad-indicator-mode { font-weight: bold; font-size: 12dp; }
+.gamepad-indicator-panel { font-size: 11dp; }
+.gamepad-indicator-status { margin-left: 13dp; font-size: 11dp; max-width: 280dp; }
+
+.gamepad-navigation-indicator.hidden { display: none; }

@@ -82,3 +82,35 @@ Or set and run in one call:
 - `editor_run` can place code into the editor and execute it in one step
 - use `editor_is_running` for a cheap status check
 - use `editor_interrupt` if the script must be stopped
+
+## Shader documents
+
+The sequence above assumes a Python document. A Shader document uses the same
+`editor_run` tool but applies shader source instead of executing Python. Pass its
+`document_id` to `editor_wait` and inspect `outcome` and `shader_status`;
+`editor.python` does not describe shader compilation. See [User shaders](user-shaders.md).
+Shader associations and unapplied drafts persist with the project.
+
+## AprilTag calibration
+
+`transform_detect_apriltags` and `transform_scale_by_apriltags` start `apriltag.scan`.
+Use `runtime_job_describe` or `runtime_job_wait` with `job_id: "apriltag.scan"`
+for progress and results; check both `outcome` and `result.success`.
+Cancel with `runtime_job_control` and `{"job_id": "apriltag.scan", "action": "cancel"}`.
+Cancellation waits for in-flight decoding/detection or solving and prevents application.
+Python and MCP share this job. Only one scan runs at a time: a second start returns
+a busy error without canceling or queuing behind the active scan. Restarting replaces
+the runtime job's stored result; a Python caller keeps its own completion result.
+
+Scaling uses `{tag_a, tag_b, distance}` constraints and covers the complete scene
+regardless of selection. Pass `targets` only for partial scaling, or
+`apply_to_scene: false` to compute without applying. Scene changes invalidate a scan.
+Python's synchronous `detect_scene_apriltags` and `scale_scene_by_apriltags` must
+run in a background editor script; viewer-thread UI callbacks are rejected. Python
+releases the GIL while waiting for its request to finish. Failure, cancellation,
+scene replacement, and shutdown all settle that wait. Canceling the editor script
+does not automatically cancel the native scan.
+
+If a requested manifest cannot be written, the scan fails and leaves the scene
+unchanged for both Python and MCP. Cancellation can arrive after a manifest has
+been written; it prevents scene application but does not remove that file.

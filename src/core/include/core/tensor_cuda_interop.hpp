@@ -34,6 +34,8 @@ namespace lfs::core {
     LFS_CORE_API void release_cuda_stream(cudaStream_t stream);
     LFS_CORE_API size_t cuda_allocation_size(size_t bytes);
     LFS_CORE_API void trim_cuda_memory_pool();
+    // Bytes the size-bucket cache holds for reuse; the CUDA pool still counts them as used.
+    LFS_CORE_API size_t cuda_bucket_cached_bytes() noexcept;
     LFS_CORE_API void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream = nullptr) noexcept;
 
     enum class CudaStorageMode : uint8_t {

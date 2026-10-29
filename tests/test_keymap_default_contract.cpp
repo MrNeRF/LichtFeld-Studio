@@ -82,13 +82,16 @@ namespace lfs::vis::input {
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_TAB, MODIFIER_CTRL | MODIFIER_SHIFT),
                           Action::PREVIOUS_SIDEBAR_CATEGORY);
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_ESCAPE, MODIFIER_NONE),
-                          mode == ToolMode::WALK ? Action::EXIT_WALK : Action::CANCEL_POLYGON);
+                          mode == ToolMode::WALK ? Action::EXIT_WALK
+                          : mode == ToolMode::VR ? Action::EXIT_VR
+                                                 : Action::CANCEL_POLYGON);
                 if (mode == ToolMode::SELECTION)
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_ENTER, MODIFIER_CTRL),
                               Action::ASSET_GALLERY_PRIMARY);
                 constexpr std::array tools = {Action::TOOL_SELECT, Action::TOOL_TRANSLATE,
                                               Action::TOOL_ROTATE, Action::TOOL_SCALE,
-                                              Action::TOOL_MIRROR, Action::TOOL_ALIGN};
+                                              Action::TOOL_MIRROR, Action::TOOL_ALIGN,
+                                              Action::TOOL_SCALE_DISTANCE};
                 for (int i = 0; i < static_cast<int>(tools.size()); ++i) {
                     EXPECT_EQ(bindings.getActionForKey(mode, KEY_1 + i, MODIFIER_NONE),
                               tools[i]);
@@ -99,8 +102,17 @@ namespace lfs::vis::input {
                         ? Action::DELETE_SELECTED
                         : Action::DELETE_NODE;
                 EXPECT_EQ(bindings.getActionForKey(mode, KEY_DELETE, MODIFIER_NONE),
-                          mode == ToolMode::WALK ? Action::NONE : delete_action);
+                          mode == ToolMode::WALK || mode == ToolMode::VR ? Action::NONE
+                                                                         : delete_action);
             }
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_LEFT, MODIFIER_NONE),
+                      Action::VR_SNAP_TURN_LEFT);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_RIGHT, MODIFIER_NONE),
+                      Action::VR_SNAP_TURN_RIGHT);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_R, MODIFIER_NONE),
+                      Action::VR_RECENTER);
+            EXPECT_EQ(bindings.getActionForKey(ToolMode::VR, KEY_W, MODIFIER_NONE),
+                      Action::CAMERA_MOVE_FORWARD);
             EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT,
                                                 MODIFIER_NONE),
                       Action::SELECTION_REPLACE);
@@ -128,7 +140,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::PREVIOUS_SIDEBAR_CATEGORY); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::EDITOR_STOP); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())
@@ -231,6 +243,40 @@ namespace lfs::vis::input {
             std::optional<lfs::ErrorAction> restore;
         };
 
+        TEST_F(KeymapTest, EditorDefaultsHaveNoCollisionsAndDoNotAffectViewportReachability) {
+            InputBindings bindings;
+            const auto path = std::filesystem::temp_directory_path() / "lfs_editor_scope_defaults.json";
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            CoreShortcutWarning warning;
+            auto subscription = lfs::ErrorBus::instance().subscribe(warning);
+            ASSERT_TRUE(bindings.loadProfileFromFile(path));
+            EXPECT_EQ(bindings.getBindingsForMode(ToolMode::EDITOR).size(), 4u);
+            const int with_editor_count = warning.count;
+            const auto with_editor_message = warning.message;
+            InputBindings without_editor;
+            for (const auto action : {Action::EDITOR_RUN, Action::EDITOR_STOP, Action::EDITOR_TOGGLE_KIND})
+                without_editor.clearBinding(ToolMode::EDITOR, action);
+            ASSERT_TRUE(without_editor.saveProfileToFile(path));
+            warning.count = 0;
+            warning.message.clear();
+            ASSERT_TRUE(without_editor.loadProfileFromFile(path));
+            EXPECT_TRUE(without_editor.getBindingsForMode(ToolMode::EDITOR).empty());
+            EXPECT_EQ(warning.count, with_editor_count);
+            EXPECT_EQ(warning.message, with_editor_message);
+            for (const auto mode : kAllToolModes)
+                EXPECT_EQ(without_editor.getBindingsForMode(mode), bindings.getBindingsForMode(mode));
+            std::filesystem::remove(path);
+            const auto profile = InputBindings::createDefaultProfile();
+            std::vector<Binding> editor;
+            for (const auto& binding : profile.bindings)
+                if (binding.mode == ToolMode::EDITOR)
+                    editor.push_back(binding);
+            ASSERT_EQ(editor.size(), 4u);
+            for (size_t i = 0; i < editor.size(); ++i)
+                for (size_t j = i + 1; j < editor.size(); ++j)
+                    EXPECT_FALSE(sameDispatchTrigger(editor[i].trigger, editor[j].trigger));
+        }
+
         TEST_F(KeymapTest, WarnsThenRestoresOnlyUnreachableCoreActions) {
             const std::filesystem::path path =
                 std::filesystem::temp_directory_path() / "lfs_broken_keymap_core.json";
@@ -295,6 +341,18 @@ namespace lfs::vis::input {
                                      static_cast<int>(ToolMode::GLOBAL);
                       }),
                       0);
+            std::filesystem::remove(path);
+        }
+
+        TEST_F(KeymapTest, DefaultProfileLoadsWithoutCoreShortcutWarning) {
+            const std::filesystem::path path =
+                std::filesystem::temp_directory_path() / "lfs_default_keymap_core.json";
+            InputBindings bindings;
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            CoreShortcutWarning warning;
+            auto subscription = lfs::ErrorBus::instance().subscribe(warning);
+            ASSERT_TRUE(bindings.loadProfileFromFile(path));
+            EXPECT_EQ(warning.count, 0) << warning.message;
             std::filesystem::remove(path);
         }
     } // namespace

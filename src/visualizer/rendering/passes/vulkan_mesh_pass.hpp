@@ -18,7 +18,6 @@
 namespace lfs::core {
     struct MeshData;
     struct CollisionVolume;
-    struct SceneNode;
 } // namespace lfs::core
 
 namespace lfs::vis {

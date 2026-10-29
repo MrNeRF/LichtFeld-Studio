@@ -12,6 +12,7 @@ import pytest
 
 
 TOOL_MODE_NAMES = (
+    "EDITOR",
     "GLOBAL",
     "SELECTION",
     "TRANSLATE",
@@ -20,9 +21,13 @@ TOOL_MODE_NAMES = (
     "ALIGN",
     "CROP_BOX",
     "WALK",
+    "VR",
 )
 
 ACTION_NAMES = (
+    "EDITOR_TOGGLE_KIND",
+    "EDITOR_RUN",
+    "EDITOR_STOP",
     "EXIT_WALK",
     "NONE",
     "CAMERA_ORBIT",
@@ -133,6 +138,11 @@ ACTION_NAMES = (
     "APPLY_ALIGNMENT",
     "INSERT_CROP_POLYGON_VERTEX",
     "REMOVE_CROP_POLYGON_VERTEX",
+    "TOOL_SCALE_DISTANCE",
+    "VR_SNAP_TURN_LEFT",
+    "VR_SNAP_TURN_RIGHT",
+    "VR_RECENTER",
+    "EXIT_VR",
 )
 
 
@@ -297,6 +307,9 @@ def _install_lf_stub(monkeypatch):
         set_camera_browse_repeat=lambda _enabled: None,
         get_camera_browse_repeat_rate=lambda: 5.0,
         set_camera_browse_repeat_rate=lambda _rate, persist=True: None,
+        get_vr_preferences=lambda: {"enabled": False, "resolution_scale": 0.7,
+                                    "scene_units_per_meter": 1.0, "move_speed": 1.5},
+        get_vr_state=lambda: {"available": False, "active": False, "status": ""},
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
@@ -604,6 +617,8 @@ def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
         {"index": "5", "label": "Mode ALIGN"},
         {"index": "6", "label": "Mode CROP_BOX"},
         {"index": "7", "label": "Mode WALK"},
+        {"index": "8", "label": "Mode VR"},
+        {"index": "9", "label": "Mode EDITOR"},
     ]
 
 

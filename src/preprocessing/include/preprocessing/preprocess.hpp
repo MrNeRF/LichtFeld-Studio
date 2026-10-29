@@ -16,6 +16,9 @@ namespace lfs::preprocessing {
 
     [[nodiscard]] lfs::Result<std::filesystem::path> ensure_lpips_weights(bool allow_download);
 
+    // The video model (with memory attention) that video masking tracks with.
+    [[nodiscard]] lfs::Result<std::filesystem::path> ensure_sam2_video_weights(bool allow_download);
+
     using PreprocessProgressCallback = std::function<void(
         std::size_t done, std::size_t total, std::string_view filename)>;
 

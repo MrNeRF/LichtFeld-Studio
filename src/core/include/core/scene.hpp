@@ -250,6 +250,7 @@ namespace lfs::core {
         };
         mutable std::mutex model_bounds_mutex_;
         mutable ModelBoundsCache model_bounds_cache_;
+        mutable ModelBoundsCache reveal_bounds_cache_;
         Scene* scene_ = nullptr;
     };
 
@@ -416,7 +417,7 @@ namespace lfs::core {
         };
         // Scene-owner thread only. Render/visibility invalidation is not a content edit.
         [[nodiscard]] std::optional<CollisionSourceIdentity> collisionSourceIdentity(NodeId id) const;
-        [[nodiscard]] std::vector<struct CollisionSource> captureCollisionSources(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
+        [[nodiscard]] struct CollisionSource captureCollisionSource(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
         NodeId addCropBox(const std::string& name, NodeId parent_id);
         NodeId addEllipsoid(const std::string& name, NodeId parent_id);
         // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
@@ -482,6 +483,8 @@ namespace lfs::core {
         [[nodiscard]] bool isNodeEffectivelyLocked(NodeId id) const;
         [[nodiscard]] glm::vec3 getNodeBoundsCenter(NodeId id) const;
         [[nodiscard]] bool getNodeBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
+        // Robust local bounds for reveal timing; ignores the most distant sampled splats.
+        [[nodiscard]] bool getNodeRevealBounds(NodeId id, glm::vec3& out_min, glm::vec3& out_max) const;
 
         [[nodiscard]] NodeId getCropBoxForSplat(NodeId splat_id) const;
         [[nodiscard]] NodeId getOrCreateCropBoxForSplat(NodeId splat_id);
@@ -685,8 +688,9 @@ namespace lfs::core {
             glm::mat4 transform;
             NodeId node_id = NULL_NODE;
             bool is_selected = false;
+            std::shared_ptr<const CollisionVolume> collision{};
         };
-        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
+        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes(bool include_collision = false) const;
 
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
         [[nodiscard]] std::vector<int> getVisibleNodeActiveShDegrees() const;

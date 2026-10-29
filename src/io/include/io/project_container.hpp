@@ -95,6 +95,7 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_GUIL = make_fourcc('G', 'U', 'I', 'L');
     inline constexpr Fourcc FOURCC_VIEW = make_fourcc('V', 'I', 'E', 'W');
     inline constexpr Fourcc FOURCC_EDTR = make_fourcc('E', 'D', 'T', 'R');
+    inline constexpr Fourcc FOURCC_SHDR = make_fourcc('S', 'H', 'D', 'R');
     inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
     inline constexpr Fourcc FOURCC_NODE = make_fourcc('N', 'O', 'D', 'E');
     inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
@@ -154,6 +155,7 @@ namespace lfs::io::project {
         // "tiles3d"); readers without it report an unsupported feature.
         TILESET_REFERENCES = 10,
         COLLISION_VOLUMES_V1 = 11,
+        USER_SHADERS_V1 = 12,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -413,6 +415,9 @@ namespace lfs::io::project {
         ProjectReader& operator=(const ProjectReader&) = delete;
         ~ProjectReader();
 
+        // Retain the already validated commit and native file handle; never reopen by path.
+        [[nodiscard]] ProjectReader share() const { return ProjectReader(impl_); }
+        [[nodiscard]] lfs::Result<void> validate_source_identity() const;
         [[nodiscard]] const std::filesystem::path& path() const noexcept;
         [[nodiscard]] std::uint64_t physical_file_size() const noexcept;
         [[nodiscard]] OpenState open_state() const noexcept;
@@ -532,6 +537,10 @@ namespace lfs::io::project {
         std::optional<std::filesystem::path> writer_lock_anchor = std::nullopt;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        lfs::core::Uuid expected_project_uuid = {};
+        lfs::core::Uuid expected_commit_uuid = {};
+        std::chrono::milliseconds writer_lock_wait{0};
+        ReaderOptions compatibility = {};
     };
 
     struct AppendOptions {
@@ -556,6 +565,31 @@ namespace lfs::io::project {
         std::optional<std::uint64_t> expected_stream_bytes = std::nullopt;
     };
 
+    // Compress once before choosing a publication strategy. The immutable stored
+    // representation is written without another compression or payload copy; a
+    // STORED payload is referenced, so it must outlive the prepared chunk.
+    class LFS_IO_API PreparedChunk {
+    public:
+        PreparedChunk(PreparedChunk&&) noexcept = default;
+        PreparedChunk& operator=(PreparedChunk&&) noexcept = default;
+        [[nodiscard]] std::uint64_t stored_bytes() const noexcept { return stored_.size(); }
+        // Conservative layout estimate, including tensor alignment and CRC tables.
+        [[nodiscard]] std::uint64_t occupied_bytes() const noexcept {
+            const bool blocks = options_.block_crcs || stored_bytes() >= BLOCK_CRC_REQUIRED_AT;
+            return stored_bytes() + CHUNK_HEADER_BYTES +
+                   (options_.tensor_payload ? 2 * (TENSOR_PAYLOAD_ALIGNMENT - 1) : CHUNK_ALIGNMENT - 1) +
+                   (blocks ? BLOCK_CRC_HEADER_BYTES + ((stored_bytes() + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES) * sizeof(std::uint32_t) : 0);
+        }
+
+    private:
+        friend class ProjectWriter;
+        PreparedChunk() = default;
+        std::unique_ptr<std::byte[]> bytes_;
+        std::span<const std::byte> stored_;
+        std::uint64_t logical_bytes_ = 0;
+        ChunkWriteOptions options_;
+    };
+
     struct CommitOptions {
         CommitKind kind = CommitKind::Explicit;
         lfs::core::Uuid commit_uuid = {};
@@ -568,6 +602,7 @@ namespace lfs::io::project {
         Version min_safe_writer_version{1, 0};
         CapabilitySet extra_reader_capabilities;
         CapabilitySet extra_writer_capabilities;
+        bool recompute_shader_capabilities = false;
     };
 
     struct CompactionOptions {
@@ -636,6 +671,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         write_chunk(const ChunkKey& key, std::span<const std::byte> payload,
                     const ChunkWriteOptions& options = {});
+        [[nodiscard]] static lfs::Result<PreparedChunk>
+        prepare_chunk(std::span<const std::byte> payload,
+                      const ChunkWriteOptions& options = {});
+        [[nodiscard]] lfs::Result<void>
+        write_prepared_chunk(const ChunkKey& key, const PreparedChunk& payload);
         [[nodiscard]] lfs::Result<void>
         set_preview(std::span<const std::byte> png_bytes);
         [[nodiscard]] lfs::Result<std::ostream*>
@@ -669,6 +709,10 @@ namespace lfs::io::project {
     private:
         struct Impl;
         explicit ProjectWriter(std::unique_ptr<Impl> impl);
+        [[nodiscard]] lfs::Result<void> validate_chunk_write(const ChunkKey& key,
+                                                             const ChunkWriteOptions& options) const;
+        [[nodiscard]] lfs::Result<void> publish_placed_chunk(const ChunkKey& key,
+                                                             lfs::Result<ChunkInfo> placed);
         std::unique_ptr<Impl> impl_;
     };
 

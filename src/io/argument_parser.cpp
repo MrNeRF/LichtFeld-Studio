@@ -109,6 +109,8 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--keep-all-checkpoints", "keep_all_checkpoints", Bool},
+            OptimizationCliBinding{"--no-keep-all-checkpoints", "keep_all_checkpoints", Bool, true},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-flip", "eval_flip", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
@@ -711,7 +713,10 @@ namespace {
 
     std::expected<std::tuple<ParseResult, std::function<void()>>, std::string> parse_arguments(
         const std::vector<std::string>& args,
-        lfs::core::param::TrainingParameters& params) {
+        lfs::core::param::TrainingParameters& params,
+        const bool create_output_directory = true,
+        const bool validate_only = false,
+        const std::function<void(::args::ArgumentParser&)>& inspect = {}) {
 
         try {
             lfs::core::param::ensure_optimization_properties_registered();
@@ -723,7 +728,9 @@ namespace {
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
+                "mask-video -- Generate SAM2 masks for a video or extracted frames\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
+                "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -731,6 +738,8 @@ namespace {
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --headless -d ./data -o ./output --export ply\n"
+                "lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n"
+                "lichtfeld-studio batch-train --manifest batch.json\n"
                 "lichtfeld-studio -v session.licht\n"
                 "lichtfeld-studio --headless --resume session.licht\n"
                 "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
@@ -967,6 +976,8 @@ namespace {
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
+            ::args::Flag keep_all_checkpoints(output_group, "enabled", lfs::io::args::optimization_cli_help("--keep-all-checkpoints"), {"keep-all-checkpoints"});
+            ::args::Flag no_keep_all_checkpoints(output_group, "disabled", "Replace the checkpoint superseded by each new training save, preserving existing history. Overrides the saved project setting.", {"no-keep-all-checkpoints"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
             ::args::ValueFlag<uint32_t> save_project_at_iteration(
@@ -1032,17 +1043,29 @@ namespace {
             ::args::Group extensions_group(parser, "EXTENSIONS:");
             ::args::ValueFlagList<std::string> python_scripts(extensions_group, "path", "Python script(s) for custom training callbacks", {"python-script"});
 
+            if (inspect) {
+                inspect(parser);
+                return std::make_tuple(ParseResult::Help, std::function<void()>{});
+            }
+
             // Parse arguments
             try {
                 parser.Prog(args.front());
                 parser.ParseArgs(std::vector<std::string>(args.begin() + 1, args.end()));
             } catch (const ::args::Help&) {
-                std::print("{}", parser.Help());
+                if (!validate_only) {
+                    std::print("{}", parser.Help());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::Completion& e) {
-                std::print("{}", e.what());
+                if (!validate_only) {
+                    std::print("{}", e.what());
+                }
                 return std::make_tuple(ParseResult::Help, std::function<void()>{});
             } catch (const ::args::ParseError& e) {
+                if (validate_only) {
+                    return std::unexpected(std::format("Parse error: {}", e.what()));
+                }
                 return std::unexpected(std::format("Parse error: {}\n{}", e.what(), parser.Help()));
             }
 
@@ -1070,12 +1093,16 @@ namespace {
                 return false;
             };
 
+            if (keep_all_checkpoints && no_keep_all_checkpoints) {
+                return std::unexpected("--keep-all-checkpoints and --no-keep-all-checkpoints are mutually exclusive");
+            }
+
             if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
                 return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
             }
 
             // Initialize logger (CLI args override environment variable)
-            {
+            if (!validate_only) {
                 auto level = lfs::core::LogLevel::Info;
                 std::string log_file_path;
                 std::string filter_pattern;
@@ -1118,6 +1145,13 @@ namespace {
                 }
                 if (!log_file_path.empty()) {
                     LOG_DEBUG("Logging to file: {}", log_file_path);
+                }
+            } else {
+                if (log_level) {
+                    auto level = lfs::core::LogLevel::Info;
+                    std::string error;
+                    if (!parse_log_level(::args::get(log_level), level, error))
+                        return std::unexpected(error);
                 }
             }
 
@@ -1424,13 +1458,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
@@ -1446,13 +1482,15 @@ namespace {
                 if (has_output_path) {
                     params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
-                    // Create output directory if provided
-                    std::error_code ec;
-                    lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
-                    if (ec) {
-                        return std::unexpected(std::format(
-                            "Failed to create output directory '{}': {}",
-                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    if (create_output_directory && !validate_only) {
+                        // Create output directory if provided
+                        std::error_code ec;
+                        lfs::core::native_fs::create_directories(params.dataset.output_path, ec);
+                        if (ec) {
+                            return std::unexpected(std::format(
+                                "Failed to create output directory '{}': {}",
+                                lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                        }
                     }
                 }
             }
@@ -1686,6 +1724,8 @@ namespace {
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
                                         mcp_port_val = per_launch_mcp_port,
                                         no_save_eval_images_flag = bool(no_save_eval_images),
+                                        keep_all_checkpoints_flag = bool(keep_all_checkpoints),
+                                        no_keep_all_checkpoints_flag = bool(no_keep_all_checkpoints),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
                                         bg_image_path_val = cli_option_present({"--bg-image-path"}) ? std::optional<std::string>(::args::get(bg_image_path)) : std::optional<std::string>(),
@@ -1886,6 +1926,10 @@ namespace {
                 setVal(debug_python_port_val, opt.debug_python_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
+                if (keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = true;
+                if (no_keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = false;
                 if (bg_mode_val) {
                     opt.bg_mode = *bg_mode_val;
                     opt.bg_modulation = *bg_mode_val == lfs::core::param::BackgroundMode::Modulation;
@@ -2012,6 +2056,7 @@ namespace {
                 note_opt("debug_python", debug_python_flag);
                 note_opt("debug_python_port", debug_python_port_val.has_value());
                 note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("keep_all_checkpoints", keep_all_checkpoints_flag || no_keep_all_checkpoints_flag);
                 note_opt("bg_mode", bg_mode_val.has_value());
                 note_opt("bg_modulation", bg_mode_val.has_value());
                 note_opt("bg_color", bg_color_val.has_value());
@@ -2111,15 +2156,42 @@ namespace {
 } // anonymous namespace
 
 // Public interface
+std::vector<lfs::io::args::TrainingFlag> lfs::io::args::training_flags() {
+    std::vector<TrainingFlag> flags;
+    lfs::core::param::TrainingParameters params;
+    (void)parse_arguments({}, params, false, true, [&](::args::ArgumentParser& parser) {
+        for (const auto* const flag : parser.Group::GetAllFlags()) {
+            const auto first = flags.size();
+            for (const auto& name : flag->GetMatcher().GetFlagStrings()) {
+                const auto spelling = name.isShort ? std::string{'-', name.shortFlag} : "--" + name.longFlag;
+                flags.push_back({spelling, flag->NumberOfArguments().max > 0,
+                                 flags.size() == first ? spelling : flags[first].canonical_name});
+            }
+        }
+    });
+    return flags;
+}
+
+const lfs::io::args::TrainingFlag* lfs::io::args::training_flag(const std::string_view argument) {
+    static const auto flags = training_flags();
+    const auto name = argument.substr(0, argument.find('='));
+    for (const auto& flag : flags) {
+        if (name == flag.name || (flag.takes_value && flag.name.size() == 2 &&
+                                  argument.starts_with(flag.name)))
+            return &flag;
+    }
+    return nullptr;
+}
+
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
+lfs::io::args::parse_args_and_params(int argc, const char* const argv[], const bool create_output_directory, const bool validate_only) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
 
     if (args.size() >= 2 && !args[1].starts_with('-') &&
         args[1] != "convert" && args[1] != "mesh2splat" &&
-        args[1] != "mesh-to-splat" && args[1] != "preprocess" &&
+        args[1] != "mesh-to-splat" && args[1] != "preprocess" && args[1] != "mask-video" &&
         args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
@@ -2127,7 +2199,7 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
             args.insert(args.begin() + 1, "-v");
     }
 
-    auto parse_result = parse_arguments(args, *params);
+    auto parse_result = parse_arguments(args, *params, create_output_directory, validate_only);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -2137,6 +2209,9 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     const auto [result, apply_overrides] = *parse_result;
     if (result == ParseResult::Help) {
+        if (validate_only) {
+            return std::unexpected("Help requested in training arguments");
+        }
         std::exit(0);
     }
 
@@ -2725,6 +2800,115 @@ dataset options work as in training; see the Evaluation page of the docs.
         return io_args::CompareMode{std::move(params)};
     }
 
+    std::expected<lfs::io::args::ParsedArgs, std::string> parseVideoMaskArgs(const int argc, const char* const argv[]) {
+        namespace io_args = lfs::io::args;
+        ::args::ArgumentParser parser("LichtFeld Studio - SAM2 video masking\n",
+                                      "Input is a video file or a dataset root containing images/. Masks contain 0 for ignored pixels and 255 for retained pixels.\n"
+                                      "Examples:\n  LichtFeld-Studio mask-video clip.mp4 --output dataset --fps 1\n"
+                                      "  LichtFeld-Studio mask-video dataset --seed 0.5,0.8 --seed-frame 0\n");
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "input", "Video file or dataset root");
+        ::args::ValueFlag<std::string> output(parser, "folder", "Output dataset root (required for video input)", {'o', "output"});
+        ::args::ValueFlag<std::string> model(parser, "file", "Local SAM2.1 video .lfw weights", {"model"});
+        ::args::ValueFlag<double> fps(parser, "fps", "Extracted frames per second (default: 1)", {"fps"});
+        ::args::ValueFlag<double> start(parser, "seconds", "Video trim start", {"start"});
+        ::args::ValueFlag<double> end(parser, "seconds", "Video trim end", {"end"});
+        ::args::ValueFlagList<std::string> seed(parser, "x,y[,label]", "Normalized operator seed; repeat for multiple points, label 1 or 0", {"seed"});
+        ::args::ValueFlag<int> seed_frame(parser, "index", "Zero-based extracted frame for seed (default: 0)", {"seed-frame"});
+        ::args::ValueFlag<std::string> box(parser, "x0,y0,x1,y1", "Normalized operator seed box", {"seed-box"});
+        ::args::ValueFlag<std::string> circle(parser, "cx,cy,rx,ry", "Normalized fisheye image circle", {"circle"});
+        ::args::Flag fisheye(parser, "fisheye", "Use a centered image circle with radii 0.5", {"fisheye"});
+        ::args::Flag recenter(parser, "recenter", "Recenter the operator in a fisheye view", {"recenter"});
+        ::args::ValueFlag<float> fisheye_fov(parser, "degrees", "Fisheye field of view (default: 200)", {"fisheye-fov"});
+        ::args::ValueFlag<float> view_fov(parser, "degrees", "Recentered field of view (default: 160)", {"view-fov"});
+        ::args::ValueFlag<int> dilation(parser, "pixels", "Mask dilation radius (default: 12)", {"dilation"});
+        ::args::Flag require_operator(parser, "require-operator", "Fail when no operator can be localized", {"require-operator"});
+        ::args::Flag overwrite(parser, "overwrite", "Replace existing generated masks and extracted frames", {'y', "overwrite"});
+        ::args::Flag no_download(parser, "no-download", "Require cached or local weights", {"no-download"});
+        ::args::Flag download_only(parser, "download-only", "Download/verify weights and exit", {"download-only"});
+        parser.Prog(std::string(argv[0]) + " mask-video");
+        try {
+            parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return io_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+        lfs::core::param::VideoMaskParameters params;
+        if (input)
+            params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        if (output)
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        if (model)
+            params.model_path = lfs::core::utf8_to_path(::args::get(model));
+        if (fps)
+            params.fps = ::args::get(fps);
+        if (start)
+            params.start_time = ::args::get(start);
+        if (end)
+            params.end_time = ::args::get(end);
+        if (seed_frame)
+            params.seed_frame = ::args::get(seed_frame);
+        if (fisheye_fov)
+            params.fisheye_fov = ::args::get(fisheye_fov);
+        if (view_fov)
+            params.view_fov = ::args::get(view_fov);
+        if (dilation)
+            params.dilation = ::args::get(dilation);
+        params.recenter = recenter;
+        params.require_operator = require_operator;
+        params.overwrite = overwrite;
+        params.no_download = no_download;
+        params.download_only = download_only;
+        if (fisheye)
+            params.circle = {0.5, 0.5, 0.5, 0.5};
+        const auto numbers = [](std::string text) {
+            std::vector<double> values;
+            std::replace(text.begin(), text.end(), ',', ' ');
+            std::istringstream stream(text);
+            double value;
+            while (stream >> value)
+                values.push_back(value);
+            if (!stream.eof())
+                values.clear();
+            return values;
+        };
+        for (const auto& point : ::args::get(seed)) {
+            const auto v = numbers(point);
+            if ((v.size() != 2 && v.size() != 3) || !(v[0] >= 0 && v[0] <= 1 && v[1] >= 0 && v[1] <= 1) ||
+                (v.size() == 3 && v[2] != 0 && v[2] != 1))
+                return std::unexpected("--seed expects normalized x,y and optional label 0 or 1");
+            params.points.push_back({float(v[0]), float(v[1]), v.size() == 3 ? float(v[2]) : 1.0f});
+        }
+        if (box) {
+            const auto v = numbers(::args::get(box));
+            if (v.size() != 4 || !(v[0] >= 0 && v[1] >= 0 && v[2] <= 1 && v[3] <= 1 && v[0] < v[2] && v[1] < v[3]))
+                return std::unexpected("--seed-box expects normalized x0,y0,x1,y1 bounds");
+            params.box = {float(v[0]), float(v[1]), float(v[2]), float(v[3])};
+            if (params.points.empty())
+                params.points.push_back({float((v[0] + v[2]) / 2), float((v[1] + v[3]) / 2), 1});
+        }
+        if (circle) {
+            const auto v = numbers(::args::get(circle));
+            if (v.size() != 4 || !std::ranges::all_of(v, [](double x) { return std::isfinite(x); }) ||
+                !(v[2] > 0 && v[3] > 0))
+                return std::unexpected("--circle expects finite cx,cy and positive rx,ry");
+            std::copy_n(v.begin(), 4, params.circle.begin());
+        }
+        if (!(params.fps > 0 && params.fps <= 1000) || !std::isfinite(params.start_time) || params.start_time < 0 ||
+            !std::isfinite(params.end_time) || (params.end_time != -1 && params.end_time <= params.start_time))
+            return std::unexpected("Invalid frame rate or trim range");
+        if (params.seed_frame < 0 || params.dilation < 0 || params.dilation > 128 ||
+            !(params.fisheye_fov > 0 && params.fisheye_fov < 360 && params.view_fov > 0 && params.view_fov < 360))
+            return std::unexpected("Invalid seed frame, dilation or field of view");
+        if (params.recenter && params.circle[2] <= 0)
+            return std::unexpected("--recenter requires --fisheye or --circle");
+        if (!params.download_only && params.input_path.empty())
+            return std::unexpected(std::format("Missing video or dataset path\n\n{}", parser.Help()));
+        return io_args::VideoMaskMode{std::move(params)};
+    }
+
     std::expected<lfs::io::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
         namespace io_args = lfs::io::args;
         namespace param = lfs::core::param;
@@ -2752,7 +2936,7 @@ dataset options work as in training; see the Evaluation page of the docs.
         ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "Host worker threads for image load/encode (default: all available cores)", {"threads"});
-        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
+        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 6; 0 is fastest/largest)", {"png-compression"});
         ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
@@ -2842,9 +3026,19 @@ dataset options work as in training; see the Evaluation page of the docs.
     std::optional<lfs::io::args::ParsedArgs> parseLichtArgs(
         const int argc, const char* const argv[], std::string& error) {
         namespace io_args = lfs::io::args;
+        using Action = io_args::LichtMode::Action;
         constexpr std::string_view usage =
             "Usage: LichtFeld-Studio licht <project.licht> --embed [dataset]\n"
-            "       LichtFeld-Studio licht --help\n";
+            "       LichtFeld-Studio licht <project.licht> --checkpoints\n"
+            "       LichtFeld-Studio licht <project.licht> --prune-checkpoints [--keep N]\n"
+            "       LichtFeld-Studio licht <project.licht> --remove-checkpoints <iteration>[,<iteration>...]\n"
+            "       LichtFeld-Studio licht --help\n"
+            "\n"
+            "  --embed [dataset]        Embed the referenced dataset, or the given dataset folder.\n"
+            "  --checkpoints            List the training checkpoints stored in the project.\n"
+            "  --prune-checkpoints      Remove every checkpoint except the one training resumes from;\n"
+            "                           --keep N also keeps the N newest other checkpoints.\n"
+            "  --remove-checkpoints     Remove the checkpoints saved at these iterations.\n";
         const auto invalid = [&](const std::string_view detail) {
             error = std::format("{}\n{}", detail, usage);
             return std::optional<io_args::ParsedArgs>{};
@@ -2857,11 +3051,15 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (argc < 3 || std::string_view(argv[2]) == "--help") {
             return invalid("Missing .licht project path.");
         }
-        if (argc < 4 || std::string_view(argv[3]) != "--embed") {
-            return invalid("The licht command currently requires --embed.");
+        if (argc < 4) {
+            return invalid("Missing licht action.");
         }
-        if (argc > 5) {
-            return invalid("Unexpected argument: " + std::string(argv[5]));
+        const std::string_view action = argv[3];
+        const auto max_arguments = action == "--embed" || action == "--remove-checkpoints" ? 5
+                                   : action == "--prune-checkpoints"                       ? 6
+                                                                                           : 4;
+        if (argc > max_arguments) {
+            return invalid("Unexpected argument: " + std::string(argv[max_arguments]));
         }
         const auto project = lfs::core::utf8_to_path(argv[2]);
         if (project.extension() != ".licht") {
@@ -2870,18 +3068,238 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (!lfs::core::native_fs::is_regular_file(project)) {
             return invalid("The .licht project file could not be found.");
         }
-        std::optional<std::filesystem::path> dataset;
-        if (argc == 5) {
-            if (std::string_view(argv[4]).starts_with('-')) {
-                return invalid(std::format("Unknown licht argument: {}", argv[4]));
+        io_args::LichtMode mode{.project_path = project};
+        if (action == "--embed") {
+            if (argc == 5) {
+                if (std::string_view(argv[4]).starts_with('-')) {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                auto override_path = lfs::core::utf8_to_path(argv[4]);
+                if (override_path.is_relative()) {
+                    override_path = lfs::core::native_fs::current_path() / override_path;
+                }
+                mode.dataset_path = override_path.lexically_normal();
             }
-            auto override_path = lfs::core::utf8_to_path(argv[4]);
-            if (override_path.is_relative()) {
-                override_path = lfs::core::native_fs::current_path() / override_path;
+        } else if (action == "--checkpoints") {
+            mode.action = Action::LIST_CHECKPOINTS;
+        } else if (action == "--prune-checkpoints") {
+            mode.action = Action::PRUNE_CHECKPOINTS;
+            if (argc > 4) {
+                if (std::string_view(argv[4]) != "--keep") {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                const std::string_view count = argc == 6 ? argv[5] : "";
+                const auto [end, parse_error] = std::from_chars(
+                    count.data(), count.data() + count.size(), mode.keep_checkpoints);
+                if (count.empty() || parse_error != std::errc{} || end != count.data() + count.size()) {
+                    return invalid("--keep needs a checkpoint count, e.g. --keep 2.");
+                }
             }
-            dataset = override_path.lexically_normal();
+        } else if (action == "--remove-checkpoints") {
+            mode.action = Action::REMOVE_CHECKPOINTS;
+            std::string_view rest = argc == 5 ? argv[4] : "";
+            while (true) {
+                const auto comma = rest.find(',');
+                const auto token = rest.substr(0, comma);
+                std::int32_t iteration = 0;
+                const auto [end, parse_error] = std::from_chars(
+                    token.data(), token.data() + token.size(), iteration);
+                if (token.empty() || parse_error != std::errc{} ||
+                    end != token.data() + token.size() || iteration < 0) {
+                    return invalid("--remove-checkpoints needs checkpoint iterations, e.g. 7000,15000.");
+                }
+                mode.checkpoint_iterations.push_back(iteration);
+                if (comma == std::string_view::npos)
+                    break;
+                rest.remove_prefix(comma + 1);
+            }
+            std::ranges::sort(mode.checkpoint_iterations);
+            const auto duplicates = std::ranges::unique(mode.checkpoint_iterations);
+            mode.checkpoint_iterations.erase(duplicates.begin(), duplicates.end());
+        } else {
+            return invalid(std::format("Unknown licht argument: {}", action));
         }
-        return io_args::ParsedArgs{io_args::LichtMode{project, dataset}};
+        return io_args::ParsedArgs{std::move(mode)};
+    }
+
+    std::optional<lfs::io::args::ParsedArgs> parseBatchTrainArgs(
+        const int argc, const char* const argv[], std::string& error) {
+        namespace io_args = lfs::io::args;
+        namespace param = lfs::core::param;
+
+        constexpr const char* BATCH_TRAIN_HELP_HEADER =
+            "LichtFeld Studio - Batch Training\n"
+            "Sequentially train Gaussian Splatting models on multiple datasets with isolated CUDA\n"
+            "processes, live progress monitoring, failure resilience, and comprehensive reporting.\n";
+
+        constexpr const char* BATCH_TRAIN_HELP_FOOTER =
+            "\nEXAMPLES:\n"
+            "  # Train all dataset subdirectories found in ./datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --strategy mrnf --iter 30000\n\n"
+            "  # Train specific datasets:\n"
+            "  lichtfeld-studio batch-train scene1/ scene2/ scene3/ -o ./outputs/\n\n"
+            "  # Train recursively scanning for datasets:\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --recursive\n\n"
+            "  # Train from a JSON batch manifest with per-scene overrides:\n"
+            "  lichtfeld-studio batch-train --manifest batch_manifest.json\n\n"
+            "  # Preview the resolved job queue without running (dry run):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --dry-run\n\n"
+            "  # Stop immediately if any dataset fails (default is to continue):\n"
+            "  lichtfeld-studio batch-train ./datasets/ -o ./outputs/ --stop-on-failure\n\n"
+            "Every other option is a training option (see LichtFeld-Studio --help) and is passed to\n"
+            "each job. -d/--data-path adds a dataset and -o/--output-path sets the output root.\n";
+
+        ::args::ArgumentParser parser(BATCH_TRAIN_HELP_HEADER, BATCH_TRAIN_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::PositionalList<std::string> inputs(parser, "inputs", "Dataset directories, parent directory to scan, or JSON batch manifest");
+        ::args::ValueFlag<std::string> output_dir(parser, "path", "Base output directory for trained models and exports", {'o', "output", "output-dir", "output-path"});
+        ::args::ValueFlag<std::string> manifest(parser, "path", "Batch manifest JSON file", {"manifest"});
+        ::args::Flag recursive(parser, "recursive", "Scan input directory recursively for datasets", {"recursive"});
+        ::args::Flag stop_on_failure(parser, "stop-on-failure", "Stop batch execution immediately if any dataset fails (default: continue)", {"stop-on-failure", "fail-fast"});
+        ::args::Flag dry_run(parser, "dry-run", "Validate and print the resolved batch queue without running training", {"dry-run"});
+        ::args::ValueFlag<int> timeout(parser, "minutes", "Timeout per training job in minutes (default: 0 = disabled)", {"timeout"});
+        ::args::ValueFlag<std::string> summary_path(parser, "path", "Custom path for the batch JSON summary file", {"summary"});
+        ::args::ValueFlag<std::string> report_path(parser, "path", "Custom path for the batch text report file", {"report"});
+        LogLevelFlag log_level(parser);
+
+        std::vector<std::string> batch_args;
+        std::vector<std::string> shared_training_args;
+        batch_args.push_back(std::string(argv[0]) + " batch-train");
+
+        // Only batch-train's own options stay here, so every training option reaches the jobs.
+        static constexpr std::string_view batch_switches[] = {"-h", "--help", "--recursive", "--stop-on-failure", "--fail-fast", "--dry-run"};
+        static constexpr std::string_view batch_values[] = {"-o", "--output", "--output-dir", "--output-path", "--manifest",
+                                                            "--timeout", "--summary", "--report", "--log-level"};
+        const auto is_one_of = [](const auto& names, const std::string_view name) {
+            return std::ranges::find(names, name) != std::end(names);
+        };
+        bool after_double_dash = false;
+        int manifest_count = 0;
+        for (int i = 2; i < argc; ++i) {
+            const std::string_view arg = argv[i];
+            const auto* flag = io_args::training_flag(arg);
+            const std::string_view name = flag ? std::string_view(flag->name) : arg.substr(0, arg.find('='));
+            const bool joined = name != arg;
+            if (after_double_dash) {
+                shared_training_args.emplace_back(arg);
+            } else if (arg == "--") {
+                after_double_dash = true;
+            } else if (is_one_of(batch_switches, arg) || !arg.starts_with('-')) {
+                batch_args.emplace_back(arg);
+            } else if (name == "-d" || name == "--data-path") {
+                if (joined)
+                    batch_args.emplace_back(arg.substr(name.size() + (arg[name.size()] == '=' ? 1 : 0)));
+                else if (i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                else {
+                    error = "Missing value for batch input option";
+                    return std::nullopt;
+                }
+            } else if (is_one_of(batch_values, name)) {
+                if (name == "--manifest")
+                    ++manifest_count;
+                const auto first = batch_args.size();
+                batch_args.emplace_back(arg);
+                if (!joined && i + 1 < argc)
+                    batch_args.emplace_back(argv[++i]);
+                if (name == "--log-level")
+                    shared_training_args.insert(shared_training_args.end(), batch_args.begin() + first, batch_args.end());
+            } else {
+                shared_training_args.emplace_back(arg);
+                // Known flags own their value even when it looks like another option.
+                if (!joined && i + 1 < argc &&
+                    (flag ? flag->takes_value : argv[i + 1][0] != '-'))
+                    shared_training_args.emplace_back(argv[++i]);
+            }
+        }
+
+        parser.Prog(batch_args[0]);
+        try {
+            parser.ParseArgs(std::vector<std::string>(batch_args.begin() + 1, batch_args.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return io_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            error = std::format("{}\n\n{}", e.what(), parser.Help());
+            return std::nullopt;
+        }
+
+        std::string log_level_error;
+        if (!log_level.apply(log_level_error)) {
+            error = std::move(log_level_error);
+            return std::nullopt;
+        }
+
+        param::BatchTrainingParameters params;
+        std::filesystem::path manifest_path;
+        if (manifest)
+            manifest_path = lfs::core::utf8_to_path(::args::get(manifest));
+        std::vector<std::filesystem::path> input_paths;
+        for (const auto& in_str : ::args::get(inputs)) {
+            auto input = lfs::core::utf8_to_path(in_str);
+            if (input.extension() == ".json") {
+                ++manifest_count;
+                manifest_path = std::move(input);
+            } else {
+                input_paths.push_back(std::move(input));
+            }
+        }
+        if (manifest_count > 1) {
+            error = "Only one batch manifest is allowed (positional or --manifest)";
+            return std::nullopt;
+        }
+        if (manifest_count == 1) {
+            auto loaded = param::read_batch_training_parameters_from_json(manifest_path);
+            if (!loaded) {
+                error = std::format("Error reading batch manifest: {} {}", loaded.error().user_message(), loaded.error().detail());
+                return std::nullopt;
+            }
+            params = std::move(*loaded);
+        }
+        params.input_paths = std::move(input_paths);
+
+        if (output_dir) {
+            params.output_dir = lfs::core::utf8_to_path(::args::get(output_dir));
+        }
+
+        if (recursive) {
+            params.recursive = true;
+        }
+
+        if (stop_on_failure) {
+            params.continue_on_failure = false;
+        }
+
+        if (dry_run) {
+            params.dry_run = true;
+        }
+
+        if (timeout) {
+            params.timeout_minutes = ::args::get(timeout);
+            if (params.timeout_minutes < 0) {
+                error = "Batch timeout must be nonnegative";
+                return std::nullopt;
+            }
+        }
+
+        if (summary_path) {
+            params.summary_file = lfs::core::utf8_to_path(::args::get(summary_path));
+        }
+
+        if (report_path) {
+            params.report_file = lfs::core::utf8_to_path(::args::get(report_path));
+        }
+
+        for (auto&& a : shared_training_args) {
+            params.shared_args.push_back(std::move(a));
+        }
+
+        if (params.input_paths.empty() && params.jobs.empty() && params.config_file.empty()) {
+            error = std::format("Missing input datasets or batch config\n\n{}", parser.Help());
+            return std::nullopt;
+        }
+
+        return io_args::BatchTrainingMode{std::move(params)};
     }
 } // namespace
 
@@ -2941,54 +3359,53 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
             ::args::Positional<std::string> input(parser, "input", "Gaussian splat file or SOG/SSOG folder");
             ::args::Positional<std::string> output(parser, "output", "Output .voxel.json");
             ::args::ValueFlag<std::string> out(parser, "path", "Output .voxel.json", {'o', "output"});
-            ::args::ValueFlag<float> size(parser, "size", "Cell edge (default 0.05)", {"voxel-size"});
-            ::args::ValueFlag<float> opacity(parser, "opacity", "Accumulated opacity threshold [0,1)", {"voxel-opacity"});
-            ::args::ValueFlag<float> area(parser, "area", "Maximum Gaussian area; 0 automatic", {"max-gaussian-area"});
+            VoxelizeMode mode;
+            ::args::ValueFlag<float> size(parser, "size", "Cell edge (default 0.05)", {"voxel-size"}, mode.settings.voxel_size);
+            ::args::ValueFlag<float> opacity(parser, "opacity", "Accumulated opacity threshold [0,1)", {"voxel-opacity"}, mode.settings.opacity);
+            ::args::ValueFlag<float> area(parser, "area", "Maximum Gaussian area; 0 automatic", {"max-gaussian-area"}, mode.settings.max_gaussian_area);
             ::args::ValueFlag<std::string> filter(parser, "filter", "cleanup (default) or none", {"filter"});
             ::args::Flag automatic(parser, "auto", "Scale-relative automatic resolution", {"auto"});
             ::args::Flag overwrite(parser, "overwrite", "Replace BOTH output files", {'y', "overwrite"});
             LogLevelFlag log_level(parser);
             try {
                 parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+                if (!input || (!output && !out) || (output && out))
+                    return std::unexpected("Provide input and one output path, positionally or with --output");
+                if (automatic && size)
+                    return std::unexpected("--auto and --voxel-size are mutually exclusive");
+                mode.input_path = absolute_input_path(::args::get(input));
+                mode.output_path = absolute_input_path(out ? ::args::get(out) : ::args::get(output));
+                if (!core::native_fs::exists(mode.input_path))
+                    return std::unexpected("Input not found: " + core::path_to_utf8(mode.input_path));
+                if (!core::path_to_utf8(mode.output_path.filename()).ends_with(".voxel.json"))
+                    return std::unexpected("Output must end in .voxel.json");
+                if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
+                    return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
+                mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
+                mode.settings.auto_resolution = automatic;
+                mode.settings.voxel_size = ::args::get(size);
+                mode.settings.opacity = ::args::get(opacity);
+                mode.settings.max_gaussian_area = ::args::get(area);
+                mode.settings.validate();
+                std::string error;
+                if (!log_level.apply(error))
+                    return std::unexpected(error);
+                mode.overwrite = overwrite;
+                return mode;
             } catch (const ::args::Help&) {
                 std::print("{}", parser.Help());
                 return HelpMode{};
-            } catch (const ::args::ParseError& e) {
+            } catch (const std::exception& e) {
                 return std::unexpected(std::format("{}\n{}", e.what(), parser.Help()));
             }
-            if (!input || (!output && !out) || (output && out))
-                return std::unexpected("Provide input and one output path, positionally or with --output");
-            if (automatic && size)
-                return std::unexpected("--auto and --voxel-size are mutually exclusive");
-            VoxelizeMode mode;
-            mode.input_path = absolute_input_path(::args::get(input));
-            mode.output_path = absolute_input_path(out ? ::args::get(out) : ::args::get(output));
-            if (!core::native_fs::exists(mode.input_path))
-                return std::unexpected("Input not found: " + core::path_to_utf8(mode.input_path));
-            if (!core::path_to_utf8(mode.output_path.filename()).ends_with(".voxel.json"))
-                return std::unexpected("Output must end in .voxel.json");
-            if (filter && ::args::get(filter) != "cleanup" && ::args::get(filter) != "none")
-                return std::unexpected("--filter supports cleanup or none; connected filtering is deferred");
-            mode.settings.cleanup = !filter || ::args::get(filter) == "cleanup";
-            mode.settings.auto_resolution = automatic;
-            if (size)
-                mode.settings.voxel_size = ::args::get(size);
-            if (opacity)
-                mode.settings.opacity = ::args::get(opacity);
-            if (area)
-                mode.settings.max_gaussian_area = ::args::get(area);
-            try {
-                mode.settings.validate();
-            } catch (const std::exception& e) {
-                return std::unexpected(e.what());
-            }
-            std::string error;
-            if (!log_level.apply(error))
-                return std::unexpected(error);
-            mode.overwrite = overwrite;
-            return mode;
         } else if (arg1 == "convert") {
             return parseConvertArgs(argc, argv);
+        } else if (arg1 == "batch-train" || arg1 == "batch" || arg1 == "batch_train") {
+            std::string err;
+            if (auto parsed = parseBatchTrainArgs(argc, argv, err)) {
+                return std::move(*parsed);
+            }
+            return std::unexpected(std::move(err));
         } else if (arg1 == "eval") {
             std::string error;
             if (auto parsed = parseEvalArgs(argc, argv, error)) {
@@ -2997,6 +3414,8 @@ lfs::io::args::parse_args(const int argc, const char* const argv[]) {
             return std::unexpected(std::move(error));
         } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
             return parseMesh2SplatArgs(argc, argv);
+        } else if (arg1 == "mask-video") {
+            return parseVideoMaskArgs(argc, argv);
         } else if (arg1 == "preprocess") {
             return parsePreprocessArgs(argc, argv);
         } else if (arg1 == "compare") {

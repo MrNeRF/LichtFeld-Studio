@@ -11,18 +11,22 @@
 #include "core/path_utils.hpp"
 #include "core/raster_arena.hpp"
 #include "core/tensor_backend.hpp"
+#include "gui/string_keys.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "preferences.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/environment_image.hpp"
 #include "rendering/export_post_process.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_custom_effects.hpp"
 #include "scene_renderer.hpp"
 #include "scene_renderer_factory.hpp"
 #include "scene_training_interop.hpp"
+#include "sequencer/timeline.hpp"
 #include "theme/theme.hpp"
 #include "viewport_reference_renderer.hpp"
 #include "window/graphics_context.hpp"
@@ -31,6 +35,7 @@
 #endif
 #include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/visualizer.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -564,6 +569,147 @@ namespace lfs::vis {
         }
     }
 
+    void RenderingManager::syncCustomPrograms() {
+        if (!shader_service_)
+            return;
+        const auto generation = shader_service_->generation();
+        if (shader_sync_generation_ == generation && !shader_service_->hasBindings() && !custom_effect_snapshot_)
+            return;
+        // Frames plan their hosts, so a service change must reach a drawn frame.
+        if (shader_sync_generation_ != generation)
+            markDirty(DirtyFlag::SPLATS, FrameReason::AsyncCompletion, "custom_effect");
+        shader_sync_generation_ = generation;
+        const auto retained = shader_service_->restrictFallback(last_complete_);
+        if (!retained)
+            last_complete_.reset();
+        auto* const effects = customEffects();
+        if (!effects)
+            return;
+        if (shader_device_generation_ != effects->deviceGeneration()) {
+            shader_device_generation_ = effects->deviceGeneration();
+            shader_service_->observeDisplay({});
+            display_record_.reset();
+            shader_service_->deviceReset();
+        }
+        const auto target = shader_service_->candidate();
+        shaders::SnapshotPtr selected;
+        rendering::ProgramSetHandle handle;
+        const auto wake = [changes = shader_service_->changes(), this] {
+            changes->notify();
+            std::function<void()> callback;
+            {
+                std::scoped_lock lock(wake_callback_mutex_);
+                callback = wake_callback_;
+            }
+            if (callback)
+                callback();
+        };
+        for (const auto& snapshot : {target, retained}) {
+            if (!snapshot)
+                continue;
+            auto ready = effects->preparePrograms(snapshot->programs, handle, wake, snapshot == target);
+            if (!ready) {
+                shader_service_->failCandidate(snapshot, ready.error());
+                continue;
+            }
+            if (*ready) {
+                selected = snapshot;
+                break;
+            }
+        }
+        if (!selected)
+            handle.reset();
+        if (custom_effect_snapshot_ != selected || live_programs_ != handle) {
+            custom_effect_snapshot_ = std::move(selected);
+            live_programs_ = std::move(handle);
+            ++custom_effect_generation_;
+            markDirty(DirtyFlag::SPLATS, FrameReason::AsyncCompletion, "custom_effect");
+        }
+    }
+
+    RenderingManager::ExportLease RenderingManager::prepareShaderExport(const ExportFrame frame, const core::SplatData* model, const RenderSettings* settings, const bool dynamic) {
+        if (!shader_service_ || !shader_service_->hasBindings() || (settings && (settings->point_cloud_mode || ((!model || model->size() == 0) && !dynamic))))
+            return {};
+        if (!model && !settings && !shader_service_->hasApplicableBindings(sequencer_custom_reveal_))
+            return {};
+        auto lease = shader_service_->prepareExport({});
+        lease.per_frame = dynamic || !model || !settings;
+        lease.frame = frame;
+        if (!lease.per_frame) {
+            auto ready = prepareShaderExport(lease, model, settings);
+            if (!ready)
+                lease.error = ready.error();
+        }
+        return lease;
+    }
+
+    Status RenderingManager::selectExportPrograms(std::string_view host) {
+        const auto& lease = *export_draw_;
+        auto* const effects = customEffects();
+        if (!effects || lease.ended() || (lease.snapshot && (!lease.programs || lease.programs->generation != effects->deviceGeneration())))
+            return Status::failure(shadersNotReady());
+        if (lease.request && (!lease.snapshot || !std::ranges::contains(lease.snapshot->programs->hosts, host, &shaders::HostProgram::label))) {
+            // A host beyond the plan, such as the banded retry of a tile-instance overflow only the draw finds.
+            if (!std::ranges::contains(lease.missing, host))
+                lease.missing.emplace_back(host);
+            return Status::failure(shadersNotReady());
+        }
+        effects->usePrograms(export_draw_->programs);
+        return {};
+    }
+
+    void RenderingManager::setSceneTime(const float seconds) {
+        if (scene_time_ == seconds)
+            return;
+        scene_time_ = seconds;
+        if (display_record_ && display_record_->custom)
+            markDirty(DirtyFlag::SPLATS, FrameReason::Playback);
+    }
+
+    SceneCustomEffects* RenderingManager::customEffects() const {
+        return scene_renderer_ ? scene_renderer_->customEffects() : nullptr;
+    }
+
+    void RenderingManager::attachCustomEffect(SceneRenderState& state, const SceneManager& scene_manager, const float time) const {
+        const auto snapshot = export_draw_ ? export_draw_->snapshot : custom_effect_snapshot_;
+        if (!snapshot || (!export_draw_ && shader_service_ && snapshot->epoch != shader_service_->projectToken()[0]))
+            return;
+        const auto scene = shaders::captureEffectScene(scene_manager.getScene(), state.model_transforms.size());
+        state.custom_effect = shaders::makeCustomEffectState(*snapshot, scene, time, sequencer_custom_reveal_);
+    }
+
+    Error RenderingManager::shaderWaitError(const Error& error, const std::stop_token& stop) {
+        // The viewer thread cannot wait for them.
+        if (error.code() == ErrorCode::ContractViolation)
+            return shadersNotReady();
+        using namespace lichtfeld::Strings;
+        std::string message =
+            error.code() != ErrorCode::Cancelled
+                ? LOCF(Runtime::EXPORT_SHADER_UNAVAILABLE, std::string(error.user_message()))
+                : LOC(stop.stop_requested() ? Runtime::EXPORT_CANCELLED : Runtime::EXPORT_STOPPED);
+        return make_error(ErrorInit{.code = error.code(),
+                                    .domain = ErrorDomain::Rendering,
+                                    .user_message = std::move(message),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+    }
+
+    Error RenderingManager::shadersNotReady() {
+        return make_error(ErrorInit{.code = ErrorCode::FailedPrecondition,
+                                    .domain = ErrorDomain::Rendering,
+                                    .user_message = LOC(lichtfeld::Strings::Runtime::EXPORT_SHADER_NOT_READY),
+                                    .detection = LFS_SOURCE_SITE_CURRENT()});
+    }
+
+    RenderingManager::SplatMotion RenderingManager::displayedSplatMotion() const {
+        if (display_record_ && display_record_->custom)
+            return SplatMotion::CustomEffect;
+        if (sequencer_custom_reveal_ ||
+            (sequencer_reveal_ &&
+             lfs::sequencer::revealMovesSplats(static_cast<lfs::sequencer::RevealEffect>(sequencer_reveal_->effect))))
+            return SplatMotion::Reveal;
+        return SplatMotion::None;
+    }
+
     void RenderingManager::notifyAsyncLodResultsReady() {
         markDirty(DirtyFlag::CAMERA, lfs::vis::FrameReason::CameraMotion);
         std::function<void()> wake;
@@ -703,6 +849,10 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneRenderResources() {
+        if (shader_service_)
+            shader_service_->observeDisplay({});
+        display_record_.reset();
+        live_programs_.reset();
         invalidateGTComparisonImageCache(state());
         dropViewStates();
         invalidatePointCloudData();
@@ -942,6 +1092,21 @@ namespace lfs::vis {
                 core::utf8_to_path(settings.environment_map_path));
         }
         updateSettings(settings);
+    }
+
+    bool RenderingManager::setViewportRenderMode(std::string_view mode) {
+        if (mode != "splats" && mode != "points" && mode != "rings" && mode != "centers")
+            return false;
+        auto settings = getSettings();
+        const bool points = mode == "points";
+        const bool changed = settings.point_cloud_mode != points;
+        settings.point_cloud_mode = points;
+        settings.show_rings = mode == "rings";
+        settings.show_center_markers = mode == "centers";
+        updateSettings(settings, changed && points ? DirtyFlag::ALL : DirtyFlag::SELECTION);
+        if (auto* viewer = python::get_visualizer())
+            viewer->projectMarkSessionChapterCommitted("VIEW");
+        return true;
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {

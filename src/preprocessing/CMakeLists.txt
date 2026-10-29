@@ -7,6 +7,11 @@ find_package(OpenSSL REQUIRED)
 
 add_library(lfs_preprocessing STATIC
     preprocess.cpp
+    video_masking.cpp
+    video_mask_cells.cpp
+    video_mask_extraction.cpp
+    video_mask_command.cpp
+    operator_view.cu
     lens_priors.cpp
     lens_views.cpp
     lens_views.hpp
@@ -29,6 +34,7 @@ target_include_directories(lfs_preprocessing
 target_link_libraries(lfs_preprocessing
     PUBLIC
         lfs_core
+        lfs_media               # video_mask_extraction.hpp extends the frame extractor
     PRIVATE
         lfs_io                  # Scene import (Loader) for depth-anchor precompute
         $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_depth_anchor>

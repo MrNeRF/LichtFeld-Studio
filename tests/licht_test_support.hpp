@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include "core/collision_volume.hpp"
 #include "core/error.hpp"
 #include "core/uuid.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/session_chapters.hpp"
+#include <algorithm>
+#include <gtest/gtest.h>
+#include <ranges>
 
 #include <array>
 #include <atomic>
@@ -274,6 +278,8 @@ namespace lfs::test::licht {
 
     [[nodiscard]] std::unique_ptr<ProjectDocument>
     make_empty_document(core::Uuid project_uuid, std::uint64_t created_at_unix_ns = 100);
+    // Four CPU splats with distinct values (means start at 1, 2, 3).
+    [[nodiscard]] std::unique_ptr<core::SplatData> make_matrix_splat(bool cuda = false);
     [[nodiscard]] std::unique_ptr<core::SplatData> make_splat(std::size_t count);
     [[nodiscard]] std::shared_ptr<core::PointCloud> make_point_cloud(std::size_t count);
     [[nodiscard]] std::shared_ptr<core::MeshData> make_triangle_mesh();
@@ -282,3 +288,35 @@ namespace lfs::test::licht {
         std::uint64_t wallclock_unix_ns);
 
 } // namespace lfs::test::licht
+
+namespace collision_test {
+    using namespace lfs::core;
+    template <class F>
+    void expectError(F&& action, std::string_view key) {
+        try {
+            action();
+            FAIL() << "Collision error was not thrown";
+        } catch (const lfs::Exception& error) {
+            EXPECT_EQ(collisionErrorField(error.error(), "message_key"), key);
+        }
+    }
+    inline auto cells(glm::ivec3 dimensions) {
+        return std::views::iota(0, dimensions.x * dimensions.y * dimensions.z) |
+               std::views::transform([dimensions](int i) {
+                   return glm::ivec3(i % dimensions.x, (i / dimensions.x) % dimensions.y, i / (dimensions.x * dimensions.y));
+               });
+    }
+    inline std::shared_ptr<const CollisionVolume> box(glm::vec3 origin, glm::ivec3 dimensions, float size = 1) {
+        auto volume = std::make_shared<CollisionVolume>(CollisionVolume{
+            .settings = {.voxel_size = size},
+            .origin = origin,
+            .dimensions = dimensions,
+            .edge = 4,
+            .occupied_count = uint64_t(dimensions.x) * dimensions.y * dimensions.z,
+            .words = {1}});
+        while (volume->edge < std::max({dimensions.x, dimensions.y, dimensions.z}))
+            volume->edge *= 2;
+        volume->validate();
+        return volume;
+    }
+} // namespace collision_test

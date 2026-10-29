@@ -9,6 +9,8 @@
 #include "Common.h"
 #include "SphericalHarmonics.h"
 #include "Utils.cuh"
+#include "core/sh_value_codec.cuh"
+#include <type_traits>
 
 namespace gsplat_lfs {
 
@@ -54,16 +56,25 @@ namespace gsplat_lfs {
         }
     }
 
+    template <bool Quantized>
     __device__ __forceinline__ float swizzled_rest_coeff_channel(
         const float4* __restrict__ sh_rest,
         const uint32_t primitive_idx,
         const uint32_t rest_coeff_idx,
         const uint32_t channel,
-        const uint32_t slots_per_primitive) {
+        const uint32_t slots_per_primitive,
+        const uint32_t n_cells,
+        const float2 bounds) {
         if (sh_rest == nullptr) {
             return 0.0f;
         }
         const uint32_t offset = rest_coeff_idx * 3u + channel;
+        if constexpr (Quantized) {
+            const auto* codes = reinterpret_cast<const uint16_t*>(sh_rest);
+            return lfs::core::sh_value::DeviceCodec16::decode(
+                codes[lfs::core::sh_value::shAtU16(primitive_idx, offset, n_cells)],
+                bounds.x, bounds.y);
+        }
         const uint32_t slot = offset / 4u;
         const uint32_t component = offset % 4u;
         return float4_component(sh_rest[shAt(primitive_idx, slot, slots_per_primitive)], component);
@@ -326,7 +337,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <typename scalar_t>
+    template <typename scalar_t, bool Quantized>
     __global__ void spherical_harmonics_swizzled_fwd_kernel(
         const uint32_t N,
         const uint32_t degrees_to_use,
@@ -335,6 +346,7 @@ namespace gsplat_lfs {
         const vec3* __restrict__ dirs,
         const scalar_t* __restrict__ sh0,
         const float4* __restrict__ sh_rest,
+        const float2* __restrict__ sh_value_bounds,
         const bool* __restrict__ masks,
         scalar_t* __restrict__ colors) {
         const uint32_t idx = cg::this_grid().thread_rank();
@@ -358,8 +370,11 @@ namespace gsplat_lfs {
             const float z = dir.z * inorm;
             const uint32_t slots_per_primitive = shSlotsForDegree(layout_degree);
 
+            const uint32_t n_cells = (shBasisCountForDegree(layout_degree) - 1u) * 3u;
+            const float2 bounds = Quantized ? sh_value_bounds[elem_id / 256u] : make_float2(0.f, 0.f);
             const auto coeff = [&](const uint32_t rest_idx) -> float {
-                return swizzled_rest_coeff_channel(sh_rest, elem_id, rest_idx, c, slots_per_primitive);
+                return swizzled_rest_coeff_channel<Quantized>(
+                    sh_rest, elem_id, rest_idx, c, slots_per_primitive, n_cells, bounds);
             };
 
             result += SH_C1 * (-y * coeff(0) + z * coeff(1) - x * coeff(2));
@@ -413,7 +428,8 @@ namespace gsplat_lfs {
         const bool* masks,
         int64_t total_elements,
         float* colors,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds) {
         const uint32_t N = static_cast<uint32_t>(total_elements);
         const int64_t n_elements = static_cast<int64_t>(N) * 3;
         if (n_elements == 0) {
@@ -422,21 +438,28 @@ namespace gsplat_lfs {
 
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
-        spherical_harmonics_swizzled_fwd_kernel<float>
-            <<<grid, threads, 0, stream>>>(
-                N,
-                degrees_to_use,
-                layout_degree,
-                color_stride,
-                reinterpret_cast<const vec3*>(dirs),
-                sh0,
-                reinterpret_cast<const float4*>(sh_rest_swizzled),
-                masks,
-                colors);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_fwd");
+        const auto launch = [&](auto quantized) {
+            spherical_harmonics_swizzled_fwd_kernel<float, decltype(quantized)::value>
+                <<<grid, threads, 0, stream>>>(
+                    N,
+                    degrees_to_use,
+                    layout_degree,
+                    color_stride,
+                    reinterpret_cast<const vec3*>(dirs),
+                    sh0,
+                    reinterpret_cast<const float4*>(sh_rest_swizzled),
+                    reinterpret_cast<const float2*>(sh_value_bounds),
+                    masks,
+                    colors);
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_fwd");
+        };
+        if (sh_value_bounds != nullptr)
+            launch(std::true_type{});
+        else
+            launch(std::false_type{});
     }
 
-    template <typename scalar_t>
+    template <typename scalar_t, bool ComputeVDirs>
     __global__ void spherical_harmonics_swizzled_bwd_kernel(
         const uint32_t N,
         const uint32_t K,
@@ -446,6 +469,7 @@ namespace gsplat_lfs {
         const vec3* __restrict__ dirs,
         const scalar_t* __restrict__ sh0,
         const float4* __restrict__ sh_rest,
+        const float2* __restrict__ sh_value_bounds,
         const bool* __restrict__ masks,
         const scalar_t* __restrict__ v_colors,
         scalar_t* __restrict__ v_coeffs,
@@ -475,20 +499,24 @@ namespace gsplat_lfs {
             v_coeffs_local[i] = 0.0f;
         }
 
-#pragma unroll
-        for (uint32_t channel = 0; channel < 3u; ++channel) {
-            coeffs[channel] = sh0[elem_id * 3u + channel];
-        }
-        for (uint32_t k = 1; k < coeff_count; ++k) {
-#pragma unroll
-            for (uint32_t channel = 0; channel < 3u; ++channel) {
-                coeffs[k * 3u + channel] =
-                    swizzled_rest_coeff_channel(sh_rest, elem_id, k - 1u, channel, slots_per_primitive);
+        const bool compute_dir_grad = ComputeVDirs && dirs != nullptr;
+        if constexpr (ComputeVDirs) {
+            if (compute_dir_grad) {
+                const uint32_t n_cells = (shBasisCountForDegree(layout_degree) - 1u) * 3u;
+                const float2 bounds = sh_value_bounds != nullptr
+                                          ? sh_value_bounds[elem_id / 256u]
+                                          : make_float2(0.f, 0.f);
+                for (uint32_t k = 1; k < coeff_count; ++k) {
+                    coeffs[k * 3u + c] = sh_value_bounds != nullptr
+                                             ? swizzled_rest_coeff_channel<true>(sh_rest, elem_id, k - 1u, c,
+                                                                                 slots_per_primitive, n_cells, bounds)
+                                             : swizzled_rest_coeff_channel<false>(sh_rest, elem_id, k - 1u, c,
+                                                                                  slots_per_primitive, n_cells, bounds);
+                }
             }
         }
 
         float v_dir_x = 0.f, v_dir_y = 0.f, v_dir_z = 0.f;
-        const bool compute_dir_grad = (v_dirs != nullptr && dirs != nullptr);
         sh_coeffs_to_color_fast_vjp(
             effective_degree,
             c,
@@ -543,7 +571,8 @@ namespace gsplat_lfs {
         bool compute_v_dirs,
         float* v_coeffs,
         float* v_dirs,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds) {
         const uint32_t N = static_cast<uint32_t>(total_elements);
         const int64_t n_elements = static_cast<int64_t>(N) * 3;
         if (n_elements == 0) {
@@ -558,21 +587,28 @@ namespace gsplat_lfs {
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh0_bwd");
             return;
         }
-        spherical_harmonics_swizzled_bwd_kernel<float>
-            <<<grid, threads, 0, stream>>>(
-                N,
-                static_cast<uint32_t>(K),
-                degrees_to_use,
-                layout_degree,
-                color_stride,
-                reinterpret_cast<const vec3*>(dirs),
-                sh0,
-                reinterpret_cast<const float4*>(sh_rest_swizzled),
-                masks,
-                v_colors,
-                v_coeffs,
-                compute_v_dirs ? v_dirs : nullptr);
-        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
+        const auto launch = [&](auto direction_grad) {
+            spherical_harmonics_swizzled_bwd_kernel<float, decltype(direction_grad)::value>
+                <<<grid, threads, 0, stream>>>(
+                    N,
+                    static_cast<uint32_t>(K),
+                    degrees_to_use,
+                    layout_degree,
+                    color_stride,
+                    reinterpret_cast<const vec3*>(dirs),
+                    sh0,
+                    reinterpret_cast<const float4*>(sh_rest_swizzled),
+                    reinterpret_cast<const float2*>(sh_value_bounds),
+                    masks,
+                    v_colors,
+                    v_coeffs,
+                    compute_v_dirs ? v_dirs : nullptr);
+            LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
+        };
+        if (compute_v_dirs && v_dirs != nullptr)
+            launch(std::true_type{});
+        else
+            launch(std::false_type{});
     }
 
     // Compute viewing directions: dir = mean - camera_position

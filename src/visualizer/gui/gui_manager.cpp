@@ -72,6 +72,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
+#include "tools/scale_distance_tool.hpp"
 
 #include "core/camera_metrics.hpp"
 #include "core/data_loading_service.hpp"
@@ -7660,6 +7661,10 @@ namespace lfs::vis::gui {
         auto* align_tool = ctx.viewer->getAlignTool();
         if (align_tool && align_tool->isEnabled() && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
+        }
+        auto* scale_distance_tool = ctx.viewer->getScaleDistanceTool();
+        if (scale_distance_tool && scale_distance_tool->isEnabled() && !ui_hidden_) {
+            scale_distance_tool->renderUI(ctx, nullptr);
         }
     }
 

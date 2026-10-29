@@ -22,16 +22,20 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <cuda.h> // For CUcontext, cuCtxGetCurrent, cuCtxSetCurrent
 #include <cuda_runtime.h>
+#include <format>
 #include <fstream>
 #include <mutex>
 #include <nvimgcodec.h>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -396,17 +400,17 @@ namespace lfs::io {
             return processing == NVIMGCODEC_PROCESSING_STATUS_SUCCESS;
         }
 
-        bool check_nvimgcodec_availability_fast() {
+        // Why the GPU decoder is unusable, empty when the probe JPEG decodes.
+        std::string nvimgcodec_unavailable_reason() {
             int device_count = 0;
-            cudaError_t err = cudaGetDeviceCount(&device_count);
-            if (err != cudaSuccess || device_count == 0) {
-                return false;
-            }
+            if (const cudaError_t err = cudaGetDeviceCount(&device_count); err != cudaSuccess)
+                return std::format("CUDA device query failed ({})", cudaGetErrorString(err));
+            if (device_count == 0)
+                return "no CUDA device";
 
             const auto extensions_dir = lfs::core::getExtensionsDir();
             std::string extensions_path_str;
             const char* extensions_path_ptr = nullptr;
-
             if (!extensions_dir.empty() && lfs::core::native_fs::exists(extensions_dir)) {
                 extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
@@ -426,13 +430,20 @@ namespace lfs::io {
                 0};
 
             const auto status = nvimgcodecInstanceCreate(&test_instance, &create_info);
-            if (status != NVIMGCODEC_STATUS_SUCCESS || !test_instance) {
-                return false;
-            }
+            if (status != NVIMGCODEC_STATUS_SUCCESS || !test_instance)
+                return std::format("instance creation failed ({})", nvimgcodec_status_to_string(status));
 
             const bool decodes = decodes_probe_jpeg(test_instance);
             nvimgcodecInstanceDestroy(test_instance);
-            return decodes;
+            if (decodes)
+                return {};
+            // Built-in modules alone decode no JPEG: without the extension directory the probe cannot succeed.
+            if (extensions_dir.empty())
+                return std::format("no extensions directory beside '{}'",
+                                   lfs::core::path_to_utf8(lfs::core::getExecutableDir()));
+            if (!extensions_path_ptr)
+                return std::format("extension directory '{}' is not reachable", lfs::core::path_to_utf8(extensions_dir));
+            return std::format("probe JPEG did not decode with the extensions in '{}'", extensions_path_str);
         }
 
         // Comprehensive availability check with diagnostics
@@ -1265,16 +1276,26 @@ namespace lfs::io {
         static std::once_flag once;
         static bool available = false;
         std::call_once(once, [] {
+            std::string reason;
             if (should_run_nvimgcodec_diagnostics()) {
                 available = check_nvimgcodec_availability_with_diagnostics();
             } else {
-                available = check_nvimgcodec_availability_fast();
+                // The decision holds for the whole process, so one transient failure (an extension directory on a
+                // network share that is not answering yet) is retried once before every image decodes on the CPU.
+                reason = nvimgcodec_unavailable_reason();
+                if (!reason.empty()) {
+                    LOG_INFO("nvImageCodec check failed ({}); retrying once", reason);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    reason = nvimgcodec_unavailable_reason();
+                }
+                available = reason.empty();
             }
             if (available) {
                 LOG_INFO("JPEG decoding runs on the GPU (nvImageCodec)");
             } else {
-                LOG_WARN("JPEG decoding runs on the CPU: nvImageCodec cannot decode JPEG on this system. "
-                         "Set LFS_NVCODEC_DIAGNOSTICS=1 for details.");
+                LOG_WARN("JPEG decoding runs on the CPU: nvImageCodec cannot decode JPEG on this system{}. "
+                         "Set LFS_NVCODEC_DIAGNOSTICS=1 for details.",
+                         reason.empty() ? std::string{} : " (" + reason + ")");
             }
         });
         return available;

@@ -16,6 +16,16 @@ namespace lfs::training {
         const unsigned* primitive_work_indices = nullptr;
         // Per-instance primitive indices in depth-sorted tile order.
         const unsigned* sorted_primitive_indices = nullptr;
+        std::size_t visible_sort_scratch_size = 0;
+        unsigned tile_sort_key_bytes = 0;
+        // Per-instance blend region masks and their tile positions from the forward blend.
+        const unsigned char* contributor_masks = nullptr;
+        const unsigned* contributor_positions = nullptr;
+        // Visible rows the backward walk reached; null when touched gating is off.
+        const unsigned* primitive_touched = nullptr;
+        // Per-tile instance ranges and per-pixel last contributors of the forward blend.
+        const uint2* tile_ranges = nullptr;
+        const unsigned* last_contributors = nullptr;
     };
 
     [[nodiscard]] CudaFastFrameView cuda_fast_frame_view(const lfs::gpu_ops::FastSaved& saved) noexcept;

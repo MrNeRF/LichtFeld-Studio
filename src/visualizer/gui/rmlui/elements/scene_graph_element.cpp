@@ -3093,7 +3093,7 @@ namespace lfs::vis::gui {
         };
 
         if (node->collision)
-            items.push_back(makeAction(tr("collision.export"), prefixedAction(std::format("export_collision:{}", node_id))));
+            items.push_back(makeAction(tr("export.export"), prefixedAction(std::format("export_collision:{}", node_id))));
         if (node->type == core::NodeType::SPLAT) {
             items.push_back(makeAction(tr("export.export") + "...",
                                        prefixedAction(std::format("export_splat:{}", node_id)), !items.empty()));

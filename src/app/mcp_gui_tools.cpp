@@ -5,6 +5,7 @@
 
 #include "app/mcp_gui_tools.hpp"
 #include "app/mcp_app_utils.hpp"
+#include "app/mcp_editor_tools.hpp"
 #include "app/mcp_event_handlers.hpp"
 #include "app/mcp_media_tools.hpp"
 #include "app/mcp_node_tools.hpp"
@@ -12,6 +13,8 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_screen_tools.hpp"
 #include "app/mcp_sequencer_tools.hpp"
+#include "app/mcp_shader_event_handlers.hpp"
+#include "app/mcp_shader_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
 #include "core/error_envelope.hpp"
@@ -25,6 +28,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_display_name.hpp"
 #include "core/property_registry.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -46,6 +50,7 @@
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
 #include "sequencer/keyframe.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui/string_keys.hpp"
@@ -372,6 +377,48 @@ namespace lfs::app {
                     std::forward<F>(fn));
             }
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
+        }
+
+        // Draws `render` through `post` with the shaders the viewport binds: an
+        // export freezes them, a live render draws what the viewport would; see
+        // RenderingManager::drawWithShaders. `frame` is what `render` draws.
+        template <typename Post, typename Render>
+        auto draw_with_viewport_shaders(vis::Visualizer* viewer, Post post, Render render,
+                                        const std::function<vis::RenderingManager::ExportFrame()>& frame,
+                                        const bool exporting = false) {
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!rendering_manager)
+                return post(render);
+            return rendering_manager->drawWithShaders(exporting, post, render, frame);
+        }
+
+        // The preview render_dataset_camera_to_base64 draws: the camera's image size.
+        vis::RenderingManager::ExportFrame dataset_camera_frame(vis::Visualizer* viewer, const int camera_index,
+                                                                const bool use_uid = true) {
+            auto* const scene_manager = viewer->getSceneManager();
+            if (!scene_manager)
+                return {};
+            std::shared_ptr<core::Camera> camera;
+            if (use_uid) {
+                camera = scene_manager->getScene().getCameraByUid(camera_index);
+            } else {
+                const auto cameras = scene_manager->getScene().getAllCameras();
+                if (camera_index >= 0 && static_cast<size_t>(camera_index) < cameras.size())
+                    camera = cameras[camera_index];
+            }
+            if (!camera)
+                return {};
+            return {.width = camera->image_width(), .height = camera->image_height()};
+        }
+
+        // `use_uid` as for render_dataset_camera_to_base64.
+        std::expected<std::string, std::string> render_dataset_camera_with_shaders(vis::Visualizer* viewer,
+                                                                                   const int camera_index,
+                                                                                   const bool use_uid = true) {
+            return draw_with_viewport_shaders(
+                viewer, [viewer](auto draw) { return post_and_wait(viewer, std::move(draw)); },
+                [viewer, camera_index, use_uid] { return render_dataset_camera_to_base64(viewer, camera_index, 0, 0, use_uid); },
+                [viewer, camera_index, use_uid] { return dataset_camera_frame(viewer, camera_index, use_uid); });
         }
 
         lfs::Result<std::string> capture_viewport_from_window(
@@ -785,98 +832,6 @@ namespace lfs::app {
             });
             if (view.fov_degrees)
                 vis::apply_set_fov(*view.fov_degrees);
-        }
-
-        void show_python_console() {
-            core::events::cmd::ShowWindow{.window_name = "python_console", .show = true}.emit();
-        }
-
-        json text_payload_json(std::string text, const int max_chars, const bool tail = true) {
-            if (max_chars >= 0 && static_cast<int>(text.size()) > max_chars) {
-                const size_t keep = static_cast<size_t>(max_chars);
-                if (tail) {
-                    text = text.substr(text.size() - keep);
-                } else {
-                    text.resize(keep);
-                }
-                return json{
-                    {"text", std::move(text)},
-                    {"truncated", true},
-                };
-            }
-
-            return json{
-                {"text", std::move(text)},
-                {"truncated", false},
-            };
-        }
-
-        struct EditorOutputObservation {
-            std::string text;
-            int64_t total_chars = 0;
-            bool running = false;
-            bool completed = false;
-            bool timed_out = false;
-            bool saw_output = false;
-        };
-
-        json editor_output_json(const std::string& text, const int max_chars, const bool tail = true) {
-            auto payload = text_payload_json(text, max_chars, tail);
-            payload["total_chars"] = static_cast<int64_t>(text.size());
-            return payload;
-        }
-
-        EditorOutputObservation observe_editor_output(vis::gui::panels::PythonConsoleState& console,
-                                                      const bool wait_for_completion,
-                                                      const bool wait_for_output,
-                                                      const int timeout_ms) {
-            using Clock = std::chrono::steady_clock;
-
-            constexpr auto POLL_INTERVAL = std::chrono::milliseconds(25);
-            const int bounded_timeout_ms = std::max(timeout_ms, 0);
-            const auto deadline = Clock::now() + std::chrono::milliseconds(bounded_timeout_ms);
-
-            EditorOutputObservation observation;
-            while (true) {
-                observation.text = console.getOutputText();
-                observation.total_chars = static_cast<int64_t>(observation.text.size());
-                observation.running = console.isScriptRunning();
-                observation.completed = !observation.running;
-                observation.saw_output = !observation.text.empty();
-
-                const bool output_ready = !wait_for_output || observation.saw_output || observation.completed;
-                const bool completion_ready = !wait_for_completion || observation.completed;
-                if (output_ready && completion_ready) {
-                    observation.timed_out = false;
-                    return observation;
-                }
-
-                if (bounded_timeout_ms == 0 || Clock::now() >= deadline) {
-                    observation.timed_out = true;
-                    return observation;
-                }
-
-                std::this_thread::sleep_for(POLL_INTERVAL);
-            }
-        }
-
-        json editor_output_response_json(vis::gui::panels::PythonConsoleState& console,
-                                         const bool wait_for_completion,
-                                         const bool wait_for_output,
-                                         const int timeout_ms,
-                                         const int output_max_chars,
-                                         const bool output_tail) {
-            auto observation = observe_editor_output(
-                console, wait_for_completion, wait_for_output, timeout_ms);
-
-            json response{
-                {"running", observation.running},
-                {"completed", observation.completed},
-                {"timed_out", observation.timed_out},
-                {"saw_output", observation.saw_output},
-            };
-            response["output"] = editor_output_json(observation.text, output_max_chars, output_tail);
-            return response;
         }
 
         std::expected<std::vector<std::string>, std::string> resolve_transform_targets(
@@ -2562,6 +2517,9 @@ namespace lfs::app {
                     [this](const std::string& type, json payload) {
                         publish(type, std::move(payload));
                     });
+                register_mcp_shader_event_handlers(handlers_, [this](const std::string& type, json payload) {
+                    publish(type, std::move(payload));
+                });
             }
 
             ~EventSubscriptionRegistry() {
@@ -2659,6 +2617,8 @@ namespace lfs::app {
             LOG_ERROR("GUI-native MCP scene tools require a GUI VisualizerImpl");
             return;
         }
+
+        register_shader_tools(registry, viewer, [viewer_impl] { return viewer_impl->getShaderService(); });
 
         // --- Scene operations (posted to GUI thread) ---
         registry.register_tool(
@@ -2891,6 +2851,8 @@ namespace lfs::app {
                          true},
                     };
                 }
+                if (*result == vis::ProjectOpenOutcome::Deferred)
+                    return json{{"status", "switch_pending"}};
                 auto info = post_and_wait(
                     viewer, [viewer] {
                         return viewer->projectGetInfo();
@@ -3041,18 +3003,21 @@ namespace lfs::app {
                     return result;
                 },
             .render_capture =
-                [viewer](std::optional<int> camera_index, int width, int height, bool presented) {
-                    // Runs as render work, not plain posted work: the window-crop fallback
-                    // inside capture_live_viewport_to_base64 needs an active GUI frame.
-                    return capture_after_gui_render(viewer, [viewer, camera_index, width, height, presented]() -> lfs::Result<std::string> {
-                        if (camera_index) {
-                            auto image = render_dataset_camera_to_base64(viewer, *camera_index, width, height);
-                            if (!image)
-                                return mcp::capture_error(lfs::ErrorCode::Unavailable, image.error());
-                            return std::move(*image);
-                        }
-                        return capture_live_viewport_to_base64(viewer, width, height, presented); }, !camera_index.has_value());
-                },
+                [viewer](std::optional<int> camera_index, int width, int height, bool presented) -> lfs::Result<std::string> {
+                // Runs as render work, not plain posted work: the window-crop fallback
+                // inside capture_live_viewport_to_base64 needs an active GUI frame.
+                if (!camera_index)
+                    return capture_after_gui_render(viewer, [viewer, width, height, presented]() -> lfs::Result<std::string> { return capture_live_viewport_to_base64(viewer, width, height, presented); }, true);
+                const auto render = [viewer, camera_index, width, height]() -> lfs::Result<std::string> {
+                    auto image = render_dataset_camera_to_base64(viewer, *camera_index, width, height);
+                    if (!image)
+                        return mcp::capture_error(lfs::ErrorCode::Unavailable, image.error());
+                    return std::move(*image);
+                };
+                return draw_with_viewport_shaders(
+                    viewer, [viewer](auto draw) { return capture_after_gui_render(viewer, std::move(draw)); }, render,
+                    [viewer, camera_index] { return dataset_camera_frame(viewer, *camera_index); }, true);
+            },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
                 return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
@@ -3206,9 +3171,7 @@ namespace lfs::app {
                 const auto panel_id = args.value("panel_id", std::string{});
                 auto result = [&]() -> lfs::Result<std::string> {
                     if (panel_id.empty())
-                        return capture_after_gui_render(viewer, [viewer, width, height]() {
-                            return capture_full_window_to_base64(viewer, width, height);
-                        });
+                        return capture_after_gui_render(viewer, [viewer, width, height]() { return capture_full_window_to_base64(viewer, width, height); }, true);
                     auto promise = std::make_shared<std::promise<lfs::Result<vis::WindowCapture>>>();
                     auto future = promise->get_future();
                     const auto accepted = capture_after_gui_render(viewer, [viewer, panel_id, promise]() -> lfs::Result<bool> {
@@ -3904,10 +3867,17 @@ namespace lfs::app {
                             return json{{"error", LOC("training.reset_before_strategy_change")}};
                     }
                     if (const auto* trainer = viewer_impl->getTrainerManager(); trainer) {
+                        auto ref = core::prop::PropertyObjectRef::cpp(&params->getActiveParams());
                         for (const auto& change : changes) {
                             if (change.meta.id == "iterations" &&
                                 trainer->rejectsIterationLimit(std::any_cast<size_t>(change.value))) {
                                 return json{{"error", LOC("training.iterations_must_exceed_current")}};
+                            }
+                            if (change.meta.needs_restart()) {
+                                auto current_val = change.meta.getter(ref);
+                                if (!trainer->canChangeProperty(change.meta, current_val, change.value)) {
+                                    return json{{"error", LOCF("training.reset_before_param_change", core::prop::property_display_name(change.meta))}};
+                                }
                             }
                         }
                     }
@@ -5159,6 +5129,85 @@ namespace lfs::app {
                 .on_success = transform_operator_result,
             });
 
+        for (const bool solve_scale : {false, true}) {
+            json properties{
+                {"family", {{"type", "string"}, {"description", "AprilTag family name (default: tag36h11)"}}},
+                {"min_views", {{"type", "integer"}, {"description", "Minimum number of camera views per tag (default: 2)"}}},
+                {"min_parallax_deg", {{"type", "number"}, {"description", "Minimum ray parallax angle in degrees (default: 1.5)"}}},
+                {"max_reprojection_error_px", {{"type", "number"}, {"description", "Maximum reprojection error in pixels (default: 3.0)"}}},
+                {"max_hamming", {{"type", "integer"}, {"description", "Maximum corrected bit errors (default: 1)"}}},
+                {"min_decision_margin", {{"type", "number"}, {"description", "Minimum detector decision margin (default: 25.0)"}}},
+                {"active_cameras_only", {{"type", "boolean"}, {"description", "Scan only training-enabled cameras (default: false)"}}},
+                {"max_image_width", {{"type", "integer"}, {"description", "Optional maximum decoded image width in pixels (default: 0)"}}},
+            };
+            if (solve_scale) {
+                properties.update(json{
+                    {"constraints", {{"type", "array"}, {"description", "Array of {tag_a, tag_b, distance} constraints in real-world units"}}},
+                    {"inlier_relative_threshold", {{"type", "number"}, {"description", "RANSAC relative error threshold (default: 0.02)"}}},
+                    {"inlier_absolute_threshold", {{"type", "number"}, {"description", "Optional RANSAC absolute error floor (default: 0.0)"}}},
+                    {"min_inliers", {{"type", "integer"}, {"description", "Minimum required inlier constraints (default: 1)"}}},
+                    {"min_inlier_ratio", {{"type", "number"}, {"description", "Minimum required inlier ratio (default: 0.5)"}}},
+                    {"manifest_path", {{"type", "string"}, {"description", "Optional output file path for calibration manifest JSON"}}},
+                    {"apply_to_scene", {{"type", "boolean"}, {"description", "Apply computed scale transform to scene nodes (default: true)"}}},
+                    {"targets", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Explicit partial targets; omitted targets scale the complete scene"}}},
+                });
+            }
+            registry.register_tool(
+                McpTool{
+                    .name = solve_scale ? "transform.scale_by_apriltags" : "transform.detect_apriltags",
+                    .description = solve_scale
+                                       ? "Start an AprilTag scene calibration job; read results with runtime.job_describe for apriltag.scan"
+                                       : "Start an AprilTag detection job; read results with runtime.job_describe for apriltag.scan",
+                    .input_schema = {
+                        .type = "object",
+                        .properties = std::move(properties),
+                        .required = solve_scale ? std::vector<std::string>{"constraints"} : std::vector<std::string>{}},
+                    .metadata = {
+                        .category = "transform",
+                        .kind = "mutation",
+                        .runtime = "gui",
+                        .thread_affinity = "gui_thread",
+                        .long_running = true,
+                        .user_visible = true,
+                    }},
+                [viewer_impl, solve_scale](const json& args) -> json {
+                    return post_and_wait(viewer_impl, [viewer_impl, solve_scale, args]() -> json {
+                        if (!viewer_impl->getSceneManager())
+                            return {{"error", "Scene manager not initialized"}};
+                        auto* gui = viewer_impl->getGuiManager();
+                        if (!gui)
+                            return {{"error", "GUI manager not initialized"}};
+                        std::vector<geometry::apriltag::TagDistanceConstraint> constraints;
+                        if (solve_scale) {
+                            if (!args.contains("constraints") || !args["constraints"].is_array())
+                                return {{"error", "'constraints' must be an array of {tag_a, tag_b, distance} objects"}};
+                            for (const auto& item : args["constraints"]) {
+                                if (!item.is_object() || !item.contains("tag_a") || !item.contains("tag_b"))
+                                    return {{"error", "Each constraint must contain 'tag_a', 'tag_b', and 'distance'"}};
+                                constraints.push_back({item["tag_a"].get<int>(), item["tag_b"].get<int>(),
+                                                       item.contains("distance") ? item["distance"].get<double>() : item.value("target_distance", 0.0)});
+                            }
+                        }
+                        std::vector<std::string> targets;
+                        if (solve_scale && args.contains("targets") && args["targets"].is_array()) {
+                            for (const auto& target : args["targets"]) {
+                                if (target.is_string())
+                                    targets.push_back(target.get<std::string>());
+                            }
+                        }
+                        try {
+                            const auto request = gui->asyncTasks().startAprilTagScan(vis::aprilTagSceneScaleOptions(args),
+                                                                                     std::move(constraints), std::move(targets), solve_scale, solve_scale && args.value("apply_to_scene", true));
+                            if (!request)
+                                return {{"error", request.error()}};
+                        } catch (const std::invalid_argument& e) {
+                            return {{"error", e.what()}};
+                        }
+                        return {{"success", true}, {"started", true}, {"job_id", "apriltag.scan"}, {"resource_uri", "lichtfeld://runtime/jobs/apriltag.scan"}};
+                    });
+                });
+        }
+
         registry.register_tool(
             McpTool{
                 .name = "crop_box.add",
@@ -5565,253 +5614,7 @@ namespace lfs::app {
                 });
             });
 
-        // --- Editor tools ---
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.set_code",
-                .description = "Populate the visible Python editor with code in the integrated Python console",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"code", json{{"type", "string"}, {"description", "Python code to place into the visible editor"}}},
-                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}}},
-                    .required = {"code"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string code = args["code"].get<std::string>();
-                const bool show_console_window = args.value("show_console", true);
-
-                return post_and_wait(viewer_impl, [code, show_console_window]() -> json {
-                    if (show_console_window)
-                        show_python_console();
-
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-
-                    console.setEditorText(code);
-                    console.focusEditor();
-                    console.setModified(true);
-
-                    return json{
-                        {"success", true},
-                        {"chars", static_cast<int64_t>(code.size())},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.run",
-                .description = "Run code through the integrated Python console, optionally wait for completion, and return the latest captured output",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"code", json{{"type", "string"}, {"description", "Optional Python code to set and run; defaults to current editor contents"}}},
-                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}},
-                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
-                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
-                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait for completion/output before returning a partial snapshot (default: 2000)"}}},
-                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
-                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const auto code = optional_string_arg(args, "code");
-                const bool show_console_window = args.value("show_console", true);
-                const bool wait_for_completion = args.value("wait_for_completion", true);
-                const bool wait_for_output = args.value("wait_for_output", true);
-                const int timeout_ms = args.value("timeout_ms", 2000);
-                const int output_max_chars = args.value("output_max_chars", 20000);
-                const bool output_tail = args.value("output_tail", true);
-
-                auto response = post_and_wait(viewer_impl, [code, show_console_window]() -> json {
-                    if (show_console_window)
-                        show_python_console();
-
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-                    if (console.isScriptRunning())
-                        return json{{"error", "A script is already running"}};
-
-                    std::string code_to_run;
-                    if (code) {
-                        console.setEditorText(*code);
-                        console.focusEditor();
-                        console.setModified(true);
-                        code_to_run = *code;
-                    } else {
-                        code_to_run = console.getEditorTextStripped();
-                    }
-
-                    if (code_to_run.empty())
-                        return json{{"error", "Editor is empty"}};
-
-                    console.runScriptAsync(code_to_run);
-                    return json{
-                        {"success", true},
-                        {"chars", static_cast<int64_t>(code_to_run.size())},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-
-                if (response.contains("error"))
-                    return response;
-
-                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                auto observed = editor_output_response_json(
-                    console,
-                    wait_for_completion,
-                    wait_for_output,
-                    timeout_ms,
-                    output_max_chars,
-                    output_tail);
-                for (auto& [key, value] : observed.items()) {
-                    response[key] = std::move(value);
-                }
-
-                response["wait_for_completion"] = wait_for_completion;
-                response["wait_for_output"] = wait_for_output;
-                response["timeout_ms"] = timeout_ms;
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.get_code",
-                .description = "Read the current contents of the visible integrated Python editor",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"max_chars", json{{"type", "integer"}, {"description", "Maximum characters to return; defaults to no limit"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const int max_chars = args.value("max_chars", -1);
-
-                return post_and_wait(viewer_impl, [max_chars]() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const editor = console.getEditor();
-                    if (!editor)
-                        return json{{"error", "Python editor not initialized"}};
-
-                    std::string code = console.getEditorText();
-                    auto result = text_payload_json(code, max_chars, false);
-                    result["success"] = true;
-                    result["total_chars"] = static_cast<int64_t>(code.size());
-                    result["modified"] = console.isModified();
-                    if (!console.getScriptPath().empty())
-                        result["path"] = core::path_to_utf8(console.getScriptPath());
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.get_output",
-                .description = "Read captured output from the integrated Python console output terminal",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"max_chars", json{{"type", "integer"}, {"description", "Maximum characters to return (default: 20000)"}}},
-                        {"tail", json{{"type", "boolean"}, {"description", "Return the most recent output when truncated (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const int max_chars = args.value("max_chars", 20000);
-                const bool tail = args.value("tail", true);
-
-                return post_and_wait(viewer_impl, [max_chars, tail]() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    auto* const output = console.getOutputTerminal();
-                    if (!output)
-                        return json{{"error", "Python output terminal not initialized"}};
-
-                    std::string text = console.getOutputText();
-                    auto result = editor_output_json(text, max_chars, tail);
-                    result["success"] = true;
-                    result["running"] = console.isScriptRunning();
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.wait",
-                .description = "Wait for the currently running editor script to finish or emit output, then return the latest output snapshot",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
-                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
-                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait before returning a partial snapshot (default: 2000)"}}},
-                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
-                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
-                    .required = {}}},
-            [](const json& args) -> json {
-                const bool wait_for_completion = args.value("wait_for_completion", true);
-                const bool wait_for_output = args.value("wait_for_output", true);
-                const int timeout_ms = args.value("timeout_ms", 2000);
-                const int output_max_chars = args.value("output_max_chars", 20000);
-                const bool output_tail = args.value("output_tail", true);
-
-                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                json response{
-                    {"success", true},
-                    {"wait_for_completion", wait_for_completion},
-                    {"wait_for_output", wait_for_output},
-                    {"timeout_ms", timeout_ms},
-                };
-
-                auto observed = editor_output_response_json(
-                    console,
-                    wait_for_completion,
-                    wait_for_output,
-                    timeout_ms,
-                    output_max_chars,
-                    output_tail);
-                for (auto& [key, value] : observed.items()) {
-                    response[key] = std::move(value);
-                }
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.is_running",
-                .description = "Check whether the integrated Python console is currently running a script",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    return json{
-                        {"success", true},
-                        {"running", console.isScriptRunning()},
-                        {"modified", console.isModified()},
-                    };
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "editor.interrupt",
-                .description = "Interrupt the currently running script in the integrated Python console",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
-                    const bool was_running = console.isScriptRunning();
-                    if (was_running)
-                        console.interruptScript();
-
-                    return json{
-                        {"success", true},
-                        {"was_running", was_running},
-                        {"running", console.isScriptRunning()},
-                    };
-                });
-            });
+        register_editor_tools(registry, viewer_impl);
 
         // --- Event, Tensor, and Sequencer tools ---
 
@@ -6225,9 +6028,7 @@ namespace lfs::app {
                 bool include_render = args.value("include_render", true);
                 if (include_render) {
                     const int camera_index = args.value("camera_index", 0);
-                    auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_dataset_camera_to_base64(viewer, camera_index, 0, 0, false);
-                    });
+                    auto render_result = render_dataset_camera_with_shaders(viewer, camera_index, false);
                     if (!render_result)
                         return json{{"error", render_result.error() + "; pass include_render=false to ask without a render"}};
                     base64_render = std::move(*render_result);
@@ -6275,9 +6076,7 @@ namespace lfs::app {
                 const int camera_index = args.value("camera_index", 0);
                 const std::string description = args["description"].get<std::string>();
 
-                auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer_impl, camera_index, 0, 0, false);
-                });
+                auto render_result = render_dataset_camera_with_shaders(viewer_impl, camera_index, false);
                 if (!render_result)
                     return json{{"error", render_result.error()}};
 
@@ -6348,6 +6147,10 @@ namespace lfs::app {
 
         register_generic_gui_operator_resources(registry, viewer);
         register_generic_gui_runtime_resources(registry, viewer);
+        register_shader_resources(registry, viewer, [viewer] {
+            auto* impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            return impl ? impl->getShaderService() : nullptr;
+        });
         register_generic_gui_ui_resources(registry, viewer);
         register_gui_screen_resources(registry, viewer);
         register_gui_node_resources(registry, viewer);
@@ -6441,9 +6244,7 @@ namespace lfs::app {
                 .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                auto result = capture_after_gui_render(viewer, [viewer]() {
-                    return capture_full_window_to_base64(viewer);
-                });
+                auto result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 if (!result)
                     return std::unexpected(std::string(result.error().user_message()));
 
@@ -6458,9 +6259,7 @@ namespace lfs::app {
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() { return capture_live_viewport_to_base64(viewer); }, true);
                 } else if (uri == "lichtfeld://render/window") {
-                    result = capture_after_gui_render(viewer, [viewer]() {
-                        return capture_full_window_to_base64(viewer);
-                    });
+                    result = capture_after_gui_render(viewer, [viewer]() { return capture_full_window_to_base64(viewer); }, true);
                 }
                 if (!result)
                     return std::unexpected(std::string(result.error().user_message()));
@@ -6479,9 +6278,7 @@ namespace lfs::app {
                     return std::unexpected("Invalid camera resource URI '" + uri +
                                            "'; expected lichtfeld://render/camera/<dataset camera index>");
 
-                auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_dataset_camera_to_base64(viewer, camera_index, 0, 0, false);
-                });
+                auto result = render_dataset_camera_with_shaders(viewer, camera_index, false);
                 if (!result)
                     return std::unexpected(result.error());
 

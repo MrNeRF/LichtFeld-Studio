@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "input/gamepad_service.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
 #include <chrono>
@@ -24,6 +25,7 @@ namespace lfs::vis {
 
     class InputController;
     class GraphicsContext;
+    struct VulkanDeviceHooks;
     namespace gui {
         class NativeDragContext;
         class NativeDragScheduler;
@@ -59,7 +61,11 @@ namespace lfs::vis {
         WindowManager(const WindowManager&) = delete;
         WindowManager& operator=(const WindowManager&) = delete;
 
-        bool init();
+        // When Vulkan cannot start through device_hooks, init retries with plain
+        // Vulkan and deviceHooksError() keeps the reason. Only the Vulkan graphics
+        // backend accepts hooks; other backends report them unusable there.
+        bool init(const VulkanDeviceHooks* device_hooks = nullptr);
+        [[nodiscard]] const std::string& deviceHooksError() const { return device_hooks_error_; }
 
         void setInitialWindowState(PersistentWindowState state);
         [[nodiscard]] PersistentWindowState persistentWindowState() const;
@@ -100,12 +106,17 @@ namespace lfs::vis {
         [[nodiscard]] InputController* inputController() const { return input_controller_; }
         [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
         [[nodiscard]] const input::InputRouter& inputRouter() const { return input_router_; }
+        [[nodiscard]] input::GamepadService& gamepads() { return gamepads_; }
+        void updateGamepadService(bool navigation_enabled);
+        void setGamepadDiagnosticsActive(bool active);
 
     private:
         friend class WindowInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
         void dispatchQueuedEvent(const ::SDL_Event& event);
         void dispatchPolledEvent(const ::SDL_Event& event);
+        void flushGamepadEvents();
+        std::vector<SDL_Event> gamepad_events_;
         bool drainQueuedEvents();
         static bool watchEvent(void* userdata, ::SDL_Event* event);
         bool pumping_events_ = false;
@@ -123,7 +134,11 @@ namespace lfs::vis {
         };
 
         SDL_Window* window_ = nullptr;
+        input::GamepadService gamepads_;
+        input::GamepadSample gamepad_wake_sample_;
+        bool gamepad_diagnostics_active_ = false;
         std::unique_ptr<GraphicsContext> graphics_context_;
+        std::string device_hooks_error_;
         std::unique_ptr<gui::NativeDragContext> native_file_drag_;
         std::unique_ptr<gui::NativeDragScheduler> native_drag_scheduler_;
         std::function<bool()> native_transfer_frame_;

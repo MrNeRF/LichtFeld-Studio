@@ -21,11 +21,14 @@
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include "training/training_cropbox_mask.hpp"
+#include "visualizer/apriltag_calibration.hpp"
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <expected>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
@@ -61,11 +64,30 @@ namespace lfs::vis {
             void startCollision(core::CollisionSettings settings);
             void startCollisionExport(core::Uuid uuid, const std::filesystem::path& path);
             void cancelCollision();
+            [[nodiscard]] bool collisionWorkerActive() const;
+            void dropSceneReplacement();
+            bool deferSceneReplacement(std::move_only_function<void()> replacement);
+            [[nodiscard]] bool sceneReplacementRequired() const { return collision_worker_.valid() || collision_replacement_; }
+            [[nodiscard]] bool sceneReplacementPending() const { return bool(collision_replacement_); }
             [[nodiscard]] std::optional<JobSnapshot> collisionJob() const { return jobs_.peek(collision_job_); }
             [[nodiscard]] float collisionResolvedSize() const;
             [[nodiscard]] core::CollisionSettings collisionGenerationSettings() const { return collision_settings_; }
             void pollImportCompletion();
             [[nodiscard]] bool hasPendingMainThreadCompletions() const;
+
+            struct AprilTagScanRequest {
+                JobHandle job;
+                std::shared_future<AprilTagSceneApplyResult> completion;
+            };
+            [[nodiscard]] std::expected<AprilTagScanRequest, std::string> startAprilTagScan(AprilTagSceneScaleOptions options,
+                                                                                            std::vector<geometry::apriltag::TagDistanceConstraint> constraints = {},
+                                                                                            std::vector<std::string> targets = {},
+                                                                                            bool solve_scale = false, bool apply_to_scene = false);
+            void cancelAprilTagScan();
+            void shutdownAprilTagScan();
+            void pollAprilTagScanCompletion();
+            [[nodiscard]] std::optional<JobSnapshot> aprilTagScanStatus() const { return jobs_.peek(apriltag_state_.job); }
+            [[nodiscard]] const AprilTagSceneApplyResult& aprilTagScanResult() const { return apriltag_state_.result; }
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -345,19 +367,32 @@ namespace lfs::vis {
             beginJob(JobHandle& handle, JobType type,
                      std::string stage);
             void settlePendingJobs();
+            void settleAprilTagScan() noexcept;
 
             VisualizerImpl* viewer_;
+            struct AprilTagScanState {
+                JobHandle job;
+                AprilTagSceneSnapshot snapshot;
+                AprilTagSceneScaleReport report;
+                AprilTagSceneApplyResult result;
+                std::optional<std::promise<AprilTagSceneApplyResult>> completion;
+                std::vector<std::string> targets;
+                bool apply_to_scene = false;
+                std::optional<std::jthread> thread;
+            };
+            AprilTagScanState apriltag_state_;
+
             JobRegistry& jobs_;
             JobHandle collision_job_;
-            std::optional<std::jthread> collision_thread_;
+            std::future<void> collision_worker_;
+            std::stop_source collision_stop_;
+            std::move_only_function<void()> collision_replacement_;
             std::shared_ptr<const core::CollisionVolume> collision_result_;
             uint64_t collision_epoch_ = 0;
             std::optional<core::Scene::CollisionSourceIdentity> collision_source_;
             core::CollisionSettings collision_settings_;
             std::atomic<float> collision_resolved_size_{0};
-            std::atomic<bool> collision_pending_{false};
             void pollCollision();
-            void publishCollisionState(bool force = false);
             void launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work);
 
             struct ExportState {

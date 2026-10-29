@@ -8,7 +8,7 @@
 #include "core/cuda_error.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
-#include "core/sh_layout.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "gsplat/GeometryFeatures.h"
 #include "gsplat/Ops.h"
@@ -100,7 +100,6 @@ namespace lfs::training {
             core::Tensor camera_rays;
             core::Tensor geometry_bg;
             core::Tensor geometry_bg_image;
-            core::Tensor shN_dequant;
         };
 
         struct CudaGsplatState : lfs::gpu_ops::BackendState {
@@ -223,34 +222,18 @@ namespace lfs::training {
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
             const float* sh0_ptr = sh0.ptr<float>();
-            // gsplat is float-native — dequant q16 shN into a temporary float4
-            // buffer (does not mutate resident storage). FastGS path decodes in-registers.
-            core::Tensor shN_dequant_temp;
             const float* shN_ptr = nullptr;
+            const float* sh_value_bounds = nullptr;
+            core::Tensor shN_value_bounds;
             if (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) {
                 if (params.sh.storage == lfs::gpu_ops::ShStorage::Q16 &&
                     splats.sh_value_bounds.is_valid()) {
-                    const auto n_prims = static_cast<std::size_t>(splats.means.shape()[0]);
-                    const auto rest =
-                        static_cast<std::uint32_t>(params.sh.layout_bases - 1);
-                    const auto n_floats = core::sh_swizzled_float_count(n_prims, rest);
-                    auto& dequant = caches.shN_dequant;
-                    if (!dequant.is_valid() || dequant.numel() < n_floats) {
-                        dequant = core::Tensor::empty(
-                            core::TensorShape({n_floats}), core::Device::GPU,
-                            core::DataType::Float32);
-                    }
-                    if (dequant.stream() != fwd_stream) {
-                        dequant.set_stream(fwd_stream);
-                    }
-                    shN_dequant_temp = dequant;
-                    training_sh_ops().decode_q16(
-                        splats.shN,
-                        splats.sh_value_bounds,
-                        shN_dequant_temp,
-                        n_prims,
-                        rest);
-                    shN_ptr = shN_dequant_temp.ptr<float>();
+                    // SH evaluation and its backward read the q16 codes with their block bounds.
+                    shN_value_bounds = splats.sh_value_bounds;
+                    shN_value_bounds.sync_to_stream(fwd_stream);
+                    shN_ptr = static_cast<const float*>(core::resolve_exportable_device_ptr(shN));
+                    sh_value_bounds = static_cast<const float*>(
+                        core::resolve_exportable_device_ptr(shN_value_bounds));
                 } else {
                     if (shN.dtype() != core::DataType::Float32) {
                         LOG_ERROR(
@@ -574,7 +557,7 @@ namespace lfs::training {
                 tangential_ptr,
                 thin_prism_ptr,
                 result,
-                fwd_stream);
+                fwd_stream, sh_value_bounds);
             // isect_ids / flatten_ids are borrowed from the owner-held VMM cache —
             // never transfer ownership or free on error paths.
 
@@ -659,10 +642,10 @@ namespace lfs::training {
             ctx.scales = scales;
             ctx.opacities = opacities;
             ctx.sh0 = sh0;
-            // backward calls ctx.shN.ptr<float>(). When resident shN is q16
-            // (Float16 bit-patterns), the forward dequant temp is the float4 buffer
-            // the kernels actually read — must save that, not the raw codes.
-            ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
+            ctx.shN = shN;
+            ctx.shN_value_bounds = shN_value_bounds;
+            ctx.shN_ptr = shN_ptr;
+            ctx.shN_bounds_ptr = sh_value_bounds;
 
             // Store camera pointers
             ctx.world_view_transform = std::move(world_view_transform);
@@ -750,7 +733,7 @@ namespace lfs::training {
         const cudaStream_t stream = core::getCurrentCUDAStream();
         core::bridgeStreams(ctx.stream, stream);
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
-                                                                            &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
+                                                                            &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN, &ctx.shN_value_bounds,
                                                                             &ctx.bg_image, &ctx.bg_color, &ctx.world_view_transform, &pixel_error_map, &edge_weight_map}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
@@ -931,7 +914,7 @@ namespace lfs::training {
                 ctx.scales.ptr<float>(),
                 ctx.opacities.ptr<float>(),
                 ctx.sh0.ptr<float>(),
-                (ctx.sh_degree > 0 && ctx.shN.is_valid() && ctx.shN.numel() > 0) ? ctx.shN.ptr<float>() : nullptr,
+                ctx.shN_ptr,
                 ctx.sh_degree,
                 ctx.sh_layout_degree,
                 bg_color_ptr,
@@ -982,7 +965,7 @@ namespace lfs::training {
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream, ctx.batches, ctx.tiles_per_gauss_ptr);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr, ctx.shN_bounds_ptr);
 
             gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 
@@ -1108,7 +1091,6 @@ namespace lfs::training {
         caches.image_chw = {};
         caches.alpha_chw = {};
         caches.depth_chw = {};
-        caches.shN_dequant = {};
         caches.camera_rays = {};
         caches.geometry_bg = {};
         caches.geometry_bg_image = {};

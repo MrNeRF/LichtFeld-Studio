@@ -5,6 +5,12 @@ import enum
 
 
 class Action(enum.Enum):
+    EDITOR_TOGGLE_KIND = 117
+
+    EDITOR_RUN = 118
+
+    EDITOR_STOP = 119
+
     NONE = 0
 
     CAMERA_ORBIT = 1
@@ -151,6 +157,8 @@ class Action(enum.Enum):
 
     TOOL_ALIGN = 67
 
+    TOOL_SCALE_DISTANCE = 112
+
     PIE_MENU = 68
 
     DEPTH_ADJUST_NEAR = 69
@@ -225,7 +233,17 @@ class Action(enum.Enum):
 
     EXIT_WALK = 111
 
+    VR_SNAP_TURN_LEFT = 113
+
+    VR_SNAP_TURN_RIGHT = 114
+
+    VR_RECENTER = 115
+
+    EXIT_VR = 116
+
 class ToolMode(enum.Enum):
+    EDITOR = 10
+
     GLOBAL = 0
 
     SELECTION = 1
@@ -241,6 +259,8 @@ class ToolMode(enum.Enum):
     CROP_BOX = 7
 
     WALK = 8
+
+    VR = 9
 
 class Modifier(enum.Enum):
     NONE = 0

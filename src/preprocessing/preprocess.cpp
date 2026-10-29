@@ -129,6 +129,12 @@ namespace {
     constexpr std::string_view kLpipsModelSha256 =
         "ea2f01796fbcf9950f9454f19b42e45568f166d879ec141ec100b9897a8cc769";
 
+    constexpr std::string_view kSam2VideoModelFile = "sam2.1-hiera-base-plus-video.lfw";
+    constexpr std::string_view kSam2VideoModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-sam2-video-v1/sam2.1-hiera-base-plus-video.lfw";
+    constexpr std::string_view kSam2VideoModelSha256 =
+        "b4a981065f3d64fe98cd882f28e5bd3a076b39f5f0c696c7885dbe404bc18fed";
+
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
 
@@ -1454,6 +1460,11 @@ namespace lfs::preprocessing {
     lfs::Result<std::filesystem::path> ensure_lpips_weights(const bool allow_download) {
         return ensure_cached_model(kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256,
                                    allow_download, "LPIPS");
+    }
+
+    lfs::Result<std::filesystem::path> ensure_sam2_video_weights(const bool allow_download) {
+        return ensure_cached_model(kSam2VideoModelFile, kSam2VideoModelUrl, kSam2VideoModelSha256,
+                                   allow_download, "SAM2.1");
     }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,

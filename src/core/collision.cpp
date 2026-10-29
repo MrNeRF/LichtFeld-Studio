@@ -2,104 +2,60 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/collision.hpp"
 #include "core/splat_data.hpp"
-#include "core/splat_data_transform.hpp"
-#include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
-#if LFS_HAS_CUDA
-#include "cuda/collision_voxelization.hpp"
-#endif
 #include <algorithm>
-#include <bit>
+#include <cstdint>
+#include <vector>
 
 namespace lfs::core {
-#if LFS_HAS_CUDA
-    size_t cuda::collisionSortWorkspaceBytes(size_t count) {
-        (void)collisionOutputBytes(count);
-        return queryCollisionSortWorkspaceBytes(count);
-    }
-#endif
-    CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform) {
+    CollisionSource captureCollisionSource(const SplatData& data, const glm::mat4& transform, size_t begin, size_t count) {
+        // Clones use the allocation/current queue; activations and deferred inputs
+        // may use their home queues. Fence all of them, including partial LOD work.
         TensorCompletion fence;
         for (const auto* tensor : {&data.means_raw(), &data.scaling_raw(), &data.rotation_raw(),
                                    &data.opacity_raw(), &data.deleted()})
             if (const auto backend = gpu_backend_of(*tensor))
                 fence.include(*backend);
-        CollisionSource source;
+        if (begin > data.size() || (count != SIZE_MAX && count > data.size() - begin))
+            throw collisionError("collision.source_unavailable", "Collision source range is unavailable");
+        count = std::min(count, data.size() - begin);
+        const auto slice = [&](const Tensor& tensor) { return tensor.slice(0, begin, begin + count); };
+        SplatData view;
+        view.means_raw() = slice(data.means_raw());
+        view.scaling_raw() = slice(data.scaling_raw());
+        view.rotation_raw() = slice(data.rotation_raw());
+        view.opacity_raw() = slice(data.opacity_raw());
+        if (data.deleted().is_valid())
+            view.deleted() = slice(data.deleted()).to(DataType::Bool);
         if (data.lod_tree && data.lod_tree->has_tree()) {
             if (data.size() != data.lod_tree->total_nodes())
-                throw std::runtime_error("Collision requires resident original LOD leaves; load the complete model first");
-            auto leaves = make_lod_leaf_view(data);
-            source = captureCollisionSource(*leaves, transform);
-        } else
-            source = {data.means_raw().to(DataType::Float32), data.get_scaling().to(DataType::Float32),
-                      data.get_rotation().to(DataType::Float32), data.get_opacity().to(DataType::Float32),
-                      data.deleted().is_valid() ? data.deleted().clone() : Tensor{}, transform};
+                throw collisionError("collision.source_unavailable", "Collision requires resident original LOD leaves; load the complete model first");
+            std::vector<bool> interior(count);
+            for (size_t i = 0; i < count; ++i)
+                interior[i] = data.lod_tree->child_count_at(begin + i) != 0;
+            auto hidden = Tensor::from_vector(interior, {count}, view.means_raw().device());
+            view.deleted() = view.deleted().is_valid() ? hidden.logical_or(view.deleted()) : hidden;
+            if (data.lod_tree->lod_opacity_encoded)
+                view.opacity_raw() = view.opacity_raw().logit();
+        }
+        CollisionSource source{view.means_raw().to(DataType::Float32), view.get_scaling().to(DataType::Float32),
+                               view.get_rotation().to(DataType::Float32), view.get_opacity().to(DataType::Float32),
+                               view.deleted(), transform};
         // Materialize lazy activations while the caller still excludes source writers.
-        for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity})
-            (void)tensor->data_ptr();
         for (const auto* tensor : {&source.means, &source.scales, &source.rotations, &source.opacity, &source.deleted})
-            fence.include(*tensor);
+            if (tensor->is_valid()) {
+                (void)tensor->data_ptr();
+                fence.include(*tensor);
+            }
         fence.wait();
         return source;
     }
-    CollisionVolume generateCollision(const CollisionSource& source, CollisionSettings settings,
-                                      std::stop_token stop, ProgressCallback progress, std::function<void(float)> resolution, std::function<void(uint64_t)> mixed_blocks) {
+#if !LFS_HAS_CUDA
+    // Voxelization runs CUDA kernels; collision_voxelization.cpp implements it in CUDA builds.
+    CollisionVolume generateCollision(const CollisionSource&, CollisionSettings settings, std::stop_token,
+                                      ProgressCallback, std::function<void(float)>, std::function<void(uint64_t)>) {
         settings.validate();
-#if LFS_HAS_CUDA
-        if (default_gpu_backend() != GpuBackend::CUDA)
-            throw std::runtime_error("Collision generation requires the CUDA tensor backend");
-        auto output = cuda::voxelizeCollision(source, settings, stop, progress, resolution, mixed_blocks);
-        auto& v = output.volume;
-        auto& bricks = output.bricks;
-        v.words.assign(1, 0);
-        auto build = [&](auto&& self, uint32_t i, int size, size_t begin, size_t end) -> void {
-            if (begin == end)
-                return;
-            reportProgress(stop, {}, 0, "");
-            if ((bricks[begin].morton >> 57) && (4 << (bricks[begin].morton >> 57)) == uint64_t(size)) {
-                v.words[i] = 1;
-                v.occupied_count += uint64_t(size) * size * size;
-            } else if (size == 4) {
-                const auto mask = bricks[begin].mask;
-                v.occupied_count += std::popcount(mask);
-                if (mask == ~uint64_t(0)) {
-                    v.words[i] = 1;
-                } else {
-                    if (v.words.size() > CollisionVolume::max_words - 2)
-                        throw std::length_error("Collision brick pointer exceeds the packed address range");
-                    v.words[i] = CollisionVolume::brick_tag | uint32_t(v.words.size());
-                    v.words.push_back(uint32_t(mask));
-                    v.words.push_back(uint32_t(mask >> 32));
-                }
-            } else {
-                if (v.words.size() > CollisionVolume::max_words - 8)
-                    throw std::length_error("Collision branch pointer exceeds the packed address range");
-                const auto base = uint32_t(v.words.size());
-                v.words.resize(base + 8);
-                v.words[i] = base + 2;
-                const int shift = 3 * (std::countr_zero(unsigned(size)) - 3);
-                for (int c = 0; c < 8; ++c) {
-                    auto next = begin;
-                    while (next < end && ((bricks[next].morton >> shift) & 7) == uint64_t(c))
-                        ++next;
-                    self(self, base + c, size / 2, begin, next);
-                    begin = next;
-                }
-                if (std::all_of(v.words.begin() + base, v.words.begin() + base + 8, [](auto n) { return n == 1; })) {
-                    v.words[i] = 1;
-                    v.words.resize(base);
-                }
-            }
-        };
-        reportProgress(stop, progress, .96f, "Assembling occupancy");
-        build(build, 0, v.edge, 0, bricks.size());
-        if (!v.occupied_count)
-            throw std::runtime_error("No occupied cells; lower opacity or check the source");
-        v.validate();
-        reportProgress(stop, progress, 1, "Collision ready");
-        return std::move(v);
-#else
-        throw std::runtime_error("Collision generation requires a build with CUDA support");
-#endif
+        throw collisionError("collision.cuda_required", "Collision generation requires a build with CUDA support", ErrorCode::Unsupported);
     }
+#endif
 } // namespace lfs::core

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -115,6 +116,7 @@ namespace lfs::media {
             height_ = opts.height;
             hardware_open_error_.clear();
             framerate_ = opts.framerate;
+            framerate_denominator_ = opts.framerate_denominator;
             const bool initialized = opts.preferred_backend == VideoEncodeBackend::Cuda
                                          ? tryInitNvenc(path, opts)
                                          : opts.preferred_backend == VideoEncodeBackend::VideoToolbox && tryInitVideoToolbox(path, opts);
@@ -210,6 +212,10 @@ namespace lfs::media {
         bool& inCall() { return in_call_; }
 
     private:
+        [[nodiscard]] double fps() const { return static_cast<double>(framerate_) / framerate_denominator_; }
+        // About one keyframe per second.
+        [[nodiscard]] int gopSize() const { return std::max(1, static_cast<int>(std::lround(fps()))); }
+
         bool tryInitNvenc(const std::filesystem::path& path, const VideoEncodeOptions& opts) {
             const AVCodec* const codec = avcodec_find_encoder_by_name(opts.codec == VideoEncodeCodec::AV1 ? "av1_nvenc" : opts.codec == VideoEncodeCodec::HEVC ? "hevc_nvenc"
                                                                                                                                                                : "h264_nvenc");
@@ -246,10 +252,11 @@ namespace lfs::media {
 
             codec_ctx_->width = width_;
             codec_ctx_->height = height_;
-            codec_ctx_->time_base = AVRational{1, framerate_};
-            codec_ctx_->framerate = AVRational{framerate_, 1};
+            codec_ctx_->time_base = AVRational{framerate_denominator_, framerate_};
+            codec_ctx_->framerate = AVRational{framerate_, framerate_denominator_};
+            codec_ctx_->sample_aspect_ratio = AVRational{1, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_CUDA;
-            codec_ctx_->gop_size = framerate_;
+            codec_ctx_->gop_size = gopSize();
             codec_ctx_->max_b_frames = 0;
             codec_ctx_->colorspace = static_cast<AVColorSpace>(opts.matrix);
             codec_ctx_->color_range = static_cast<AVColorRange>(opts.range);
@@ -374,7 +381,7 @@ namespace lfs::media {
 
             use_nvenc_ = true;
             backend_ = VideoEncodeBackend::Cuda;
-            LOG_INFO("NVENC ({}): {}x{} @ {} fps", codec->name, width_, height_, framerate_);
+            LOG_INFO("NVENC ({}): {}x{} @ {} fps", codec->name, width_, height_, fps());
             return true;
         }
 
@@ -436,10 +443,11 @@ namespace lfs::media {
 
             codec_ctx_->width = width_;
             codec_ctx_->height = height_;
-            codec_ctx_->time_base = AVRational{1, framerate_};
-            codec_ctx_->framerate = AVRational{framerate_, 1};
+            codec_ctx_->time_base = AVRational{framerate_denominator_, framerate_};
+            codec_ctx_->framerate = AVRational{framerate_, framerate_denominator_};
+            codec_ctx_->sample_aspect_ratio = AVRational{1, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
-            codec_ctx_->gop_size = framerate_;
+            codec_ctx_->gop_size = gopSize();
             const bool aom = opts.codec == VideoEncodeCodec::AV1;
             codec_ctx_->max_b_frames = videotoolbox || aom ? 0 : 2;
             codec_ctx_->thread_count = aom ? int(std::clamp(std::thread::hardware_concurrency(), 1u, 8u)) : 0;
@@ -449,7 +457,7 @@ namespace lfs::media {
             // Map CRF 18 to 0.1 bits per pixel per frame, with a 250 kbps floor and linear quality scaling.
             const int64_t crf_scale = 51 - opts.crf;
             codec_ctx_->bit_rate = std::max<int64_t>(
-                250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
+                250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / (330LL * framerate_denominator_));
             if (aom) {
                 // Explicit constant-quality AV1, not the legacy H264 bitrate map.
                 // Limit lookahead and per-call workers without adding a global pool.
@@ -531,7 +539,7 @@ namespace lfs::media {
             backend_ = videotoolbox ? (hardware ? VideoEncodeBackend::VideoToolbox : VideoEncodeBackend::VideoToolboxSoftware)
                                     : VideoEncodeBackend::Software;
             LOG_INFO("{} {} ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codecName(opts.codec), codec->name,
-                     width_, height_, framerate_, codec_ctx_->bit_rate);
+                     width_, height_, fps(), codec_ctx_->bit_rate);
             return {};
         }
 
@@ -623,6 +631,7 @@ namespace lfs::media {
         int width_ = 0;
         int height_ = 0;
         int framerate_ = DEFAULT_FRAMERATE;
+        int framerate_denominator_ = 1;
         int64_t frame_count_ = 0;
         bool is_open_ = false;
         bool in_call_ = false;
@@ -656,7 +665,7 @@ namespace lfs::media {
             return encodeError(ErrorCode::FailedPrecondition, "Encoder is already open");
         if (auto error = io::video::videoOutputExtentError(options.width, options.height))
             return encodeError(ErrorCode::InvalidArgument, std::string(*error));
-        if (auto error = io::video::videoEncodingRangeError(options.framerate, options.crf))
+        if (auto error = io::video::videoEncodingRangeError(options.framerate, options.crf, options.framerate_denominator))
             return encodeError(ErrorCode::InvalidArgument, std::move(*error));
         if (options.codec != VideoEncodeCodec::H264 && options.codec != VideoEncodeCodec::HEVC && options.codec != VideoEncodeCodec::AV1)
             return encodeError(ErrorCode::InvalidArgument, std::format("Unknown video codec (got {})", static_cast<int>(options.codec)));

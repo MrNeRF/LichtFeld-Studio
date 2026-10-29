@@ -47,6 +47,8 @@ namespace lfs::vis::gui {
             std::optional<sequencer::KeyframeId> hovered_keyframe_id;
             std::optional<float> selected_keyframe_time;
             std::optional<float> hovered_keyframe_time;
+            int camera_width = 16;
+            int camera_height = 9;
         };
 
         struct HoverState {
@@ -126,6 +128,12 @@ namespace lfs::vis::gui {
         std::vector<ExactMarkerInfo> exact_markers_;
         std::vector<RenderRequest> render_requests_;
         std::vector<int> visible_slot_assignments_;
+        int render_width_ = THUMB_WIDTH;
+        int render_height_ = THUMB_HEIGHT;
+        bool equirectangular_ = false;
+        bool orthographic_ = false;
+        float ortho_scale_ = 1.0f;
+        std::uint64_t custom_effect_generation_ = 0; // thumbnails show its effects
         uint32_t generation_ = 0;
         int burst_remaining_ = 0;
         std::optional<HoverState> hover_state_;

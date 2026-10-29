@@ -13,3 +13,13 @@ pytest tests/python/test_render_on_demand_idle.py -m 'gpu and integration' -q
 The manifest is runner configuration and must not be committed with local dataset paths. For an idle floor comparison, sample GPU utilization before the app starts; unrelated GPU work can make utilization unsuitable as a per-process rendering measurement.
 
 `ui_fps` counts successful UI presentations in the trailing second, excluding the single idle-clear presentation. `viewport_fps` counts fresh view outputs (including empty-scene clears); cached and deferred results do not count. Both reach zero at idle. The ledger still counts the idle-clear presentation in `frames_presented`.
+
+## Shader demand
+
+Binding or editing a shader requests redraw; compilation starts when a draw needs
+its host. Worker completion wakes the viewer to publish it. A pending unbound
+asset does not force frames. Scene-time shaders advance only with playback,
+scrubbing or explicit export times; they do not disable idle rendering. After
+shader publication settles, apply the same idle ledger checks above. Read
+`lichtfeld://shaders/state` for pending work and [User shaders](user-shaders.md)
+for revision-aware waits and failed-compile fallback.

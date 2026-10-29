@@ -2074,7 +2074,7 @@ namespace lfs::io::project {
         } else {
             auto lock_result =
                 detail::WriterLock::acquire(
-                    lock_anchor);
+                    lock_anchor, options.writer_lock_wait);
             if (!lock_result) {
                 return std::move(lock_result)
                     .error();
@@ -2148,10 +2148,19 @@ namespace lfs::io::project {
             }
             if (destination_exists) {
                 auto existing =
-                    ProjectReader::open(path);
+                    ProjectReader::open(path, options.compatibility);
                 if (!existing) {
                     return std::move(existing)
                         .error();
+                }
+                if ((!options.expected_project_uuid.is_nil() &&
+                     existing->superblock().project_uuid != options.expected_project_uuid) ||
+                    (!options.expected_commit_uuid.is_nil() &&
+                     existing->commit().commit_uuid != options.expected_commit_uuid)) {
+                    return writer_error(lfs::ErrorCode::FailedPrecondition, path,
+                                        "The project changed before publication.",
+                                        "replacement destination differs from the retained source",
+                                        "project.identity");
                 }
                 const WriteCompatibility
                     compatibility =
@@ -2566,13 +2575,89 @@ namespace lfs::io::project {
         return impl_->notify(CommitBoundary::PreflightComplete);
     }
 
+    lfs::Result<PreparedChunk>
+    ProjectWriter::prepare_chunk(const std::span<const std::byte> payload,
+                                 const ChunkWriteOptions& options) {
+        std::optional<FramedPayload> compressed;
+        std::span<const std::byte> stored = payload;
+        ChunkWriteOptions placed_options = options;
+        if (options.compression == Compression::ByteShuffleZstdFramed) {
+            // Deterministic fallback: non-multiple-of-4 payloads cannot be
+            // f32-word plane-shuffled; emit framed Zstd instead (no knob).
+            if (payload.size() % 4 != 0) {
+                placed_options.compression = Compression::ZstdFramed;
+            } else {
+                const std::vector<std::byte> planes = byte_plane_f32_words(payload);
+                auto result = frame_zstd(planes, std::filesystem::path{},
+                                         "chunk.byteshuffle_zstd_framed",
+                                         ZSTD_PAYLOAD_LEVEL);
+                if (!result) {
+                    return std::move(result).error();
+                }
+                compressed.emplace(std::move(*result));
+                stored = compressed->view();
+            }
+        }
+        if (placed_options.compression == Compression::ZstdFramed) {
+            auto result = frame_zstd(payload, std::filesystem::path{}, "chunk.zstd_framed",
+                                     ZSTD_PAYLOAD_LEVEL);
+            if (!result) {
+                return std::move(result).error();
+            }
+            compressed.emplace(std::move(*result));
+            stored = compressed->view();
+        } else if (placed_options.compression != Compression::Stored &&
+                   placed_options.compression != Compression::ZstdFramed &&
+                   placed_options.compression != Compression::ByteShuffleZstdFramed) {
+            return writer_error(
+                lfs::ErrorCode::InvalidArgument, std::filesystem::path{},
+                "The project chunk compression is invalid.",
+                "compression must be STORED, ZSTD_FRAMED, or BYTESHUFFLE_ZSTD_FRAMED",
+                "chunk.compression");
+        }
+
+        PreparedChunk prepared;
+        prepared.options_ = placed_options;
+        prepared.logical_bytes_ = payload.size();
+        prepared.stored_ = stored;
+        if (compressed)
+            prepared.bytes_ = std::move(compressed->bytes);
+        return prepared;
+    }
+
     lfs::Result<void>
     ProjectWriter::write_chunk(const ChunkKey& key,
                                const std::span<const std::byte> payload,
                                const ChunkWriteOptions& options) {
-        if (auto ready = impl_->require_ready(); !ready) {
+        if (auto ready = impl_->require_ready(); !ready)
             return ready;
+        // Large framed payloads are compressed while they are placed, without a
+        // compressed copy in memory. Non-multiple-of-4 payloads cannot be
+        // f32-word plane-shuffled and fall back to framed Zstd (no knob).
+        const bool framed = options.compression == Compression::ZstdFramed ||
+                            options.compression == Compression::ByteShuffleZstdFramed;
+        if (!framed || payload.size() < detail::FRAMED_RECORD_TARGET_BYTES) {
+            auto prepared = prepare_chunk(payload, options);
+            if (!prepared)
+                return lfs::Result<void>::failure(std::move(prepared).error());
+            return write_prepared_chunk(key, *prepared);
         }
+        if (auto valid = validate_chunk_write(key, options); !valid)
+            return valid;
+        const bool shuffled = options.compression == Compression::ByteShuffleZstdFramed &&
+                              payload.size() % 4 == 0;
+        ChunkWriteOptions placed_options = options;
+        if (!shuffled)
+            placed_options.compression = Compression::ZstdFramed;
+        return publish_placed_chunk(
+            key, impl_->place_framed_chunk(
+                     key, payload, placed_options, shuffled,
+                     shuffled ? "chunk.byteshuffle_zstd_framed" : "chunk.zstd_framed",
+                     ZSTD_PAYLOAD_LEVEL));
+    }
+
+    lfs::Result<void>
+    ProjectWriter::validate_chunk_write(const ChunkKey& key, const ChunkWriteOptions& options) const {
         if (auto valid = validate_key(key, impl_->destination_path); !valid) {
             return valid;
         }
@@ -2590,65 +2675,11 @@ namespace lfs::io::project {
                 "a key may be written only once per generation",
                 "chunk_key"));
         }
+        return {};
+    }
 
-        std::span<const std::byte> stored = payload;
-        std::optional<FramedPayload> framed;
-        ChunkWriteOptions placed_options = options;
-        std::optional<lfs::Result<ChunkInfo>> direct_placed;
-        if (options.compression == Compression::ByteShuffleZstdFramed) {
-            // Deterministic fallback: non-multiple-of-4 payloads cannot be
-            // f32-word plane-shuffled; emit framed Zstd instead (no knob).
-            if (payload.size() % 4 != 0) {
-                placed_options.compression = Compression::ZstdFramed;
-            } else if (payload.size() >=
-                       detail::FRAMED_RECORD_TARGET_BYTES) {
-                direct_placed.emplace(impl_->place_framed_chunk(
-                    key, payload, placed_options, true,
-                    "chunk.byteshuffle_zstd_framed", ZSTD_PAYLOAD_LEVEL));
-            } else {
-                const std::vector<std::byte> planes = byte_plane_f32_words(payload);
-                auto result = frame_zstd(planes, impl_->active_path,
-                                         "chunk.byteshuffle_zstd_framed",
-                                         ZSTD_PAYLOAD_LEVEL);
-                if (!result) {
-                    return status_failure(std::move(result).error());
-                }
-                framed = std::move(*result);
-            }
-        }
-        if (placed_options.compression == Compression::ZstdFramed && !framed &&
-            !direct_placed) {
-            if (payload.size() >= detail::FRAMED_RECORD_TARGET_BYTES) {
-                direct_placed.emplace(impl_->place_framed_chunk(
-                    key, payload, placed_options, false, "chunk.zstd_framed",
-                    ZSTD_PAYLOAD_LEVEL));
-            } else {
-                auto result = frame_zstd(payload, impl_->active_path,
-                                         "chunk.zstd_framed",
-                                         ZSTD_PAYLOAD_LEVEL);
-                if (!result) {
-                    return status_failure(std::move(result).error());
-                }
-                framed = std::move(*result);
-            }
-        } else if (placed_options.compression != Compression::Stored &&
-                   placed_options.compression != Compression::ZstdFramed &&
-                   placed_options.compression != Compression::ByteShuffleZstdFramed) {
-            return status_failure(writer_error(
-                lfs::ErrorCode::InvalidArgument, impl_->destination_path,
-                "The project chunk compression is invalid.",
-                "compression must be STORED, ZSTD_FRAMED, or BYTESHUFFLE_ZSTD_FRAMED",
-                "chunk.compression"));
-        }
-
-        lfs::Result<ChunkInfo> placed = [&]() -> lfs::Result<ChunkInfo> {
-            if (direct_placed)
-                return std::move(*direct_placed);
-            if (!framed)
-                return impl_->place_stored_chunk(key, stored, payload.size(), placed_options);
-            return impl_->place_stored_chunk(key, framed->view(), payload.size(),
-                                             placed_options);
-        }();
+    lfs::Result<void>
+    ProjectWriter::publish_placed_chunk(const ChunkKey& key, lfs::Result<ChunkInfo> placed) {
         if (!placed) {
             impl_->poisoned = true;
             return status_failure(std::move(placed).error());
@@ -2659,6 +2690,19 @@ namespace lfs::io::project {
         }
         impl_->rows[key] = std::move(*placed);
         return {};
+    }
+
+    lfs::Result<void>
+    ProjectWriter::write_prepared_chunk(const ChunkKey& key, const PreparedChunk& payload) {
+        if (auto ready = impl_->require_ready(); !ready) {
+            return ready;
+        }
+        if (auto valid = validate_chunk_write(key, payload.options_); !valid) {
+            return valid;
+        }
+        return publish_placed_chunk(
+            key, impl_->place_stored_chunk(key, payload.stored_, payload.logical_bytes_,
+                                           payload.options_));
     }
 
     lfs::Result<void>
@@ -3283,13 +3327,21 @@ namespace lfs::io::project {
         reader_capabilities |= options.extra_reader_capabilities;
         writer_capabilities |= options.extra_writer_capabilities;
         if (impl_->prior_reader.has_value()) {
-            reader_capabilities |=
-                impl_->prior_reader->commit().required_reader_capabilities;
+            auto inherited_reader_capabilities = impl_->prior_reader->commit().required_reader_capabilities;
+            if (options.recompute_shader_capabilities)
+                inherited_reader_capabilities.set(USER_SHADERS_V1, false);
+            reader_capabilities |= inherited_reader_capabilities;
             CapabilitySet inherited_writer_capabilities =
                 impl_->prior_reader->commit().required_writer_capabilities;
+            if (options.recompute_shader_capabilities)
+                inherited_writer_capabilities.set(USER_SHADERS_V1, false);
             inherited_writer_capabilities.set(OPAQUE_CHUNK_PRESERVATION, false);
             inherited_writer_capabilities.set(CLEAN_PROOF_REUSE, false);
             writer_capabilities |= inherited_writer_capabilities;
+        }
+        if (std::ranges::any_of(impl_->rows, [](const auto& item) { return item.first.fourcc == FOURCC_SHDR && item.second.row_kind != RowKind::Tombstone; })) {
+            writer_capabilities.set(USER_SHADERS_V1);
+            writer_capabilities.set(OPAQUE_CHUNK_PRESERVATION);
         }
         if (impl_->index_compression == IndexCompression::Zstd) {
             if (options.min_reader_version > CURRENT_CONTAINER_VERSION ||

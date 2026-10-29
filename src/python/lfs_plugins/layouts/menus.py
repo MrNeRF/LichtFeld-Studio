@@ -105,10 +105,11 @@ def menu_action(
     return entry
 
 
-def keymap_shortcut(action: Any) -> str:
-    """Return the current global shortcut, or an empty string when unavailable."""
+def keymap_shortcut(action: Any, mode: Any = None) -> str:
+    """Return the current shortcut in a tool mode (global by default), or an empty string when unavailable."""
     try:
-        mode = lf.keymap.ToolMode.GLOBAL
+        if mode is None:
+            mode = lf.keymap.ToolMode.GLOBAL
         if not lf.keymap.is_bound(action, mode):
             return ""
         return lf.keymap.get_trigger_description(action, mode) or ""

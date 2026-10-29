@@ -7,6 +7,7 @@
 #include "core/provenance.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_color.hpp"
+#include "io/video/video_frame_reframe.hpp"
 #include "media/video_encode_session.hpp"
 #include <array>
 #include <exception>
@@ -87,6 +88,10 @@ namespace lfs::io::video {
     class VideoEncoderImpl {
         media::VideoEncodeSession session_;
         int width_ = 0, height_ = 0;
+        // Frames arrive at render_size_ and are fitted into width_ x height_ when reframe_.
+        VideoFrameGeometry render_size_{};
+        VideoFrameMapping mapping_{};
+        bool reframe_ = false;
         int64_t frame_count_ = 0;
         std::optional<YuvPlanes> planes_;
 
@@ -99,7 +104,7 @@ namespace lfs::io::video {
             if (auto result = validateVideoEncodingOptions(options); !result)
                 return result;
             auto stamp = options.provenance ? *options.provenance : core::make_minimal_provenance_stamp();
-            media::VideoEncodeOptions request{.width = options.width, .height = options.height, .framerate = options.framerate, .crf = options.crf, .comment = core::provenance_to_json(stamp)};
+            media::VideoEncodeOptions request{.width = options.width, .height = options.height, .framerate = options.framerate, .crf = options.crf, .framerate_denominator = options.framerate_denominator, .comment = core::provenance_to_json(stamp)};
             // The shared tensor converter produces BT.601 limited-range planes.
             // Primaries and transfer remain unspecified: the producer does not
             // establish them merely by selecting an output resolution.
@@ -117,6 +122,12 @@ namespace lfs::io::video {
                 return legacyResult(result);
             width_ = options.width;
             height_ = options.height;
+            render_size_ = options.spherical_video ? VideoFrameGeometry{width_, height_}
+                                                   : videoCameraRenderSize(width_, height_, options.camera_width,
+                                                                           options.camera_height, options.framing);
+            mapping_ = videoFrameMapping(render_size_.width, render_size_.height, width_, height_, options.framing);
+            reframe_ = !options.spherical_video && options.camera_width > 0 &&
+                       (render_size_.width != width_ || render_size_.height != height_);
             frame_count_ = 0;
             planes_.reset();
             return {};
@@ -127,12 +138,14 @@ namespace lfs::io::video {
             if (!rgb_hwc.is_valid() || rgb_hwc.dtype() != core::DataType::Float32 ||
                 rgb_hwc.ndim() != 3 || rgb_hwc.size(2) != 3)
                 return std::unexpected("Video frame must be an HWC float32 RGB tensor");
-            if (rgb_hwc.size(1) != static_cast<size_t>(width_) || rgb_hwc.size(0) != static_cast<size_t>(height_))
+            if (rgb_hwc.size(1) != static_cast<size_t>(render_size_.width) ||
+                rgb_hwc.size(0) != static_cast<size_t>(render_size_.height))
                 return std::unexpected("Frame size mismatch");
             try {
-                const auto frame = session_.backend() == media::VideoEncodeBackend::Cuda && rgb_hwc.device() == core::Device::CPU
+                const auto input = session_.backend() == media::VideoEncodeBackend::Cuda && rgb_hwc.device() == core::Device::CPU
                                        ? rgb_hwc.gpu()
                                        : rgb_hwc;
+                const auto frame = reframe_ ? reframeVideoFrame(input, width_, height_, mapping_) : input;
                 // The writer completes its transfers before returning. Reuse only
                 // on the same device, backend and stream so a new producer cannot
                 // race an earlier conversion or inherit another backend's storage.

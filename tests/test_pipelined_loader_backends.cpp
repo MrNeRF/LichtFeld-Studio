@@ -462,6 +462,7 @@ namespace {
             std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / (wide ? "rgb16.jxl" : "rgb8.jxl"), file,
                                        std::filesystem::copy_options::overwrite_existing);
             PipelinedLoaderConfig config;
+            config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
             config.backend = GetParam();
             PipelinedImageLoader loader(config);
             lfs::io::LoadParams params;
@@ -500,6 +501,7 @@ namespace {
         const auto file = path("float.jxl");
         std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / "rgb32.jxl", file);
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         PipelinedImageLoader loader(config);
         lfs::io::LoadParams params;
@@ -529,6 +531,7 @@ namespace {
         small.reserve(64);
         const auto budget = small.capacity();
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         config.max_cache_bytes = budget;
         PipelinedImageLoader loader(config);
@@ -661,6 +664,7 @@ namespace {
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         config.max_cache_bytes = 1;
         PipelinedImageLoader loader(config);
@@ -723,6 +727,7 @@ namespace {
             ASSERT_TRUE(save_png(file, samples.data(), width, height, 3, 16, 0));
         }
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         config.max_cache_bytes = 1; // Exercise actual-size disk spill too.
         PipelinedImageLoader loader(config);
@@ -771,6 +776,7 @@ namespace {
             GTEST_SKIP();
         const GpuBackendScope scope(GetParam());
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         config.max_cache_bytes = 1;
         PipelinedImageLoader loader(config);
@@ -967,6 +973,7 @@ namespace {
         lfs::io::LoadParams params;
         params.undistort = &camera;
         PipelinedLoaderConfig config;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
         config.max_cache_bytes = 1024;
         PipelinedImageLoader loader(config);
@@ -1005,6 +1012,7 @@ namespace {
         std::filesystem::path spill;
         {
             PipelinedLoaderConfig config;
+            config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
             config.backend = GetParam();
             config.max_cache_bytes = 1;
             PipelinedImageLoader loader(config);

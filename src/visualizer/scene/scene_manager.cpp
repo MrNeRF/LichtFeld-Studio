@@ -1679,6 +1679,12 @@ namespace lfs::vis {
     }
 
     bool SceneManager::resetToEmptyState(const bool trainer_already_cleared, const bool internal_import) {
+        if (auto* gui = services().guiOrNull();
+            gui && services().sceneOrNull() == this && gui->asyncTasks().collisionWorkerActive()) {
+            gui->asyncTasks().cancelCollision();
+            LOG_WARN("Scene reset deferred while the collision worker is stopping");
+            return false;
+        }
         if (!trainer_already_cleared) {
             if (auto* trainer = services().trainerOrNull()) {
                 if (!trainer->clearTrainer()) {
@@ -1918,6 +1924,16 @@ namespace lfs::vis {
             uuids_to_remove.push_back(removed_uuid);
             removes_camera_nodes = node_to_remove->type == core::NodeType::CAMERA;
         }
+        if (auto* gui = services().guiOrNull();
+            ids_to_deselect.size() == scene_.getNodeCount() && gui &&
+            gui->asyncTasks().deferSceneReplacement([this, removed_uuid, keep_children, history_mode, internal_import] {
+                if (const auto* node = scene_.getNodeByUuid(removed_uuid))
+                    if (auto result = removeNodeImpl(node->id, keep_children, history_mode,
+                                                     classifyTrainingRemovalImpact(node->id), internal_import);
+                        !result)
+                        LOG_ERROR("Deferred node removal failed: {}", result.error());
+            }))
+            return {};
 
         if (removes_scene_model_resources) {
             drainGpuForTensorRelease();
@@ -3746,6 +3762,9 @@ namespace lfs::vis {
             LOG_WARN("switchToEditMode: no training model");
             return;
         }
+        if (auto* gui = services().guiOrNull();
+            gui && gui->asyncTasks().deferSceneReplacement([this] { switchToEditMode(); }))
+            return;
 
         std::unique_ptr<AppearanceTensorModel> appearance;
         auto* trainer_mgr = services().trainerOrNull();
@@ -3988,7 +4007,7 @@ namespace lfs::vis {
             }
         }
 
-        state.meshes = scene_.getVisibleMeshes();
+        state.meshes = scene_.getVisibleMeshes(true);
         for (auto& vm : state.meshes) {
             vm.transform = rendering::dataWorldTransformToVisualizerWorld(vm.transform);
             vm.is_selected = selection_.isNodeSelected(vm.node_id);

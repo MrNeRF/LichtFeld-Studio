@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -53,7 +55,7 @@ namespace {
         for (std::size_t i = 0; i < a.size(); ++i) {
             const float diff = std::abs(a[i] - b[i]);
             const float tol = atol + rtol * std::abs(b[i]);
-            if (diff > tol) {
+            if (!std::isfinite(a[i]) || !std::isfinite(b[i]) || diff > tol) {
                 if (mismatches < 8) {
                     ADD_FAILURE() << "idx " << i << " got " << a[i] << " expected " << b[i]
                                   << " diff " << diff;
@@ -143,7 +145,7 @@ namespace {
 
     std::vector<float> cpu_attention(const std::vector<float>& q, const std::vector<float>& k,
                                      const std::vector<float>& v, int b, int h, int n_q, int n_k,
-                                     int d) {
+                                     int d, const std::vector<float>* mask = nullptr) {
         const float scale = 1.0f / std::sqrt(static_cast<float>(d));
         std::vector<float> o(static_cast<std::size_t>(b) * h * n_q * d, 0.0f);
         std::vector<float> scores(static_cast<std::size_t>(n_q) * n_k);
@@ -158,7 +160,7 @@ namespace {
                     for (int t = 0; t < d; ++t) {
                         dot += qh[i * d + t] * kh[j * d + t];
                     }
-                    scores[i * n_k + j] = dot * scale;
+                    scores[i * n_k + j] = dot * scale + (mask ? (*mask)[(size_t(bh) * n_q * n_k + i * n_k + j) % mask->size()] : 0.0f);
                 }
             }
             auto p = cpu_softmax(scores, n_q, n_k);
@@ -232,6 +234,68 @@ namespace {
 
     std::string vcpkg_python() {
         return project_root() + "/build/vcpkg_installed/x64-linux/tools/python3/python3";
+    }
+
+    // Sample the committed photo bytes; offsets give distinct inputs, weights and biases.
+    std::vector<float> photo_values(size_t count, size_t offset = 0, float scale = 1, float bias = 0) {
+        const auto path = std::filesystem::path(project_root()) / "tests/data/nn/lpips_crop_a.png";
+        auto [pixels, width, height, channels] = lfs::core::load_image(path);
+        const size_t size = size_t(width) * height * channels;
+        std::vector<float> values(count);
+        for (size_t i = 0; i < count; ++i)
+            values[i] = scale * (pixels[(i + offset) % size] / 255.0f) + bias;
+        lfs::core::free_image(pixels);
+        return values;
+    }
+
+    // CPU separable reconstruction filter. Enumerating the whole source axis also checks
+    // the GPU's truncated support and boundary normalization. PIL rounds each pass to bytes.
+    std::vector<float> cpu_photo_resize(std::vector<float> input, int planes, int height, int width,
+                                        int out_h, int out_w, bool cubic) {
+        const auto filter = [cubic](double distance) {
+            const double x = std::abs(distance);
+            if (!cubic)
+                return std::max(0.0, 1.0 - x);
+            if (x < 1)
+                return 1 - 2.5 * x * x + 1.5 * x * x * x;
+            if (x < 2)
+                return 2 - 4 * x + 2.5 * x * x - 0.5 * x * x * x;
+            return 0.0;
+        };
+        for (const bool horizontal : {true, false}) {
+            const int source_size = horizontal ? width : height;
+            const int target_size = horizontal ? out_w : out_h;
+            if (source_size == target_size)
+                continue;
+            const int next_h = horizontal ? height : out_h, next_w = horizontal ? out_w : width;
+            const double scale = double(source_size) / target_size;
+            std::vector<float> output(size_t(planes) * next_h * next_w);
+            for (int target = 0; target < target_size; ++target) {
+                std::vector<double> weights(size_t(source_size), 0);
+                for (int source = 0; source < source_size; ++source)
+                    weights[source] = filter((source + 0.5 - (target + 0.5) * scale) / std::max(1.0, scale));
+                const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
+                for (auto& weight : weights)
+                    weight = cubic ? std::round(weight / total * (1 << 22)) : weight / total;
+                for (int plane = 0; plane < planes; ++plane)
+                    for (int other = 0; other < (horizontal ? height : width); ++other) {
+                        double sum = 0;
+                        for (int source = 0; source < source_size; ++source) {
+                            const int y = horizontal ? other : source, x = horizontal ? source : other;
+                            const float value = input[(plane * height + y) * width + x];
+                            sum += weights[source] * (cubic ? std::round(value * 255.0) : value);
+                        }
+                        const int y = horizontal ? other : target, x = horizontal ? target : other;
+                        output[(plane * next_h + y) * next_w + x] = cubic
+                                                                        ? float(std::clamp(std::floor(sum / (1 << 22) + 0.5), 0.0, 255.0) / 255.0)
+                                                                        : float(sum);
+                    }
+            }
+            input = std::move(output);
+            height = next_h;
+            width = next_w;
+        }
+        return input;
     }
 
 } // namespace
@@ -896,6 +960,55 @@ TEST_F(NnOpsTest, ConvolutionsCoverPhotosAboveFourMegapixels) {
     }
 }
 
+TEST_F(NnOpsTest, Fp32PointwiseConvolutionCoversPhotosAboveEightMegapixels) {
+    RecordProperty("catches", "Pixel tiles of the tiled fp32 GEMM in grid.y fail to launch above 65535 tiles");
+    auto [data, crop_width, crop_height, channels] =
+        lfs::core::load_image(std::filesystem::path(project_root()) / "tests/data/nn/lpips_crop_a.png");
+    ASSERT_TRUE(data != nullptr && channels == 3);
+    constexpr int width = 2900, height = 2900;
+    const std::size_t pixels = static_cast<std::size_t>(width) * height;
+    ASSERT_GT(pixels, std::size_t{65535} * 128);
+    constexpr int cin = 8, cout = 8;
+    std::vector<float> in(cin * pixels);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const std::size_t source =
+                static_cast<std::size_t>(y * crop_height / height) * crop_width + x * crop_width / width;
+            for (int c = 0; c < cin; ++c) {
+                in[c * pixels + static_cast<std::size_t>(y) * width + x] =
+                    static_cast<float>(data[3 * source + c % 3]) / 255.0f * (c < 3 ? 1.0f : -0.5f);
+            }
+        }
+    }
+    lfs::core::free_image(data);
+    std::vector<float> weights(cout * cin), bias(cout);
+    for (int i = 0; i < static_cast<int>(weights.size()); ++i) {
+        weights[i] = std::cos(0.07f * i) * 0.2f;
+    }
+    for (int i = 0; i < cout; ++i) {
+        bias[i] = 0.01f * i;
+    }
+    constexpr auto dtype = lfs::core::DataType::Float32;
+    const auto B = upload(bias, {cout}, dtype);
+    const auto Out = lfs::core::nn::conv2d(
+        upload(in, {1, cin, static_cast<std::size_t>(height), static_cast<std::size_t>(width)}, dtype),
+        upload(weights, {cout, cin, 1, 1}, dtype), &B, lfs::core::nn::Conv2dParams{});
+    for (const int row : {0, height / 2, height - 1}) {
+        std::vector<float> expected(static_cast<std::size_t>(cout) * width);
+        for (int o = 0; o < cout; ++o) {
+            for (int x = 0; x < width; ++x) {
+                double sum = bias[o];
+                for (int c = 0; c < cin; ++c) {
+                    sum += static_cast<double>(weights[o * cin + c]) *
+                           in[c * pixels + static_cast<std::size_t>(row) * width + x];
+                }
+                expected[static_cast<std::size_t>(o) * width + x] = static_cast<float>(sum);
+            }
+        }
+        EXPECT_TRUE(all_close(host_f32(Out.slice(2, row, row + 1)), expected, 2e-5f, 2e-5f)) << "row " << row;
+    }
+}
+
 TEST_F(NnOpsTest, SplitQkvWindow2dMatchesComposed) {
     const int b = 1, h = 16, w = 16, heads = 2, d = 8, ws = 8;
     std::vector<float> qkv(static_cast<std::size_t>(b) * h * w * 3 * heads * d);
@@ -1337,4 +1450,157 @@ TEST_F(NnOpsTest, LayerNorm2dMatchesChannelNorm) {
         }
     }
     EXPECT_TRUE(all_close(host_f32(Y), yref, 1e-5f, 1e-5f));
+}
+
+TEST_F(NnOpsTest, PhotoRowAttention) {
+    // Catches dropping the final partial key block or using the wrong batch/head stride in row attention.
+    using namespace lfs::core;
+    constexpr int b = 2, h = 2, nq = 3, nk = 259;
+    for (const int d : {56, 128})
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            if (d <= 64 && dtype == DataType::Float16)
+                continue; // This shape uses the existing tensor-core path.
+            SCOPED_TRACE(std::to_string(d) + ":" + std::to_string(int(dtype)));
+            auto q = upload(photo_values(b * h * nq * d, 0, 2, -1), {b, h, nq, size_t(d)}, dtype);
+            auto k = upload(photo_values(b * h * nk * d, 173, 2, -1), {b, h, nk, size_t(d)}, dtype);
+            auto v = upload(photo_values(b * h * nk * d, 739, 2, -1), {b, h, nk, size_t(d)}, dtype);
+            const auto expected = cpu_attention(host_f32(q), host_f32(k), host_f32(v), b, h, nq, nk, d);
+            const float tolerance = dtype == DataType::Float16 ? 5e-4f : 2e-5f;
+            EXPECT_TRUE(all_close(host_f32(nn::attention(q, k, v)), expected, tolerance, tolerance));
+        }
+}
+
+TEST_F(NnOpsTest, PhotoRegisterSoftmax) {
+    // Catches a missing normalization or padded register values contributing to the sum in any specialization.
+    using namespace lfs::core;
+    for (const int columns : {4097, 8193, 16385}) {
+        SCOPED_TRACE(columns);
+        const auto values = photo_values(size_t(3) * columns, 0, 20, 1000);
+        const auto actual = host_f32(nn::softmax(upload(values, {3, size_t(columns)}, DataType::Float32)));
+        EXPECT_TRUE(all_close(actual, cpu_softmax(values, 3, columns), 3e-5f, 1e-7f));
+    }
+}
+
+TEST_F(NnOpsTest, PhotoWideTiledAttention) {
+    // Catches copying a remainder tile to row zero, omitting attention scale, or slicing a mask at the wrong row.
+    using namespace lfs::core;
+    constexpr int b = 2, h = 2, nq = 129, nk = 17, d = 160;
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        auto q = upload(photo_values(b * h * nq * d, 0, 2, -1), {b, h, nq, d}, dtype);
+        auto k = upload(photo_values(b * h * nk * d, 173, 2, -1), {b, h, nk, d}, dtype);
+        auto v = upload(photo_values(b * h * nk * d, 739, 2, -1), {b, h, nk, d}, dtype);
+        for (const int mask_rank : {0, 2, 4}) {
+            SCOPED_TRACE(std::to_string(int(dtype)) + ":" + std::to_string(mask_rank));
+            auto mask = upload(photo_values((mask_rank == 4 ? b * h : 1) * nq * nk, 41, 4, -2),
+                               mask_rank == 4 ? std::vector<size_t>{b, h, nq, nk} : std::vector<size_t>{nq, nk}, dtype);
+            const auto mask_values = host_f32(mask);
+            const auto expected = cpu_attention(host_f32(q), host_f32(k), host_f32(v), b, h, nq, nk, d,
+                                                mask_rank ? &mask_values : nullptr);
+            const float tolerance = dtype == DataType::Float16 ? 2e-3f : 2e-5f;
+            EXPECT_TRUE(all_close(host_f32(nn::attention(q, k, v, mask_rank ? &mask : nullptr)), expected, tolerance, tolerance));
+        }
+    }
+}
+
+TEST_F(NnOpsTest, PhotoDepthwiseConvolution) {
+    // Catches reading channel zero's filter for every channel, ignoring dilation, or zero padding replicated edges.
+    using namespace lfs::core;
+    constexpr int n = 2, c = 3, height = 11, width = 13, kh = 3, kw = 5;
+    const auto values = photo_values(n * c * height * width);
+    const auto weights = photo_values(c * kh * kw, 217, 2, -1);
+    const auto biases = photo_values(c, 913, 2, -1);
+    auto input = upload(values, {n, c, height, width}, DataType::Float32);
+    auto weight = upload(weights, {c, 1, kh, kw}, DataType::Float32);
+    auto bias = upload(biases, {c}, DataType::Float32);
+    for (const auto padding : {nn::ConvPadMode::Zeros, nn::ConvPadMode::Replicate})
+        for (const bool biased : {false, true}) {
+            nn::Conv2dParams params;
+            params.groups = c;
+            params.stride_h = 2;
+            params.pad_h = params.pad_w = 2;
+            params.dilation_h = params.dilation_w = 2;
+            params.pad_mode = padding;
+            const auto expected = cpu_conv2d(values, weights, biased ? &biases : nullptr, n, c, height, width,
+                                             c, kh, kw, 2, 1, 2, 2, 2, 2, c, int(padding));
+            EXPECT_TRUE(all_close(host_f32(nn::conv2d(input, weight, biased ? &bias : nullptr, params)), expected, 2e-5f, 2e-5f));
+        }
+}
+
+TEST_F(NnOpsCudaTest, PhotoPilBicubicResize) {
+    // Catches omitting byte rounding after either axis or using ordinary cubic interpolation without downsampling support.
+    using namespace lfs::core;
+    const auto values = photo_values(2 * 3 * 11 * 13);
+    auto input = upload(values, {2, 3, 11, 13}, DataType::Float32);
+    for (const auto [height, width] : {std::pair{5, 7}, {19, 17}, {11, 7}, {5, 13}}) {
+        const auto expected = cpu_photo_resize(values, 6, 11, 13, height, width, true);
+        EXPECT_TRUE(all_close(host_f32(nn::resize2d_pil_bicubic(input, height, width)), expected, 0, 1e-7f));
+    }
+}
+
+TEST_F(NnOpsTest, PhotoAntialiasedBilinearResize) {
+    // Catches fixing filter support at one pixel during downsampling or failing to renormalize boundary weights.
+    using namespace lfs::core;
+    const auto values = photo_values(2 * 3 * 11 * 13);
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        auto input = upload(values, {2, 3, 11, 13}, dtype);
+        for (const auto [height, width] : {std::pair{5, 7}, {19, 17}, {1, 1}}) {
+            const auto expected = cpu_photo_resize(host_f32(input), 6, 11, 13, height, width, false);
+            const float tolerance = dtype == DataType::Float16 ? 6e-4f : 2e-6f;
+            EXPECT_TRUE(all_close(host_f32(nn::resize2d_bilinear_antialiased(input, height, width)), expected, 0, tolerance));
+        }
+    }
+}
+
+TEST_F(NnOpsCudaTest, PhotoRotaryEmbedding) {
+    // Catches swapping the x/y axes, failing to repeat spatial positions, or rotating trailing pointer tokens.
+    using namespace lfs::core;
+    constexpr int b = 2, heads = 2, height = 3, width = 5, pointers = 3, tokens = height * width * 2 + pointers, d = 32;
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        auto input = upload(photo_values(b * heads * tokens * d, 0, 2, -1), {b, heads, tokens, d}, dtype);
+        auto expected = host_f32(input);
+        for (int batch_head = 0; batch_head < b * heads; ++batch_head)
+            for (int token = 0; token < tokens - pointers; ++token)
+                for (int axis = 0; axis < 2; ++axis)
+                    for (int frequency = 0; frequency < d / 4; ++frequency) {
+                        const int position = axis == 0 ? token % width : (token % (height * width)) / width;
+                        const double angle = position * std::pow(10000.0, -4.0 * frequency / d);
+                        const size_t index = (batch_head * tokens + token) * d + axis * d / 2 + 2 * frequency;
+                        const double real = expected[index], imaginary = expected[index + 1];
+                        expected[index] = float(real * std::cos(angle) - imaginary * std::sin(angle));
+                        expected[index + 1] = float(real * std::sin(angle) + imaginary * std::cos(angle));
+                    }
+        const float tolerance = dtype == DataType::Float16 ? 6e-4f : 2e-6f;
+        EXPECT_TRUE(all_close(host_f32(nn::rotary_embedding_2d(input, height, width, pointers)), expected, 0, tolerance));
+    }
+}
+
+TEST_F(NnOpsCudaTest, PhotoBfloat16Rounding) {
+    // Catches truncation or rounding ties away from even instead of round-to-nearest-even, including negative values.
+    using namespace lfs::core;
+    auto values = photo_values(1027, 0, 2, -1);
+    for (size_t i = 1; i < 32; ++i) {
+        const uint32_t bits = std::bit_cast<uint32_t>(values[i]);
+        values.push_back(std::bit_cast<float>((bits & 0xffff0000u) | 0x8000u));
+    }
+    auto expected = values;
+    for (auto& value : expected) {
+        const uint32_t bits = std::bit_cast<uint32_t>(value);
+        value = std::bit_cast<float>((bits + 0x7fffu + ((bits >> 16) & 1u)) & 0xffff0000u);
+    }
+    EXPECT_EQ(host_f32(nn::round_bfloat16(upload(values, {values.size()}, DataType::Float32))), expected);
+}
+
+TEST_F(NnOpsTest, VideoTrackingOpsRejectBackendsWithoutKernels) {
+    // Catches a backend without the SAM2 video tracking kernels running them silently instead of reporting it.
+    using namespace lfs::core;
+    auto input = upload(photo_values(2 * 3 * 11 * 13), {2, 3, 11, 13}, DataType::Float32);
+    if (gpu_backend_of(input) == GpuBackend::CUDA)
+        GTEST_SKIP() << "The CUDA backend runs the video tracking ops";
+    auto tokens = upload(photo_values(2 * 2 * 15 * 32, 0, 2, -1), {2, 2, 15, 32}, DataType::Float32);
+    EXPECT_THROW((void)nn::resize2d_pil_bicubic(input, 5, 7), std::runtime_error);
+    EXPECT_THROW((void)nn::round_bfloat16(input), std::runtime_error);
+    EXPECT_THROW((void)nn::rotary_embedding_2d(tokens, 3, 5), std::runtime_error);
+    EXPECT_THROW((void)nn::dilate_binary_disk(input.gt(0.5f).to(DataType::Float32), 2), std::runtime_error);
+    EXPECT_THROW((void)nn::fill_small_background(input, 0.1f), std::runtime_error);
+    EXPECT_THROW((void)nn::remove_small_foreground(input, -0.1f), std::runtime_error);
 }

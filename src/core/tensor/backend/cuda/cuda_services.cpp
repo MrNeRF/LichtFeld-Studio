@@ -57,6 +57,10 @@ namespace lfs::core {
         CudaMemoryPool::instance().trim();
     }
 
+    size_t cuda_bucket_cached_bytes() noexcept {
+        return SizeBucketedPool::instance().stats().bytes_cached.load(std::memory_order_relaxed);
+    }
+
     size_t cuda_allocation_size(size_t bytes) {
         return SizeBucketedPool::get_bucket_size(bytes);
     }

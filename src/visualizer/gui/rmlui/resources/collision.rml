@@ -6,8 +6,8 @@
   </head>
   <body template="floating-window" data-model="collision">
     <div data-if="!export_mode">
-      <div data-if="!collision_has_source" class="text-muted">@tr:rendering_panel.simplify_select_source</div>
-      <div data-if="collision_has_source"><span>@tr:rendering_panel.simplify_source</span>: {{collision_source}}</div>
+      <div data-if="collision_source == ''" class="text-muted">@tr:rendering_panel.simplify_select_source</div>
+      <div data-if="collision_source != ''"><span>@tr:rendering_panel.simplify_source</span>: {{collision_source}}</div>
       <div id="collision-size-fields" data-if="!collision_automatic">
         <div class="setting-row setting-row--aligned" data-tooltip="tooltip.collision.voxel_size">
           <span class="setting-row__label-col">@tr:main_panel.voxel_size</span>
@@ -45,9 +45,6 @@
         <span class="setting-row__label-col">@tr:collision.cleanup</span>
         <label class="setting-row__control-col setting-row__control-col--checkbox"><input type="checkbox" data-checked="collision_cleanup" /></label>
       </div>
-      <div class="rendering-simplify-actions">
-        <button class="btn btn--primary" data-attrif-disabled="!collision_can_generate" data-event-click="collision_generate">@tr:collision.generate</button>
-      </div>
     </div>
     <div data-if="export_mode">
       <div data-if="!collision_exportable" class="text-muted">@tr:collision.select_export</div>
@@ -59,10 +56,10 @@
     <div data-if="collision_active">
       <progress max="1" data-attr-value="collision_progress" />
       <span>{{collision_status}}</span>
-
     </div>
-    <div data-if="collision_has_error" class="text-error"><span>@tr:status.error</span>: {{collision_error}}</div>
+    <div data-if="collision_error != ''" class="text-error"><span>@tr:status.error</span>: {{collision_error}}</div>
     <div class="ep-buttons">
+      <button data-if="!export_mode" class="btn btn--primary" data-attrif-disabled="collision_source == '' || collision_active" data-event-click="collision_generate">@tr:new_project.create</button>
       <button data-if="export_mode" class="btn btn--primary ep-action-btn" data-attrif-disabled="!collision_exportable" data-event-click="collision_export">@tr:export.export</button>
       <button data-if="!collision_active" class="btn btn--secondary ep-action-btn" data-event-click="collision_close">@tr:common.cancel</button>
       <button data-if="collision_active" class="btn btn--secondary ep-action-btn" data-event-click="collision_cancel">@tr:common.cancel</button>

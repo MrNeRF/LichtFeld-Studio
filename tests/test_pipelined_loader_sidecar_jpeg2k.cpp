@@ -162,6 +162,7 @@ TEST_F(PipelinedImageLoaderSidecarJpeg2k, SmallRamBudgetSpillsAndCleansOnExit) {
     config.output_queue_size = 2;
     config.prefetch_count = 2;
     config.max_cache_bytes = 1;
+    config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
 
     fs::path spill_dir;
     std::vector<float> first_values;
@@ -357,8 +358,10 @@ TEST_P(PipelinedDepthDecode, PreservesSamplesOnColdAndCachedReads) {
     config.decoder_pool_size = 1;
     config.output_queue_size = 2;
     config.prefetch_count = 2;
-    if (spill)
+    if (spill) {
         config.max_cache_bytes = 1;
+        config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
+    }
     lfs::io::PipelinedImageLoader loader(config);
     lfs::io::ImageRequest request;
     request.path = rgb_path;

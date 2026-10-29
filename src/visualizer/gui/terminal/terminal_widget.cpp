@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <core/logger.hpp>
 #include <cstring>
+#include <utility>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -401,13 +402,76 @@ namespace lfs::vis::terminal {
             if (new_cols == cols_ && new_rows == rows_)
                 return;
 
-            cols_ = new_cols;
-            rows_ = new_rows;
-            vterm_set_size(vt_, rows_, cols_);
+            reflow(new_cols, new_rows);
         }
 
         pty_.resize(new_cols, new_rows);
         markDirty();
+    }
+
+    // libvterm 0.3.3 rewraps lines on resize with bugs later versions fixed: when row 0 continues a
+    // scrollback line it reads the row above the screen, it moves a cursor on the row after a full row
+    // to the end of that row, and when a wrapped line no longer fits it pushes only its first row, or
+    // aborts if the cursor ends it. So lines are rewrapped onto a screen tall enough to push nothing,
+    // with row 0 cut from scrollback meanwhile (there is no line info setter; the getter returns the
+    // live record) and the cursor put back. Then the rows change without rewrapping, which keeps rows
+    // whole and only clears their line info.
+    static_assert(VTERM_VERSION_MAJOR == 0 && VTERM_VERSION_MINOR == 3 && VTERM_VERSION_PATCH == 3,
+                  "TerminalWidget::reflow works around libvterm 0.3.3");
+
+    void TerminalWidget::reflow(const int new_cols, const int new_rows) {
+        VTermState* const state = vterm_obtain_state(vt_);
+        const auto lineinfo = [state](const int row) -> VTermLineInfo& {
+            return const_cast<VTermLineInfo&>(*vterm_state_get_lineinfo(state, row));
+        };
+        const auto used = [this](const int row) {
+            VTermScreenCell cell;
+            int count = cols_;
+            while (count > 0 && (vterm_screen_get_cell(screen_, {row, count - 1}, &cell), !cell.chars[0]))
+                --count;
+            return count;
+        };
+
+        if (new_cols != cols_) {
+            VTermPos cursor;
+            vterm_state_get_cursorpos(state, &cursor);
+            const bool top_continues = lineinfo(0).continuation;
+            lineinfo(0).continuation = 0;
+            int cursor_line_row = -1; // Row of the cursor in its rewrapped line, when libvterm misplaces it.
+            if (cursor.row > 0 && !lineinfo(cursor.row).continuation && used(cursor.row - 1) == cols_) {
+                int last = cursor.row;
+                while (last + 1 < rows_ && lineinfo(last + 1).continuation)
+                    ++last;
+                const int width = (last - cursor.row) * cols_ + used(last);
+                cursor_line_row = std::min(cursor.col / new_cols, std::max(0, width - 1) / new_cols);
+            }
+            vterm_screen_enable_reflow(screen_, true);
+            vterm_set_size(vt_, rows_ * ((cols_ + new_cols - 1) / new_cols), new_cols);
+            lineinfo(0).continuation = top_continues;
+            if (cursor_line_row >= 0) {
+                VTermPos moved;
+                vterm_state_get_cursorpos(state, &moved);
+                const int col = std::min(cursor.col - cursor_line_row * new_cols, new_cols - 1);
+                const std::string move = "\x1b[" + std::to_string(moved.row + 2 + cursor_line_row) + ";" +
+                                         std::to_string(col + 1) + "H";
+                vterm_input_write(vt_, move.data(), move.size());
+            }
+        }
+
+        std::vector<bool> continued(rows_);
+        for (int row = 0; row < rows_; ++row)
+            continued[row] = lineinfo(row).continuation;
+        top_continues_ = continued[0];
+        popped_.clear();
+        resize_pushes_ = 0;
+        vterm_screen_enable_reflow(screen_, false);
+        vterm_set_size(vt_, new_rows, new_cols);
+        const int pushed = std::exchange(resize_pushes_, -1);
+        const int popped = static_cast<int>(popped_.size());
+        for (int row = 0; row < popped; ++row)
+            lineinfo(row).continuation = popped_[popped - 1 - row];
+        for (int row = pushed; row < static_cast<int>(continued.size()) && row - pushed + popped < rows_; ++row)
+            lineinfo(row - pushed + popped).continuation = continued[row];
     }
 
     void TerminalWidget::markDirty() {
@@ -532,45 +596,41 @@ namespace lfs::vis::terminal {
         std::string result;
         result.reserve(scrollback_.size() * cols_ + rows_ * cols_);
 
-        for (auto it = scrollback_.rbegin(); it != scrollback_.rend(); ++it) {
-            const auto& line = *it;
-            std::string row_text;
-            for (size_t col = 0; col < line.cells.size(); ++col) {
-                const auto& cell = line.cells[col];
-                if (cell.chars[0]) {
-                    char utf8[4];
-                    const size_t len = encodeUtf8(cell.chars[0], utf8);
-                    if (len > 0)
-                        row_text.append(utf8, len);
-                } else {
-                    row_text += ' ';
-                }
+        // Rows libvterm wrapped at the terminal width form one line, so only real line ends become newlines.
+        bool first_row = true;
+        const auto begin_row = [&](const bool continuation) {
+            if (!first_row && !continuation) {
+                while (!result.empty() && result.back() == ' ')
+                    result.pop_back();
+                result += '\n';
             }
-            while (!row_text.empty() && row_text.back() == ' ')
-                row_text.pop_back();
-            result += row_text;
-            result += '\n';
+            first_row = false;
+        };
+        const auto append_cell = [&](const VTermScreenCell& cell) {
+            if (!cell.chars[0]) {
+                result += ' ';
+                return;
+            }
+            char utf8[4];
+            const size_t len = encodeUtf8(cell.chars[0], utf8);
+            if (len > 0)
+                result.append(utf8, len);
+        };
+
+        for (auto it = scrollback_.rbegin(); it != scrollback_.rend(); ++it) {
+            begin_row(it->continuation);
+            for (const auto& cell : it->cells)
+                append_cell(cell);
         }
 
+        const VTermState* const state = vterm_obtain_state(vt_);
         for (int row = 0; row < rows_; ++row) {
-            std::string row_text;
+            begin_row(vterm_state_get_lineinfo(state, row)->continuation);
             for (int col = 0; col < cols_; ++col) {
                 VTermScreenCell cell;
                 vterm_screen_get_cell(screen_, {row, col}, &cell);
-                if (cell.chars[0]) {
-                    char utf8[4];
-                    const size_t len = encodeUtf8(cell.chars[0], utf8);
-                    if (len > 0)
-                        row_text.append(utf8, len);
-                } else {
-                    row_text += ' ';
-                }
+                append_cell(cell);
             }
-            while (!row_text.empty() && row_text.back() == ' ')
-                row_text.pop_back();
-            result += row_text;
-            if (row < rows_ - 1)
-                result += '\n';
         }
 
         while (!result.empty() && (result.back() == '\n' || result.back() == ' '))
@@ -725,6 +785,8 @@ namespace lfs::vis::terminal {
         while (self->scrollback_.size() > MAX_SCROLLBACK) {
             self->scrollback_.pop_back();
         }
+        if (self->resize_pushes_ >= 0)
+            ++self->resize_pushes_;
         return 0;
     }
 
@@ -733,7 +795,17 @@ namespace lfs::vis::terminal {
         if (self->scrollback_.empty())
             return 0;
 
+        // Rows only come back while reflow() changes the row count, each as one row of the current
+        // width, so a row comes back only if it fits, and a row the one below continues only if full.
         const auto& line = self->scrollback_.front();
+        int width = static_cast<int>(line.cells.size());
+        while (width > 0 && !line.cells[width - 1].chars[0])
+            --width;
+        const bool continued = self->popped_.empty() ? self->top_continues_ : self->popped_.back();
+        if (self->resize_pushes_ != 0 || width > std::min(cols, self->cols_) || (continued && width != self->cols_))
+            return 0;
+        self->popped_.push_back(line.continuation);
+
         const int copy_cols = std::min(cols, static_cast<int>(line.cells.size()));
         std::memcpy(cells, line.cells.data(), copy_cols * sizeof(VTermScreenCell));
 

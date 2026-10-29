@@ -104,6 +104,9 @@ namespace lfs::python {
 
         // Expose Action enum
         nb::enum_<Action>(keymap, "Action")
+            .value("EDITOR_TOGGLE_KIND", Action::EDITOR_TOGGLE_KIND)
+            .value("EDITOR_RUN", Action::EDITOR_RUN)
+            .value("EDITOR_STOP", Action::EDITOR_STOP)
             .value("NONE", Action::NONE)
             .value("CAMERA_ORBIT", Action::CAMERA_ORBIT)
             .value("CAMERA_PAN", Action::CAMERA_PAN)
@@ -177,6 +180,7 @@ namespace lfs::python {
             .value("TOOL_SCALE", Action::TOOL_SCALE)
             .value("TOOL_MIRROR", Action::TOOL_MIRROR)
             .value("TOOL_ALIGN", Action::TOOL_ALIGN)
+            .value("TOOL_SCALE_DISTANCE", Action::TOOL_SCALE_DISTANCE)
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)
@@ -213,10 +217,15 @@ namespace lfs::python {
             .value("APPLY_ALIGNMENT", Action::APPLY_ALIGNMENT)
             .value("INSERT_CROP_POLYGON_VERTEX", Action::INSERT_CROP_POLYGON_VERTEX)
             .value("REMOVE_CROP_POLYGON_VERTEX", Action::REMOVE_CROP_POLYGON_VERTEX)
-            .value("EXIT_WALK", Action::EXIT_WALK);
+            .value("EXIT_WALK", Action::EXIT_WALK)
+            .value("VR_SNAP_TURN_LEFT", Action::VR_SNAP_TURN_LEFT)
+            .value("VR_SNAP_TURN_RIGHT", Action::VR_SNAP_TURN_RIGHT)
+            .value("VR_RECENTER", Action::VR_RECENTER)
+            .value("EXIT_VR", Action::EXIT_VR);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
+            .value("EDITOR", ToolMode::EDITOR)
             .value("GLOBAL", ToolMode::GLOBAL)
             .value("SELECTION", ToolMode::SELECTION)
             .value("TRANSLATE", ToolMode::TRANSLATE)
@@ -224,7 +233,8 @@ namespace lfs::python {
             .value("SCALE", ToolMode::SCALE)
             .value("ALIGN", ToolMode::ALIGN)
             .value("CROP_BOX", ToolMode::CROP_BOX)
-            .value("WALK", ToolMode::WALK);
+            .value("WALK", ToolMode::WALK)
+            .value("VR", ToolMode::VR);
 
         // Expose Modifier enum
         nb::enum_<Modifier>(keymap, "Modifier")

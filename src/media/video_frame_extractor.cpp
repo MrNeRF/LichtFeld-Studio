@@ -1446,6 +1446,52 @@ namespace lfs::io {
                 }
                 extract_to_stream_end = extract_to_stream_end &&
                                         !(params.sharpness.enabled && params.sharpness.window_mode);
+                // Stream copies can report an end beyond the last frame's presentation interval.
+                // Bound FPS targets by decoded coverage before scheduling them.
+                if (params.mode == ExtractionMode::FPS &&
+                    !params.sharpness.enabled && !untimed_stream && fmt_ctx->pb &&
+                    (fmt_ctx->pb->seekable & AVIO_SEEKABLE_NORMAL) &&
+                    av_seek_frame(fmt_ctx, video_stream_idx,
+                                  stream_timestamp_for_time(end_time) - 1,
+                                  AVSEEK_FLAG_BACKWARD) >= 0) {
+                    avcodec_flush_buffers(codec_ctx);
+                    decoder_pump.resetAfterSeek();
+                    // The probe reuses the frame an HDR color probe prefetched; the rewind decodes it again.
+                    if (prefetched_color_frame)
+                        ++discarded_color_probe_frames;
+                    prefetched_color_frame = false;
+                    double decoded_end_time = -1.0;
+                    while (true) {
+                        if (params.cancel_requested && params.cancel_requested())
+                            throw ExtractionCancelled{};
+                        const DecoderPumpResult result = decoder_pump.next(frame, error);
+                        if (result == DecoderPumpResult::Error)
+                            throw std::runtime_error(error);
+                        if (result == DecoderPumpResult::EndOfStream)
+                            break;
+                        if (frame->best_effort_timestamp == AV_NOPTS_VALUE && frame->pts == AV_NOPTS_VALUE) {
+                            decoded_end_time = end_time;
+                            break;
+                        }
+                        const double frame_time = frameTimestampSeconds(
+                            frame, time_base, 0, video_fps, stream_start_timestamp, false);
+                        if (frame_time >= end_time)
+                            break;
+                        const double frame_duration = frame->duration > 0
+                                                          ? static_cast<double>(frame->duration) * time_base
+                                                          : 1.0 / video_fps;
+                        decoded_end_time = std::max(decoded_end_time, frame_time + frame_duration);
+                    }
+                    if (decoded_end_time > start_time)
+                        end_time = std::min(end_time, decoded_end_time);
+                    if (av_seek_frame(fmt_ctx, video_stream_idx, stream_start_timestamp,
+                                      AVSEEK_FLAG_BACKWARD) < 0) {
+                        throw std::runtime_error("Failed to rewind video after checking its final frame");
+                    }
+                    avcodec_flush_buffers(codec_ctx);
+                    decoder_pump.resetAfterSeek();
+                    av_frame_unref(frame);
+                }
                 const double trim_duration = unknown_stream_end ? 0.0 : end_time - start_time;
                 if (!unknown_stream_end && (!std::isfinite(trim_duration) || trim_duration <= 0.0)) {
                     error = "Invalid extraction parameters: invalid video trim range";
@@ -1839,6 +1885,9 @@ namespace lfs::io {
                             ++written_count;
                             ++accepted_frames;
                             used_gpu_encoding = true;
+                            if (!custom_sink && params.frame_written && i < batch_meta.size())
+                                params.frame_written({batch_filenames[i], batch_encode_w, batch_encode_h,
+                                                      batch_meta[i].timestamp, batch_meta[i].source_frame});
                             if (!custom_sink && params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
                                                         batch_meta[i]});
@@ -1948,6 +1997,8 @@ namespace lfs::io {
                     }
                     emit_rgb(write_w, write_h, write_data, best->info, best->score);
                     ++written_count;
+                    if (!custom_sink && params.frame_written)
+                        params.frame_written({fname, write_w, write_h, best->timestamp, best->source_frame});
                     if (!custom_sink && params.generate_metadata) {
                         saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
                                                 frame_metadata(best->info, best->timestamp, best->source_frame, best->score)});
@@ -2131,6 +2182,8 @@ namespace lfs::io {
                         } else {
                             emit_rgb(hw_rot_w, hw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                             ++written_count;
+                            if (!custom_sink && params.frame_written)
+                                params.frame_written({filename, hw_rot_w, hw_rot_h, current_frame_time, current_src_frame});
                             if (!custom_sink && params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                         frame_metadata(current_info, current_frame_time, current_src_frame, frame_score)});
@@ -2222,6 +2275,8 @@ namespace lfs::io {
                     } else {
                         emit_rgb(sw_rot_w, sw_rot_h, cpu_contiguous_buffer, current_info, frame_score);
                         ++written_count;
+                        if (!custom_sink && params.frame_written)
+                            params.frame_written({filename, sw_rot_w, sw_rot_h, current_frame_time, current_src_frame});
                         if (!custom_sink && params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                     frame_metadata(current_info, current_frame_time, current_src_frame, frame_score)});

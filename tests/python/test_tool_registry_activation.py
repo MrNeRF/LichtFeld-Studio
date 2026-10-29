@@ -7,6 +7,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
 
+import pytest
+
 
 def _import_tools_with_runtime_stub(monkeypatch, lf_stub):
     project_root = Path(__file__).parent.parent.parent
@@ -82,6 +84,27 @@ def test_crop_activation_uses_active_operator(monkeypatch):
     assert ("set_active_operator", "builtin.cropbox", "translate") in calls
     assert ("set_gizmo_type", "translate") in calls
     assert not any(call == ("set_active_tool", "builtin.cropbox") for call in calls)
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_scale_distance_activation_uses_native_availability(monkeypatch, available):
+    calls = []
+    lf_stub = ModuleType("lichtfeld")
+    lf_stub.ui = SimpleNamespace(
+        ops=SimpleNamespace(cancel_modal=lambda: calls.append(("cancel_modal",))),
+        clear_gizmo=lambda: calls.append(("clear_gizmo",)),
+        is_tool_available=lambda tool_id: calls.append(("is_tool_available", tool_id)) or available,
+        set_active_tool=lambda tool_id: calls.append(("set_active_tool", tool_id)),
+        set_active_operator=lambda *args: pytest.fail("Scale distance must use the native toolbar tool"),
+    )
+    tools = _import_tools_with_runtime_stub(monkeypatch, lf_stub)
+
+    assert tools.ToolRegistry.set_active("builtin.scale_distance") is available
+    assert ("is_tool_available", "builtin.scale_distance") in calls
+    assert (("set_active_tool", "builtin.scale_distance") in calls) is available
+    assert tools.ToolRegistry.get_active_id() == ("builtin.scale_distance" if available else "")
+    if not available:
+        assert calls == [("is_tool_available", "builtin.scale_distance")]
 
 
 def test_clear_active_clears_cpp_toolbar_tool(monkeypatch):

@@ -42,6 +42,12 @@ class PortableProjectTests(unittest.TestCase):
     def fixture(self, format='sog'):
         return (FIXTURES / ('portable-'+format+'.licht')).read_bytes()
 
+    def test_custom_shader_clip_is_rejected_even_in_valid_container(self):
+        changed = rewrite_chapter(self.fixture(), b'SEQR', lambda chapter: chapter['timeline'].update(
+            reveal_clip={'effect': 12, 'shader_id': '11111111-1111-4111-8111-111111111111'}))
+        with self.assertRaisesRegex(ValueError, 'Custom shader clips'):
+            codec.ProjectFile(io.BytesIO(changed))
+
     def test_real_native_exports_keep_compression_and_hdr(self):
         for format in ('ply','sog','ssog'):
             with self.subTest(format=format):

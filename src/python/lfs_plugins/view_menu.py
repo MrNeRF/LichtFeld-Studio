@@ -146,6 +146,7 @@ class ViewMenu:
                 )
             )
 
+        vr = lf.ui.get_vr_state()
         return [
             menu_submenu(f"{tr('menu.view.theme')} · {active_theme_label}", theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
@@ -170,6 +171,20 @@ class ViewMenu:
                         shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_SET_HOME)),
             menu_action(tr("toolbar.reset_home"), lf.reset_home,
                         shortcut=keymap_shortcut(lf.keymap.Action.CAMERA_RESTORE_HOME)),
+            menu_separator(),
+            # Disabled with the runtime status as tooltip where VR cannot run (no OpenXR runtime or headset,
+            # or a viewer without Vulkan VR support).
+            menu_action(
+                tr("input_settings.action.exit_vr") if vr["active"] else tr("menu.view.enter_vr"),
+                lambda active=vr["active"]: lf.set_vr_active(not active),
+                shortcut=keymap_shortcut(lf.keymap.Action.EXIT_VR, lf.keymap.ToolMode.VR) if vr["active"] else "",
+                enabled=vr["active"] or vr["available"],
+                tooltip="" if vr["active"] or vr["available"] else vr["status"],
+            ),
+            menu_action(tr("input_settings.action.vr_recenter"), lf.recenter_vr,
+                        shortcut=keymap_shortcut(lf.keymap.Action.VR_RECENTER, lf.keymap.ToolMode.VR),
+                        enabled=vr["active"]),
+            menu_separator(),
             menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
             menu_toggle(
                 tr("scene.logging"),

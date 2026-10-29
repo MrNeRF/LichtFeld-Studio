@@ -5,6 +5,7 @@
 
 #include "app/include/app/mcp_app_utils.hpp"
 #include "app/include/app/view_info_json.hpp"
+#include "core/error_envelope.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -140,7 +141,7 @@ namespace lfs::app {
             const auto& timeline = controller.timeline();
             const bool has_ply_sequence = controller.hasPlySequence();
             const bool has_any_timeline_state =
-                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || has_ply_sequence;
+                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || timeline.revealClip().has_value() || has_ply_sequence;
             json keyframe_list = json::array();
             int64_t visible_index = 0;
             for (const auto& keyframe : timeline.keyframes()) {
@@ -163,6 +164,11 @@ namespace lfs::app {
                 {"ply_sequence_frame_count", has_ply_sequence ? controller.plySequence()->frames.size() : 0},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
                 {"follow_playback", ui_state ? ui_state->follow_playback : false},
+                {"camera_width", ui_state ? ui_state->camera_width : 16},
+                {"camera_height", ui_state ? ui_state->camera_height : 9},
+                {"video_framerate_numerator", ui_state ? ui_state->framerate : 30},
+                {"video_framerate_denominator", ui_state ? ui_state->framerate_denominator : 1},
+                {"export_fit", ui_state ? ui_state->export_fit : 0},
                 {"keyframe_count", keyframe_list.size()},
                 {"keyframes", keyframe_list},
             };
@@ -218,6 +224,68 @@ namespace lfs::app {
                     if (!controller)
                         return json{{"error", controller.error()}};
                     return sequencer_state_json(backend, **controller);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{.name = "sequencer.reveal_get",
+                    .description = "Read the live sequencer reveal clip",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                    .metadata =
+                        {.category = "sequencer", .kind = "query", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller)
+                        return json{{"error", controller.error()}};
+                    const auto& clip = (*controller)->timeline().revealClip();
+                    return json{{"success", true}, {"reveal", clip ? clip->toJson() : json(nullptr)}};
+                });
+            });
+
+        registry.register_tool(McpTool{.name = "sequencer.reveal_set",
+                                       .description = "Set the live sequencer reveal clip",
+                                       .input_schema = {.type = "object",
+                                                        .properties = json{{"start", {{"type", "number"}}},
+                                                                           {"end", {{"type", "number"}}},
+                                                                           {"softness", {{"type", "number"}}},
+                                                                           {"effect", {{"type", "integer"}}},
+                                                                           {"shader_id", {{"type", "string"}}}},
+                                                        .required = {"start", "end", "softness", "effect"}},
+                                       .metadata = {.category = "sequencer",
+                                                    .kind = "mutation",
+                                                    .runtime = "gui",
+                                                    .thread_affinity = "gui_thread"}},
+                               [viewer, backend](const json& args) -> json {
+                                   const auto clip = sequencer::RevealClip::fromJson(args);
+                                   if (!clip)
+                                       return json{{"error", core::to_wire_envelope(clip.error())}};
+                                   return post_and_wait(viewer, [backend, clip = *clip]() -> json {
+                                       auto controller = ensure_ready_controller(backend);
+                                       if (!controller)
+                                           return json{{"error", controller.error()}};
+                                       if (auto changed = (*controller)->setRevealClip(clip); !changed)
+                                           return json{{"error", core::to_wire_envelope(changed.error())}};
+                                       return json{{"success", true}};
+                                   });
+                               });
+
+        registry.register_tool(
+            McpTool{.name = "sequencer.reveal_remove",
+                    .description = "Remove the live sequencer reveal clip",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                    .metadata = {.category = "sequencer",
+                                 .kind = "mutation",
+                                 .runtime = "gui",
+                                 .thread_affinity = "gui_thread"}},
+            [viewer, backend](const json&) -> json {
+                return post_and_wait(viewer, [backend]() -> json {
+                    auto controller = ensure_ready_controller(backend);
+                    if (!controller)
+                        return json{{"error", controller.error()}};
+                    if (auto removed = (*controller)->setRevealClip(std::nullopt); !removed)
+                        return json{{"error", core::to_wire_envelope(removed.error())}};
+                    return json{{"success", true}};
                 });
             });
 
@@ -422,9 +490,6 @@ namespace lfs::app {
                     const auto keyframe_index = resolve_required_sequencer_keyframe_command_index(args, backend);
                     if (!keyframe_index)
                         return json{{"error", keyframe_index.error()}};
-
-                    if (*keyframe_index == 0)
-                        return mcp::invalid_argument_result("The first keyframe cannot be deleted", "keyframe_id");
 
                     if (backend.delete_keyframe)
                         backend.delete_keyframe(*keyframe_index);

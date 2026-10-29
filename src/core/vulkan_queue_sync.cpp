@@ -93,6 +93,14 @@ namespace lfs::rendering {
     VkResult vk_queue_bind_sparse_synced(VkQueue queue, uint32_t count, const VkBindSparseInfo* binds, VkFence fence) {
         return queue_access(queue, [&] { return vkQueueBindSparse(queue, count, binds, fence); });
     }
+    void vk_with_queue_access(VkQueue queue, const std::function<void()>& operation) {
+        const VkResult known = queue_access(queue, [&] {
+            operation();
+            return VK_SUCCESS;
+        });
+        if (known != VK_SUCCESS)
+            operation();
+    }
     VkResult vk_device_wait_idle_synced(VkDevice device) {
         const auto state = device_access(device);
         const std::unique_lock lock(state->mutex);

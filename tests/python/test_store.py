@@ -53,7 +53,6 @@ def test_runtime_state_exposes_panel_reactive_signals():
     assert isinstance(RuntimeState.export_progress_state, StateSignal)
     assert isinstance(RuntimeState.mesh2splat_state, StateSignal)
     assert isinstance(RuntimeState.splat_simplify_state, StateSignal)
-    assert isinstance(RuntimeState.collision_state, StateSignal)
     assert isinstance(RuntimeState.viewport_toolbar_generation, StateSignal)
     assert isinstance(RuntimeState.scripts_generation, StateSignal)
     assert isinstance(RuntimeState.language_generation, StateSignal)

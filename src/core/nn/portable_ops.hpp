@@ -16,6 +16,8 @@ namespace lfs::core::nn::portable {
     Tensor conv(const Tensor& input, const Tensor& weight, const Tensor* bias,
                 const Conv2dParams& params, bool transpose = false);
     Tensor resize(const Tensor& input, int height, int width, ResizeMode mode, CoordTransform coord);
+    // Separable bilinear resampling with antialiasing, as resize2d_bilinear_antialiased.
+    Tensor resize_antialiased(const Tensor& input, int height, int width);
     Tensor pool(const Tensor& input, int kh, int kw, int sh, int sw, int ph, int pw,
                 bool average = false, bool count_include_pad = true);
     Tensor window_partition(const Tensor& input, int window);

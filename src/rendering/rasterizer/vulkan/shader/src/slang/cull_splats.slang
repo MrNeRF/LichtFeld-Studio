@@ -75,14 +75,44 @@ void main(
                 logical_idx, xyz, cam, uniforms.step,
                 transform_indices, node_mask, overlay_params, model_transforms);
             if (state.active) {
+#if LFS_REVEAL
+                float3 reveal_mean = state.mean_ws;
+                float4 reveal = overlay_params[OVERLAY_PARAM_REVEAL];
+                if (overlay_enabled(reveal.x)) {
+                    float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS];
+                    if (int(round(bounds.x)) == 2)
+                        reveal_mean = lfs_reveal_effect(reveal_mean, float3(1.0f), reveal, bounds).position;
+                }
+#endif
               // LFS_3DGUT_PROJECTION is never set on cull SPVs today (CMake only
               // enables it on projection shaders). Kept for a future HiGS-cull +
               // 3DGUT product combo so the center test matches GUT projection.
               #if LFS_3DGUT_PROJECTION
+              #if LFS_REVEAL
+                survives = splat_center_potentially_visible_gut(reveal_mean, cam);
+              #else
                 survives = splat_center_potentially_visible_gut(state.mean_ws, cam);
+              #endif
+              #else
+              #if LFS_REVEAL
+                survives = splat_center_potentially_visible(reveal_mean, cam);
               #else
                 survives = splat_center_potentially_visible(state.mean_ws, cam);
               #endif
+              #endif
+#if LFS_REVEAL
+                // Other moving effects need conservative culling.
+                // Keep them for projection rather than culling at their original location.
+                int reveal_type = int(round(overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS].x));
+                if (overlay_enabled(reveal.x) && (reveal_type == 1 || (reveal_type >= 3 && reveal_type <= 5) || reveal_type == 10))
+                    survives = true;
+#endif
+#if LFS_CUSTOM_EFFECT
+                // A bound effect may move the element anywhere, so it is not
+                // culled at its stored center.
+                if (custom_chain_bound(custom_chain(overlay_params, state.node_idx)))
+                    survives = true;
+#endif
             }
         }
     }

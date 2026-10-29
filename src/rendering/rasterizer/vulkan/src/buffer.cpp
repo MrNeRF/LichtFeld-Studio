@@ -30,6 +30,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
     ADD_OWNED(rgb);
+    ADD_OWNED(custom_geometry);
     ADD_OWNED(overlay_flags);
     ADD_OWNED(primitive_depth_keys);
     ADD_OWNED(lod_indices);
@@ -113,6 +114,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
     ADD_OWNED(rgb);
+    ADD_OWNED(custom_geometry);
     ADD_OWNED(overlay_flags);
     ADD_OWNED(primitive_depth_keys);
     ADD_OWNED(lod_indices);
@@ -397,18 +399,10 @@ void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) 
     deviceBuffer.offset = 0;
     deviceBuffer.created_with_extra_usage = 0;
 
-    // Fence-only submits are always host-waited inside endCommandBatch, so every
-    // in-flight GPU batch that could still reference this buffer has a timeline
-    // pending_signal on its command-batch slot (including a just-split growth batch).
-    entry.key_count = 0;
-    for (const CommandBatchSlot& slot : command_batch_slots_) {
-        if (slot.pending_signal != VK_NULL_HANDLE && slot.pending_signal_value != 0) {
-            entry.keys.push_back(BufferRetireKey{slot.pending_signal, slot.pending_signal_value});
-            ++entry.key_count;
-        }
-    }
+    // Includes a just-split growth batch.
+    entry.keys = inFlightRetireKeys();
 
-    if (entry.key_count == 0 && !memory_release_gate_) {
+    if (entry.keys.keys.empty() && !memory_release_gate_) {
         // Immediate free: label policy depends on whether a live replacement with the
         // same profiler label already exists (see call-site comments at resize*).
         destroyBufferRetired(entry.shell);
@@ -421,16 +415,36 @@ void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) 
     retired_buffer_shells_.push_back(std::move(entry));
 }
 
+void VulkanGSPipeline::releaseDeviceBuffer(_VulkanBuffer& deviceBuffer) {
+    if (deviceBuffer.buffer == VK_NULL_HANDLE && deviceBuffer.allocation == VK_NULL_HANDLE)
+        return;
+    GrowthBatchSplitGuard split(this);
+    retireDeviceBufferForGrowth(deviceBuffer);
+}
+
+VulkanGSPipeline::RetireKeys VulkanGSPipeline::inFlightRetireKeys() const noexcept {
+    // Fence-only submits are always host-waited inside endCommandBatch, so every
+    // in-flight GPU batch has a timeline pending_signal on its command-batch slot.
+    RetireKeys keys;
+    for (const CommandBatchSlot& slot : command_batch_slots_) {
+        if (slot.pending_signal != VK_NULL_HANDLE && slot.pending_signal_value != 0)
+            keys.keys.push_back(BufferRetireKey{slot.pending_signal, slot.pending_signal_value});
+    }
+    return keys;
+}
+
+bool VulkanGSPipeline::retireKeysComplete(const RetireKeys& keys) const {
+    return std::ranges::all_of(keys.keys, [&](const BufferRetireKey& key) {
+        return timelineValueComplete(key.semaphore, key.value);
+    });
+}
+
 void VulkanGSPipeline::drainRetiredBufferShells(const bool force) {
     if (retired_buffer_shells_.empty()) {
         return;
     }
     const auto complete = [&](const RetiredBufferShell& retired) {
-        for (std::uint32_t i = 0; i < retired.key_count; ++i) {
-            if (!timelineValueComplete(retired.keys[i].semaphore, retired.keys[i].value))
-                return false;
-        }
-        return true;
+        return retireKeysComplete(retired.keys);
     };
     const auto release = [&] {
         std::erase_if(retired_buffer_shells_, [&](RetiredBufferShell& retired) {

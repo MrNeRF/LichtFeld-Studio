@@ -26,6 +26,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
+        $<$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>:vr/openxr_service.cpp>
+        $<$<NOT:$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>>:vr/openxr_service_unavailable.cpp>
 
         # Geometry node modifiers
         nodes/modifier_manager.cpp
@@ -114,6 +116,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         screen/area_gestures.cpp
         screen/screen_service.cpp
 
+        # User shader effects; they compile and draw only where the vksplat
+        # viewport rasterizer is built.
+        shaders/shader_api.cpp
+        shaders/shader_service.cpp
+        $<$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>:shaders/slang_compiler.cpp>
+        $<$<NOT:$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>>:shaders/slang_compiler_unavailable.cpp>
+
         # Preferences and theme system
         preferences.cpp
         theme/theme.cpp
@@ -186,6 +195,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/video_widget_factory.cpp
 
         # Scene management
+        scene/apriltag_calibration.cpp
         scene/scene_manager.cpp
         scene/point_cloud_updates.cpp
         scene/point_cloud_merge.cpp
@@ -195,6 +205,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Input handling
         input/input_controller.cpp
+        input/gamepad_service.cpp
         input/input_router.cpp
         input/input_bindings.cpp
         input/injected_pointer.cpp
@@ -208,7 +219,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Tools
         tools/selection_tool.cpp
+        tools/point_pick_overlay.cpp
         tools/align_tool.cpp
+        tools/scale_distance_tool.cpp
         tools/unified_tool_registry.cpp
         tools/builtin_tools.cpp
 
@@ -228,8 +241,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_context.cpp
         operator/operator_id.cpp
         operator/operator_registry.cpp
+        operator/ops/point_pick_operator.cpp
         operator/ops/align_ops.cpp
         operator/ops/depth_window_ops.cpp
+        operator/ops/scale_distance_ops.cpp
         operator/ops/crop_polygon_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
@@ -304,12 +319,18 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/external/httplib
 )
 
+# OpenXR VR viewing draws its eyes with vksplat.
+if(LFS_VKSPLAT_VIEWPORT_BUILD)
+    find_package(OpenXR CONFIG REQUIRED)
+endif()
+
 target_link_libraries(lfs_visualizer
         PRIVATE
         lfs_core
         lfs_diagnostics
         lfs_video
         lfs_geometry
+        lfs_preprocessing
         lfs_io
         lfs_rendering_tensor
         $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>
@@ -329,6 +350,7 @@ target_link_libraries(lfs_visualizer
         nfd::nfd
         vterm
         fmt::fmt-header-only
+        $<$<BOOL:${LFS_VKSPLAT_VIEWPORT_BUILD}>:OpenXR::openxr_loader>
 )
 
 set_property(SOURCE
@@ -693,3 +715,11 @@ file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES
 if (VISUALIZER_RESOURCE_FILES)
     add_custom_target(visualizer_resources SOURCES ${VISUALIZER_RESOURCE_FILES})
 endif ()
+
+# Runtime effect compiler; Slang headers stay private to the implementation.
+if(LFS_VKSPLAT_VIEWPORT_BUILD)
+    target_compile_definitions(lfs_visualizer PRIVATE LFS_VKSPLAT_VIEWPORT=1)
+    target_link_libraries(lfs_visualizer PRIVATE slang::slang)
+    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_BINARY_DIR}/generated/user_shaders")
+    add_dependencies(lfs_visualizer lfs_user_shader_ir)
+endif()

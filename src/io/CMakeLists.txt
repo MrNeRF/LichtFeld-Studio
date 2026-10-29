@@ -32,6 +32,8 @@ endif()
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
+        include/io/video/video_frame_rate.hpp
+        include/io/video/video_frame_geometry.hpp
         include/io/video/video_extensions.hpp
         include/io/video/video_reconstruction.hpp
         video/video_encoder.hpp

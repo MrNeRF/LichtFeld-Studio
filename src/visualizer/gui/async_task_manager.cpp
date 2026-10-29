@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
+#include "core/collision.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -52,7 +53,9 @@
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
+#include "sequencer/reveal_render_state.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#include "shaders/shader_service.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/training_setup.hpp"
 #endif
@@ -516,7 +519,10 @@ namespace lfs::vis::gui {
             .transparent_background = environmentBackgroundEnabled(render_settings)};
     }
 
-    SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot) {
+    SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot,
+                                                       const std::optional<lfs::sequencer::RevealClip>& reveal_clip,
+                                                       const shaders::ShaderFrameSnapshot* const shader_snapshot,
+                                                       const float time) {
         SceneRenderState state;
         state.combined_model = snapshot.gaussianModel();
         state.model_transforms = snapshot.model_transforms;
@@ -568,6 +574,13 @@ namespace lfs::vis::gui {
                 .parent_effectively_visible = true,
             });
         }
+
+        const auto& scene = snapshot.effect_scene;
+        if (reveal_clip && scene.bounded)
+            state.reveal = makeRevealRenderState(scene.bounds_min, scene.bounds_max, *reveal_clip, time);
+        if (shader_snapshot)
+            state.custom_effect = shaders::makeCustomEffectState(*shader_snapshot, scene, time,
+                                                                 makeCustomRevealContext(reveal_clip, time));
         return state;
     }
 
@@ -614,6 +627,9 @@ namespace lfs::vis::gui {
         GraphicsContext* graphics_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
+        const std::optional<lfs::sequencer::RevealClip>& reveal_clip,
+        const shaders::ShaderFrameSnapshot* const shader_snapshot,
+        const float time,
         const lfs::sequencer::CameraState& cam_state,
         const int width,
         const int height) {
@@ -657,7 +673,7 @@ namespace lfs::vis::gui {
                 }
                 primary_frame = std::move(*render_result);
             } else {
-                auto scene_state = makeVideoExportGaussianSceneState(snapshot);
+                auto scene_state = makeVideoExportGaussianSceneState(snapshot, reveal_clip, shader_snapshot, time);
                 const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
                 auto preview_image = render_environment
                                          ? rendering_manager.renderPreviewImageRgba8(
@@ -668,8 +684,8 @@ namespace lfs::vis::gui {
                                                cam_state.focal_length_mm,
                                                width,
                                                height,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular)
                                      : snapshot.borrowed_model
                                          // Sequence switches must not inherit interactive depth-tie order.
@@ -682,8 +698,8 @@ namespace lfs::vis::gui {
                                                width,
                                                height,
                                                std::nullopt,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular)
                                          : rendering_manager.renderPreviewImage(
                                                *snapshot.gaussianModel(),
@@ -694,8 +710,8 @@ namespace lfs::vis::gui {
                                                width,
                                                height,
                                                std::nullopt,
-                                               std::nullopt,
-                                               std::nullopt,
+                                               render_settings.orthographic,
+                                               render_settings.ortho_scale,
                                                render_settings.equirectangular);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
@@ -936,7 +952,7 @@ namespace lfs::vis::gui {
                 } else if (!snapshot->error.empty()) {
                     jobs_.failed(
                         handle, snapshot->error,
-                        snapshot->stage);
+                        handle.type == JobType::Collision ? "Failed" : snapshot->stage);
                 } else {
                     jobs_.completed(handle);
                 }
@@ -948,6 +964,8 @@ namespace lfs::vis::gui {
         if (settle(video_export_state_.job)) {
             publishVideoExportOverlayState();
         }
+        if (!collision_worker_.valid())
+            settle(collision_job_);
     }
 
     void AsyncTaskManager::resetVideoExportEnvironmentState() {
@@ -962,8 +980,12 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::shutdown() {
+        shutdownAprilTagScan();
+
         cancelCollision();
-        collision_thread_.reset();
+        collision_replacement_ = {};
+        if (collision_worker_.valid())
+            collision_worker_.wait();
         pollCollision();
         if (auto* loader = viewer_->getDataLoader())
             loader->cancelPendingImports();
@@ -1013,6 +1035,145 @@ namespace lfs::vis::gui {
             splat_simplify_state_.thread->join();
         splat_simplify_state_.thread.reset();
         settlePendingJobs();
+    }
+
+    std::expected<AsyncTaskManager::AprilTagScanRequest, std::string> AsyncTaskManager::startAprilTagScan(
+        AprilTagSceneScaleOptions options,
+        std::vector<geometry::apriltag::TagDistanceConstraint> constraints,
+        std::vector<std::string> targets,
+        const bool solve_scale, const bool apply_to_scene) {
+        auto* sm = viewer_->getSceneManager();
+        if (!sm)
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED));
+        if (const auto state = aprilTagScanStatus(); state && state->running())
+            return std::unexpected(LOC("runtime.apriltag_busy"));
+        std::promise<AprilTagSceneApplyResult> completion;
+        auto future = completion.get_future().share();
+        auto snapshot = snapshotAprilTagScene(sm->getScene(), options.active_cameras_only);
+        if (!beginJob(apriltag_state_.job, JobType::AprilTagScan, LOC("runtime.apriltag_scanning"))) {
+            return std::unexpected(LOC("runtime.apriltag_busy"));
+        }
+        apriltag_state_.thread.reset();
+        apriltag_state_.snapshot = std::move(snapshot);
+        apriltag_state_.targets = std::move(targets);
+        apriltag_state_.apply_to_scene = apply_to_scene;
+        apriltag_state_.report = {};
+        apriltag_state_.result = {};
+        apriltag_state_.completion = std::move(completion);
+        const auto job = apriltag_state_.job;
+        try {
+            apriltag_state_.thread.emplace([this, job, options = std::move(options),
+                                            constraints = std::move(constraints), solve_scale](std::stop_token stop) {
+                jobs_.work(job);
+                std::string error;
+                try {
+                    const auto progress = [this, job, stop](const std::size_t done, const std::size_t total, const std::string&) {
+                        jobs_.report(job, total ? 0.9f * static_cast<float>(done) / total : 0.0f,
+                                     done == total ? LOC("runtime.apriltag_solving") : LOC("runtime.apriltag_scanning"));
+                        return !stop.stop_requested() && !jobs_.cancelRequested(job);
+                    };
+                    apriltag_state_.report = computeAprilTagSceneScale(
+                        apriltag_state_.snapshot, constraints, options, solve_scale, progress);
+                    error = apriltag_state_.report.error_message;
+                } catch (const std::exception& e) {
+                    error = e.what();
+                } catch (...) {
+                    error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                }
+                jobs_.finishWork(job, stop.stop_requested() || jobs_.cancelRequested(job), std::move(error));
+                wakeMainThreadForAsyncWork();
+            });
+        } catch (const std::exception& e) {
+            jobs_.failed(job, e.what(), LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            settleAprilTagScan();
+            return std::unexpected(e.what());
+        }
+        return AprilTagScanRequest{job, std::move(future)};
+    }
+
+    void AsyncTaskManager::shutdownAprilTagScan() {
+        cancelAprilTagScan();
+        apriltag_state_.thread.reset();
+        if (const auto state = aprilTagScanStatus(); state && state->running()) {
+            jobs_.canceled(apriltag_state_.job);
+        }
+        settleAprilTagScan();
+    }
+
+    void AsyncTaskManager::cancelAprilTagScan() {
+        if (const auto state = aprilTagScanStatus(); state && state->running()) {
+            jobs_.requestCancel(apriltag_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+            if (apriltag_state_.thread)
+                apriltag_state_.thread->request_stop();
+        }
+    }
+
+    void AsyncTaskManager::settleAprilTagScan() noexcept {
+        if (!apriltag_state_.completion)
+            return;
+        try {
+            auto result = apriltag_state_.result;
+            const auto state = aprilTagScanStatus();
+            if (!state || state->status != JobStatus::Completed) {
+                result.scale_report.success = false;
+                result.error_message = state && state->status == JobStatus::Canceled
+                                           ? LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED)
+                                       : state ? state->error
+                                               : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            }
+            apriltag_state_.completion->set_value(std::move(result));
+        } catch (...) {
+            apriltag_state_.completion->set_exception(std::current_exception());
+        }
+        apriltag_state_.completion.reset();
+    }
+
+    void AsyncTaskManager::pollAprilTagScanCompletion() {
+        const auto state = aprilTagScanStatus();
+        if (!state || state->status != JobStatus::CompletionPending)
+            return;
+        const ScopeExit settle([this] { settleAprilTagScan(); });
+        // Completion publication synchronizes the report; workers never access the live scene.
+        if (apriltag_state_.thread && apriltag_state_.thread->joinable())
+            apriltag_state_.thread->join();
+        apriltag_state_.thread.reset();
+        if (state->cancel_requested || state->worker_canceled) {
+            jobs_.report(state->handle, std::nullopt, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED));
+            jobs_.canceled(state->handle);
+            return;
+        }
+        if (!state->error.empty()) {
+            apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
+            apriltag_state_.result.error_message = state->error;
+            jobs_.failed(state->handle, state->error, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            return;
+        }
+        auto* sm = viewer_->getSceneManager();
+        if (!sm) {
+            apriltag_state_.result.scale_report = std::move(apriltag_state_.report);
+            apriltag_state_.result.error_message = LOC("runtime.apriltag_scene_changed");
+            jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+            return;
+        }
+        try {
+            apriltag_state_.result = applyAprilTagScaleReport(*sm, apriltag_state_.snapshot,
+                                                              std::move(apriltag_state_.report), apriltag_state_.targets, apriltag_state_.apply_to_scene);
+            if (!apriltag_state_.result.scale_report.success ||
+                (apriltag_state_.apply_to_scene && !apriltag_state_.result.applied)) {
+                jobs_.failed(state->handle, apriltag_state_.result.error_message, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+                return;
+            }
+            if (apriltag_state_.result.applied) {
+                if (auto* rm = viewer_->getRenderingManager())
+                    rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+            }
+            jobs_.report(state->handle, 1.0f, LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
+            jobs_.completed(state->handle);
+        } catch (const std::exception& e) {
+            jobs_.failed(state->handle, e.what(), LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+        } catch (...) {
+            jobs_.failed(state->handle, LOC(lichtfeld::Strings::Runtime::TASK_FAILED));
+        }
     }
 
     bool AsyncTaskManager::startSplatLoad(std::vector<std::filesystem::path> paths,
@@ -1790,6 +1951,10 @@ namespace lfs::vis::gui {
             options.width = evt.width;
             options.height = evt.height;
             options.framerate = evt.framerate;
+            options.framerate_denominator = evt.framerate_denominator;
+            options.camera_width = evt.camera_width;
+            options.camera_height = evt.camera_height;
+            options.framing = static_cast<lfs::io::video::VideoFrameFit>(evt.framing);
             if (const auto* rendering = viewer_->getRenderingManager())
                 options.spherical_video = rendering->getSettings().equirectangular;
             options.crf = evt.crf;
@@ -1853,6 +2018,7 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::pollImportCompletion() {
         pollCollision();
+        pollAprilTagScanCompletion();
         if (import_cancel_pending_) {
             cancelImport(false);
             if (import_cancel_pending_)
@@ -1866,9 +2032,11 @@ namespace lfs::vis::gui {
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        if (const auto job = collisionJob(); job && job->status == JobStatus::CompletionPending)
+            return true;
         if (import_cancel_pending_)
             return importWorkersFinished();
-        return collision_pending_.load(std::memory_order_acquire) ||
+        return (aprilTagScanStatus() && aprilTagScanStatus()->status == JobStatus::CompletionPending) ||
                splat_load_state_.pending_render_request.has_value() ||
                (viewer_->getDataLoader() && viewer_->getDataLoader()->hasPendingImports()) ||
                import_state_.load_complete.load(std::memory_order_acquire) ||
@@ -2143,6 +2311,7 @@ namespace lfs::vis::gui {
         GalleryScenePublishRequest publication;
         publication.path = path;
         publication.format = format;
+        publication.shaders_omitted = viewer_->getShaderService() && !viewer_->getShaderService()->assets().empty();
         try {
             if (lfs::core::native_fs::exists(path) || lfs::core::native_fs::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
@@ -2269,6 +2438,10 @@ namespace lfs::vis::gui {
                     jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
                 } else {
                     jobs_.report(job, 1.0F, "Scene ready for upload");
+                    if (!source && publication.shaders_omitted && viewer_ && viewer_->getGuiManager())
+                        viewer_->getGuiManager()->enqueueToast({.title = LOC("editor.shader"),
+                                                                .message = LOC("shader.publication_omitted"),
+                                                                .level = ErrorNoticeLevel::Warning});
                 }
                 jobs_.finishWork(job, cancelled, error);
                 publishExportState();
@@ -3372,10 +3545,11 @@ namespace lfs::vis::gui {
             return;
         }
         const auto& timeline = gui_manager->sequencer().timeline();
+        const auto reveal_clip = timeline.revealClip();
         const auto* sequence = gui_manager->sequencer().plySequence();
         const auto sequence_uuid = sequence ? std::optional(sequence->node_uuid) : std::nullopt;
         std::vector<size_t> sequence_frames;
-        if (timeline.empty()) {
+        if (timeline.empty() && !reveal_clip) {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_KEYFRAMES));
             return;
         }
@@ -3400,7 +3574,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto render_settings = rendering_manager->getSettings();
+        auto render_settings = rendering_manager->getSettings();
         const auto reconstruction_plan = io::video::resolveVideoReconstructionPlan({
             .selection = validated_options->reconstruction,
             .output_width = validated_options->width,
@@ -3444,6 +3618,7 @@ namespace lfs::vis::gui {
             fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_RENDERING_ENGINE_UNAVAILABLE));
             return;
         }
+        // The export draws the shaders, bindings and parameters of its start.
 
         auto export_options = *validated_options;
         const float duration = timeline.clipDuration();
@@ -3452,7 +3627,7 @@ namespace lfs::vis::gui {
             fail_start(LOC(lichtfeld::Strings::Runtime::EXPORT_FRAME_COUNT_EXCEEDED));
             return;
         }
-        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate);
+        const int total_frames = lfs::io::video::videoExportFrameCount(duration, export_options.framerate, export_options.framerate_denominator);
         if (export_options.image_sequence) {
             export_options.image_sequence->output.files.output_directory = path;
             export_options.image_sequence->output.framerate = export_options.framerate;
@@ -3463,12 +3638,22 @@ namespace lfs::vis::gui {
         }
         const int width = export_options.width;
         const int height = export_options.height;
+        const auto render_size = render_settings.equirectangular ? lfs::io::video::VideoFrameGeometry{width, height} : lfs::io::video::videoCameraRenderSize(width, height, export_options.camera_width, export_options.camera_height, export_options.framing);
+        auto shader_lease = rendering_manager->prepareShaderExport(
+            {.width = render_size.width, .height = render_size.height},
+            sequence_uuid || lfs::python::has_scene_time_callback() ? nullptr : snapshot_result->gaussianModel(), &render_settings, sequence_uuid.has_value() || lfs::python::has_scene_time_callback());
+
+        if (export_options.camera_width > 0 && render_settings.orthographic && !render_settings.equirectangular)
+            render_settings.ortho_scale *= static_cast<float>(render_size.height) / std::max(1, rendering_manager->getRenderedSize().y);
 
         std::vector<lfs::sequencer::CameraState> frame_states;
         frame_states.reserve(total_frames);
+        const auto& viewport = viewer_->getViewport();
+        const lfs::sequencer::CameraState current_view{
+            viewport.getTranslation(), glm::quat_cast(viewport.getRotationMatrix()), rendering_manager->getFocalLengthMm()};
         for (int i = 0; i < total_frames; ++i) {
-            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate);
-            frame_states.push_back(timeline.evaluate(time));
+            const float time = lfs::io::video::videoExportSampleTime(i, export_options.framerate, export_options.framerate_denominator);
+            frame_states.push_back(timeline.empty() ? current_view : timeline.evaluate(time));
             if (sequence)
                 sequence_frames.push_back(*gui_manager->sequencer().plySequenceFrameIndex(time));
         }
@@ -3508,15 +3693,16 @@ namespace lfs::vis::gui {
         if (auto notification = videoReconstructionFallbackNotification(*reconstruction_plan))
             lfs::ErrorBus::instance().publish(std::move(*notification));
         video_export_state_.thread.emplace(
-            [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
+            [this, job, viewer = viewer_, path = path, export_options = export_options, total_frames, width, height, render_size,
              engine, scene_manager, rendering_manager, render_settings,
-             sequence_uuid, sequence_frames = std::move(sequence_frames),
+             sequence_uuid, sequence_frames = std::move(sequence_frames), reveal_clip,
              encoder = std::move(encoder),
              images = std::move(images),
              environment_state = video_export_environment_state_.get(),
              mesh_renderer_state = video_export_mesh_renderer_state_.get(),
              snapshot = sequence_uuid || export_options.image_sequence ? VideoExportSceneSnapshot{} : *snapshot_result,
-             frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
+             frame_states = std::move(frame_states),
+             shader_lease = std::move(shader_lease)](std::stop_token stop_token) mutable {
                 jobs_.work(job);
                 bool cancelled = false;
                 std::string error_msg;
@@ -3603,41 +3789,42 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    const auto render_frame = [&] {
-                        return postToViewerAndWait(
-                            viewer,
-                            [viewer, engine, scene_manager, rendering_manager, environment_state,
-                             mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
-                             fps = static_cast<float>(export_options.framerate),
+                    const auto render_frame = [&]() -> std::expected<lfs::core::Tensor, std::string> {
+                        const float clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator);
+                        const auto sequence_frame = sequence_uuid ? sequence_frames[frame] : 0;
+                        const auto prepared = postToViewerAndWait(viewer, [&]() -> std::expected<bool, std::string> {
+                            if (sequence_uuid) {
+                                auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
+                                const auto* current = sequencer_ui.controller().plySequence();
+                                if (!current || current->node_uuid != *sequence_uuid)
+                                    return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_CHANGED)));
+                                auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
+                                if (!ready)
+                                    return std::unexpected(std::string(ready.error().user_message()));
+                                if (!*ready)
+                                    return false;
+                            }
+                            const bool animated_scene = lfs::python::has_scene_time_callback();
+                            shader_lease.per_frame |= sequence_uuid.has_value() || animated_scene;
+                            if (animated_scene)
+                                lfs::python::tick_scene_time_callback(clip_time);
+                            return true;
+                        });
+                        if (!prepared)
+                            return std::unexpected(prepared.error());
+                        if (!*prepared)
+                            return lfs::core::Tensor{};
+                        std::optional<VideoExportSceneSnapshot> current_snapshot;
+                        const VideoExportSceneSnapshot* snapshot_ptr = &snapshot;
+                        return rendering_manager->drawWithShaders(
+                            &shader_lease,
+                            [viewer](auto draw) { return postToViewerAndWait(viewer, std::move(draw)); },
+                            [viewer, engine, rendering_manager, environment_state,
+                             mesh_renderer_state, &snapshot_ptr, render_settings, render_size,
                              image_format = export_options.image_sequence ? std::optional(export_options.image_sequence->output.layout.format) : std::nullopt,
-                             cam_state = frame_states[frame],
-                             clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
-                                if (sequence_uuid) {
-                                    auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
-                                    const auto* current = sequencer_ui.controller().plySequence();
-                                    if (!current || current->node_uuid != *sequence_uuid)
-                                        return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_EXPORT_SEQUENCE_CHANGED)));
-                                    auto ready = sequencer_ui.preparePlySequenceExportFrame(sequence_frame);
-                                    if (!ready)
-                                        return std::unexpected(std::string(ready.error().user_message()));
-                                    if (!*ready)
-                                        return lfs::core::Tensor{};
-                                }
-                                if (lfs::python::has_scene_time_callback()) {
-                                    lfs::python::tick_scene_time_callback(clip_time);
-                                }
-                                const auto evaluated = viewer->getGuiManager()->sequencer().prepareExportFrame(
-                                    scene_manager->modifierManager(), clip_time, fps);
-                                if (!evaluated)
-                                    return std::unexpected(evaluated.error().message);
-                                // Capture effective payloads after the worker fence. Sequence frames
-                                // borrow only for this synchronous viewer-thread render.
-                                auto current_snapshot = captureVideoExportSceneSnapshot(
-                                    *scene_manager, sequence_uuid ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
-                                if (!current_snapshot)
-                                    return std::unexpected(current_snapshot.error());
-                                snapshot_ptr = &*current_snapshot;
+                             cam_state = frame_states[frame], reveal_clip, &shader_lease,
+                             clip_time]()
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 auto* const window_manager = viewer->getWindowManager();
                                 auto* const graphics_context =
                                     window_manager != nullptr ? window_manager->getGraphicsContext() : nullptr;
@@ -3648,16 +3835,19 @@ namespace lfs::vis::gui {
                                         .rotation = glm::mat3_cast(cam_state.rotation),
                                         .translation = cam_state.position,
                                         .focal_length_mm = cam_state.focal_length_mm,
-                                        .width = width,
-                                        .height = height,
+                                        .width = render_size.width,
+                                        .height = render_size.height,
                                         .orthographic_override = render_settings.orthographic,
                                         .ortho_scale_override = render_settings.ortho_scale,
                                         .mode = *image_format == media::FramePixelFormat::RGBAFloat32
                                                     ? ExportPostProcessMode::Transparent
                                                     : ExportPostProcessMode::Opaque,
                                         .equirectangular = render_settings.equirectangular};
-                                    auto image = rendering_manager->renderLinearImage(*snapshot_ptr->gaussianModel(),
-                                                                                      makeVideoExportGaussianSceneState(*snapshot_ptr), request);
+                                    // Linear frames draw the reveal and the leased user shaders as RGB8 frames do.
+                                    auto image = rendering_manager->renderLinearImage(
+                                        *snapshot_ptr->gaussianModel(),
+                                        makeVideoExportGaussianSceneState(*snapshot_ptr, reveal_clip, shader_lease.snapshot.get(), clip_time),
+                                        request);
                                     if (!image)
                                         return std::unexpected(std::string(image.error().detail()));
                                     auto rgb = *image_format == media::FramePixelFormat::RGBAFloat32
@@ -3673,10 +3863,32 @@ namespace lfs::vis::gui {
                                     graphics_context,
                                     *snapshot_ptr,
                                     render_settings,
+                                    reveal_clip,
+                                    shader_lease.snapshot.get(),
+                                    clip_time,
                                     cam_state,
-                                    width,
-                                    height);
-                            });
+                                    render_size.width,
+                                    render_size.height);
+                            },
+                            stop_token, [&]() -> Result<bool> {
+                                // Runs in the draw's viewer-thread task, after each shader wait: evaluate the
+                                // frame and capture effective payloads; sequence frames borrow only for this render.
+                                const auto failed = [](std::string message) {
+                                    return make_error(ErrorInit{.code = ErrorCode::Unavailable, .domain = ErrorDomain::Rendering, .user_message = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+                                };
+                                const auto evaluated = viewer->getGuiManager()->sequencer().prepareExportFrame(
+                                    scene_manager->modifierManager(), clip_time, static_cast<float>(export_options.framerate) / static_cast<float>(std::max(1, export_options.framerate_denominator)));
+                                if (!evaluated)
+                                    return failed(evaluated.error().message);
+                                auto current = captureVideoExportSceneSnapshot(
+                                    *scene_manager, sequence_uuid || export_options.image_sequence ? VideoExportCapture::ImmediateRender : VideoExportCapture::Owned);
+                                if (!current)
+                                    return failed(current.error());
+                                current_snapshot = std::move(*current);
+                                snapshot_ptr = &*current_snapshot;
+                                return shader_lease.per_frame
+                                           ? rendering_manager->prepareShaderExport(shader_lease, snapshot_ptr->gaussianModel(), &render_settings)
+                                           : rendering_manager->prepareShaderExport(shader_lease); });
                     };
                     auto frame_tensor = render_frame();
                     const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
@@ -3693,6 +3905,8 @@ namespace lfs::vis::gui {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         frame_tensor = render_frame();
                     }
+                    // A wait for the shaders ends on the stop request, a project switch and shutdown too.
+                    cancelled |= !frame_tensor && (stop_token.stop_requested() || shader_lease.ended());
                     if (cancelled)
                         break;
 
@@ -3997,29 +4211,40 @@ namespace lfs::vis::gui {
         LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
     }
 
-    void AsyncTaskManager::cancelCollision() {
-        if (const auto state = collisionJob(); state && state->running()) {
-            jobs_.requestCancel(collision_job_);
-            if (collision_thread_)
-                collision_thread_->request_stop();
-            publishCollisionState();
-        }
+    bool AsyncTaskManager::collisionWorkerActive() const {
+        return collision_worker_.valid() &&
+               collision_worker_.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
     }
 
-    void AsyncTaskManager::publishCollisionState(const bool force) {
-        AppStore::TaskProgressState state;
-        if (const auto job = collisionJob()) {
-            state.active = job->running();
-            state.progress = job->progress;
-            state.stage = job->stage;
-            state.error = job->error;
+    void AsyncTaskManager::dropSceneReplacement() {
+        if (collision_replacement_ && viewer_->projectCreatePending()) {
+            viewer_->pending_training_action_ = VisualizerImpl::PendingTrainingAction::None;
+            viewer_->pending_create_project_path_.clear();
+            viewer_->pending_load_files_.clear();
         }
-        auto& store = app_store();
-        const bool changed = store.collision_state.set(std::move(state));
-        if (force && !changed)
-            store.store().enqueue_dirty(store.collision_state.field_id());
-        if (changed || force)
-            wakeMainThreadForAsyncWork();
+        collision_replacement_ = {};
+    }
+
+    bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
+        if (!sceneReplacementRequired())
+            return false;
+        cancelCollision();
+        dropSceneReplacement();
+        collision_replacement_ = [this, epoch = viewer_->project_lifecycle_->documentEpoch(),
+                                  scene_epoch = splat_simplify_scene_epoch_, replacement = std::move(replacement)]() mutable {
+            if (!viewer_->project_lifecycle_->isApplicationClosePending() &&
+                viewer_->project_lifecycle_->documentEpoch() == epoch && splat_simplify_scene_epoch_ == scene_epoch)
+                replacement();
+            else
+                LOG_WARN("Discarding stale collision scene replacement");
+        };
+        return true;
+    }
+
+    void AsyncTaskManager::cancelCollision() {
+        jobs_.requestCancel(collision_job_, LOC("common.cancel"));
+        collision_stop_.request_stop();
+        publish_viewport_toolbar_generation();
     }
 
     float AsyncTaskManager::collisionResolvedSize() const {
@@ -4034,26 +4259,26 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollision(core::CollisionSettings settings) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision capture requires the viewer thread");
+        pollCollision();
         settings.validate();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         if (!manager)
-            throw std::runtime_error("No scene manager");
+            throw core::collisionError("runtime.no_scene_manager", "No scene manager");
         const auto selected = manager->getSelectedNodeIds();
         if (selected.size() != 1)
-            throw std::runtime_error("Select exactly one splat node to voxelize");
+            throw core::collisionError("collision.source_unavailable", "Select exactly one splat node to voxelize");
         core::Scene::CollisionSourceIdentity identity;
-        auto sources = manager->getScene().captureCollisionSources(selected.front(), &identity);
+        auto source = manager->getScene().captureCollisionSource(selected.front(), &identity);
         collision_source_ = identity;
         collision_settings_ = settings;
         collision_resolved_size_ = 0;
-        launchCollision([this, settings, sources = std::move(sources)](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([this, settings, source = std::move(source)](std::stop_token stop, const core::ProgressCallback& progress) {
             collision_result_ = std::make_shared<const core::CollisionVolume>(core::generateCollision(
-                sources.front(), settings, stop, progress, [this](float size) {
+                source, settings, stop, progress, [this](float size) {
                     collision_resolved_size_ = size;
-                    publishCollisionState(true);
                     publish_viewport_toolbar_generation();
                 }));
             return false;
@@ -4062,116 +4287,120 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::startCollisionExport(core::Uuid uuid, const std::filesystem::path& path) {
         if (!viewer_->isOnViewerThread())
-            throw std::logic_error("Collision export capture requires the viewer thread");
+            throw core::collisionError("selection.operation_failed_generic", "Collision export capture requires the viewer thread");
+        pollCollision();
         if (const auto state = collisionJob(); state && state->running())
-            throw std::runtime_error("A collision job is already running");
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision job is already running");
         auto* manager = viewer_->getSceneManager();
         const auto* node = manager ? manager->getScene().getNodeByUuid(uuid) : nullptr;
         if (!node || node->type != core::NodeType::COLLISION || !node->collision)
-            throw std::runtime_error("The export target is not a collision node");
-        auto volume = node->collision;
+            throw core::collisionError("collision.select_export", "The export target is not a collision node");
         const auto transform = manager->getScene().getWorldTransform(node->id);
-        launchCollision([volume, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
+        launchCollision([volume = node->collision, transform, path](std::stop_token stop, const core::ProgressCallback& progress) {
             io::exportCollision(*volume, path, transform, stop, progress);
             return true; // Publication wins a cancellation arriving after installation.
         });
     }
 
     void AsyncTaskManager::launchCollision(std::function<bool(std::stop_token, const core::ProgressCallback&)> work) {
-        collision_thread_.reset();
-        if (!beginJob(collision_job_, JobType::Collision, "Preparing collision"))
-            throw std::runtime_error("Cannot start collision job");
+        if (collisionWorkerActive() || collision_replacement_)
+            throw core::collisionError("projects.gallery.eligibility.busy", "A collision worker or scene replacement is still pending");
+        pollCollision();
+        if (!beginJob(collision_job_, JobType::Collision, LOC("gallery.transfer.phase.preparing")))
+            throw core::collisionError("projects.gallery.eligibility.busy", "Cannot start collision job");
         collision_result_.reset();
         collision_epoch_ = viewer_->project_lifecycle_->documentEpoch();
-        publishCollisionState(true);
+        publish_viewport_toolbar_generation();
         const auto job = collision_job_;
+        collision_stop_ = {};
         try {
-            collision_thread_.emplace([this, job, work = std::move(work)](std::stop_token stop) {
+            collision_worker_ = std::async(std::launch::async, [this, job, work = std::move(work), stop = collision_stop_.get_token()]() mutable {
                 jobs_.work(job);
-                publishCollisionState(true);
                 std::string error;
                 bool published = false, canceled = false;
                 try {
-                    published = work(stop, [this, job](float value, const std::string& stage) {
+                    AppStore::TaskProgressState shown;
+                    published = work(stop, [this, job, &shown](float value, const std::string& stage) {
                         jobs_.report(job, value, stage);
-                        publishCollisionState();
+                        AppStore::TaskProgressState next{.active = true, .progress = value, .stage = stage};
+                        if (next != shown) {
+                            shown = std::move(next);
+                            publish_viewport_toolbar_generation();
+                        }
                         return !jobs_.cancelRequested(job);
                     });
                 } catch (const core::OperationCancelled&) {
                     canceled = true;
                 } catch (const std::exception& e) {
-                    error = e.what();
-                    LOG_ERROR("Collision operation failed: {}", error);
+                    error = core::localizedCollisionError(e);
+                    LOG_ERROR("Collision operation failed: {}", e.what());
                 }
-                jobs_.finishWork(job, !published && error.empty() && (canceled || stop.stop_requested() || jobs_.cancelRequested(job)),
-                                 error, std::nullopt, std::nullopt, published);
-                publishCollisionState(true);
-                collision_pending_.store(true, std::memory_order_release);
-                wakeMainThreadForAsyncWork();
+                work = {};
+                jobs_.finishWork(job, canceled, std::move(error), std::nullopt, std::nullopt, published);
+                publish_viewport_toolbar_generation();
             });
         } catch (const std::exception& e) {
             LOG_ERROR("Cannot launch collision worker: {}", e.what());
-            jobs_.failed(job, e.what());
-            publishCollisionState(true);
-            throw;
+            jobs_.failed(job, core::localizedCollisionError(e));
+            publish_viewport_toolbar_generation();
+            throw core::collisionError("selection.operation_failed_generic", e.what(), lfs::ErrorCode::Internal);
         }
     }
 
     void AsyncTaskManager::pollCollision() {
-        if (!collision_pending_.exchange(false, std::memory_order_acq_rel))
-            return;
-        collision_thread_.reset();
         const auto state = collisionJob();
-        if (!state)
+        if (!state || state->status != JobStatus::CompletionPending)
             return;
+        if (collisionWorkerActive()) {
+            wakeMainThreadForAsyncWork();
+            return;
+        }
         auto result = std::move(collision_result_);
-        if (state->worker_canceled || (result && (jobs_.cancelRequested(collision_job_) ||
-                                                  !viewer_->project_lifecycle_ ||
-                                                  collision_epoch_ != viewer_->project_lifecycle_->documentEpoch()))) {
+        if (result && (state->cancel_requested ||
+                       !viewer_->project_lifecycle_ ||
+                       collision_epoch_ != viewer_->project_lifecycle_->documentEpoch())) {
             jobs_.canceled(collision_job_);
-        } else if (!state->error.empty()) {
-            LOG_ERROR("Collision job failed: {}", state->error);
-            jobs_.failed(collision_job_, state->error);
-        } else {
+        } else if (result && !state->worker_canceled && state->error.empty()) {
             try {
-                if (result) {
-                    auto* scene_manager = viewer_->getSceneManager();
-                    if (!scene_manager || !collision_source_)
-                        throw std::runtime_error(LOC("collision.source_unavailable"));
-                    auto& manager = *scene_manager;
-                    auto& scene = manager.getScene();
-                    std::optional<std::shared_lock<std::shared_mutex>> lock;
-                    if (auto* mutex = scene.liveModelMutex(); mutex && core::Scene::live_model_lock_depth() == 0)
-                        lock.emplace(*mutex);
-                    scene.noteLiveModelLockAcquired();
-                    const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
-                    if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
-                        throw std::runtime_error(LOC("collision.source_changed"));
-                    const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
-                    auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
-                    const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
-                    if (id == core::NULL_NODE)
-                        throw std::runtime_error("Cannot add collision node");
-                    bool installed = false;
-                    const ScopeExit rollback([&] {
-                        if (!installed)
-                            scene.removeNodeById(id);
-                    });
-                    // The owned grid is world-space; keep its initial world frame
-                    // while inheriting subsequent source/ancestor edits.
-                    scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
-                    op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
-                        manager, "Generate collision", std::move(before),
-                        op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
-                    installed = true;
-                }
-                jobs_.completed(collision_job_);
+                auto* scene_manager = viewer_->getSceneManager();
+                if (!scene_manager || !collision_source_)
+                    throw core::collisionError("collision.source_unavailable", "Collision source is no longer available");
+                auto& manager = *scene_manager;
+                auto& scene = manager.getScene();
+                std::optional<std::shared_lock<std::shared_mutex>> lock;
+                if (auto* mutex = scene.liveModelMutex(); mutex && core::Scene::live_model_lock_depth() == 0)
+                    lock.emplace(*mutex);
+                scene.noteLiveModelLockAcquired();
+                const ScopeExit release_depth([&scene] { scene.noteLiveModelLockReleased(); });
+                if (scene.collisionSourceIdentity(collision_source_->id) != collision_source_)
+                    throw core::collisionError("collision.source_unavailable", "Collision source changed during generation; generate it again");
+                const op::SceneGraphCaptureOptions options{.include_selected_nodes = false, .include_scene_context = false, .scoped_topology = true};
+                auto before = op::SceneGraphPatchEntry::captureStateByIds(manager, {}, options);
+                const auto id = scene.addCollision("Collision", std::move(result), collision_source_->id);
+                if (id == core::NULL_NODE)
+                    throw core::collisionError("selection.operation_failed_generic", "Cannot add collision node");
+                bool installed = false;
+                const ScopeExit rollback([&] {
+                    if (!installed)
+                        scene.removeNodeById(id);
+                });
+                // The owned grid is world-space; keep its initial world frame
+                // while inheriting subsequent source/ancestor edits.
+                scene.getNodeById(id)->local_transform.set(glm::inverse(collision_source_->world_transform), false);
+                op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(
+                    manager, LOC("collision.title"), std::move(before),
+                    op::SceneGraphPatchEntry::captureStateByIds(manager, {id}, options)));
+                installed = true;
             } catch (const std::exception& e) {
                 LOG_ERROR("Collision completion failed: {}", e.what());
-                jobs_.failed(collision_job_, e.what());
+                jobs_.failed(collision_job_, core::localizedCollisionError(e));
             }
         }
-        publishCollisionState(true);
+        collision_worker_.get();
+        settlePendingJobs();
+        publish_viewport_toolbar_generation();
+        if (auto replacement = std::exchange(collision_replacement_, {}))
+            replacement();
     }
 
     void AsyncTaskManager::startSplatSimplify(const std::string& source_name,

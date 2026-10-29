@@ -54,6 +54,18 @@ namespace lfs::core::nn::models {
 #endif
         }
 
+        struct ArenaCloser {
+            ActivationArena& arena;
+            bool& trimmed;
+            ~ArenaCloser() {
+                arena.end();
+                if (!trimmed && arena.capacity() > 0) {
+                    configure_nn_mempool();
+                    trimmed = true;
+                }
+            }
+        };
+
         void recapture(Tensor& slot, const Tensor& src) {
             if (!slot.is_valid() || slot.dtype() != src.dtype() || slot.device() != src.device() ||
                 slot.numel() != src.numel()) {
@@ -188,6 +200,7 @@ namespace lfs::core::nn::models {
         Sam2 model;
         model.device_ = device;
         model.compute_ = dtype;
+        model.encoder_compute_ = dtype;
         model.weights_ = std::move(*loaded);
         configure_nn_mempool();
         const std::array<const char*, 8> required = {
@@ -213,16 +226,33 @@ namespace lfs::core::nn::models {
 
     std::size_t Sam2::weights_bytes() const {
         std::size_t bytes = 0;
-        for (const auto& [name, tensor] : weights_) {
-            (void)name;
-            if (tensor.is_valid()) {
-                bytes += tensor.bytes();
+        for (const auto* weights : {&weights_, &encoder_weights_}) {
+            for (const auto& [name, tensor] : *weights) {
+                (void)name;
+                if (tensor.is_valid()) {
+                    bytes += tensor.bytes();
+                }
             }
         }
         return bytes;
     }
 
+    void Sam2::set_encoder_dtype(const DataType dtype) {
+        LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32, "SAM2 encoder dtype must be float16 or float32");
+        encoder_compute_ = dtype;
+        encoder_weights_.clear();
+        pos_embed_ = Tensor();
+        if (dtype == compute_)
+            return;
+        for (const auto& [name, tensor] : weights_)
+            if (name.starts_with("image_encoder."))
+                encoder_weights_.emplace(name, tensor.to(dtype));
+    }
+
     const Tensor& Sam2::w(std::string_view name) const {
+        if (encoding_ && !encoder_weights_.empty())
+            if (const auto half = encoder_weights_.find(std::string(name)); half != encoder_weights_.end())
+                return half->second;
         const auto it = weights_.find(std::string(name));
         LFS_ASSERT_MSG(it != weights_.end(), std::format("SAM2 weight {} is not loaded", name));
         return it->second;
@@ -517,10 +547,10 @@ namespace lfs::core::nn::models {
             coords[static_cast<std::size_t>(i) * 2 + 0] = (x + 0.5f) / static_cast<float>(kImage);
             coords[static_cast<std::size_t>(i) * 2 + 1] = (y + 0.5f) / static_cast<float>(kImage);
         }
-        auto coord_t = Tensor::from_vector(coords, shape_of({1, static_cast<std::size_t>(n), 2}),
-                                           device_);
+        // Prompt uploads must follow earlier users of the same activation arena storage.
+        auto coord_t = Tensor::from_vector(coords, shape_of({1, static_cast<std::size_t>(n), 2}), Device::CPU)
+                           .to(device_, getCurrentCUDAStream());
         coord_t = as_compute(std::move(coord_t), compute_);
-        coord_t.set_stream(w("sam_prompt_encoder.pe_layer.positional_encoding_gaussian_matrix").stream());
         auto pe = fourier_pe(coord_t, w("sam_prompt_encoder.pe_layer.positional_encoding_gaussian_matrix"));
         Tensor packed;
         for (int i = 0; i < n; ++i) {
@@ -558,7 +588,14 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2Prediction> Sam2::predict(const std::vector<Sam2PointPrompt>& points,
                                               const std::optional<std::array<float, 4>>& box,
-                                              bool multimask) {
+                                              bool multimask, const Tensor* mask_logits) {
+        if (mask_logits) {
+            LFS_ASSERT_MSG(mask_logits->ndim() == 4 && mask_logits->size(0) == 1 && mask_logits->size(1) == 1 &&
+                               mask_logits->size(2) == 256 && mask_logits->size(3) == 256,
+                           "SAM2 mask prompts are 1 x 1 x 256 x 256 logits");
+            const auto prompt = mask_logits->to(compute_);
+            return run_decoder(points, box, multimask, nullptr, false, &prompt);
+        }
         return run_decoder(points, box, multimask, nullptr);
     }
 
@@ -573,7 +610,7 @@ namespace lfs::core::nn::models {
         return std::make_pair(std::move(*pred), std::move(taps));
     }
 
-    lfs::Result<void> Sam2::run_encoder(const Tensor& image, Sam2Taps* taps) {
+    lfs::Result<void> Sam2::run_encoder(const Tensor& image, Sam2Taps* taps, bool video) {
         if (!image.is_valid() || image.ndim() != 4 || image.shape()[1] != 3) {
             return lfs::Result<void>::failure(
                 sam_error(lfs::ErrorCode::InvalidArgument,
@@ -604,23 +641,19 @@ namespace lfs::core::nn::models {
                 (void)name;
                 tensor.set_stream(fwd_stream);
             }
+            for (auto& [name, tensor] : encoder_weights_) {
+                (void)name;
+                tensor.set_stream(fwd_stream);
+            }
+            mean_.sync_to_stream(fwd_stream);
+            std_.sync_to_stream(fwd_stream);
             mean_.set_stream(fwd_stream);
             std_.set_stream(fwd_stream);
             weights_on_stream_ = true;
         }
         ActivationArenaGuard arena_guard(arena_);
         arena_.begin(fwd_stream);
-        struct ArenaCloser {
-            ActivationArena& arena;
-            bool& trimmed;
-            ~ArenaCloser() {
-                arena.end();
-                if (!trimmed && arena.capacity() > 0) {
-                    configure_nn_mempool();
-                    trimmed = true;
-                }
-            }
-        } arena_closer{arena_, mempool_trimmed_};
+        ArenaCloser arena_closer{arena_, mempool_trimmed_};
         StageProfile profile(fwd_stream, default_gpu_backend() == GpuBackend::CUDA);
 
         Tensor img;
@@ -631,10 +664,16 @@ namespace lfs::core::nn::models {
             if (img.dtype() != DataType::Float32) {
                 img = img.to(DataType::Float32);
             }
-            img = resize2d(img, kImage, kImage, ResizeMode::Bilinear, CoordTransform::HalfPixel);
+            img = video ? resize2d_pil_bicubic(img, kImage, kImage)
+                        : resize2d_bilinear_antialiased(img, kImage, kImage);
             img = img.sub(mean_).div(std_);
-            img = as_compute(std::move(img), compute_);
+            img = as_compute(std::move(img), encoder_compute_);
         }
+        struct EncodingScope {
+            bool& flag;
+            explicit EncodingScope(bool& f) : flag(f) { flag = true; }
+            ~EncodingScope() { flag = false; }
+        } encoding_scope{encoding_};
 
         Tensor x;
         {
@@ -711,6 +750,8 @@ namespace lfs::core::nn::models {
                 }
                 fpn[static_cast<std::size_t>(i)] = prev;
             }
+            for (auto& level : fpn)
+                level = as_compute(std::move(level), compute_);
         }
         if (taps) {
             capture_tap(taps->fpn[0], fpn[0]);
@@ -749,6 +790,8 @@ namespace lfs::core::nn::models {
 
         {
             ActivationArena::bind(nullptr);
+            if (video)
+                recapture(raw_image_embed_, fpn[2]);
             recapture(image_embed_hold_, embed);
             recapture(high_res0_hold_, hr0);
             recapture(high_res1_hold_, hr1);
@@ -756,6 +799,7 @@ namespace lfs::core::nn::models {
         }
 
         image_set_ = true;
+        video_image_ = video;
         profile.mark("end");
         profile.dump();
         return {};
@@ -763,12 +807,13 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2Prediction> Sam2::run_decoder(const std::vector<Sam2PointPrompt>& points,
                                                   const std::optional<std::array<float, 4>>& box,
-                                                  bool multimask, Sam2Taps* taps) {
+                                                  bool multimask, Sam2Taps* taps, bool video,
+                                                  const Tensor* mask_input) {
         if (!image_set_) {
             return sam_error(lfs::ErrorCode::FailedPrecondition,
                              "set_image must be called before predict");
         }
-        if (points.empty() && !box) {
+        if (points.empty() && !box && !video) {
             return sam_error(lfs::ErrorCode::InvalidArgument,
                              "predict requires at least one point or a box");
         }
@@ -779,24 +824,14 @@ namespace lfs::core::nn::models {
         lfs::core::CUDAStreamGuard stream_guard(fwd_stream);
         ActivationArenaGuard arena_guard(arena_);
         arena_.begin(fwd_stream);
-        struct ArenaCloser {
-            ActivationArena& arena;
-            bool& trimmed;
-            ~ArenaCloser() {
-                arena.end();
-                if (!trimmed && arena.capacity() > 0) {
-                    configure_nn_mempool();
-                    trimmed = true;
-                }
-            }
-        } arena_closer{arena_, mempool_trimmed_};
+        ArenaCloser arena_closer{arena_, mempool_trimmed_};
         StageProfile profile(fwd_stream, default_gpu_backend() == GpuBackend::CUDA);
 
         Tensor sparse;
         Tensor dense;
         {
             profile.mark("prompt");
-            sparse = encode_points(points, box);
+            sparse = video ? encode_points({{0, 0, -1}}, std::nullopt) : encode_points(points, box);
             auto no_mask = w("sam_prompt_encoder.no_mask_embed.weight")
                                .reshape(shape_of({1, static_cast<std::size_t>(kDim), 1, 1}));
             dense = no_mask
@@ -804,6 +839,20 @@ namespace lfs::core::nn::models {
                                           static_cast<std::size_t>(kEmbed),
                                           static_cast<std::size_t>(kEmbed)}))
                         .contiguous();
+            if (mask_input) {
+                Conv2dParams downsample;
+                downsample.stride_h = downsample.stride_w = 2;
+                dense = conv_k(*mask_input, "sam_prompt_encoder.mask_downscaling.0.weight",
+                               "sam_prompt_encoder.mask_downscaling.0.bias", downsample);
+                dense = gelu(layer_norm_2d(dense, w("sam_prompt_encoder.mask_downscaling.1.weight"),
+                                           w("sam_prompt_encoder.mask_downscaling.1.bias"), kLn2dEps));
+                dense = conv_k(dense, "sam_prompt_encoder.mask_downscaling.3.weight",
+                               "sam_prompt_encoder.mask_downscaling.3.bias", downsample);
+                dense = gelu(layer_norm_2d(dense, w("sam_prompt_encoder.mask_downscaling.4.weight"),
+                                           w("sam_prompt_encoder.mask_downscaling.4.bias"), kLn2dEps));
+                dense = conv1x1(dense, "sam_prompt_encoder.mask_downscaling.6.weight",
+                                "sam_prompt_encoder.mask_downscaling.6.bias");
+            }
         }
         if (taps) {
             capture_tap(taps->sparse_embeddings, sparse);
@@ -900,8 +949,23 @@ namespace lfs::core::nn::models {
                              false);
         }
 
-        const int start = multimask ? 1 : 0;
-        const int count = multimask ? 3 : 1;
+        int start = multimask ? 1 : 0;
+        if (!multimask) {
+            constexpr float kStabilityDelta = 0.05f;
+            constexpr float kMinimumStability = 0.98f;
+            const auto single = low_res.slice(1, 0, 1).to(DataType::Float32);
+            const float intersection = single.gt(kStabilityDelta).to(DataType::Float32).sum().item<float>();
+            const float mask_union = single.gt(-kStabilityDelta).to(DataType::Float32).sum().item<float>();
+            if (mask_union > 0 && intersection / mask_union < kMinimumStability) {
+                const auto scores = iou.to(DataType::Float32).to(Device::CPU).contiguous().to_vector();
+                start = static_cast<int>(std::max_element(scores.begin() + 1, scores.end()) - scores.begin());
+            }
+        }
+        if (video && multimask) {
+            const auto scores = iou.to(DataType::Float32).to(Device::CPU).contiguous().to_vector();
+            start = choose_video_candidate(low_res, scores);
+        }
+        const int count = multimask && !video ? 3 : 1;
         auto sel = low_res.slice(1, static_cast<std::size_t>(start),
                                  static_cast<std::size_t>(start + count))
                        .contiguous();
@@ -909,6 +973,16 @@ namespace lfs::core::nn::models {
                                  static_cast<std::size_t>(start + count))
                            .contiguous();
 
+        Tensor pointer;
+        if (video) {
+            const int pointer_token = multimask ? start : 0;
+            pointer = mlp(hs.slice(1, size_t(2 + pointer_token), size_t(3 + pointer_token)).squeeze(1).contiguous(),
+                          "obj_ptr_proj", 3, Activation::Relu, false);
+            if (obj_logits.to(DataType::Float32).item<float>() <= 0) {
+                pointer = w("no_obj_ptr");
+                sel = Tensor::full(sel.shape(), -1024.0f, device_, compute_);
+            }
+        }
         Tensor masks_up;
         Tensor low_out;
         Tensor iou_out;
@@ -925,8 +999,9 @@ namespace lfs::core::nn::models {
             low_out = sel.reshape(shape_of({static_cast<std::size_t>(count),
                                             static_cast<std::size_t>(kEmbed * 4),
                                             static_cast<std::size_t>(kEmbed * 4)}))
-                          .to(DataType::Float32)
-                          .clamp(-32.0f, 32.0f);
+                          .to(DataType::Float32);
+            if (!video)
+                low_out = low_out.clamp(-32.0f, 32.0f);
             iou_out = iou_sel.to(DataType::Float32).contiguous();
             if (iou_out.ndim() > 1) {
                 iou_out = iou_out.reshape(shape_of({static_cast<std::size_t>(count)}));
@@ -943,6 +1018,11 @@ namespace lfs::core::nn::models {
         pred.masks = masks_up;
         pred.iou = iou_out;
         pred.low_res_logits = low_out;
+        ActivationArena::bind(nullptr);
+        if (video)
+            pred.object_pointer = pointer.clone();
+        pred.object_score_logits = obj_logits.clone();
+        ActivationArena::bind(&arena_);
 
         profile.mark("end");
         profile.dump();

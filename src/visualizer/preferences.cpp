@@ -4,6 +4,8 @@
 #include "preferences.hpp"
 #include "core/native_fs.hpp"
 #include "gpu_preferences_state.hpp"
+#include "input/gamepad_navigation.hpp"
+#include "input/gamepad_profiles.hpp"
 #include "rendering/rendering_types.hpp"
 #include "visualizer/navigation_up_axis.hpp"
 
@@ -747,6 +749,103 @@ namespace lfs::vis {
         return {};
     }
 
+    namespace {
+        input::GamepadProfiles gamepadProfilesFromValues(const json& values) {
+            if (const auto legacy = values.find("gamepad_navigation"); legacy != values.end())
+                (void)input::GamepadNavigationSettings::fromJson(*legacy);
+            if (const auto profiles = values.find("gamepad_profiles"); profiles != values.end())
+                return input::GamepadProfiles::fromJson(*profiles);
+            return input::GamepadProfiles::migrate(input::GamepadNavigationSettings::fromJson(
+                values.value("gamepad_navigation", json::object())));
+        }
+    } // namespace
+
+    std::string UserPreferences::gamepadNavigation() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto found = impl_->values.find("gamepad_navigation");
+        if (!impl_->values.contains("gamepad_profiles"))
+            return found == impl_->values.end() ? "{}" : found->dump();
+        const bool enabled = found != impl_->values.end() ? found->value("enabled", false) : false;
+        return gamepadProfilesFromValues(impl_->values).activeSettings(enabled).json().dump();
+    }
+
+    std::string UserPreferences::gamepadProfiles() {
+        std::lock_guard lock(impl_->mutex);
+        impl_->loadLocked();
+        return gamepadProfilesFromValues(impl_->values).value.dump();
+    }
+
+    lfs::Status UserPreferences::setGamepadProfiles(const std::string_view serialized, bool enabled, const std::string_view expected) {
+        try {
+            auto profiles = input::GamepadProfiles::fromJson(json::parse(serialized));
+            std::lock_guard lock(impl_->mutex);
+            impl_->loadLocked();
+            if (!impl_->paths || !impl_->writable)
+                return invalidRenderingPreference("Gamepad preferences are not writable");
+            // Never replace unreadable/newer data, including via reset.
+            const auto previous = gamepadProfilesFromValues(impl_->values);
+            if (!expected.empty() && previous.value.dump() != expected)
+                return invalidRenderingPreference("Gamepad profiles changed while editing");
+            auto candidate = impl_->values;
+            if (core::persisted_settings::field<std::uint64_t>(candidate, "schema_version", 2) <= 2)
+                candidate["schema_version"] = 2;
+            candidate["gamepad_profiles"] = profiles.value;
+            candidate["gamepad_navigation"] = profiles.activeSettings(enabled).json();
+            auto merged = core::persisted_settings::mergeForWrite(impl_->paths->preferencesFile(), candidate,
+                                                                  "schema_version", 2, nullptr, {}, impl_->paths->backupDir());
+            merged["gamepad_profiles"] = candidate["gamepad_profiles"];
+            merged["gamepad_navigation"] = candidate["gamepad_navigation"];
+            if (auto result = impl_->paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
+                return result;
+            impl_->values = merged;
+            impl_->persisted_values = std::move(merged);
+            return {};
+        } catch (const std::exception& error) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+    }
+
+    lfs::Status UserPreferences::setGamepadNavigation(const std::string_view serialized) {
+        try {
+            const auto settings = input::GamepadNavigationSettings::fromJson(json::parse(serialized));
+            // Read/modify/write under the same mutex: slider/binding edits update
+            // only the active profile and cannot resurrect deleted profiles/overrides.
+            std::lock_guard lock(impl_->mutex);
+            impl_->loadLocked();
+            if (!impl_->paths || !impl_->writable)
+                return invalidRenderingPreference("Gamepad preferences are not writable");
+            auto profiles = gamepadProfilesFromValues(impl_->values);
+            profiles.updateActive(settings);
+            auto candidate = impl_->values;
+            if (core::persisted_settings::field<std::uint64_t>(candidate, "schema_version", 2) <= 2)
+                candidate["schema_version"] = 2;
+            candidate["gamepad_navigation"] = settings.json();
+            candidate["gamepad_profiles"] = profiles.value;
+            auto merged = core::persisted_settings::mergeForWrite(impl_->paths->preferencesFile(), candidate,
+                                                                  "schema_version", 2, nullptr, {}, impl_->paths->backupDir());
+            merged["gamepad_navigation"] = candidate["gamepad_navigation"];
+            merged["gamepad_profiles"] = candidate["gamepad_profiles"];
+            if (auto result = impl_->paths->writePreferencesAtomically(merged.dump(2) + '\n'); !result)
+                return result;
+            impl_->values = merged;
+            impl_->persisted_values = std::move(merged);
+            return {};
+        } catch (const std::exception& error) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+    }
+
     lfs::Status UserPreferences::setRenderingDefaults(const std::string_view serialized) {
         RenderSettings validated;
         if (auto result = applyRenderingDefaults(validated, serialized); !result)
@@ -894,6 +993,46 @@ namespace lfs::vis {
         impl_->loadLocked();
         const auto it = impl_->values.find("native_floating_windows");
         return it != impl_->values.end() && it->is_boolean() && it->get<bool>();
+    }
+
+    namespace {
+        [[nodiscard]] VrPreferences clampedVrPreferences(VrPreferences preferences) {
+            constexpr VrPreferences defaults;
+            const auto clamp = [](const float value, const float low, const float high, const float fallback) {
+                return std::isfinite(value) ? std::clamp(value, low, high) : fallback;
+            };
+            preferences.resolution_scale = clamp(preferences.resolution_scale, 0.25f, 1.5f, defaults.resolution_scale);
+            preferences.scene_units_per_meter =
+                clamp(preferences.scene_units_per_meter, 0.001f, 1000.0f, defaults.scene_units_per_meter);
+            preferences.move_speed = clamp(preferences.move_speed, 0.1f, 10.0f, defaults.move_speed);
+            return preferences;
+        }
+    } // namespace
+
+    void UserPreferences::setVrPreferences(const VrPreferences& preferences, const bool persist) {
+        const auto clamped = clampedVrPreferences(preferences);
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["vr_enabled"] = clamped.enabled;
+        impl_->values["vr_resolution_scale"] = clamped.resolution_scale;
+        impl_->values["vr_scene_units_per_meter"] = clamped.scene_units_per_meter;
+        impl_->values["vr_move_speed"] = clamped.move_speed;
+        if (persist)
+            impl_->saveLocked();
+    }
+
+    VrPreferences UserPreferences::vrPreferences() {
+        using lfs::core::persisted_settings::field;
+        constexpr VrPreferences defaults;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto& values = impl_->values;
+        return clampedVrPreferences({
+            .enabled = field<bool>(values, "vr_enabled", defaults.enabled),
+            .resolution_scale = field<float>(values, "vr_resolution_scale", defaults.resolution_scale),
+            .scene_units_per_meter = field<float>(values, "vr_scene_units_per_meter", defaults.scene_units_per_meter),
+            .move_speed = field<float>(values, "vr_move_speed", defaults.move_speed),
+        });
     }
     void UserPreferences::setFloatingWindowGeometry(const std::string& value) {
         std::scoped_lock lock(impl_->mutex);

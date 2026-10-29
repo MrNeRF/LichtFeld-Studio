@@ -44,6 +44,7 @@ namespace lfs::core {
 
     size_t cuda_allocation_size(size_t) { return 0; }
     void trim_cuda_memory_pool() {}
+    size_t cuda_bucket_cached_bytes() noexcept { return 0; }
     void safe_cuda_pool_deallocate(void*, cudaStream_t) noexcept {}
     bool tensor_uses_cuda_storage(const Tensor&) { return false; }
 

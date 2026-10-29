@@ -7,6 +7,8 @@
 #include "core/export.hpp"
 
 #include "gui/ui_context.hpp"
+#include "input/input_bindings.hpp"
+#include "shaders/shader_service.hpp"
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
@@ -42,12 +44,22 @@ namespace lfs::vis::gui::panels {
         void addError(const std::string& text);
         void addInfo(const std::string& text);
         void clear();
-        bool handleShortcut(const FrameInputEvent& event);
+        bool handleShortcut(const FrameInputEvent& event, const input::InputBindings* bindings = nullptr,
+                            shaders::ShaderService* service = nullptr);
+        bool documentCommand(input::Action action, shaders::ShaderService* service = nullptr, bool in_flight_only = false);
+        bool formatDocument(bool cleanup = false);
+        bool loadDocument(const std::filesystem::path& path);
+        bool saveDocument(const std::filesystem::path& path);
 
         void addToHistory(const std::string& cmd);
 
         terminal::TerminalWidget* getTerminal();
         terminal::TerminalWidget* getOutputTerminal();
+        void setShaderChanges(std::shared_ptr<shaders::ShaderChanges> changes);
+        void notifyShaderObservers() const {
+            if (shader_changes_)
+                shader_changes_->notify();
+        }
         editor::PythonEditor* getEditor();
         const editor::PythonEditor* getEditor() const;
         void setEditorText(const std::string& text);
@@ -68,10 +80,10 @@ namespace lfs::vis::gui::panels {
         void setTerminalFocused(bool focused) { terminal_focused_ = focused; }
 
         // Script file management
-        void setScriptPath(const std::filesystem::path& path) { script_path_ = path; }
-        const std::filesystem::path& getScriptPath() const { return script_path_; }
-        void setModified(bool modified) { is_modified_ = modified; }
-        bool isModified() const { return is_modified_; }
+        void setScriptPath(const std::filesystem::path& path);
+        [[nodiscard]] std::filesystem::path getScriptPath() const;
+        void setModified(bool modified);
+        bool isModified() const;
 
         // Font scaling (steps match loaded monospace font sizes)
         float getFontScale() const { return font_scale_; }
@@ -86,9 +98,13 @@ namespace lfs::vis::gui::panels {
         // Script execution
         bool isScriptRunning() const { return script_running_.load(); }
         void interruptScript();
-        void runScriptAsync(const std::string& code);
+        void runScriptAsync(const std::string& code, std::optional<core::Uuid> document = {});
+        [[nodiscard]] std::uint64_t scriptRun() const { return script_run_; }
+        // The document the latest run started from; a project switch may close it while the run goes on.
+        [[nodiscard]] const std::optional<core::Uuid>& scriptDocument() const { return script_document_; }
 
     private:
+        std::shared_ptr<shaders::ShaderChanges> shader_changes_;
         PythonConsoleState();
         ~PythonConsoleState();
 
@@ -103,10 +119,6 @@ namespace lfs::vis::gui::panels {
         std::atomic<bool> visible_{false};
         bool terminal_focused_ = false;
 
-        // Script file tracking
-        std::filesystem::path script_path_;
-        bool is_modified_ = false;
-
         // Font scaling steps must match gui_manager MONO_SCALES
         static constexpr int FONT_STEP_COUNT = 5;
         static constexpr float FONT_STEPS[FONT_STEP_COUNT] = {0.7f, 1.0f, 1.3f, 1.7f, 2.2f};
@@ -116,6 +128,8 @@ namespace lfs::vis::gui::panels {
         std::atomic<bool> script_running_{false};
         std::atomic<unsigned long> script_thread_id_{0};
         std::thread script_thread_;
+        std::uint64_t script_run_ = 0;
+        std::optional<core::Uuid> script_document_;
     };
 
     // Draw the Python console as a docked panel (fixed position/size)

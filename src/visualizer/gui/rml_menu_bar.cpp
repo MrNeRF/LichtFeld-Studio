@@ -658,13 +658,13 @@ namespace lfs::vis::gui {
 
         bool altLetterBoundInActiveMap(int app_key) {
             using lfs::vis::input::Action;
-            using lfs::vis::input::kAllToolModes;
+            using lfs::vis::input::kAllKeymapScopes;
             using lfs::vis::input::KEYMOD_ALT;
             const auto* controller = lfs::vis::InputController::instance();
             if (controller == nullptr)
                 return false;
             const auto& bindings = controller->getBindings();
-            for (const auto mode : kAllToolModes) {
+            for (const auto mode : kAllKeymapScopes) {
                 if (bindings.getActionForKey(mode, app_key, KEYMOD_ALT) != Action::NONE)
                     return true;
             }
@@ -2031,12 +2031,14 @@ namespace lfs::vis::gui {
 
         if (camera_buttons != camera_buttons_) {
             camera_buttons_ = std::move(camera_buttons);
-            menu_model_.DirtyVariable("menu_camera_buttons");
+            if (menu_model_)
+                menu_model_.DirtyVariable("menu_camera_buttons");
             render_needed_ = true;
         }
         if (snap_buttons != snap_buttons_) {
             snap_buttons_ = std::move(snap_buttons);
-            menu_model_.DirtyVariable("menu_snap_buttons");
+            if (menu_model_)
+                menu_model_.DirtyVariable("menu_snap_buttons");
             render_needed_ = true;
         }
     }

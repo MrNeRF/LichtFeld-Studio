@@ -786,6 +786,44 @@ Splat_2D_AlphaBlend load_splat_alphablend(
     return { g_inv_cov_opac, g_xy_vs, g_rgb };
 }
 
+// Inverse scale times transposed rotation: maps an offset from a splat's
+// center into its unit-sphere frame.
+[ForceInline]
+float3x3 gut_inverse_scale_rotation(float4 g_rotation, float3 g_scale) {
+    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
+    float3 safe_scale = max(g_scale, float3(1e-8f));
+    float3x3 inv_scale = float3x3(
+        1.0f / safe_scale.x, 0.0f, 0.0f,
+        0.0f, 1.0f / safe_scale.y, 0.0f,
+        0.0f, 0.0f, 1.0f / safe_scale.z
+    );
+    return mul(inv_scale, transpose(rotation));
+}
+
+[ForceInline]
+bool inverse_3x3(float3x3 m, out float3x3 inv_m)
+{
+    float3 r0 = float3(m[0][0], m[0][1], m[0][2]);
+    float3 r1 = float3(m[1][0], m[1][1], m[1][2]);
+    float3 r2 = float3(m[2][0], m[2][1], m[2][2]);
+    float3 c0 = cross(r1, r2);
+    float3 c1 = cross(r2, r0);
+    float3 c2 = cross(r0, r1);
+    float det = dot(r0, c0);
+    if (abs(det) <= 1.0e-8f) {
+        inv_m = float3x3(1.0f, 0.0f, 0.0f,
+                         0.0f, 1.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f);
+        return false;
+    }
+
+    float inv_det = 1.0f / det;
+    inv_m = float3x3(c0.x * inv_det, c1.x * inv_det, c2.x * inv_det,
+                     c0.y * inv_det, c1.y * inv_det, c2.y * inv_det,
+                     c0.z * inv_det, c1.z * inv_det, c2.z * inv_det);
+    return true;
+}
+
 [ForceInline]
 Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
     uint g_idx,
@@ -829,15 +867,7 @@ Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
         g_scale = lfsPortalCompactScales(g_scale);
         g_opacity = lfsPortalCompactOpacity(g_opacity);
     }
-    float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g_rotation));
-    float3 safe_scale = max(g_scale, float3(1e-8f));
-    float3x3 inv_scale = float3x3(
-        1.0f / safe_scale.x, 0.0f, 0.0f,
-        0.0f, 1.0f / safe_scale.y, 0.0f,
-        0.0f, 0.0f, 1.0f / safe_scale.z
-    );
-    float3x3 iscl_rot = mul(inv_scale, transpose(rotation));
-    return { g_xyz_ws, iscl_rot, g_opacity, g_rgb };
+    return { g_xyz_ws, gut_inverse_scale_rotation(g_rotation, g_scale), g_opacity, g_rgb };
 }
 
 
@@ -1334,7 +1364,18 @@ static const uint OVERLAY_PARAM_CROP_POLYGON_VERTICES = 6;
 static const uint OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES = 64;
 static const uint OVERLAY_PARAM_CROP_POLYGON_STRIDE = OVERLAY_PARAM_CROP_POLYGON_VERTICES + OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES / 2;
 static const uint OVERLAY_PARAM_CROP_POLYGON_COUNT = 16;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_CROP_POLYGON_BASE + OVERLAY_PARAM_CROP_POLYGON_STRIDE * OVERLAY_PARAM_CROP_POLYGON_COUNT;
+static const uint OVERLAY_PARAM_REVEAL = OVERLAY_PARAM_CROP_POLYGON_BASE + OVERLAY_PARAM_CROP_POLYGON_STRIDE * OVERLAY_PARAM_CROP_POLYGON_COUNT;
+static const uint OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS = OVERLAY_PARAM_REVEAL + 1;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS + 1;
+
+#ifndef LFS_CUSTOM_EFFECT
+#define LFS_CUSTOM_EFFECT 0
+#endif
+#if LFS_CUSTOM_EFFECT
+__exported import lfs_reveal;
+#else
+#include "reveal_effects.inc"
+#endif
 
 [ForceInline]
 bool overlay_enabled(float value)

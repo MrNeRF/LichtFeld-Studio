@@ -4,30 +4,21 @@
 
 #pragma once
 
-#include "core/scene.hpp"
-#include "internal/viewport.hpp"
-#include "operator/operator.hpp"
-#include "rendering/rendering_types.hpp"
-#include "rendering/view_source.hpp"
+#include "point_pick_operator.hpp"
 #include <glm/glm.hpp>
 #include <optional>
 #include <vector>
 
-namespace lfs::vis {
-    class RenderingManager;
-}
-
 namespace lfs::vis::op {
 
-    class LFS_VIS_API AlignPickPointOperator : public Operator {
+    class LFS_VIS_API AlignPickPointOperator : public PointPickOperator {
     public:
+        AlignPickPointOperator();
+
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
-        OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
-        OperatorResult modal(OperatorContext& ctx, OperatorProperties& props) override;
-        void cancel(OperatorContext& ctx) override;
 
     private:
         friend class AlignPreviewTest;
@@ -43,40 +34,15 @@ namespace lfs::vis::op {
         glm::vec3 preview_camera_{};
         void restorePreview(OperatorContext& ctx);
         [[nodiscard]] bool updatePreview(OperatorContext& ctx);
-        std::vector<glm::vec3> picked_points_;
-        int pick_button_ = 0;
-        bool press_active_ = false;
-        int press_button_ = -1;
-        glm::dvec2 press_pos_{0.0, 0.0};
-        std::optional<int> press_point_index_;
-        bool drag_active_ = false;
-        std::optional<int> selected_point_;
-        std::optional<SplitViewPanelId> pick_panel_;
-        struct PendingPick {
-            glm::dvec2 screen_position;
-            // Empty for a new point; otherwise replace the dragged marker.
-            std::optional<int> point_index;
-        };
-        struct PointSample {
-            glm::vec3 world{Viewport::INVALID_WORLD_POS};
-            SplitViewPanelId panel = SplitViewPanelId::Left;
-            bool pending = false;
-        };
-        std::optional<PendingPick> pending_pick_;
-        void resolvePendingPoint();
-        [[nodiscard]] bool requestPoint(const PendingPick& pick);
-        [[nodiscard]] bool applyPointSample(const PointSample& sample, std::optional<int> index);
-        [[nodiscard]] PointSample sampleScreenPoint(glm::dvec2 position) const;
-        [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
-        [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
-        void syncPickedPointsToServices();
-        void removeLastPoint();
-        void removeSelectedPoint();
-        void clearAllPoints();
-        [[nodiscard]] bool tryPlacePoint(double x, double y);
         [[nodiscard]] bool applyAlignment(OperatorContext& ctx);
-        [[nodiscard]] OperatorResult handlePendingUiAction(OperatorContext& ctx);
-        void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
+        bool applyPickedPoints(OperatorContext& ctx, float value) override;
+        std::optional<OperatorResult> prepareModal(OperatorContext& ctx) override;
+        bool pointEditingBlocked() const override;
+        void beforePointEdit(OperatorContext& ctx) override;
+        void pointSampleApplied() override;
+        void handleToolUiAction(OperatorContext& ctx, PointPickState::UiAction action) override;
+        OperatorResult handleToolAction(OperatorContext& ctx, input::Action action) override;
+        [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
     };
 
     void registerAlignOperators();
@@ -114,18 +80,5 @@ namespace lfs::vis::op {
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
 
     [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
-
-    // Orthographic zoom belongs to each view's settings.
-    [[nodiscard]] LFS_VIS_API float alignPanelOrthoScale(const RenderingManager& rendering, ViewId view);
-
-    inline constexpr float kAlignMarkerWorldRadius = 0.05f;
-    [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,
-                                                const glm::mat4& view,
-                                                const glm::mat4& projection,
-                                                float window_height,
-                                                bool orthographic,
-                                                float ortho_scale,
-                                                float screen_scale_x,
-                                                float screen_scale_y);
 
 } // namespace lfs::vis::op

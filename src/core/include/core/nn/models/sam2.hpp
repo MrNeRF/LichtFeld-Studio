@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -23,6 +24,8 @@ namespace lfs::core::nn::models {
         Tensor masks;          // [num_masks, H, W] fp32 logits, original image size
         Tensor iou;            // [num_masks] fp32 predicted mask quality
         Tensor low_res_logits; // [num_masks, 256, 256] fp32
+        Tensor object_pointer; // video tracking only
+        Tensor object_score_logits;
     };
 
     struct Sam2PointPrompt {
@@ -30,6 +33,9 @@ namespace lfs::core::nn::models {
         float y;
         int label;
     }; // px in original image, label 1=fg 0=bg
+
+    inline constexpr float kSam2MinIou = 0.5f;
+    inline constexpr float kSam2MaxArea = 0.4f;
 
     // Named activations matching tests/data/nn/sam2_ref_fixture.json.
     struct Sam2Taps {
@@ -62,14 +68,28 @@ namespace lfs::core::nn::models {
         lfs::Result<Sam2Taps> set_image_with_taps(const Tensor& image);
 
         // Points and/or box in original-image pixel coords. multimask=true returns 3
-        // candidate masks, false returns 1. Requires set_image first.
+        // candidate masks, false returns 1. mask_logits, as the official mask_input, is a previous low-resolution
+        // prediction (1 x 1 x 256 x 256) to refine. Requires set_image first.
         lfs::Result<Sam2Prediction> predict(const std::vector<Sam2PointPrompt>& points,
                                             const std::optional<std::array<float, 4>>& box,
-                                            bool multimask = true);
+                                            bool multimask = true, const Tensor* mask_logits = nullptr);
 
         lfs::Result<std::pair<Sam2Prediction, Sam2Taps>>
         predict_with_taps(const std::vector<Sam2PointPrompt>& points,
                           const std::optional<std::array<float, 4>>& box, bool multimask = true);
+
+        // One object and one automatic seed per sequence. A reverse pass starts a fresh bank from that seed.
+        // Video tracking runs on the CUDA tensor backend only; other backends report Unsupported.
+        lfs::Result<void> set_video_image(const Tensor& image);
+        lfs::Result<Sam2Prediction> seed_video(const Tensor& mask, int frame_index, int frame_count,
+                                               bool reverse);
+        lfs::Result<Sam2Prediction> track_video(int frame_index);
+        void reset_video();
+        [[nodiscard]] bool supports_video() const;
+
+        // Runs the image encoder in `dtype` (tensor cores for Float16) while prompts, the mask decoder and video
+        // tracking keep the compute dtype; the encoder's features are converted on the way out.
+        void set_encoder_dtype(DataType dtype);
 
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
         [[nodiscard]] Device device() const { return device_; }
@@ -83,10 +103,11 @@ namespace lfs::core::nn::models {
         [[nodiscard]] int orig_width() const { return orig_w_; }
 
     private:
-        lfs::Result<void> run_encoder(const Tensor& image, Sam2Taps* taps);
+        lfs::Result<void> run_encoder(const Tensor& image, Sam2Taps* taps, bool video = false);
         lfs::Result<Sam2Prediction> run_decoder(const std::vector<Sam2PointPrompt>& points,
                                                 const std::optional<std::array<float, 4>>& box,
-                                                bool multimask, Sam2Taps* taps);
+                                                bool multimask, Sam2Taps* taps, bool video = false,
+                                                const Tensor* mask_input = nullptr);
 
         const Tensor& w(std::string_view name) const;
         Tensor conv1x1(const Tensor& x, std::string_view weight, std::string_view bias);
@@ -112,7 +133,30 @@ namespace lfs::core::nn::models {
         Tensor ensure_workspace(std::size_t bytes, const Tensor& like);
         void capture_tap(Tensor& slot, const Tensor& src);
 
+        struct VideoMemory {
+            Tensor features;
+            Tensor pointer;
+            bool reliable = true;
+        };
+        std::vector<int> reliable_memories(int frame_index) const;
+        int choose_video_candidate(const Tensor& low_res, const std::vector<float>& iou);
+        Tensor video_memory_attention(int frame_index);
+        Tensor video_memory_encoder(const Tensor& high_res_mask, bool binary, bool object_present);
+        Tensor video_attention(const Tensor& query, const Tensor& key, const Tensor& value,
+                               std::string_view prefix, int pointer_tokens);
+        Sam2Prediction video_output(Tensor low_res, Tensor pointer, Tensor object_score,
+                                    Tensor iou);
+        std::map<int, VideoMemory> video_bank_;
+        int video_seed_ = -1, video_last_ = -1, video_frame_count_ = 0;
+        bool video_reverse_ = false;
+        bool video_image_ = false;
+        bool video_oversized_ = false;
+        Tensor raw_image_embed_;
+        Tensor video_image_position_;
+        Tensor video_memory_position_;
         std::unordered_map<std::string, Tensor> weights_;
+        std::unordered_map<std::string, Tensor> encoder_weights_; // image_encoder.* in encoder_compute_, when it differs
+        bool encoding_ = false;
         Tensor workspace_;
         Tensor image_embed_hold_;
         Tensor high_res0_hold_;
@@ -135,6 +179,7 @@ namespace lfs::core::nn::models {
         int orig_w_ = 0;
         Device device_ = Device::GPU;
         DataType compute_ = DataType::Float16;
+        DataType encoder_compute_ = DataType::Float16;
     };
 
 } // namespace lfs::core::nn::models

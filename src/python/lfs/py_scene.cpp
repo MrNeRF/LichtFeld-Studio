@@ -1546,80 +1546,58 @@ namespace lfs::python {
     }
 
     void register_scene(nb::module_& m) {
-        const auto collision_tasks = []() -> vis::gui::AsyncTaskManager& {
-            auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
-            if (!viewer || !viewer->getGuiManager())
-                throw std::runtime_error("Collision authoring requires the GUI");
-            return viewer->getGuiManager()->asyncTasks();
-        };
-        m.def("generate_collision", [collision_tasks](float size, float opacity, bool automatic, bool cleanup, float max_area) {
+        const auto collision_access = [](auto&& action) {
             auto* manager = get_scene_manager();
-            point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
-                collision_tasks().startCollision({.voxel_size = size, .opacity = opacity, .max_gaussian_area = max_area,
-                                                  .auto_resolution = automatic, .cleanup = cleanup});
-            }); }, nb::arg("voxel_size") = .05f, nb::arg("opacity") = .1f, nb::arg("auto_resolution") = false, nb::arg("cleanup") = true, nb::arg("max_gaussian_area") = 0.f);
-        m.def("export_collision", [collision_tasks](const std::string& uuid, const std::string& path) {
+            return point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
+                auto* viewer = dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
+                if (!viewer || !viewer->getGuiManager())
+                    throw core::collisionError("collision.gui_required", "Collision authoring requires the GUI");
+                return action(viewer->getGuiManager()->asyncTasks(), manager);
+            });
+        };
+        m.def("generate_collision", [collision_access](float size, float opacity, bool automatic, bool cleanup, float max_area) {
+            const core::CollisionSettings settings{.voxel_size = size, .opacity = opacity, .max_gaussian_area = max_area,
+                                                    .auto_resolution = automatic, .cleanup = cleanup};
+            collision_access([&](auto& tasks, auto*) { tasks.startCollision(settings); }); }, nb::arg("voxel_size") = .05f, nb::arg("opacity") = .1f, nb::arg("auto_resolution") = false, nb::arg("cleanup") = true, nb::arg("max_gaussian_area") = 0.f);
+        m.def("export_collision", [collision_access](const std::string& uuid, const std::string& path) {
             const auto parsed = core::Uuid::from_string(uuid);
             if (!parsed)
-                throw std::invalid_argument("Invalid collision target UUID");
-            auto* manager = get_scene_manager();
-            point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
-                collision_tasks().startCollisionExport(*parsed, core::utf8_to_path(path));
+                throw core::collisionError("collision.select_export", "Invalid collision target UUID", ErrorCode::InvalidArgument);
+            collision_access([&](auto& tasks, auto*) {
+                tasks.startCollisionExport(*parsed, core::utf8_to_path(path));
             }); }, nb::arg("uuid"), nb::arg("path"));
-        m.def("cancel_collision", [collision_tasks] {
-            auto* manager = get_scene_manager();
-            point_cloud_access(manager ? &manager->getScene() : nullptr, [&] { collision_tasks().cancelCollision(); });
+        m.def("cancel_collision", [collision_access] {
+            collision_access([](auto& tasks, auto*) { tasks.cancelCollision(); });
         });
-        m.def("get_collision_state", [collision_tasks] {
-            struct State {
-                std::optional<vis::JobSnapshot> job;
-                std::string uuid, name, source, walk_error;
-                float resolved_size = 0;
-                core::CollisionSettings settings;
-                core::WalkSettings walk_settings;
-                bool colliders = false, walking = false;
-            };
-            auto* manager = get_scene_manager();
-            const auto state = point_cloud_access(manager ? &manager->getScene() : nullptr, [&] {
-                State state;
-                state.job = collision_tasks().collisionJob();
-                state.resolved_size = collision_tasks().collisionResolvedSize();
-                state.settings = collision_tasks().collisionGenerationSettings();
-                if (manager) {
-                    const auto& scene = manager->getScene();
-                    for (const auto* node : scene.getNodes())
-                        state.colliders |= node && bool(node->collision);
-                    const auto* target = scene.getNode(manager->getSelectedNodeName());
-                    if (target && target->type == core::NodeType::SPLAT && manager->getSelectedNodeIds().size() == 1 && (target->model || scene.isConsolidated()))
-                        state.source = target->name;
-                    if (target && target->type == core::NodeType::COLLISION && target->collision) {
-                        state.uuid = target->uuid.to_string();
-                        state.name = target->name;
-                    }
-                }
-                if (const auto* input = vis::InputController::instance()) {
-                    state.walking = input->cameraNavigationMode() == vis::InputController::CameraNavigationMode::Walk;
-                    state.walk_error = input->walk_error;
-                    state.walk_settings = input->walk_settings;
-                }
-                return state;
-            });
+        m.def("get_collision_state", [collision_access] {
             nb::dict result;
-            result["active"] = state.job && state.job->running();
-            result["progress"] = state.job ? state.job->progress : 0.f;
-            result["stage"] = state.job ? state.job->stage : "";
-            result["error"] = state.job ? state.job->error : "";
-            result["walk_error"] = state.walk_error;
-            result["has_collision"] = state.colliders;
-            result["walking"] = state.walking;
-            result["walk_settings"] = nb::make_tuple(state.walk_settings.height, state.walk_settings.radius,
-                                                     state.walk_settings.step, state.walk_settings.speed);
-            result["target_uuid"] = state.uuid;
-            result["target_name"] = state.name;
-            result["source_name"] = state.source;
-            result["resolved_voxel_size"] = state.resolved_size;
-            result["generation_settings"] = nb::make_tuple(state.settings.voxel_size, state.settings.opacity,
-                                                           state.settings.auto_resolution, state.settings.cleanup, state.settings.max_gaussian_area);
+            collision_access([&](auto& tasks, auto* manager) {
+                // Posted access releases the caller's GIL while the viewer fills this snapshot.
+                nb::gil_scoped_acquire acquire;
+                const auto job = tasks.collisionJob();
+                const auto settings = tasks.collisionGenerationSettings();
+                const auto* input = vis::InputController::instance();
+                const auto walk = input ? input->walk_settings : core::WalkSettings{};
+                const auto* target = manager ? manager->getScene().getNode(manager->getSelectedNodeName()) : nullptr;
+                const bool collider = target && target->type == core::NodeType::COLLISION && target->collision;
+                const bool source = target && target->type == core::NodeType::SPLAT && manager->getSelectedNodeIds().size() == 1 && (target->model || manager->getScene().isConsolidated());
+                result["active"] = job && job->running();
+                result["progress"] = job ? job->progress : 0.f;
+                result["stage"] = job ? job->stage : "";
+                result["error"] = job ? job->error : "";
+                result["walk_error"] = input ? input->walk_error : "";
+                result["has_collision"] = manager && std::ranges::any_of(manager->getScene().getNodes(), [](const auto* node) {
+                                              return node && bool(node->collision);
+                                          });
+                result["walking"] = input && input->cameraNavigationMode() == vis::InputController::CameraNavigationMode::Walk;
+                result["walk_settings"] = nb::make_tuple(walk.height, walk.radius, walk.step, walk.speed);
+                result["target_uuid"] = collider ? target->uuid.to_string() : "";
+                result["target_name"] = collider ? target->name : "";
+                result["source_name"] = source ? target->name : "";
+                result["resolved_voxel_size"] = tasks.collisionResolvedSize();
+                result["generation_settings"] = nb::make_tuple(settings.voxel_size, settings.opacity,
+                                                               settings.auto_resolution, settings.cleanup, settings.max_gaussian_area);
+            });
             return result;
         });
         m.def("set_walk_settings", [](float height, float radius, float step, float speed) {

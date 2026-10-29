@@ -41,10 +41,12 @@ namespace lfs::training {
         lfs::core::Uuid save_as_project_uuid = {};
         std::optional<std::filesystem::path>
             source_path;
+        std::shared_ptr<lfs::io::project::ProjectReader> retained_source;
         lfs::io::project::ProjectChapter project;
         lfs::io::project::ReferencesChapter references;
         lfs::io::project::GuiLayoutChapter gui_layout;
         lfs::io::project::ViewSessionChapter view;
+        lfs::io::project::ShaderLibraryChapter shaders;
         lfs::io::project::EditorSessionChapter editor;
         lfs::io::project::SequencerSessionChapter
             sequencer;
@@ -57,6 +59,7 @@ namespace lfs::training {
         lfs::io::project::CommitKind
             durable_commit_kind =
                 lfs::io::project::CommitKind::Explicit;
+        std::array<std::uint64_t, 2> shader_token{};
         bool allow_existing_destination_replacement = false;
         std::optional<
             lfs::io::project::WriterLockLease>

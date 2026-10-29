@@ -7,6 +7,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/cuda/vmm_device_buffer.hpp"
 #include "core/environment.hpp"
 #include "core/image_io.hpp"
@@ -721,7 +722,7 @@ TEST_F(GsplatRasterizerTest, GutModeSteadyStateAllocs) {
 }
 
 // gut/gsplat forward+backward with default quant ON + sh_degree>0.
-// Saves dequant temp in ctx so backward does not dtype-abort on q16 codes.
+// Forward and backward retain the resident q16 storage.
 class GsplatRasterizerQuantTest : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
@@ -766,10 +767,9 @@ TEST_F(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree)
         /*use_gut=*/true);
     ASSERT_TRUE(result.has_value()) << result.error();
     auto& [output, ctx] = *result;
-    // ctx must hold float dequant, not raw Float16 codes.
     ASSERT_TRUE(ctx.shN.is_valid());
-    EXPECT_EQ(ctx.shN.dtype(), DataType::Float32)
-        << "backward requires float dequant temp in ctx under q16";
+    EXPECT_EQ(ctx.shN.dtype(), DataType::Float16);
+    EXPECT_EQ(ctx.shN.data_ptr(), splat.shN().data_ptr());
 
     auto grad_image = Tensor::ones_like(output.image);
     auto grad_alpha = Tensor::zeros_like(output.alpha);
@@ -2551,5 +2551,217 @@ TEST_F(GsplatRasterizerTest, ExpectedRadialDepthBehindCameraHasCorrectGradients)
             EXPECT_NEAR(gs.ptr<float>()[1], 0.f, 1e-5f);
             EXPECT_NEAR(gs.ptr<float>()[2], .6f * std::exp(-1.5f), 1e-5f);
         }
+    }
+}
+
+namespace {
+
+    struct GutQuantGuard {
+        GutQuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(true); }
+        ~GutQuantGuard() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
+    };
+
+    std::vector<uint8_t> gut_tensor_bytes(const Tensor& tensor) {
+        const auto host = tensor.cpu().contiguous();
+        const auto* data = static_cast<const uint8_t*>(host.data_ptr());
+        return {data, data + host.bytes()};
+    }
+
+    // Fisheye distortion with the pinhole fixture's focal length, so the
+    // millimetre-sized SH fixture covers pixels of a single 16x16 tile.
+    Camera make_narrow_fisheye_camera(int w, int h) {
+        auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::GPU);
+        auto T = Tensor::from_vector({0.f, 0.f, 3.f}, {3}, Device::GPU);
+        auto radial = Tensor::from_vector(
+            {0.03556234340872849f, 0.007709264733622488f,
+             0.0006652110074087792f, -0.0003144582282973898f},
+            {4}, Device::CPU);
+        return Camera(
+            R, T,
+            500.f, 500.f,
+            static_cast<float>(w) * 0.5f, static_cast<float>(h) * 0.5f,
+            radial, Tensor(),
+            lfs::core::CameraModelType::FISHEYE,
+            "test_narrow_fisheye",
+            "",
+            std::filesystem::path{},
+            w, h,
+            0);
+    }
+
+    SplatData make_sh_storage_fixture(size_t n, int degree) {
+        const size_t rest = sh_rest_coefficients_for_degree(degree);
+        std::vector<float> means(n * 3), rotation(n * 4, 0.f), sh(n * rest * 3);
+        std::vector<float> opacity(n, -100.f);
+        for (size_t i = 0; i < n; ++i) {
+            means[3 * i] = (static_cast<float>(i % 17) - 8.f) * 0.001f;
+            means[3 * i + 1] = (static_cast<float>(i % 13) - 6.f) * 0.001f;
+            rotation[4 * i] = 1.f;
+            for (size_t j = 0; j < rest * 3; ++j)
+                sh[i * rest * 3 + j] = (static_cast<float>((i * 7 + j * 11) % 43) - 21.f) *
+                                       (0.003f + 0.001f * static_cast<float>(i / 256));
+        }
+        opacity[0] = 2.f;
+        opacity[256] = 1.f;
+        return SplatData(degree,
+                         Tensor::from_vector(means, {n, 3}, Device::GPU),
+                         Tensor::full({n, 1, 3}, 0.3f, Device::GPU),
+                         Tensor::from_vector(sh, {n, rest, 3}, Device::GPU),
+                         Tensor::full({n, 3}, -4.f, Device::GPU),
+                         Tensor::from_vector(rotation, {n, 4}, Device::GPU),
+                         Tensor::from_vector(opacity, {n, 1}, Device::GPU), 1.f);
+    }
+
+    SplatData decoded_sh_reference(const SplatData& quantized) {
+        auto reference = quantized.clone();
+        reference.shN() = Tensor::zeros(
+            {sh_swizzled_float_count(quantized.size(), quantized.max_sh_coeffs_rest())}, Device::GPU);
+        // The decode runs on the legacy stream; order it after the tensor-stream work.
+        if (cudaDeviceSynchronize() != cudaSuccess)
+            throw std::runtime_error("q16 reference inputs failed");
+        sh_value::decode_shN_u16_to_float4(
+            reinterpret_cast<const uint16_t*>(quantized.shN().data_ptr()),
+            quantized.shN_value_bounds().ptr<float>(), reference.shN().ptr<float>(),
+            quantized.size(), quantized.max_sh_coeffs_rest());
+        if (cudaDeviceSynchronize() != cudaSuccess)
+            throw std::runtime_error("q16 reference decode failed");
+        reference.shN_value_bounds() = {};
+        return reference;
+    }
+
+} // namespace
+
+TEST_F(GsplatRasterizerQuantTest, DecodedFp32AndQ16AreBitwiseEqualAcrossBandsAndWarmup) {
+    GutQuantGuard guard;
+    constexpr size_t n = 257;
+    for (const int layout_degree : {1, 2, 3}) {
+        auto seed = make_sh_storage_fixture(n, layout_degree);
+        ASSERT_TRUE(sh_value::apply_shN_value_quant(seed));
+        auto decoded = decoded_sh_reference(seed);
+        for (bool fisheye : {false, true}) {
+            auto camera = fisheye ? make_narrow_fisheye_camera(16, 16) : make_camera(16, 16);
+            auto bg = Tensor::full({3}, 0.2f, Device::GPU);
+            for (int active_degree = 0; active_degree <= layout_degree; ++active_degree) {
+                for (const int iteration : {999, 1000, 1001}) {
+                    SCOPED_TRACE(::testing::Message() << layout_degree << '/' << active_degree
+                                                      << " fisheye=" << fisheye << " iteration=" << iteration);
+                    Tensor reference_image, reference_alpha, reference_grad, reference_moments, reference_bounds;
+                    for (int arm = 0; arm < 2; ++arm) {
+                        auto model = arm ? seed.clone() : decoded.clone();
+                        model.set_active_sh_degree(active_degree);
+                        AdamConfig cfg;
+                        cfg.initial_capacity = n + 256;
+                        AdamOptimizer opt(model, cfg);
+                        opt.allocate_gradients();
+                        auto result = gsplat_rasterize_forward(
+                            camera, model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+                        ASSERT_TRUE(result.has_value()) << result.error();
+                        ASSERT_GT(result->second.n_isects, 0);
+                        EXPECT_GT(result->first.alpha.max().item<float>(), 0.f);
+                        if (!arm) {
+                            reference_image = result->first.image.clone();
+                            reference_alpha = result->first.alpha.clone();
+                        } else {
+                            EXPECT_EQ(gut_tensor_bytes(result->first.image), gut_tensor_bytes(reference_image));
+                            EXPECT_EQ(gut_tensor_bytes(result->first.alpha), gut_tensor_bytes(reference_alpha));
+                            EXPECT_EQ(result->second.shN.data_ptr(), model.shN().data_ptr());
+                            EXPECT_EQ(result->second.shN.dtype(), DataType::Float16);
+                        }
+                        auto grad_image = Tensor::full(result->first.image.shape(), 0.7f, Device::GPU);
+                        auto grad_alpha = Tensor::full(result->first.alpha.shape(), 0.3f, Device::GPU);
+                        gsplat_rasterize_backward(result->second, grad_image, grad_alpha, model, opt, Tensor{});
+                        auto& grad = opt.get_grad(ParamType::ShN);
+                        if (!arm) {
+                            reference_grad = grad.clone();
+                        } else {
+                            // Color gradients are summed with atomics across warps, so the
+                            // arms differ only in rounding; step both from one gradient.
+                            const float scale = reference_grad.abs().max().item<float>();
+                            EXPECT_LE((grad - reference_grad).abs().max().item<float>(), 1e-5f * scale);
+                            grad.copy_from(reference_grad);
+                        }
+                        const auto params_before = gut_tensor_bytes(model.shN());
+                        opt.step(iteration);
+                        const auto* state = opt.get_state(ParamType::ShN);
+                        ASSERT_NE(state, nullptr);
+                        EXPECT_EQ(state->step_count, active_degree > 0 && iteration > 1000 ? 1 : 0);
+                        if (iteration <= 1000 || active_degree == 0)
+                            EXPECT_EQ(gut_tensor_bytes(model.shN()), params_before);
+                        if (!arm) {
+                            reference_moments = state->exp_avg.clone();
+                            reference_bounds = state->joint_bounds.clone();
+                        } else {
+                            EXPECT_EQ(gut_tensor_bytes(state->exp_avg), gut_tensor_bytes(reference_moments));
+                            EXPECT_EQ(gut_tensor_bytes(state->joint_bounds), gut_tensor_bytes(reference_bounds));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(GsplatRasterizerQuantTest, ShBackwardWithoutDirectionGradNeedsNoCoefficientStorage) {
+    GutQuantGuard guard;
+    constexpr size_t n = 257;
+    auto model = make_sh_storage_fixture(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
+    auto reference = decoded_sh_reference(model);
+    auto dirs = Tensor::full({n, 3}, 0.3f, Device::GPU);
+    auto v_colors = Tensor::full({n, 3}, 0.7f, Device::GPU);
+    for (uint32_t degree = 0; degree <= 3; ++degree) {
+        auto expected = Tensor::zeros({n, 16, 3}, Device::GPU);
+        auto actual = Tensor::zeros_like(expected);
+        auto without_values = Tensor::zeros_like(expected);
+        auto expected_dirs = Tensor::zeros({n, 3}, Device::GPU);
+        auto actual_dirs = Tensor::zeros_like(expected_dirs);
+        // The SH kernels run on the legacy stream; order them against the tensor stream.
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        gsplat_lfs::spherical_harmonics_swizzled_bwd(
+            16, degree, 3, dirs.ptr<float>(), reference.sh0().ptr<float>(), reference.shN().ptr<float>(),
+            nullptr, v_colors.ptr<float>(), n, true, expected.ptr<float>(), expected_dirs.ptr<float>());
+        gsplat_lfs::spherical_harmonics_swizzled_bwd(
+            16, degree, 3, dirs.ptr<float>(), model.sh0().ptr<float>(),
+            reinterpret_cast<const float*>(model.shN().data_ptr()), nullptr, v_colors.ptr<float>(), n,
+            true, actual.ptr<float>(), actual_dirs.ptr<float>(), 3, nullptr, model.shN_value_bounds().ptr<float>());
+        gsplat_lfs::spherical_harmonics_swizzled_bwd(
+            16, degree, 3, dirs.ptr<float>(), nullptr, nullptr, nullptr, v_colors.ptr<float>(), n,
+            false, without_values.ptr<float>(), nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(gut_tensor_bytes(actual), gut_tensor_bytes(expected));
+        EXPECT_EQ(gut_tensor_bytes(without_values), gut_tensor_bytes(expected));
+        EXPECT_LT(max_abs_diff_tensors(actual_dirs, expected_dirs), 1e-6f);
+    }
+}
+
+TEST_F(GsplatRasterizerQuantTest, FirstQ16AndSteadyForwardsAllocateNoDecodedShTensor) {
+    GutQuantGuard guard;
+    ASSERT_TRUE(release_gsplat_caches());
+    auto model = make_sh_storage_fixture(4097, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
+    auto reference = decoded_sh_reference(model);
+    model.set_active_sh_degree(3);
+    reference.set_active_sh_degree(3);
+    auto camera = make_camera(16, 16);
+    auto bg = Tensor::zeros({3}, Device::GPU);
+    for (int i = 0; i < 5; ++i) {
+        auto result = gsplat_rasterize_forward(
+            camera, reference, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        release_ctx_arena(result->second);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    Tensor::trim_memory_pool();
+    for (int i = 0; i < 30; ++i) {
+        const auto before = alloc_counter::snapshot();
+        auto result = gsplat_rasterize_forward(
+            camera, model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        ASSERT_GT(result->second.n_isects, 0);
+        EXPECT_EQ(result->second.shN.data_ptr(), model.shN().data_ptr());
+        EXPECT_EQ(result->second.shN.dtype(), DataType::Float16);
+        release_ctx_arena(result->second);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(alloc_counter::delta_since(before), 0u) << "q16 forward " << i;
     }
 }

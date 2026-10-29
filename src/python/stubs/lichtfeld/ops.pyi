@@ -61,6 +61,8 @@ class BuiltinOp(enum.Enum):
 
     CropPolygonSet = 22
 
+    ScaleDistancePickPoint = 23
+
 class BuiltinTool(enum.Enum):
     Select = 0
 
@@ -73,6 +75,8 @@ class BuiltinTool(enum.Enum):
     Mirror = 4
 
     Align = 5
+
+    ScaleDistance = 6
 
 class OperatorFlags(enum.Flag):
     NONE = 0

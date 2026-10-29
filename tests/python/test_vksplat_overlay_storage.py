@@ -179,7 +179,9 @@ class VkSplatOverlayStorageTests(unittest.TestCase):
             "CropPolygonVertices": "OVERLAY_PARAM_CROP_POLYGON_VERTICES",
             "CropPolygonParamStride": "OVERLAY_PARAM_CROP_POLYGON_STRIDE",
             "CropPolygonCount": "OVERLAY_PARAM_CROP_POLYGON_COUNT",
-            "TableParamCount": "OVERLAY_PARAM_COUNT",
+            "RevealParams": "OVERLAY_PARAM_REVEAL",
+            "RevealEffectBounds": "OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS",
+            "VksplatTableParamCount": "OVERLAY_PARAM_COUNT",
             "kMaxVertices": "OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES",
         }
         for host_name, shader_name in pairs.items():

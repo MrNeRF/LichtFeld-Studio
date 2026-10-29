@@ -28,6 +28,7 @@ namespace lfs::vis::gui {
 
     struct PanelInputState;
     class RmlUIManager;
+    class SequencerExportWorkflowTest;
 
     struct ContextMenuItem {
         std::string label{};
@@ -63,6 +64,7 @@ namespace lfs::vis::gui {
         void preload();
 
     private:
+        friend class SequencerExportWorkflowTest;
         void initContext();
         bool syncTheme();
         void hide();

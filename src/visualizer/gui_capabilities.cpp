@@ -9,9 +9,11 @@
 #include "core/tensor_sh.hpp"
 
 #include "core/crop_polygon.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
 #include "operation/undo_entry.hpp"
@@ -27,6 +29,7 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <unordered_set>
 
 namespace lfs::vis::cap {
@@ -1161,6 +1164,47 @@ namespace lfs::vis::cap {
         entry->captureAfter();
         vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
+    }
+
+    std::expected<std::vector<std::string>, std::string> applyVisualizerWorldDelta(
+        SceneManager& scene_manager,
+        const std::vector<std::string>& targets,
+        const glm::mat4& delta,
+        const std::string_view undo_label) {
+        const auto& scene = scene_manager.getScene();
+        const auto transform_targets = top_level_transform_targets(scene, targets);
+        if (transform_targets.empty())
+            return std::unexpected("No unlocked transformable scene nodes found");
+
+        for (const auto& name : transform_targets) {
+            const auto* const node = scene.getNode(name);
+            if (!node)
+                return std::unexpected("Node not found: " + name);
+            if (scene.isNodeEffectivelyLocked(node->id))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
+        }
+
+        std::vector<glm::mat4> local_transforms;
+        local_transforms.reserve(transform_targets.size());
+        for (const auto& name : transform_targets) {
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene, name);
+            const auto local = scene_coords::nodeLocalTransformFromVisualizerWorld(
+                scene, name, delta * *world_transform);
+            if (!local)
+                return std::unexpected("Cannot transform '" + name + "': parent transform cannot preserve a finite world transform");
+            local_transforms.push_back(*local);
+        }
+
+        auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
+        entry->captureTransforms(transform_targets);
+        // All targets are validated before this synchronous scene-owner-thread batch.
+        for (std::size_t i = 0; i < transform_targets.size(); ++i)
+            scene_manager.setNodeTransform(transform_targets[i], local_transforms[i]);
+
+        entry->captureAfter();
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
+
+        return transform_targets;
     }
 
     std::expected<size_t, std::string> bakeNodeTransforms(SceneManager& scene_manager,

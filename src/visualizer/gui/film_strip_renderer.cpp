@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/film_strip_renderer.hpp"
+#include "io/video/video_frame_geometry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -72,10 +73,11 @@ namespace lfs::vis::gui {
         const glm::mat3 cam_rot = glm::mat3_cast(state.rotation);
 
         const auto image = rm->renderPreviewImage(sm, cam_rot, state.position, state.focal_length_mm,
-                                                  THUMB_WIDTH, THUMB_HEIGHT);
+                                                  render_width_, render_height_, std::nullopt, orthographic_, ortho_scale_,
+                                                  equirectangular_, /*deterministic_export=*/false, time);
         // Vulkan preview readback is already in the orientation RmlUi samples.
         const bool ok = image &&
-                        slots_[slot_idx].texture.upload(*image, THUMB_WIDTH, THUMB_HEIGHT, /*flip_y=*/false);
+                        slots_[slot_idx].texture.upload(*image, render_width_, render_height_, /*flip_y=*/false);
 
         if (ok) {
             slots_[slot_idx].time = time;
@@ -89,6 +91,25 @@ namespace lfs::vis::gui {
     void FilmStripRenderer::render(const SequencerController& controller,
                                    RenderingManager* rm, SceneManager* sm,
                                    const RenderOptions& options) {
+        const auto settings = rm ? rm->getSettings() : RenderSettings{};
+        const auto size = io::video::videoCameraRenderSize(THUMB_WIDTH, THUMB_HEIGHT,
+                                                           settings.equirectangular ? 2 : std::clamp(options.camera_width, 1, 8192),
+                                                           settings.equirectangular ? 1 : std::clamp(options.camera_height, 1, 8192), io::video::VideoFrameFit::FIT);
+        const float scale = settings.ortho_scale * static_cast<float>(size.height) / std::max(1, rm ? rm->getRenderedSize().y : 1);
+        const std::uint64_t custom_effect_generation = rm ? rm->customEffectGeneration() : 0;
+        if (size.width != render_width_ || size.height != render_height_ || equirectangular_ != settings.equirectangular ||
+            orthographic_ != settings.orthographic || (settings.orthographic && scale != ortho_scale_) ||
+            custom_effect_generation != custom_effect_generation_) {
+            render_width_ = size.width;
+            render_height_ = size.height;
+            equirectangular_ = settings.equirectangular;
+            orthographic_ = settings.orthographic;
+            ortho_scale_ = scale;
+            custom_effect_generation_ = custom_effect_generation;
+            for (auto& slot : slots_)
+                slot.valid = false;
+            invalidateAll();
+        }
         const float timeline_x = options.timeline_x;
         const float timeline_width = options.timeline_width;
         const float strip_y = options.strip_y;
@@ -328,7 +349,7 @@ namespace lfs::vis::gui {
         if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
             return {};
         const auto& slot = slots_[slot_idx];
-        return slot.valid ? slot.texture.rmlSrcUrl(THUMB_WIDTH, THUMB_HEIGHT) : std::string{};
+        return slot.valid ? slot.texture.rmlSrcUrl(render_width_, render_height_) : std::string{};
     }
 
     void FilmStripRenderer::invalidateAll() {

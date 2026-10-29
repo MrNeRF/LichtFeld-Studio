@@ -4,6 +4,7 @@
 #include "python_editor.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 
+#include "core/source_site.hpp"
 #include "python_lsp_client.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
@@ -610,11 +611,6 @@ namespace lfs::vis::editor {
             size_t end_byte = 0;
         };
 
-        struct DiagnosticByteRange {
-            size_t start = 0;
-            size_t end = 0;
-        };
-
         struct PendingSyntaxPreEdit {
             size_t start_byte = 0;
             size_t end_byte = 0;
@@ -695,9 +691,19 @@ namespace lfs::vis::editor {
                 }
 
                 auto buffer_message = std::static_pointer_cast<Zep::BufferMessage>(message);
-                if (buffer_message->pBuffer != owner_.buffer) {
-                    return;
+                auto* changed = buffer_message->pBuffer;
+                if (buffer_message->type == Zep::BufferMessageType::TextAdded ||
+                    buffer_message->type == Zep::BufferMessageType::TextChanged ||
+                    buffer_message->type == Zep::BufferMessageType::TextDeleted) {
+                    auto& doc = owner_.documents[changed];
+                    ++doc.info.source_revision;
+                    owner_.notifyShaderObservers();
+                    doc.clearDiagnostics(*changed);
+                    owner_.host_text_changed = true;
                 }
+                owner_.syncActiveBuffer();
+                if (changed != owner_.buffer || !owner_.isPython())
+                    return;
 
                 switch (buffer_message->type) {
                 case Zep::BufferMessageType::PreBufferChange:
@@ -761,13 +767,16 @@ namespace lfs::vis::editor {
             config.lineMargins = Zep::NVec2f(1.0f, 1.0f);
 
             buffer = editor->InitWithText("script.py", "");
+            buffer->SetFileFlags(Zep::FileFlags::DefaultBuffer);
+            buffer->SetPreserveCarriageReturns(true);
+            documents.try_emplace(buffer);
             if (auto* tab = editor->GetActiveTabWindow()) {
                 if (auto* window = tab->GetActiveWindow()) {
                     window->SetWindowFlags(window->GetWindowFlags() & ~Zep::WindowFlags::WrapText);
                 }
             }
             if (buffer != nullptr) {
-                buffer->SetFileFlags(Zep::FileFlags::InsertTabs, false);
+                buffer->ClearFileFlags(Zep::FileFlags::InsertTabs);
                 buffer->SetPostKeyNotifier([this](uint32_t key, uint32_t modifier) {
                     handlePostKey(key, modifier);
                     return false;
@@ -851,7 +860,99 @@ namespace lfs::vis::editor {
             editor->RequestRefresh();
         }
 
+        std::uint64_t shader_generation = 0;
+        std::shared_ptr<shaders::ShaderChanges> shader_changes;
+        void notifyShaderObservers() {
+            if (shader_changes)
+                shader_changes->notify();
+        }
+
+        struct Document {
+            EditorDocument info{.id = core::generate_uuid_v4()};
+            std::optional<std::string> locator;
+            std::set<std::shared_ptr<Zep::RangeMarker>> markers;
+            std::vector<EditorDiagnosticRange> ranges;
+            std::vector<shaders::ShaderSlot> run_slots;
+            std::uint64_t run_revision = 0;
+            std::uint64_t reported_links = 0;
+            shaders::ShaderState reported_state = shaders::ShaderState::Unbound;
+            bool reported_compiling = false;
+            bool open = true;
+            void clearDiagnostics(Zep::ZepBuffer& buffer) {
+                buffer.ClearRangeMarkers(markers);
+                markers.clear();
+                ranges.clear();
+            }
+        };
+
+        bool isPython() const {
+            const auto found = documents.find(buffer);
+            return found == documents.end() || found->second.info.kind == DocumentKind::Python;
+        }
+
+        void resetLanguageState() {
+            clearSyntaxDiagnosticMarkers();
+            clearSemanticHighlighting();
+            clearCompletionState();
+            lsp.reset();
+            syntax_document = lfs::python::PythonSyntaxDocument{};
+            pending_syntax_pre_edit.reset();
+            pending_syntax_edits.clear();
+            current_syntax_scope.clear();
+            pending_semantic_tokens.reset();
+            syntax_full_reparse_required = true;
+            syntax_analysis_pending = isPython();
+            semantic_tokens_request_pending = false;
+            text_changed = false;
+            last_cursor_byte_index = std::string::npos;
+            if (buffer) {
+                buffer->ClearFoldRanges();
+                editor->SetBufferSyntax(*buffer, isPython() ? "script.py" : "shader.slang");
+            }
+            editor->RequestRefresh();
+        }
+
+        void syncActiveBuffer() {
+            const auto& buffers = editor->GetBuffers();
+            const auto live = [&](const Zep::ZepBuffer* candidate) {
+                return std::ranges::any_of(buffers, [&](const auto& owned) { return owned.get() == candidate; });
+            };
+            if (buffer && !live(buffer)) {
+                buffer = nullptr;
+                syntax_markers.clear();
+            }
+            if (std::erase_if(documents, [&](const auto& entry) { return !live(entry.first); }))
+                notifyShaderObservers();
+            for (auto& [candidate, doc] : documents) {
+                const bool open = std::ranges::any_of(editor->GetTabWindows(), [&](const auto* tab) {
+                    return std::ranges::any_of(tab->GetWindows(), [&](const auto* window) { return &window->GetBuffer() == candidate; });
+                });
+                if (std::exchange(doc.open, open) != open)
+                    notifyShaderObservers();
+            }
+            auto* active = editor->GetActiveBuffer();
+            if (!active || active == buffer)
+                return;
+            clearSyntaxDiagnosticMarkers();
+            clearSemanticHighlighting();
+            buffer = active;
+            documents.try_emplace(buffer);
+            buffer->SetPreserveCarriageReturns(true);
+            resetLanguageState();
+            notifyShaderObservers();
+        }
+
+        Zep::ZepBuffer* documentBuffer(const core::Uuid& id) {
+            syncActiveBuffer();
+            for (const auto& [candidate, doc] : documents)
+                if (doc.info.id == id && !editor->FindBufferWindows(candidate).empty())
+                    return candidate;
+            return nullptr;
+        }
+
         void ensureLspStarted() {
+            if (!isPython())
+                return;
             if (lsp != nullptr) {
                 return;
             }
@@ -890,10 +991,14 @@ namespace lfs::vis::editor {
 
             suppress_buffer_events = true;
             buffer->SetText(text);
+            auto& doc = documents[buffer];
+            ++doc.info.source_revision;
+            notifyShaderObservers();
+            doc.clearDiagnostics(*buffer);
             suppress_buffer_events = false;
             text_changed = false;
             host_text_changed = false;
-            if (lsp) {
+            if (isPython() && lsp) {
                 document_version = lsp->updateDocument(text);
             }
             clearCompletionState();
@@ -905,7 +1010,7 @@ namespace lfs::vis::editor {
             clearSemanticHighlighting();
             semantic_dirty_range.clear();
             semantic_full_refresh_required = true;
-            semantic_tokens_request_pending = true;
+            semantic_tokens_request_pending = isPython();
             last_text_change_at = Clock::now();
             semantic_tokens_idle_delay = SEMANTIC_TOKENS_BOUNDARY_DELAY;
             next_semantic_tokens_request_at = last_text_change_at + semantic_tokens_idle_delay;
@@ -1151,11 +1256,13 @@ namespace lfs::vis::editor {
 
         void scheduleSyntaxAnalysis(
             const std::chrono::milliseconds delay = SYNTAX_ANALYSIS_DEBOUNCE) {
-            syntax_analysis_pending = true;
+            syntax_analysis_pending = isPython();
             next_syntax_analysis_at = Clock::now() + delay;
         }
 
         void recordSyntaxPreEdit(const size_t start, const size_t end) {
+            if (!isPython())
+                return;
             const std::string text = getText();
             const size_t clamped_start = std::min(start, text.size());
             const size_t clamped_end = std::min(std::max(start, end), text.size());
@@ -1168,6 +1275,8 @@ namespace lfs::vis::editor {
         }
 
         void recordSyntaxPostEdit(const Zep::BufferMessageType type, const size_t start, const size_t end) {
+            if (!isPython())
+                return;
             const std::string text = getText();
             if (!pending_syntax_pre_edit.has_value()) {
                 syntax_full_reparse_required = true;
@@ -1220,7 +1329,7 @@ namespace lfs::vis::editor {
             syntax_markers.clear();
         }
 
-        [[nodiscard]] std::optional<DiagnosticByteRange> diagnosticRangeForIssue(
+        [[nodiscard]] std::optional<EditorDiagnosticRange> diagnosticRangeForIssue(
             const lfs::python::PythonBufferIssue& issue,
             std::string_view text) const {
             size_t start = std::min(issue.start_byte, text.size());
@@ -1230,7 +1339,7 @@ namespace lfs::vis::editor {
             }
 
             if (start < end) {
-                return DiagnosticByteRange{.start = start, .end = end};
+                return EditorDiagnosticRange{.start = start, .end = end};
             }
 
             if (text.empty()) {
@@ -1254,10 +1363,25 @@ namespace lfs::vis::editor {
             if (start >= end) {
                 return std::nullopt;
             }
-            return DiagnosticByteRange{.start = start, .end = end};
+            return EditorDiagnosticRange{.start = start, .end = end};
+        }
+
+        static std::shared_ptr<Zep::RangeMarker> diagnosticMarker(Zep::ZepBuffer& buffer,
+                                                                  const char* name, const std::string& message, Zep::ThemeColor color) {
+            auto marker = std::make_shared<Zep::RangeMarker>(buffer);
+            marker->markerType = Zep::RangeMarkerType::Mark;
+            marker->displayType = Zep::RangeMarkerDisplayType::Underline |
+                                  Zep::RangeMarkerDisplayType::Tooltip |
+                                  Zep::RangeMarkerDisplayType::Indicator;
+            marker->SetName(name);
+            marker->SetDescription(message);
+            marker->SetColors(Zep::ThemeColor::Background, Zep::ThemeColor::Text, color);
+            return marker;
         }
 
         void applySyntaxDiagnostics(const std::string& text) {
+            if (!isPython())
+                return;
             clearSyntaxDiagnosticMarkers();
             if (buffer == nullptr || editor == nullptr ||
                 syntax_document.analysis().status != lfs::python::PythonBufferStatus::SyntaxError) {
@@ -1270,18 +1394,10 @@ namespace lfs::vis::editor {
                     continue;
                 }
 
-                auto marker = std::make_shared<Zep::RangeMarker>(*buffer);
-                marker->markerType = Zep::RangeMarkerType::Mark;
-                marker->displayType = Zep::RangeMarkerDisplayType::Underline |
-                                      Zep::RangeMarkerDisplayType::Tooltip |
-                                      Zep::RangeMarkerDisplayType::Indicator;
+                auto marker = diagnosticMarker(*buffer, "Python syntax", issue.message, Zep::ThemeColor::Error);
                 marker->tipPos = Zep::ToolTipPos::RightLine;
-                marker->SetName("Python syntax");
-                marker->SetDescription(issue.message);
-                marker->SetColors(Zep::ThemeColor::Background, Zep::ThemeColor::Text, Zep::ThemeColor::Error);
                 marker->SetAlpha(0.95f);
-                marker->SetRange(Zep::ByteRange(static_cast<Zep::ByteIndex>(range->start),
-                                                static_cast<Zep::ByteIndex>(range->end)));
+                marker->SetRange({static_cast<Zep::ByteIndex>(range->start), static_cast<Zep::ByteIndex>(range->end)});
                 syntax_markers.insert(std::move(marker));
             }
 
@@ -1289,6 +1405,8 @@ namespace lfs::vis::editor {
         }
 
         void syncSyntaxFolds(const std::string& text) {
+            if (!isPython())
+                return;
             if (buffer == nullptr) {
                 return;
             }
@@ -1320,6 +1438,8 @@ namespace lfs::vis::editor {
         }
 
         void updateSyntaxDiagnostics(const std::string& text, const CursorLocation& cursor) {
+            if (!isPython())
+                return;
             current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
             if (!syntax_analysis_pending || Clock::now() < next_syntax_analysis_at) {
                 return;
@@ -1427,6 +1547,8 @@ namespace lfs::vis::editor {
         }
 
         void applyTreeSitterHighlightingFallback(const std::string& text) {
+            if (!isPython())
+                return;
             if (buffer == nullptr) {
                 return;
             }
@@ -1460,6 +1582,8 @@ namespace lfs::vis::editor {
         }
 
         void applySemanticHighlighting(const std::string& text) {
+            if (!isPython())
+                return;
             if (buffer == nullptr) {
                 return;
             }
@@ -1485,6 +1609,8 @@ namespace lfs::vis::editor {
 
         void applySemanticHighlightingRange(const std::string& text,
                                             const SemanticLineRange& range) {
+            if (!isPython())
+                return;
             if (buffer == nullptr || range.start_byte >= range.end_byte) {
                 return;
             }
@@ -1580,6 +1706,8 @@ namespace lfs::vis::editor {
         }
 
         void issueSemanticTokensRequest() {
+            if (!isPython())
+                return;
             if (!lsp || !lsp->isAvailable()) {
                 semantic_tokens_request_pending = false;
                 return;
@@ -1596,6 +1724,8 @@ namespace lfs::vis::editor {
         }
 
         void scheduleAutoCompletion(const std::string& text, const CursorLocation& cursor) {
+            if (!isPython())
+                return;
             if (!shouldOfferCompletions(text, cursor)) {
                 completion.clear();
                 completion_request_pending = false;
@@ -1613,6 +1743,8 @@ namespace lfs::vis::editor {
         void issueCompletionRequest(const std::string& text,
                                     const CursorLocation& cursor,
                                     const bool manual) {
+            if (!isPython())
+                return;
             if (!lsp || !lsp->isAvailable() || !isInsertMode()) {
                 completion_request_pending = false;
                 return;
@@ -1642,6 +1774,8 @@ namespace lfs::vis::editor {
         }
 
         void updateLanguageServerState(const std::string& text, const CursorLocation& cursor) {
+            if (!isPython())
+                return;
             const bool cursor_changed =
                 cursor.byte_index != last_cursor_byte_index || cursor.line != last_cursor_line ||
                 cursor.character != last_cursor_character;
@@ -1864,7 +1998,7 @@ namespace lfs::vis::editor {
                                  const uint32_t modifiers,
                                  const std::string& text,
                                  const CursorLocation& cursor) {
-            if (read_only) {
+            if (read_only || !isPython()) {
                 return false;
             }
 
@@ -2157,6 +2291,8 @@ namespace lfs::vis::editor {
         }
 
         void handlePostKey(uint32_t key, uint32_t modifier) {
+            if (!isPython())
+                return;
             if (buffer == nullptr || (modifier & (Zep::ModifierKey::Ctrl | Zep::ModifierKey::Alt)) != 0 ||
                 key != Zep::ExtKeys::RETURN) {
                 return;
@@ -2484,6 +2620,8 @@ namespace lfs::vis::editor {
         }
 
         bool ensureSyntaxDocumentCurrent(const std::string& text, const size_t cursor_byte) {
+            if (!isPython())
+                return false;
             if (!syntax_analysis_pending && syntax_document.hasTree()) {
                 current_syntax_scope = syntax_document.scopeAt(cursor_byte);
                 return true;
@@ -2758,6 +2896,7 @@ namespace lfs::vis::editor {
         std::unique_ptr<Zep::ZepEditor> editor;
         Zep::ZepBuffer* buffer = nullptr;
         Host host;
+        std::unordered_map<Zep::ZepBuffer*, Document> documents;
         std::unique_ptr<PythonLspClient> lsp;
         CompletionPopupState completion;
         SemanticHighlightState semantic_highlights;
@@ -2766,9 +2905,6 @@ namespace lfs::vis::editor {
         std::optional<PendingSyntaxPreEdit> pending_syntax_pre_edit;
         std::vector<lfs::python::PythonBufferEdit> pending_syntax_edits;
         std::string current_syntax_scope;
-        std::unordered_map<
-            const Zep::ZepBuffer*, std::string>
-            session_locators;
 
         gui::ElementObserver rml_element;
         bool request_focus = false;
@@ -3009,10 +3145,11 @@ namespace lfs::vis::editor {
 
     PythonEditor::~PythonEditor() = default;
 
-    bool PythonEditor::renderRml(Rml::Element& element,
+    void PythonEditor::renderRml(Rml::Element& element,
                                  const float width,
                                  const float height,
                                  const float font_size_px) {
+        impl_->syncActiveBuffer();
         impl_->ensureLspStarted();
         impl_->applyTheme(theme());
         if (impl_->semantic_highlighting_from_tree_sitter &&
@@ -3023,6 +3160,7 @@ namespace lfs::vis::editor {
             impl_->applySemanticHighlighting(impl_->getText());
         }
 
+        impl_->syncActiveBuffer();
         impl_->rml_element = element.GetObserverPtr();
         if (impl_->request_focus)
             impl_->focusEditor();
@@ -3067,8 +3205,6 @@ namespace lfs::vis::editor {
         }
 
         impl_->request_focus = false;
-
-        return execute_requested_;
     }
 
     void PythonEditor::processRmlEvent(Rml::Element& element, Rml::Event& event) {
@@ -3076,6 +3212,7 @@ namespace lfs::vis::editor {
             return;
         }
 
+        impl_->syncActiveBuffer();
         impl_->rml_element = element.GetObserverPtr();
         const std::string type = event.GetType();
         const auto local_mouse = [&]() {
@@ -3218,18 +3355,6 @@ namespace lfs::vis::editor {
                 event.StopPropagation();
                 return;
             }
-            if ((modifiers & Zep::ModifierKey::Ctrl) != 0 &&
-                (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER)) {
-                execute_requested_ = true;
-                event.StopPropagation();
-                return;
-            }
-            if (key == Rml::Input::KI_F5) {
-                execute_requested_ = true;
-                event.StopPropagation();
-                return;
-            }
-
             if (impl_->handleCompletionKey(key, modifiers, text, cursor)) {
                 event.StopPropagation();
                 return;
@@ -3282,37 +3407,404 @@ namespace lfs::vis::editor {
     }
 
     std::string PythonEditor::getText() const {
+        impl_->syncActiveBuffer();
         return impl_->getText();
     }
 
-    std::string PythonEditor::getTextStripped() const {
-        return rstrip_lines(getText());
+    std::string PythonEditor::getTextStripped(const std::optional<core::Uuid> id) const {
+        auto* buffer = impl_->documentBuffer(id.value_or(document().id));
+        if (!buffer)
+            return {};
+        const auto text = buffer->GetBufferText(buffer->Begin(), buffer->End());
+        return impl_->documents.at(buffer).info.kind == DocumentKind::Shader ? text : rstrip_lines(text);
     }
 
     void PythonEditor::setText(const std::string& text) {
+        impl_->syncActiveBuffer();
         impl_->setTextSilently(text, std::nullopt);
     }
 
     void PythonEditor::clear() {
+        impl_->syncActiveBuffer();
         impl_->setTextSilently("", std::nullopt);
     }
 
     void PythonEditor::setActiveSessionLocator(
         std::string locator) {
+        impl_->syncActiveBuffer();
         if (impl_->buffer != nullptr)
-            impl_->session_locators.insert_or_assign(
-                impl_->buffer, std::move(locator));
+            impl_->documents.at(impl_->buffer).locator = std::move(locator);
     }
 
     void PythonEditor::clearActiveSessionLocator() {
+        impl_->syncActiveBuffer();
         if (impl_->buffer != nullptr)
-            impl_->session_locators.erase(impl_->buffer);
+            impl_->documents.at(impl_->buffer).locator.reset();
     }
 
-    bool PythonEditor::consumeExecuteRequested() {
-        const bool requested = execute_requested_;
-        execute_requested_ = false;
-        return requested;
+    EditorDocument PythonEditor::document() const {
+        impl_->syncActiveBuffer();
+        return impl_->documents.at(impl_->buffer).info;
+    }
+
+    namespace {
+        Error documentError(const std::string& message) {
+            return make_error(ErrorInit{.code = ErrorCode::InvalidArgument,
+                                        .domain = ErrorDomain::App,
+                                        .user_message = message,
+                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+        }
+    } // namespace
+
+    std::vector<EditorDocument> PythonEditor::documents() const {
+        impl_->syncActiveBuffer();
+        std::vector<EditorDocument> result;
+        for (const auto& [buffer, doc] : impl_->documents)
+            if (!impl_->editor->FindBufferWindows(buffer).empty())
+                result.push_back(doc.info);
+        std::ranges::sort(result, {}, [](const auto& doc) { return doc.id.bytes; });
+        return result;
+    }
+
+    Result<EditorDocumentState> PythonEditor::inspectDocument(const core::Uuid& id,
+                                                              const shaders::ShaderService* service) const {
+        auto* buffer = impl_->documentBuffer(id);
+        if (!buffer)
+            return documentError("Editor document is closed or unknown.");
+        const auto& doc = impl_->documents.at(buffer);
+        EditorDocumentState result;
+        result.document = doc.info;
+        result.text = buffer->GetBufferText(buffer->Begin(), buffer->End());
+        result.modified = buffer->HasFileFlags(Zep::FileFlags::Dirty);
+        result.locator = doc.locator.value_or(std::string{});
+        result.markers = doc.ranges;
+        if (!service)
+            return result;
+        if (doc.info.shader_asset)
+            for (const auto& slot : doc.run_slots)
+                if (service->boundAsset(slot, true) == doc.info.shader_asset)
+                    result.owned_bindings.push_back(slot);
+        if (doc.info.shader_asset) {
+            const auto state = service->asset(*doc.info.shader_asset);
+            if (state) {
+                const auto* found = &state->assets.front();
+                result.shader_status = found->status;
+                if (doc.run_revision == doc.info.source_revision &&
+                    found->status.diagnostics_revision == doc.info.asset_revision)
+                    result.diagnostics = found->status.diagnostics.entries;
+                result.applied = doc.info.asset_revision != 0 &&
+                                 found->status.displayed_revision == doc.info.asset_revision &&
+                                 std::ranges::any_of(state->displayed_bindings, [&](const auto& binding) {
+                                     return binding.asset == *doc.info.shader_asset &&
+                                            std::ranges::contains(result.owned_bindings, binding.target);
+                                 });
+            }
+        }
+        return result;
+    }
+
+    Status PythonEditor::setDocumentText(const core::Uuid& id, const std::string& text) {
+        auto* buffer = impl_->documentBuffer(id);
+        if (!buffer)
+            return Status::failure(documentError("Editor document is closed or unknown."));
+        auto& doc = impl_->documents.at(buffer);
+        if (doc.info.kind == DocumentKind::Shader && text.size() > shaders::kMaxShaderSourceBytes)
+            return Status::failure(documentError("Shader source exceeds 1 MiB."));
+        if (buffer == impl_->buffer) {
+            setText(text);
+        } else {
+            buffer->SetText(text);
+        }
+        buffer->SetFileFlags(Zep::FileFlags::Dirty);
+        impl_->editor->RequestRefresh();
+        return {};
+    }
+
+    Status PythonEditor::setDocumentMode(const core::Uuid& id, const DocumentKind kind,
+                                         const std::optional<shaders::ShaderAsset>& asset) {
+        auto* buffer = impl_->documentBuffer(id);
+        if (!buffer)
+            return Status::failure(documentError("Editor document is closed or unknown."));
+        if (kind == DocumentKind::Shader &&
+            buffer->GetBufferText(buffer->Begin(), buffer->End()).size() > shaders::kMaxShaderSourceBytes)
+            return Status::failure(documentError("Shader source exceeds 1 MiB."));
+        if (asset && kind != DocumentKind::Shader)
+            return Status::failure(documentError("A shader association requires shader mode."));
+        auto& doc = impl_->documents.at(buffer);
+        if (doc.info.kind != kind || asset) {
+            doc.info.kind = kind;
+            ++doc.info.source_revision;
+            impl_->notifyShaderObservers();
+            doc.clearDiagnostics(*buffer);
+            if (kind == DocumentKind::Shader)
+                buffer->ClearFileFlags(Zep::FileFlags::DefaultBuffer);
+            if (buffer == impl_->buffer)
+                impl_->resetLanguageState();
+            else
+                impl_->editor->SetBufferSyntax(*buffer, kind == DocumentKind::Python ? "script.py" : "shader.slang");
+        }
+        if (asset) {
+            doc.run_slots.clear();
+            doc.run_revision = 0;
+            doc.info.shader_asset = asset->id;
+            doc.info.asset_revision = asset->revision;
+        }
+        impl_->host_text_changed = true;
+        impl_->editor->RequestRefresh();
+        return {};
+    }
+
+    Status PythonEditor::setDocumentTarget(const core::Uuid& id, const shaders::ShaderSlot& target,
+                                           const shaders::ShaderService& service) {
+        auto* buffer = impl_->documentBuffer(id);
+        if (!buffer)
+            return Status::failure(documentError("Editor document is closed or unknown."));
+        if (auto valid = service.validateTarget(target); !valid)
+            return valid;
+        if (target.kind == shaders::ShaderSlot::Kind::Reveal) {
+            if (auto valid = service.validateRevealTarget(); !valid)
+                return valid;
+        }
+        if (impl_->documents.at(buffer).info.kind != DocumentKind::Shader)
+            return Status::failure(documentError("A shader target requires a shader document."));
+        impl_->documents.at(buffer).info.target = target;
+        impl_->notifyShaderObservers();
+        impl_->editor->RequestRefresh();
+        return {};
+    }
+
+    std::string PythonEditor::activeSessionLocator() const {
+        impl_->syncActiveBuffer();
+        const auto found = impl_->documents.find(impl_->buffer);
+        return found == impl_->documents.end() ? std::string{} : found->second.locator.value_or(std::string{});
+    }
+
+    void PythonEditor::setDocumentKind(const DocumentKind kind) {
+        impl_->syncActiveBuffer();
+        auto& doc = impl_->documents.at(impl_->buffer);
+        if (doc.info.kind == kind)
+            return;
+        doc.info.kind = kind;
+        if (kind == DocumentKind::Shader)
+            impl_->buffer->ClearFileFlags(Zep::FileFlags::DefaultBuffer);
+        ++doc.info.source_revision;
+        impl_->notifyShaderObservers();
+        doc.clearDiagnostics(*impl_->buffer);
+        impl_->resetLanguageState();
+        impl_->host_text_changed = true;
+    }
+
+    core::Uuid PythonEditor::newDocument(const std::string& text, const DocumentKind kind, std::string locator) {
+        auto* buffer = impl_->editor->GetEmptyBuffer(kind == DocumentKind::Shader ? "shader.slang" : "script.py");
+        auto* window = impl_->editor->AddTabWindow()->AddWindow(buffer);
+        buffer->SetPreserveCarriageReturns(true);
+        buffer->ClearFileFlags(Zep::FileFlags::DefaultBuffer);
+        buffer->ClearFileFlags(Zep::FileFlags::InsertTabs);
+        impl_->documents[buffer].info.kind = kind;
+        impl_->editor->SetCurrentWindow(window);
+        impl_->syncActiveBuffer();
+        impl_->setTextSilently(text);
+        setActiveSessionLocator(std::move(locator));
+        buffer->SetPostKeyNotifier([owner = impl_.get()](uint32_t key, uint32_t mods) {
+            owner->syncActiveBuffer();
+            owner->handlePostKey(key, mods);
+            return false;
+        });
+        return document().id;
+    }
+
+    bool PythonEditor::activateDocument(const core::Uuid& id) {
+        for (const auto& [buffer, doc] : impl_->documents) {
+            if (doc.info.id != id)
+                continue;
+            const auto windows = impl_->editor->FindBufferWindows(buffer);
+            if (windows.empty())
+                return false;
+            impl_->editor->SetCurrentWindow(windows.front());
+            impl_->syncActiveBuffer();
+            return true;
+        }
+        return false;
+    }
+
+    void PythonEditor::setShaderTarget(const shaders::ShaderSlot& target) {
+        impl_->syncActiveBuffer();
+        impl_->documents.at(impl_->buffer).info.target = target;
+        impl_->notifyShaderObservers();
+    }
+
+    void PythonEditor::openShaderAsset(const shaders::ShaderAsset& asset) {
+        for (const auto& [buffer, doc] : impl_->documents) {
+            if (doc.info.shader_asset == asset.id) {
+                activateDocument(doc.info.id);
+                return;
+            }
+        }
+        newDocument(asset.source, DocumentKind::Shader, "shader://" + asset.id.to_string());
+        auto& doc = impl_->documents.at(impl_->buffer);
+        doc.info.shader_asset = asset.id;
+        doc.info.asset_revision = asset.revision;
+        impl_->buffer->ClearFileFlags(Zep::FileFlags::Dirty);
+    }
+
+    Status PythonEditor::removeShaderAsset(shaders::ShaderService& service) {
+        const auto asset = document().shader_asset;
+        if (!asset)
+            return {};
+        auto removed = service.command(shaders::RemoveShader{*asset});
+        if (!removed)
+            return Status::failure(removed.error());
+        for (auto& [buffer, doc] : impl_->documents) {
+            if (doc.info.shader_asset != asset)
+                continue;
+            doc.run_slots.clear();
+            doc.clearDiagnostics(*buffer);
+        }
+        return {};
+    }
+
+    Status PythonEditor::runShader(shaders::ShaderService& service, const std::optional<core::Uuid> document_id,
+                                   const std::optional<std::string>& source) {
+        auto* buffer = impl_->documentBuffer(document_id.value_or(document().id));
+        if (!buffer)
+            return Status::failure(documentError("Editor document is closed or unknown."));
+        auto& doc = impl_->documents.at(buffer);
+        if (doc.info.kind != DocumentKind::Shader) {
+            return Status::failure(make_error(ErrorInit{
+                .code = ErrorCode::FailedPrecondition,
+                .domain = ErrorDomain::App,
+                .user_message = LOC("editor.shader_required"),
+                .detection = core::source_site_from_location(std::source_location::current()),
+            }));
+        }
+        auto asset = doc.info.shader_asset;
+        if (asset && !service.status(*asset))
+            asset.reset();
+        const auto text = source.value_or(buffer->GetBufferText(buffer->Begin(), buffer->End()));
+        auto applied = service.command(shaders::RunShader{asset, text, doc.info.target});
+        if (!applied)
+            return Status::failure(applied.error());
+        if (source) {
+            auto edited = setDocumentText(doc.info.id, *source);
+            if (!edited)
+                return edited;
+        }
+        if (doc.info.shader_asset != *applied)
+            doc.run_slots.clear();
+        doc.info.shader_asset = *applied;
+        const auto status = service.status(*doc.info.shader_asset);
+        if (!status)
+            return Status::failure(status.error());
+        doc.info.asset_revision = status->revision;
+        impl_->notifyShaderObservers();
+        doc.run_revision = doc.info.source_revision;
+        doc.reported_links = 0;
+        doc.reported_state = shaders::ShaderState::Unbound;
+        doc.clearDiagnostics(*buffer);
+        if (!std::ranges::contains(doc.run_slots, doc.info.target))
+            doc.run_slots.push_back(doc.info.target);
+        return {};
+    }
+
+    std::vector<shaders::ShaderSlot> PythonEditor::stopShader(shaders::ShaderService& service, const std::optional<core::Uuid> document_id) {
+        auto* buffer = impl_->documentBuffer(document_id.value_or(document().id));
+        if (!buffer)
+            return {};
+        auto& doc = impl_->documents.at(buffer);
+        const auto asset = doc.info.shader_asset;
+        const auto slots = std::exchange(doc.run_slots, {});
+        std::vector<shaders::ShaderSlot> released;
+        if (asset)
+            for (const auto& slot : slots)
+                if (service.boundAsset(slot, true) == asset && service.command(shaders::UnbindShader{slot, asset}))
+                    released.push_back(slot);
+        impl_->notifyShaderObservers();
+        return released;
+    }
+
+    void PythonEditor::setShaderChanges(std::shared_ptr<shaders::ShaderChanges> changes) {
+        impl_->shader_changes = std::move(changes);
+    }
+
+    bool PythonEditor::hasShaderBinding(const shaders::ShaderService& service) const {
+        impl_->syncActiveBuffer();
+        const auto& doc = impl_->documents.at(impl_->buffer);
+        return doc.info.shader_asset && std::ranges::any_of(doc.run_slots, [&](const auto& slot) { return service.boundAsset(slot, true) == doc.info.shader_asset; });
+    }
+
+    std::vector<EditorShaderUpdate> PythonEditor::pollShaders(shaders::ShaderService& service) {
+        impl_->syncActiveBuffer();
+        std::vector<EditorShaderUpdate> updates;
+        const auto generation = service.generation();
+        if (impl_->shader_generation == generation)
+            return updates;
+        impl_->shader_generation = generation;
+        for (auto& [buffer, doc] : impl_->documents) {
+            if (!doc.info.shader_asset || !doc.run_revision)
+                continue;
+            const auto status = service.status(*doc.info.shader_asset);
+            if (!status || status->revision != doc.info.asset_revision)
+                continue;
+            if (status->links == doc.reported_links && status->state == doc.reported_state &&
+                status->compiling == doc.reported_compiling)
+                continue;
+            if (status->links != doc.reported_links && doc.info.kind == DocumentKind::Shader)
+                applyDiagnostics(doc.info.id, doc.run_revision, status->diagnostics.entries);
+            const bool diagnostics_changed = status->links != doc.reported_links;
+            doc.reported_links = status->links;
+            doc.reported_state = status->state;
+            doc.reported_compiling = status->compiling;
+            updates.push_back({doc.info.id, *status, diagnostics_changed});
+        }
+        return updates;
+    }
+
+    bool PythonEditor::applyDiagnostics(const core::Uuid& id, const std::uint64_t revision,
+                                        const std::span<const shaders::Diagnostic> diagnostics) {
+        for (auto& [buffer, doc] : impl_->documents) {
+            if (doc.info.id != id || doc.info.source_revision != revision)
+                continue;
+            doc.clearDiagnostics(*buffer);
+            const auto text = buffer->GetBufferText(buffer->Begin(), buffer->End());
+            for (const auto& diagnostic : diagnostics) {
+                if (!diagnostic.line || !diagnostic.column || text.empty())
+                    continue;
+                std::size_t start = 0;
+                for (std::uint32_t line = 1; line < diagnostic.line && start < text.size(); ++line) {
+                    const auto newline = text.find('\n', start);
+                    start = newline == std::string::npos ? text.size() : newline + 1;
+                }
+                for (std::uint32_t column = 1; column < diagnostic.column && start < text.size() && text[start] != '\n'; ++column)
+                    decode_utf8(text, start);
+                if (start >= text.size() || text[start] == '\n')
+                    continue;
+                auto end = start;
+                decode_utf8(text, end);
+                auto marker = Impl::diagnosticMarker(*buffer, LOC("editor.diagnostic"), diagnostic.message,
+                                                     diagnostic.severity == shaders::DiagnosticSeverity::Error
+                                                         ? Zep::ThemeColor::Error
+                                                         : Zep::ThemeColor::Warning);
+                marker->SetRange({static_cast<Zep::ByteIndex>(start), static_cast<Zep::ByteIndex>(end)});
+                doc.markers.insert(std::move(marker));
+                doc.ranges.push_back({start, end});
+            }
+            impl_->editor->RequestRefresh();
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<EditorDiagnosticRange> PythonEditor::diagnosticRanges(const core::Uuid& id) const {
+        for (const auto& [buffer, doc] : impl_->documents)
+            if (doc.info.id == id)
+                return doc.ranges;
+        return {};
+    }
+
+    bool PythonEditor::pythonAnalysisActive() const {
+        impl_->syncActiveBuffer();
+        return impl_->lsp != nullptr || impl_->syntax_document.hasTree() || impl_->syntax_analysis_pending ||
+               impl_->semantic_tokens_request_pending || impl_->completion_request_pending;
     }
 
     bool PythonEditor::consumeTextChanged() {
@@ -3322,6 +3814,9 @@ namespace lfs::vis::editor {
     }
 
     std::vector<PythonEditorSymbol> PythonEditor::syntaxSymbols() const {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return {};
         std::vector<PythonEditorSymbol> symbols;
         symbols.reserve(impl_->syntax_document.symbols().size());
 
@@ -3349,10 +3844,16 @@ namespace lfs::vis::editor {
     }
 
     std::vector<PythonEditorSymbol> PythonEditor::syntaxBreadcrumbs() const {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return {};
         return impl_->syntaxBreadcrumbs();
     }
 
     std::vector<PythonEditorFold> PythonEditor::syntaxFolds() const {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return {};
         const std::string text = impl_->getText();
         std::vector<PythonEditorFold> folds;
         if (impl_->buffer == nullptr) {
@@ -3382,6 +3883,7 @@ namespace lfs::vis::editor {
     }
 
     void PythonEditor::refreshSyntaxDiagnostics() {
+        impl_->syncActiveBuffer();
         impl_->scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
         if (impl_->editor != nullptr) {
             impl_->editor->RequestRefresh();
@@ -3389,22 +3891,37 @@ namespace lfs::vis::editor {
     }
 
     bool PythonEditor::foldAllSyntaxBlocks() {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return false;
         return impl_->foldAllSyntaxBlocks();
     }
 
     bool PythonEditor::unfoldAllSyntaxBlocks() {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return false;
         return impl_->unfoldAllSyntaxBlocks();
     }
 
     bool PythonEditor::jumpToSyntaxSymbol(const std::size_t index) {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return false;
         return impl_->jumpToSyntaxSymbol(index);
     }
 
     bool PythonEditor::jumpToSyntaxBreadcrumb(const std::size_t index) {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return false;
         return impl_->jumpToSyntaxBreadcrumb(index);
     }
 
     bool PythonEditor::toggleSyntaxFold(const std::size_t index) {
+        impl_->syncActiveBuffer();
+        if (!impl_->isPython())
+            return false;
         return impl_->toggleSyntaxFold(index);
     }
 
@@ -3477,9 +3994,7 @@ namespace lfs::vis::editor {
                     buffer->GetBufferText(
                         buffer->Begin(), buffer->End());
                 if (buffer_text.empty() &&
-                    (buffer->HasFileFlags(
-                         Zep::FileFlags::DefaultBuffer) ||
-                     buffer->GetFilePath().empty())) {
+                    buffer->HasFileFlags(Zep::FileFlags::DefaultBuffer)) {
                     continue;
                 }
                 const auto [found, inserted] =
@@ -3506,12 +4021,9 @@ namespace lfs::vis::editor {
         for (const auto& entry : displayed) {
             auto* buffer = entry.buffer;
             std::string locator;
-            const auto retained =
-                impl_->session_locators.find(
-                    buffer);
-            if (retained !=
-                impl_->session_locators.end()) {
-                locator = retained->second;
+            const auto& retained = impl_->documents[buffer].locator;
+            if (retained) {
+                locator = *retained;
             } else if (
                 !buffer->GetFilePath().empty()) {
                 locator =
@@ -3540,9 +4052,7 @@ namespace lfs::vis::editor {
 
             const bool modified =
                 buffer == active_buffer &&
-                        retained ==
-                            impl_->session_locators
-                                .end() &&
+                        !retained &&
                         buffer->GetFilePath()
                             .empty()
                     ? active_modified
@@ -3559,6 +4069,7 @@ namespace lfs::vis::editor {
                         capture_buffer_session_state(
                             *buffer,
                             entry.window),
+                    .document = impl_->documents[buffer].info,
                 });
             if (buffer == active_buffer) {
                 result.active_file = locator;
@@ -3572,7 +4083,10 @@ namespace lfs::vis::editor {
     void PythonEditor::restoreWorkspaceSessionState(
         const PythonEditorWorkspaceSessionState&
             state) {
+        auto changes = impl_->shader_changes;
         impl_ = std::make_unique<Impl>();
+        impl_->shader_changes = std::move(changes);
+        impl_->notifyShaderObservers();
         if (state.open_files.empty()) {
             impl_->setVimModeEnabled(
                 state.vim_mode);
@@ -3614,25 +4128,26 @@ namespace lfs::vis::editor {
                 continue;
             }
 
-            buffer->SetFileFlags(
-                Zep::FileFlags::
-                    DefaultBuffer,
-                false);
-            buffer->SetFileFlags(
-                Zep::FileFlags::InsertTabs,
-                false);
+            buffer->ClearFileFlags(Zep::FileFlags::DefaultBuffer);
+            buffer->ClearFileFlags(Zep::FileFlags::InsertTabs);
             if (is_filesystem_editor_locator(
                     file.locator)) {
                 buffer->SetFilePath(
                     std::filesystem::path(
                         file.locator));
             }
+            buffer->SetPreserveCarriageReturns(true);
+            impl_->documents[buffer].info = file.document;
+            if (impl_->documents[buffer].info.id.is_nil())
+                impl_->documents[buffer].info.id = core::generate_uuid_v4();
+            impl_->editor->SetBufferSyntax(*buffer, file.document.kind == DocumentKind::Shader ? "shader.slang" : "script.py");
             buffer->SetText(
                 file.text,
                 !file.modified);
-            buffer->SetFileFlags(
-                Zep::FileFlags::Dirty,
-                file.modified);
+            if (file.modified)
+                buffer->SetFileFlags(Zep::FileFlags::Dirty);
+            else
+                buffer->ClearFileFlags(Zep::FileFlags::Dirty);
             buffer->SetPostKeyNotifier(
                 [owner = impl_.get()](
                     const std::uint32_t key,
@@ -3645,8 +4160,7 @@ namespace lfs::vis::editor {
             restore_buffer_session_state(
                 *buffer, window,
                 file.text, file.editor);
-            impl_->session_locators.emplace(
-                buffer, file.locator);
+            impl_->documents.at(buffer).locator = file.locator;
 
             const bool requested_active =
                 state.active_file &&
@@ -3667,6 +4181,7 @@ namespace lfs::vis::editor {
             impl_->editor->SetCurrentWindow(
                 active_window);
         }
+        impl_->resetLanguageState();
         impl_->text_changed = false;
         impl_->host_text_changed = false;
         impl_->setVimModeEnabled(
@@ -3684,7 +4199,21 @@ namespace lfs::vis::editor {
         impl_->editor->RequestRefresh();
     }
 
+    bool PythonEditor::isModified() const {
+        impl_->syncActiveBuffer();
+        return impl_->buffer->HasFileFlags(Zep::FileFlags::Dirty);
+    }
+
+    void PythonEditor::setModified(bool modified) {
+        impl_->syncActiveBuffer();
+        if (modified)
+            impl_->buffer->SetFileFlags(Zep::FileFlags::Dirty);
+        else
+            impl_->buffer->ClearFileFlags(Zep::FileFlags::Dirty);
+    }
+
     void PythonEditor::setReadOnly(bool readonly) {
+        impl_->syncActiveBuffer();
         impl_->read_only = readonly;
         if (impl_->buffer != nullptr) {
             impl_->buffer->SetFileFlags(Zep::FileFlags::ReadOnly, readonly);

@@ -112,6 +112,13 @@ class GalleryFilePanel(Panel):
         current_path = lf.project_poll_write().get("path") if mode == "publish" and action in ("publish", "update") else None
         open_project = bool(current_path and Path(current_path).resolve() == Path(asset["path"]).resolve())
         self._review["open_project"] = bool(open_project)
+        if mode == "publish" and action in ("publish", "update"):
+            shaders = bool(lf.shaders.list()) if open_project else False
+            if asset.get("path") and Path(asset["path"]).is_file():
+                chapters = lf.io.inspect_project_details(asset["path"], checkpoint_byte_budget=0).chapters
+                shaders |= any(chapter.fourcc == "SHDR" and chapter.row_kind != lf.io.ProjectRowKind.TOMBSTONE for chapter in chapters)
+            if shaders:
+                self._review["warning"] = " ".join(filter(None, (warning, lf.ui.tr("shader.publication_omitted"))))
         self._fields = dict(fields)
         self._pull_folders = deepcopy(list(pull_folders)) if action == "pull" else []
         self._fields.setdefault("use_cover", False)

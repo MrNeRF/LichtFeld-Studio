@@ -253,6 +253,56 @@
         <div class="section">
           <div class="section-rule">
             <span class="section-rule__lead"></span>
+            <span class="section-rule__label">@tr:video_extractor.masking</span>
+            <span class="section-rule__line"></span>
+          </div>
+          <div class="settings-row">
+            <label class="toggle-label">
+              <input id="masking-toggle" type="checkbox" />
+              <span>@tr:video_extractor.masking_enable</span>
+            </label>
+          </div>
+          <div id="masking-options" style="display:none">
+            <div class="settings-row"><span class="inline-note">@tr:video_extractor.masking_layout</span></div>
+            <div class="settings-row">
+              <label class="toggle-label"><input id="mask-circle" type="checkbox" /><span>@tr:video_extractor.masking_circle</span></label>
+              <label class="toggle-label"><input id="mask-recenter" type="checkbox" /><span>@tr:video_extractor.masking_recenter</span></label>
+            </div>
+            <div class="settings-row">
+              <span class="field-label">@tr:video_extractor.masking_fov</span>
+              <input id="mask-fov" class="dimension-input" type="text" value="200" />
+              <span class="field-label">@tr:video_extractor.masking_view_fov</span>
+              <input id="mask-view-fov" class="dimension-input" type="text" value="160" />
+            </div>
+            <div class="settings-row">
+              <span class="field-label">@tr:video_extractor.masking_dilation</span>
+              <input id="mask-dilation" class="dimension-input" type="text" value="12" />
+              <label class="toggle-label"><input id="mask-require-operator" type="checkbox" /><span>@tr:video_extractor.masking_require_operator</span></label>
+            </div>
+            <div class="settings-row">
+              <span class="field-label">@tr:video_extractor.masking_model</span>
+              <input id="mask-model" class="pattern-input" type="text" value="" />
+            </div>
+            <div class="settings-row">
+              <span class="inline-note">@tr:video_extractor.masking_model_hint</span>
+            </div>
+            <div class="settings-row">
+              <label class="toggle-label"><input id="mask-manual-seed" type="checkbox" /><span>@tr:video_extractor.masking_manual_seed</span></label>
+              <span class="inline-note">@tr:video_extractor.masking_auto_hint</span>
+            </div>
+            <div id="mask-seed-options" class="settings-row" style="display:none">
+              <span class="field-label">@tr:video_extractor.masking_seed_position</span>
+              <input id="mask-seed-x" class="dimension-input" type="text" value="0.5" />
+              <input id="mask-seed-y" class="dimension-input" type="text" value="0.8" />
+              <span class="field-label">@tr:video_extractor.masking_seed_frame</span>
+              <input id="mask-seed-frame" class="dimension-input" type="text" value="0" />
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-rule">
+            <span class="section-rule__lead"></span>
             <span class="section-rule__label">@tr:video_extractor.naming</span>
             <span class="section-rule__line"></span>
           </div>

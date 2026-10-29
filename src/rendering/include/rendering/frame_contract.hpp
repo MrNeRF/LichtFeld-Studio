@@ -86,13 +86,26 @@ namespace lfs::rendering {
         [[nodiscard]] glm::mat4 getProjectionMatrix(
             const float near_plane_override = DEFAULT_NEAR_PLANE,
             const float far_plane_override = DEFAULT_FAR_PLANE) const {
-            return createProjectionMatrix(
+            glm::mat4 projection = createProjectionMatrix(
                 cameraSize(),
                 focalLengthToVFov(focal_length_mm),
                 orthographic,
                 ortho_scale,
                 near_plane_override,
                 far_plane_override);
+            if (!orthographic && intrinsics_override) {
+                const auto camera_size = cameraSize();
+                const auto intrinsics = getCameraIntrinsics();
+                const float width = static_cast<float>(camera_size.x);
+                const float height = static_cast<float>(camera_size.y);
+                // Top-left pixel intrinsics to RH (-Z forward) clip space.
+                // Retain the existing near/far and GLM depth convention.
+                projection[0][0] = 2.0f * intrinsics.focal_x / width;
+                projection[1][1] = 2.0f * intrinsics.focal_y / height;
+                projection[2][0] = 1.0f - 2.0f * intrinsics.center_x / width;
+                projection[2][1] = 2.0f * intrinsics.center_y / height - 1.0f;
+            }
+            return projection;
         }
     };
 

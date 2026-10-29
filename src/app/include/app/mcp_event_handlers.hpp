@@ -26,7 +26,7 @@ namespace lfs::app {
         SubscriptionQueue,
     };
 
-    inline constexpr std::array<std::string_view, 30> kMcpRuntimeEventTypes = {
+    inline constexpr std::array<std::string_view, 35> kMcpRuntimeEventTypes = {
         "media.extract.started",
         "media.extract.progress",
         "media.extract.completed",
@@ -36,6 +36,11 @@ namespace lfs::app {
         "nodes.evaluation.progress",
         "nodes.evaluation.completed",
         "nodes.evaluation.failed",
+        "shader.compile.started",
+        "shader.compile.completed",
+        "shader.compile.failed",
+        "shader.bindings.changed",
+        "shader.applied",
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -59,7 +64,7 @@ namespace lfs::app {
         "disk_space.save_failed",
     };
 
-    inline constexpr std::array<std::string_view, 36> kMcpSubscriptionEventTypes = {
+    inline constexpr std::array<std::string_view, 41> kMcpSubscriptionEventTypes = {
         "media.extract.started",
         "media.extract.progress",
         "media.extract.completed",
@@ -69,6 +74,11 @@ namespace lfs::app {
         "nodes.evaluation.progress",
         "nodes.evaluation.completed",
         "nodes.evaluation.failed",
+        "shader.compile.started",
+        "shader.compile.completed",
+        "shader.compile.failed",
+        "shader.bindings.changed",
+        "shader.applied",
         "editor.started",
         "editor.completed",
         "scene.loaded",

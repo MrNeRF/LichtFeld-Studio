@@ -95,6 +95,7 @@ NUMBER_PROPS = (
 )
 
 BOOL_PROPS = (
+    "keep_all_checkpoints",
     "use_exposure_correction",
     "use_bilateral_grid",
     "invert_masks",
@@ -386,7 +387,7 @@ SECTIONS = (
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS),
     SectionSpec("evaluation", "training.section.evaluation", EVALUATION_RUNS),
-    SectionSpec("save_steps", "training_panel.save_eval_steps"),
+    SectionSpec("save_steps", "training_panel.save_eval_steps", (_run("save_retention", "keep_all_checkpoints"),)),
     SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )
 

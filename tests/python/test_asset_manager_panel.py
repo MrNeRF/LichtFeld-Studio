@@ -133,6 +133,15 @@ def panel_module(monkeypatch):
     if controller is not None:
         _stop_gallery_controller(controller)
 
+def _no_shaders_to_publish(monkeypatch, lf):
+    """Publish reviews warn about user shaders the upload leaves out; these projects have none."""
+    monkeypatch.setattr(lf, "shaders", SimpleNamespace(list=lambda: []), raising=False)
+    if not hasattr(lf, "io"):
+        monkeypatch.setattr(lf, "io", SimpleNamespace(), raising=False)
+    monkeypatch.setattr(lf.io, "inspect_project_details",
+                        lambda *_args, **_kwargs: SimpleNamespace(chapters=[]), raising=False)
+
+
 def _stop_gallery_controller(controller):
     """Stop fixture-owned timers after the singleton's test lifetime."""
     controller._poll = lambda: None
@@ -4010,6 +4019,7 @@ def test_publish_review_keeps_the_entered_details_for_the_next_attempt(panel_mod
     monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda *_args: None, raising=False)
     monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
     monkeypatch.setattr(panel_module.lf, "project_poll_write", lambda: {"path": ""}, raising=False)
+    _no_shaders_to_publish(monkeypatch, gallery_file_panel.lf)
     review = gallery_file_panel.GalleryFilePanel()
     review.show(controller=controller, asset=index.get_asset_dict(project_id), scene=None, action="publish",
                 fields={"title": "project-a", "description": "", "upload_format": "sog"})

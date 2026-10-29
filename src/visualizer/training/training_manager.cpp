@@ -2434,6 +2434,16 @@ namespace lfs::vis {
                iterations <= static_cast<std::size_t>(std::max(0, getCurrentIteration()));
     }
 
+    bool TrainerManager::canChangeProperty(const core::prop::PropertyMeta& meta,
+                                           const std::any& current_value,
+                                           const std::any& new_value) const {
+        if (!meta.needs_restart())
+            return true;
+        if (!trainer_ || isDatasetEditable() || isFinished())
+            return true;
+        return meta.values_equal(current_value, new_value);
+    }
+
     lfs::core::param::TrainingParameters TrainerManager::getEditableTrainingParams(
         const ParameterManager& parameter_manager) const {
         const auto& configured_dataset = parameter_manager.getDatasetConfig();
@@ -2452,7 +2462,9 @@ namespace lfs::vis {
         auto params = trainer_->getParams();
         if (trainer_->isInitialized() && params.resume_checkpoint.has_value()) {
             if (auto* const param_mgr = services().paramsOrNull()) {
-                params.optimization.save_steps = param_mgr->copyActiveParams().save_steps;
+                const auto active = param_mgr->copyActiveParams();
+                params.optimization.save_steps = active.save_steps;
+                params.optimization.keep_all_checkpoints = active.keep_all_checkpoints;
             }
             return params;
         }

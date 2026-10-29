@@ -53,8 +53,8 @@ namespace lfs::training {
         lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
         int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
-        size_t capacity = 0; // Allocated capacity (moment rows / float cells)
-        size_t size = 0;     // Used size
+        size_t capacity = 0; // Primitive rows, or float-layout cells for SH-rest (never packed bytes)
+        size_t size = 0;     // Used size in the same units as capacity
         [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
 

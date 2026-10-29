@@ -395,10 +395,9 @@ namespace {
         ASSERT_TRUE(service.initialize(request));
 
         std::uint64_t requested_bytes = 0;
-        request.release_host_memory = [&](const std::uint64_t bytes) -> std::uint64_t {
+        request.release_host_memory = [&](const std::uint64_t bytes) {
             requested_bytes = bytes;
             available_memory.set(std::to_string(checkpoint_bytes + 4 * GIB));
-            return bytes;
         };
         auto released_autosave = service.prepare(request);
         ASSERT_TRUE(released_autosave.has_value())
@@ -406,11 +405,16 @@ namespace {
         EXPECT_EQ(requested_bytes, 3 * GIB);
 
         available_memory.set(std::to_string(checkpoint_bytes + GIB));
-        request.release_host_memory = [](std::uint64_t) -> std::uint64_t { return 0; };
+        request.release_host_memory = [](std::uint64_t) {};
         auto deferred_autosave = service.prepare(request);
         ASSERT_FALSE(deferred_autosave.has_value());
         EXPECT_NE(lfs::format_for_developer(deferred_autosave.error()).find("deferred"),
                   std::string::npos);
+        EXPECT_TRUE(deferred_autosave.error().user_message().starts_with(
+            "Not enough free RAM to save the project: the save copies the "))
+            << deferred_autosave.error().user_message();
+        EXPECT_NE(deferred_autosave.error().user_message().find("4.0 GiB free"), std::string::npos)
+            << deferred_autosave.error().user_message();
     }
 
 #if defined(__APPLE__)

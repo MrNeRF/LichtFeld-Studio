@@ -17,6 +17,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/loader.hpp"
+#include "py_error.hpp"
 #include "py_scene.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -466,6 +467,32 @@ namespace lfs::python {
             return std::nullopt;
         }
 
+        // Runs `draw` on the viewer thread with the shaders the viewport binds:
+        // an export freezes them and throws when they cannot draw, a live render
+        // draws what the viewport would; see RenderingManager::drawWithShaders.
+        // `frame` describes what `draw` renders. `cancelled` when the viewer takes no work or drops it.
+        template <class Draw, class Drawn = std::invoke_result_t<Draw&>>
+        [[nodiscard]] Drawn drawWithViewportShaders(std::type_identity_t<Drawn> cancelled,
+                                                    const std::function<vis::RenderingManager::ExportFrame()>& frame,
+                                                    Draw draw, const bool exporting = false) {
+            auto* const viewer = get_visualizer();
+            auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+            if (!rendering_manager)
+                return draw();
+            const auto shaded = [&]() -> Result<Drawn> { return draw(); };
+            if (viewer->isOnViewerThread())
+                return unwrap(rendering_manager->drawWithShaders(exporting, [](auto run) { return run(); }, shaded, frame));
+            if (!viewer->acceptsPostedWork())
+                return cancelled;
+            nb::gil_scoped_release release;
+            const auto post = [viewer, cancelled](auto run) {
+                return vis::post_work_and_wait(
+                    [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                    std::move(run), [cancelled] { return Result<Drawn>(cancelled); });
+            };
+            return unwrap(rendering_manager->drawWithShaders(exporting, post, shaded, frame));
+        }
+
         [[nodiscard]] std::optional<core::Tensor> renderViewOnViewerThread(
             const glm::mat3& rotation,
             const glm::vec3& translation,
@@ -533,7 +560,8 @@ namespace lfs::python {
             const std::optional<bool> orthographic_override = std::nullopt,
             const std::optional<float> ortho_scale_override = std::nullopt,
             const int reference_height = 0) {
-            auto invoke_render = [&]() -> std::optional<core::Tensor> {
+            const auto frame = [width, height] { return vis::RenderingManager::ExportFrame{.width = width, .height = height}; };
+            return drawWithViewportShaders(std::nullopt, frame, [&] {
                 return renderViewOnViewerThread(
                     rotation,
                     translation,
@@ -545,21 +573,7 @@ namespace lfs::python {
                     orthographic_override,
                     ortho_scale_override,
                     reference_height);
-            };
-
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                return invoke_render();
-            }
-            if (!viewer->acceptsPostedWork()) {
-                return std::nullopt;
-            }
-
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                invoke_render,
-                []() -> std::optional<core::Tensor> { return std::nullopt; });
+            });
         }
 
         [[nodiscard]] std::optional<std::pair<core::Tensor, core::Tensor>> renderViewAndDepthOnViewerThread(
@@ -608,24 +622,10 @@ namespace lfs::python {
             const int height,
             const float fov_degrees,
             const bool expected_depth) {
-            auto invoke_render = [&]() {
+            const auto frame = [width, height] { return vis::RenderingManager::ExportFrame{.width = width, .height = height, .depth = true}; };
+            return drawWithViewportShaders(std::nullopt, frame, [&] {
                 return renderViewAndDepthOnViewerThread(rotation, translation, width, height, fov_degrees, expected_depth);
-            };
-
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                return invoke_render();
-            }
-            if (!viewer->acceptsPostedWork()) {
-                return std::nullopt;
-            }
-
-            nb::gil_scoped_release release;
-            using Result = std::optional<std::pair<core::Tensor, core::Tensor>>;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                invoke_render,
-                []() -> Result { return std::nullopt; });
+            });
         }
     } // namespace
 
@@ -1314,50 +1314,6 @@ namespace lfs::python {
             return image;
         }
 
-        [[nodiscard]] core::Tensor renderCurrentViewRgb8(const vis::ViewInfo& view_info,
-                                                         const int width,
-                                                         const int height,
-                                                         const std::optional<glm::vec3>& background_color_override) {
-            auto image = renderViewThreadSafe(
-                viewInfoRotationMatrix(view_info),
-                glm::vec3{view_info.translation[0], view_info.translation[1], view_info.translation[2]},
-                width,
-                height,
-                view_info.fov,
-                PreviewReadback::UInt8Rgb,
-                background_color_override,
-                view_info.orthographic,
-                viewInfoOrthoScale(view_info),
-                view_info.height);
-            if (!image || !image->is_valid()) {
-                throw std::runtime_error("viewport export render failed");
-            }
-            return toU8Hwc(std::move(*image));
-        }
-
-        using ExportImageResult = std::expected<core::Tensor, std::string>;
-
-        template <typename RenderResult>
-        [[nodiscard]] RenderResult runExportOnViewerThread(
-            std::function<RenderResult()> invoke_render) {
-            const auto failure = [](const char* detail) -> RenderResult {
-                if constexpr (std::is_same_v<RenderResult, ExportImageResult>)
-                    return std::unexpected(detail);
-                else
-                    return make_error({.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering, .detail = detail, .detection = LFS_SOURCE_SITE_CURRENT()});
-            };
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return invoke_render();
-            if (!viewer->acceptsPostedWork())
-                return failure("viewer is not accepting export work");
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                std::move(invoke_render),
-                [failure]() -> RenderResult { return failure("viewport export was cancelled"); });
-        }
-
         vis::RenderingManager::ExportImageRequest currentViewImageRequest(
             const vis::ViewInfo& view_info, int width, int height, vis::ExportPostProcessMode mode) {
             return {.rotation = viewInfoRotationMatrix(view_info),
@@ -1371,101 +1327,46 @@ namespace lfs::python {
                     .mode = mode};
         }
 
-        [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
-                                                           const int width,
-                                                           const int height,
-                                                           const vis::ExportPostProcessMode mode) {
-            auto result = runExportOnViewerThread<ExportImageResult>([&view_info, width, height, mode]() -> ExportImageResult {
+        // Throws when the shaders the viewport binds cannot draw it.
+        [[nodiscard]] Result<core::Tensor> renderCurrentViewExport(const vis::ViewInfo& view_info,
+                                                                   const int width,
+                                                                   const int height,
+                                                                   const vis::ExportPostProcessMode mode) {
+            const auto request = currentViewImageRequest(view_info, width, height, mode);
+            const auto render = [&request, mode]() -> Result<core::Tensor> {
                 auto* const viewer = get_visualizer();
                 auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
                 auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
                 if (!rendering_manager || !scene_manager) {
-                    return std::unexpected("no active viewer is available");
+                    return make_error(ErrorInit{
+                        .code = ErrorCode::Unavailable,
+                        .domain = ErrorDomain::Rendering,
+                        .user_message = "no active viewer is available",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
                 }
-                const auto request = currentViewImageRequest(view_info, width, height, mode);
-                return rendering_manager->renderExportImage(scene_manager, request);
-            });
-            if (!result) {
-                throw std::runtime_error("viewport export failed: " + result.error());
-            }
-            return std::move(*result);
-        }
-
-        // Post-process for images assembled outside renderExportImage (the BW2A
-        // transparent fallback): applies the same PPISP correction path.
-        [[nodiscard]] core::Tensor applyExportPostProcessThreadSafe(core::Tensor image,
-                                                                    const vis::ExportPostProcessMode mode) {
-            auto result = runExportOnViewerThread<ExportImageResult>(
-                [image = std::move(image), mode]() mutable -> ExportImageResult {
-                    auto* const viewer = get_visualizer();
-                    auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
-                    auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
-                    if (!rendering_manager || !scene_manager) {
-                        return std::unexpected("no active viewer is available");
-                    }
-                    const auto view_info = vis::get_current_view_info();
-                    const vis::ExportPostProcessView view{
-                        .rotation = view_info ? viewInfoRotationMatrix(*view_info) : glm::mat3{1.0f},
-                        .focal_length_mm =
-                            view_info ? lfs::rendering::vFovToFocalLength(view_info->fov) : 0.0f,
-                        .equirectangular_view = rendering_manager->getSettings().equirectangular,
-                        .controller_predict_size =
-                            view_info ? glm::ivec2{view_info->width, view_info->height} : glm::ivec2{0, 0},
-                    };
-                    return vis::applyExportPostProcess(std::move(image),
-                                                       scene_manager,
-                                                       rendering_manager->getSettings(),
-                                                       rendering_manager->getCurrentCameraId(),
-                                                       mode,
-                                                       view);
-                });
-            if (!result) {
-                throw std::runtime_error("viewport export post-process failed: " + result.error());
-            }
-            return std::move(*result);
-        }
-
-        [[nodiscard]] core::Tensor recoverAlphaRgba(core::Tensor black_rgb, core::Tensor white_rgb) {
-            black_rgb = toU8Hwc(std::move(black_rgb));
-            white_rgb = toU8Hwc(std::move(white_rgb));
-
-            if (black_rgb.shape() != white_rgb.shape() || black_rgb.shape()[2] < 3) {
-                throw std::runtime_error("transparent viewport export expected matching RGB images");
-            }
-
-            const auto height = black_rgb.shape()[0];
-            const auto width = black_rgb.shape()[1];
-            auto rgba = core::Tensor::empty({height, width, std::size_t{4}},
-                                            core::Device::CPU,
-                                            core::DataType::UInt8);
-
-            const auto* const black = black_rgb.ptr<uint8_t>();
-            const auto* const white = white_rgb.ptr<uint8_t>();
-            auto* const out = rgba.ptr<uint8_t>();
-            const auto pixel_count = height * width;
-            const auto src_channels = black_rgb.shape()[2];
-
-            for (std::size_t i = 0; i < pixel_count; ++i) {
-                const auto src = i * src_channels;
-                const auto dst = i * std::size_t{4};
-                const float delta =
-                    (static_cast<float>(white[src]) - static_cast<float>(black[src]) +
-                     static_cast<float>(white[src + 1]) - static_cast<float>(black[src + 1]) +
-                     static_cast<float>(white[src + 2]) - static_cast<float>(black[src + 2])) /
-                    (3.0f * 255.0f);
-                const float alpha = std::clamp(1.0f - delta, 0.0f, 1.0f);
-                for (std::size_t channel = 0; channel < 3; ++channel) {
-                    const float recovered = alpha > 1.0e-6f
-                                                ? static_cast<float>(black[src + channel]) / alpha
-                                                : 0.0f;
-                    out[dst + channel] = static_cast<uint8_t>(
-                        std::lround(std::clamp(recovered, 0.0f, 255.0f)));
+                auto direct = rendering_manager->renderExportImage(scene_manager, request);
+                if (!direct && mode == vis::ExportPostProcessMode::Transparent) {
+                    LOG_DEBUG("transparent viewport export direct RGBA render failed, falling back to BW2A: {}", direct.error());
+                    return rendering_manager->renderTransparentExportFallback(scene_manager, request);
                 }
-                out[dst + 3] = static_cast<uint8_t>(
-                    std::lround(std::clamp(alpha * 255.0f, 0.0f, 255.0f)));
-            }
-
-            return rgba;
+                return from_legacy_expected(std::move(direct), LegacyErrorContext{
+                                                                   .code = ErrorCode::FailedPrecondition,
+                                                                   .domain = ErrorDomain::Rendering,
+                                                                   .operation = "Render viewport export",
+                                                                   .source = LFS_SOURCE_SITE_CURRENT()});
+            };
+            // Called with shaders bound, on the viewer thread that runs the viewport export.
+            const auto frame = [&request] {
+                auto* const viewer = get_visualizer();
+                return viewer->getRenderingManager()->exportImageFrame(viewer->getSceneManager(), request);
+            };
+            return drawWithViewportShaders(make_error(ErrorInit{
+                                               .code = ErrorCode::Cancelled,
+                                               .domain = ErrorDomain::Rendering,
+                                               .user_message = "viewport export was cancelled",
+                                               .detection = LFS_SOURCE_SITE_CURRENT()}),
+                                           frame, render, true);
         }
     } // namespace
 
@@ -1892,39 +1793,16 @@ namespace lfs::python {
             target_width = std::max(1, target_width);
             target_height = std::max(1, target_height);
 
-            if (transparent) {
-                try {
-                    image = renderCurrentViewExport(
-                        *view_info, target_width, target_height, vis::ExportPostProcessMode::Transparent);
-                } catch (const std::exception& e) {
-                    LOG_DEBUG("transparent viewport export direct RGBA render failed, falling back to BW2A: {}", e.what());
-                    auto black = renderCurrentViewRgb8(
-                        *view_info,
-                        target_width,
-                        target_height,
-                        std::optional<glm::vec3>{glm::vec3{0.0f}});
-                    auto white = renderCurrentViewRgb8(
-                        *view_info,
-                        target_width,
-                        target_height,
-                        std::optional<glm::vec3>{glm::vec3{1.0f}});
-                    image = applyExportPostProcessThreadSafe(
-                        recoverAlphaRgba(std::move(black), std::move(white)),
-                        vis::ExportPostProcessMode::Transparent);
-                }
-            } else {
-                const bool export_hdr_environment =
-                    render_settings &&
-                    render_settings->environment_mode ==
-                        static_cast<int>(vis::EnvironmentBackgroundMode::Equirectangular) &&
-                    !render_settings->environment_map_path.empty();
-                image = renderCurrentViewExport(
-                    *view_info,
-                    target_width,
-                    target_height,
-                    export_hdr_environment ? vis::ExportPostProcessMode::EnvironmentComposite
-                                           : vis::ExportPostProcessMode::Opaque);
-            }
+            const bool export_hdr_environment =
+                render_settings &&
+                render_settings->environment_mode ==
+                    static_cast<int>(vis::EnvironmentBackgroundMode::Equirectangular) &&
+                !render_settings->environment_map_path.empty();
+            image = unwrap(renderCurrentViewExport(
+                *view_info, target_width, target_height,
+                transparent              ? vis::ExportPostProcessMode::Transparent
+                : export_hdr_environment ? vis::ExportPostProcessMode::EnvironmentComposite
+                                         : vis::ExportPostProcessMode::Opaque));
         }
 
         const auto comment = core::provenance_to_json(
@@ -2103,17 +1981,32 @@ Returns:
 )doc");
 
         m.def("render_linear_image", [](int width, int height, bool transparent) {
-            auto result = runExportOnViewerThread<Result<core::Tensor>>(
-                [width, height, transparent]() -> Result<core::Tensor> {
+            const auto unavailable = [] {
+                return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Rendering,
+                                   .detail = "No active viewer is available for float render capture", .detection = LFS_SOURCE_SITE_CURRENT()});
+            };
+            const auto view = vis::get_current_view_info();
+            if (!view)
+                throw Exception(unavailable());
+            const auto request = currentViewImageRequest(*view, width, height,
+                transparent ? vis::ExportPostProcessMode::Transparent : vis::ExportPostProcessMode::Opaque);
+            // Called with shaders bound, on the viewer thread that runs the export.
+            const auto frame = [&request] {
+                auto* const viewer = get_visualizer();
+                return viewer->getRenderingManager()->exportImageFrame(viewer->getSceneManager(), request);
+            };
+            auto result = drawWithViewportShaders(
+                Result<core::Tensor>(make_error(ErrorInit{.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering,
+                                                          .user_message = "float render capture was cancelled",
+                                                          .detection = LFS_SOURCE_SITE_CURRENT()})),
+                frame,
+                [&request, &unavailable]() -> Result<core::Tensor> {
                     auto* const viewer = get_visualizer();
-                    const auto view = vis::get_current_view_info();
-                    if (!viewer || !view || !viewer->getRenderingManager() || !viewer->getSceneManager())
-                        return make_error({.code = ErrorCode::FailedPrecondition, .domain = ErrorDomain::Rendering,
-                                           .detail = "No active viewer is available for float render capture", .detection = LFS_SOURCE_SITE_CURRENT()});
-                    const auto request = currentViewImageRequest(*view, width, height,
-                        transparent ? vis::ExportPostProcessMode::Transparent : vis::ExportPostProcessMode::Opaque);
+                    if (!viewer || !viewer->getRenderingManager() || !viewer->getSceneManager())
+                        return unavailable();
                     return viewer->getRenderingManager()->renderLinearImage(viewer->getSceneManager(), request);
-                });
+                },
+                true);
             if (!result)
                 throw Exception(result.error());
             return PyTensor(std::move(*result)); }, nb::arg("width"), nb::arg("height"), nb::arg("transparent") = true,
@@ -2152,26 +2045,16 @@ Returns:
             const auto t = tensorToVisualizerTranslation(translation);
             if (!r || !t)
                 return std::nullopt;
-            auto* viewer = get_visualizer();
-            auto invoke = [&]() -> std::optional<core::Tensor> {
+            const auto frame = [width, height] { return vis::RenderingManager::ExportFrame{.width = width, .height = height}; };
+            auto image = drawWithViewportShaders(std::nullopt, frame, [&]() -> std::optional<core::Tensor> {
+                auto* viewer = get_visualizer();
                 auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
                 if (!rm)
                     return std::nullopt;
                 auto image = rm->renderLightFieldViewRgb8(viewer->getSceneManager(), *r, *t,
                     width, height, fov, shift_x, near_distance, far_distance);
                 return image ? std::optional<core::Tensor>(*image) : std::nullopt;
-            };
-            std::optional<core::Tensor> image;
-            if (viewer && !viewer->isOnViewerThread()) {
-                if (!viewer->acceptsPostedWork())
-                    return std::nullopt;
-                nb::gil_scoped_release release;
-                image = vis::post_work_and_wait(
-                    [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                    invoke, []() -> std::optional<core::Tensor> { return std::nullopt; });
-            } else {
-                image = invoke();
-            }
+            });
             return image ? std::optional<PyTensor>(PyTensor(std::move(*image), true)) : std::nullopt; }, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"), nb::arg("fov") = DEFAULT_FOV, nb::arg("shift_x") = 0.0f, nb::arg("near_distance") = 0.0f, nb::arg("far_distance") = 100000.0f,
               R"doc(
 Render a parallel off-axis perspective view for light-field quilts.

@@ -80,6 +80,13 @@ namespace lfs::vis {
         float zoom_speed = 50.0f; // Pinch and Ctrl+swipe.
     };
 
+    struct VrPreferences {
+        bool enabled = false;               // read at startup
+        float resolution_scale = 0.7f;      // 0.25 .. 1.5 of the headset's recommended size
+        float scene_units_per_meter = 1.0f; // 0.001 .. 1000
+        float move_speed = 1.5f;            // 0.1 .. 10 meters per second
+    };
+
     /** Process-local, atomically persisted user preferences. */
     class LFS_VIS_API UserPreferences {
     public:
@@ -91,6 +98,10 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::Status setRenderingDefaults(std::string_view serialized);
         [[nodiscard]] std::string renderingDefaults();
+        [[nodiscard]] lfs::Status setGamepadNavigation(std::string_view serialized);
+        [[nodiscard]] std::string gamepadNavigation();
+        [[nodiscard]] std::string gamepadProfiles();
+        [[nodiscard]] lfs::Status setGamepadProfiles(std::string_view serialized, bool enabled, std::string_view expected = {});
         [[nodiscard]] lfs::Status setViewportVignette(std::string_view serialized);
         [[nodiscard]] std::string viewportVignette();
         void setSidebarDefaults(float width, float scene_ratio, const std::string& active_tab);
@@ -103,6 +114,8 @@ namespace lfs::vis {
         [[nodiscard]] float uiScale();
         void setNativeFloatingWindows(bool enabled);
         [[nodiscard]] bool nativeFloatingWindows();
+        void setVrPreferences(const VrPreferences& preferences, bool persist = true);
+        [[nodiscard]] VrPreferences vrPreferences();
         void setFloatingWindowGeometry(const std::string& value);
         [[nodiscard]] std::string floatingWindowGeometry();
         void setZoomSpeed(float value, bool persist = true);

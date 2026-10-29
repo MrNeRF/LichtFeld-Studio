@@ -38,6 +38,7 @@ namespace lfs::vis::op {
             {"selection.depth_window_drag"},
             {"crop.draw_polygon"},
             {"crop_polygon.set"},
+            {"scale_distance.pick_point"},
         }};
 
     } // namespace

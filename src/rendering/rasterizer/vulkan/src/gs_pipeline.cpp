@@ -4,11 +4,14 @@
 #include "core/vulkan_helpers.hpp"
 #include "gs_renderer.h"
 #include "perf_timer.h"
+#include "shader_variants.hpp"
 
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cassert>
 #include <filesystem>
 #include <format>
@@ -18,6 +21,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -92,35 +96,130 @@ namespace {
             bytes);
     }
 
-    [[nodiscard]] bool spirvHasComputeWorkgroupSize(
-        const std::vector<std::uint32_t>& spirv,
-        const std::uint32_t expected_x,
-        const std::uint32_t expected_y,
-        const std::uint32_t expected_z) {
-        // OpExecutionMode LocalSize is the execution mode emitted by the
-        // Slang compute shaders in this renderer. Check the module before
-        // creating the pipeline so the host dispatch geometry cannot silently
-        // diverge from the shader's numthreads declaration.
-        constexpr std::uint16_t kOpExecutionMode = 16u;
-        constexpr std::uint32_t kExecutionModeLocalSize = 17u;
-        for (std::size_t word = 5; word < spirv.size();) {
-            const std::uint32_t instruction = spirv[word];
-            const std::uint16_t word_count = static_cast<std::uint16_t>(instruction >> 16u);
-            const std::uint16_t opcode = static_cast<std::uint16_t>(instruction & 0xffffu);
-            if (word_count == 0 || word + word_count > spirv.size()) {
-                return false;
-            }
-            if (opcode == kOpExecutionMode && word_count >= 6u &&
-                spirv[word + 2u] == kExecutionModeLocalSize) {
-                return spirv[word + 3u] == expected_x &&
-                       spirv[word + 4u] == expected_y &&
-                       spirv[word + 5u] == expected_z;
-            }
-            word += word_count;
+    void writeDebugName(const lfs::rendering::VulkanDebugNameWriter& names,
+                        const VkObjectType type,
+                        const std::uint64_t handle,
+                        const std::string_view name) {
+        const VkResult result = names.set(type, handle, name);
+        if (result != VK_SUCCESS) {
+            fprintf(stderr,
+                    "vkSetDebugUtilsObjectNameEXT failed for '%.*s' (type=%d, handle=0x%llx, result=%s(%d)) at %s:%d\n",
+                    static_cast<int>(name.size()),
+                    name.data(),
+                    static_cast<int>(type),
+                    static_cast<unsigned long long>(handle),
+                    lfs::rendering::vkResultToString(result),
+                    static_cast<int>(result),
+                    __FILE__,
+                    __LINE__);
         }
-        return false;
+    }
+
+    // What the renderer binds of a compute module: the GLCompute entry point
+    // "main", its LocalSize and its descriptor resources. Push constants come
+    // only from host code, which the shader compiler checks against its manifest.
+    struct SpirvComputeInterface {
+        struct Resource {
+            uint32_t set = 0;
+            uint32_t binding = 0;
+            bool storage_buffer = false;
+        };
+        bool has_main = false;
+        std::array<uint32_t, 3> local_size = {}; // zero when sized by LocalSizeId
+        std::vector<Resource> resources;
+    };
+
+    [[nodiscard]] lfs::Result<SpirvComputeInterface> inspectComputeSpirv(const std::span<const uint32_t> words,
+                                                                         const std::string_view label) {
+        constexpr uint32_t kMagic = 0x07230203u;
+        constexpr uint32_t kMainName[2] = {0x6e69616du, 0u}; // "main\0" as a SPIR-V literal
+        if (words.size() < 5 || words[0] != kMagic) {
+            return vksplatProgramError(lfs::ErrorCode::InvalidArgument,
+                                       std::format("VkSplat compute program '{}' is not SPIR-V (words={}, magic={:#010x})",
+                                                   label, words.size(), words.empty() ? 0u : words[0]),
+                                       LFS_SOURCE_SITE_CURRENT());
+        }
+        SpirvComputeInterface result;
+        std::unordered_map<uint32_t, uint32_t> pointees; // OpTypePointer id -> pointee type
+        std::unordered_map<uint32_t, uint32_t> bindings;
+        std::unordered_map<uint32_t, uint32_t> sets;
+        std::unordered_set<uint32_t> buffer_blocks;
+        struct Variable {
+            uint32_t id = 0;
+            uint32_t pointer_type = 0;
+            uint32_t storage_class = 0;
+        };
+        std::vector<Variable> variables;
+        uint32_t main_id = 0;
+        for (size_t word = 5; word < words.size();) {
+            const uint32_t count = words[word] >> 16u;
+            if (count == 0 || count > words.size() - word) {
+                return vksplatProgramError(lfs::ErrorCode::InvalidArgument,
+                                           std::format("VkSplat compute program '{}' has a malformed instruction at word {}",
+                                                       label, word),
+                                           LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto ins = words.subspan(word, count);
+            switch (ins[0] & 0xffffu) {
+            case 15: // OpEntryPoint GLCompute %id "main"
+                if (count >= 5 && ins[1] == 5u && ins[3] == kMainName[0] && ins[4] == kMainName[1])
+                    main_id = ins[2];
+                break;
+            case 16: // OpExecutionMode %main LocalSize x y z
+                if (count >= 6 && main_id != 0 && ins[1] == main_id && ins[2] == 17u)
+                    result.local_size = {ins[3], ins[4], ins[5]};
+                break;
+            case 71: // OpDecorate
+                if (count >= 4 && ins[2] == 33u)
+                    bindings[ins[1]] = ins[3];
+                else if (count >= 4 && ins[2] == 34u)
+                    sets[ins[1]] = ins[3];
+                else if (count >= 3 && ins[2] == 3u)
+                    buffer_blocks.insert(ins[1]);
+                break;
+            case 32: // OpTypePointer %id StorageClass %type
+                if (count >= 4)
+                    pointees[ins[1]] = ins[3];
+                break;
+            case 59: // OpVariable
+                if (count >= 4)
+                    variables.push_back({ins[2], ins[1], ins[3]});
+                break;
+            default:
+                break;
+            }
+            word += count;
+        }
+        result.has_main = main_id != 0;
+
+        constexpr uint32_t kUniform = 2, kStorageBuffer = 12;
+        for (const auto& variable : variables) {
+            const auto pointer = pointees.find(variable.pointer_type);
+            const uint32_t pointee = pointer != pointees.end() ? pointer->second : 0u;
+            const auto binding = bindings.find(variable.id);
+            const auto set = sets.find(variable.id);
+            if (binding == bindings.end() && set == sets.end())
+                continue;
+            result.resources.push_back({
+                .set = set != sets.end() ? set->second : 0u,
+                .binding = binding != bindings.end() ? binding->second : 0u,
+                .storage_buffer = variable.storage_class == kStorageBuffer ||
+                                  (variable.storage_class == kUniform && buffer_blocks.contains(pointee)),
+            });
+        }
+        return result;
     }
 } // namespace
+
+lfs::Error vksplatProgramError(const lfs::ErrorCode code, std::string detail, const lfs::core::SourceSite site) {
+    return lfs::make_error(lfs::ErrorInit{
+        .code = code,
+        .domain = lfs::ErrorDomain::Vulkan,
+        .user_message = "Shader program setup failed.",
+        .detail = std::move(detail),
+        .detection = site,
+    });
+}
 
 [[noreturn]] static void throwRendererContractViolation(std::string detail,
                                                         lfs::core::SourceSite site) {
@@ -381,6 +480,7 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(depths)
     _(inv_cov_vs_opacity)
     _(rgb)
+    _(custom_geometry)
     _(overlay_flags)
     _(primitive_depth_keys)
     _(primitive_sort_indices)
@@ -520,6 +620,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(depths)
     _(inv_cov_vs_opacity)
     _(rgb)
+    _(custom_geometry)
     _(overlay_flags)
     _(primitive_depth_keys)
     _(primitive_sort_indices)
@@ -588,6 +689,7 @@ void VulkanGSPipeline::cleanup() {
     // Pipeline never owns the Vulkan instance, device, or VMA allocator —
     // those are always passed in by the host visualizer via initializeExternal.
     // Clean up only what we created on top of them.
+    stopProgramSetWorker();
     if (!commandBatchInProgress) {
         waitForPendingBatch();
     }
@@ -608,11 +710,23 @@ void VulkanGSPipeline::cleanup() {
         assert(retired_buffer_shells_.empty());
         destroyBufferRetireTimeline();
 
+        program_sets_.retired.clear();
+        program_sets_.current = nullptr;
+        program_sets_.sets.clear();
+        ++program_set_serial_;
+        custom_fixed_.reset();
+        custom_variants_.clear();
+        custom_effect_active_ = false;
         for (_ComputePipeline* pipeline : all_compute_pipelines)
+            destroyComputePipeline(*pipeline);
+        for (_ComputePipeline* pipeline : pending_compute_pipelines)
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
         pending_compute_pipelines.clear();
         banded_export_pipelines_.clear();
+        reveal_pipelines_.clear();
+        reveal_initialized_ = false;
+        reveal_active_ = false;
         banded_export_initialized_ = false;
         banded_export_active_ = false;
 
@@ -680,8 +794,11 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
     if (!feature_check.supported())
         lfs::rendering::throw_renderer_contract("VkSplat device lacks required shader features: " + feature_check.missing,
                                                 LFS_SOURCE_SITE_CURRENT());
+    VkPhysicalDeviceSubgroupSizeControlProperties sizeControlProperties{};
+    sizeControlProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES;
     VkPhysicalDeviceSubgroupProperties subgroupProperties{};
     subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+    subgroupProperties.pNext = &sizeControlProperties;
     VkPhysicalDeviceProperties2 deviceProperties2{};
     deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     deviceProperties2.pNext = &subgroupProperties;
@@ -689,31 +806,26 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
     const auto& limits = deviceProperties2.properties.limits;
 
     deviceInfo = {
-        subgroupProperties.subgroupSize,
-        limits.maxComputeSharedMemorySize,
-        limits.maxComputeWorkGroupCount[0],
-        limits.maxComputeWorkGroupCount[1],
-        limits.maxComputeWorkGroupCount[2],
-        limits.maxStorageBufferRange,
+        .subgroupSize = subgroupProperties.subgroupSize,
+        .sharedSize = limits.maxComputeSharedMemorySize,
+        .maxGroupsX = limits.maxComputeWorkGroupCount[0],
+        .maxGroupsY = limits.maxComputeWorkGroupCount[1],
+        .maxGroupsZ = limits.maxComputeWorkGroupCount[2],
+        .maxStorageBufferRange = limits.maxStorageBufferRange,
+        .maxWorkGroupSize = {limits.maxComputeWorkGroupSize[0],
+                             limits.maxComputeWorkGroupSize[1],
+                             limits.maxComputeWorkGroupSize[2]},
+        .maxWorkGroupInvocations = limits.maxComputeWorkGroupInvocations,
+        .minSubgroupSize = sizeControlProperties.minSubgroupSize,
+        .maxSubgroupSize = sizeControlProperties.maxSubgroupSize,
+        .requiredSubgroupSizeStages = sizeControlProperties.requiredSubgroupSizeStages,
     };
 }
 
 void VulkanGSPipeline::setDebugObjectName(const VkObjectType type,
                                           const std::uint64_t handle,
                                           const std::string_view name) const {
-    const VkResult result = debug_name_writer_.set(type, handle, name);
-    if (result != VK_SUCCESS) {
-        fprintf(stderr,
-                "vkSetDebugUtilsObjectNameEXT failed for '%.*s' (type=%d, handle=0x%llx, result=%s(%d)) at %s:%d\n",
-                static_cast<int>(name.size()),
-                name.data(),
-                static_cast<int>(type),
-                static_cast<unsigned long long>(handle),
-                lfs::rendering::vkResultToString(result),
-                static_cast<int>(result),
-                __FILE__,
-                __LINE__);
-    }
+    writeDebugName(debug_name_writer_, type, handle, name);
 }
 
 void VulkanGSPipeline::validateBufferRange(const _VulkanBuffer& buffer,
@@ -899,28 +1011,6 @@ void VulkanGSPipeline::createQueryPools() {
         }
     }
     timestamp_query_pool = command_batch_slots_[0].timestamp_query_pool;
-}
-
-void VulkanGSPipeline::createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule) {
-    VkShaderModuleCreateInfo create_info = {};
-    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    create_info.codeSize = spirv_code.size() * sizeof(uint32_t);
-    create_info.pCode = spirv_code.data();
-
-    const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, pShaderModule);
-    if (result != VK_SUCCESS) {
-        lfs::rendering::throw_vk_result(
-            result,
-            "vkCreateShaderModule",
-            std::format(
-                "VkSplat shader-module creation failed (device={:#x}, byte_size={}, output={:#x}, result={}({}))",
-                lfs::rendering::vkHandleValue(device),
-                create_info.codeSize,
-                lfs::rendering::vkHandleValue(*pShaderModule),
-                lfs::rendering::vkResultToString(result),
-                static_cast<int>(result)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
 }
 
 void VulkanGSPipeline::beginCommandBatch() {
@@ -1780,220 +1870,351 @@ VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
 
 // Compute pipeline
 
-void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeline) {
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
-    bindings.reserve(pipeline.buffer_layouts.size());
-
-    for (int i : pipeline.buffer_layouts) {
-        VkDescriptorSetLayoutBinding binding;
-        binding.binding = i;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        binding.descriptorCount = 1;
-        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        binding.pImmutableSamplers = nullptr;
-        bindings.push_back(binding);
-    }
-
-    VkDescriptorSetLayoutCreateInfo layout_info = {};
-    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
-    layout_info.pBindings = bindings.data();
-
-    const VkResult result = vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &pipeline.descriptor_set_layout);
-    if (result != VK_SUCCESS) {
-        lfs::rendering::throw_vk_result(
-            result,
-            "vkCreateDescriptorSetLayout",
-            std::format(
-                "VkSplat compute descriptor-set layout creation failed (pipeline='{}', binding_count={}, device={:#x}, result={}({}))",
-                pipeline.diagnostic_name,
-                bindings.size(),
-                lfs::rendering::vkHandleValue(device),
-                lfs::rendering::vkResultToString(result),
-                static_cast<int>(result)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (debug_name_writer_.enabled()) {
-        setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
-                           pipeline.descriptor_set_layout,
-                           std::format("vksplat.{}.descriptor_layout", pipeline.diagnostic_name));
-    }
+VulkanGSPipeline::ComputeBuildContext VulkanGSPipeline::computeBuildContext() const {
+    return {.device = device, .limits = deviceInfo, .names = debug_name_writer_, .dispatch = vulkan_dispatch_};
 }
 
-void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
-                                             const std::string& spirv_path,
-                                             bool compatible_subgroup_size,
-                                             const uint32_t expected_workgroup_size_x) {
+lfs::Status VulkanGSPipeline::prepareComputeProgram(const ComputeBuildContext& context,
+                                                    _ComputePipeline& program,
+                                                    const ComputeProgramSpec& spec,
+                                                    const std::span<const uint32_t> spirv) {
+    const auto reject = [&](const lfs::ErrorCode code, const std::string_view detail, const lfs::core::SourceSite site) {
+        return lfs::Status::failure(
+            vksplatProgramError(code, std::format("VkSplat compute program '{}' {}", spec.label, detail), site));
+    };
+    auto inspected = inspectComputeSpirv(spirv, spec.label);
+    if (!inspected)
+        return lfs::Status::failure(std::move(inspected).error());
+    const auto& shader = *inspected;
+    const auto& limits = context.limits;
+    if (!shader.has_main)
+        return reject(lfs::ErrorCode::InvalidArgument, "has no GLCompute entry point named main",
+                      LFS_SOURCE_SITE_CURRENT());
+    for (const auto& resource : shader.resources) {
+        if (resource.set != 0 || !resource.storage_buffer ||
+            std::ranges::find(spec.bindings, static_cast<int>(resource.binding)) == spec.bindings.end()) {
+            return reject(lfs::ErrorCode::ContractViolation,
+                          std::format("declares set {} binding {} (storage_buffer={}), which the host layout of {} "
+                                      "storage buffers in set 0 does not provide",
+                                      resource.set, resource.binding, resource.storage_buffer, spec.bindings.size()),
+                          LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+    const auto& local = shader.local_size;
+    if (spec.workgroup != std::array<uint32_t, 3>{} && local != spec.workgroup) {
+        return reject(lfs::ErrorCode::ContractViolation,
+                      std::format("declares workgroup [{},{},{}], the host dispatches [{},{},{}]",
+                                  local[0], local[1], local[2],
+                                  spec.workgroup[0], spec.workgroup[1], spec.workgroup[2]),
+                      LFS_SOURCE_SITE_CURRENT());
+    }
+    if (local[0] != 0 && limits.maxWorkGroupInvocations != 0 &&
+        (local[0] > limits.maxWorkGroupSize[0] || local[1] > limits.maxWorkGroupSize[1] ||
+         local[2] > limits.maxWorkGroupSize[2] ||
+         uint64_t{local[0]} * local[1] * local[2] > limits.maxWorkGroupInvocations)) {
+        return reject(lfs::ErrorCode::Unsupported,
+                      std::format("workgroup [{},{},{}] exceeds the device limits [{},{},{}] and {} invocations",
+                                  local[0], local[1], local[2], limits.maxWorkGroupSize[0],
+                                  limits.maxWorkGroupSize[1], limits.maxWorkGroupSize[2],
+                                  limits.maxWorkGroupInvocations),
+                      LFS_SOURCE_SITE_CURRENT());
+    }
+    const uint32_t subgroup = spec.required_subgroup_size;
+    if (subgroup != 0 && subgroup != limits.subgroupSize && limits.maxSubgroupSize != 0 &&
+        (!std::has_single_bit(subgroup) || subgroup < limits.minSubgroupSize || subgroup > limits.maxSubgroupSize ||
+         (limits.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) == 0)) {
+        return reject(lfs::ErrorCode::Unsupported,
+                      std::format("requires subgroup size {}, the device pins {}..{} for compute stages {:#x}",
+                                  subgroup, limits.minSubgroupSize, limits.maxSubgroupSize,
+                                  limits.requiredSubgroupSizeStages),
+                      LFS_SOURCE_SITE_CURRENT());
+    }
+    _ComputePipeline record(spec.bindings);
+    record.diagnostic_name = spec.label;
+    record.required_subgroup_size = spec.required_subgroup_size;
+    record.expected_workgroup_size_x = spec.workgroup[0];
+    const auto& vk = context.dispatch;
+    const auto vk_failure = [&](const VkResult result, const std::string_view operation, auto& failed_handle,
+                                const lfs::core::SourceSite site) {
+        failed_handle = VK_NULL_HANDLE;
+        destroyComputeProgram(context.device, vk, record);
+        return lfs::Status::failure(lfs::rendering::make_vk_result_error(
+            result,
+            std::format("{} failed for VkSplat compute program '{}' (device={:#x}, result={}({}))",
+                        operation, spec.label, lfs::rendering::vkHandleValue(context.device),
+                        lfs::rendering::vkResultToString(result), static_cast<int>(result)),
+            site));
+    };
+    const auto name = [&](const VkObjectType type, const auto handle, const std::string_view suffix) {
+        if (context.names.enabled())
+            writeDebugName(context.names, type, lfs::rendering::vkHandleValue(handle),
+                           std::format("vksplat.{}.{}", spec.label, suffix));
+    };
 
-    pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
-    pipeline.spirv_path = spirv_path;
-    all_compute_pipelines.push_back(&pipeline);
-    const auto spirv_code = loadSpirv(spirv_path);
-    if (expected_workgroup_size_x != 0 &&
-        !spirvHasComputeWorkgroupSize(spirv_code, expected_workgroup_size_x, 1u, 1u)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "VkSplat compute shader workgroup geometry does not match the host contract (pipeline='{}', shader='{}', expected=[{},1,1])",
-                pipeline.diagnostic_name,
-                spirv_path,
-                expected_workgroup_size_x),
-            LFS_SOURCE_SITE_CURRENT());
+    VkShaderModuleCreateInfo module_info{};
+    module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    module_info.codeSize = spirv.size_bytes();
+    module_info.pCode = spirv.data();
+    VkResult result = vk.create_shader_module(context.device, &module_info, nullptr, &record.shader);
+    if (result != VK_SUCCESS)
+        return vk_failure(result, "vkCreateShaderModule", record.shader, LFS_SOURCE_SITE_CURRENT());
+    name(VK_OBJECT_TYPE_SHADER_MODULE, record.shader, "shader");
+
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    bindings.reserve(record.buffer_layouts.size());
+    for (const int binding : record.buffer_layouts) {
+        bindings.push_back({
+            .binding = static_cast<uint32_t>(binding),
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = nullptr,
+        });
     }
-    recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
-    createShaderModule(spirv_code, &pipeline.shader);
-    if (debug_name_writer_.enabled()) {
-        setDebugObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
-                           pipeline.shader,
-                           std::format("vksplat.{}.shader", pipeline.diagnostic_name));
+    VkDescriptorSetLayoutCreateInfo set_layout_info{};
+    set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    set_layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    set_layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
+    set_layout_info.pBindings = bindings.data();
+    result = vk.create_descriptor_set_layout(context.device, &set_layout_info, nullptr, &record.descriptor_set_layout);
+    if (result != VK_SUCCESS) {
+        return vk_failure(result, "vkCreateDescriptorSetLayout", record.descriptor_set_layout,
+                          LFS_SOURCE_SITE_CURRENT());
     }
-    createComputeDescriptorSetLayout(pipeline);
+    name(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, record.descriptor_set_layout, "descriptor_layout");
 
     VkPushConstantRange push_constant_range{};
     push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant_range.offset = 0;
     push_constant_range.size = static_cast<uint32_t>(MAX_UNIFORM_SIZE);
-
     VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1;
-    pipeline_layout_info.pSetLayouts = &pipeline.descriptor_set_layout;
+    pipeline_layout_info.pSetLayouts = &record.descriptor_set_layout;
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pPushConstantRanges = &push_constant_range;
+    result = vk.create_pipeline_layout(context.device, &pipeline_layout_info, nullptr, &record.pipeline_layout);
+    if (result != VK_SUCCESS)
+        return vk_failure(result, "vkCreatePipelineLayout", record.pipeline_layout, LFS_SOURCE_SITE_CURRENT());
+    name(VK_OBJECT_TYPE_PIPELINE_LAYOUT, record.pipeline_layout, "pipeline_layout");
 
-    const VkResult layout_result = vkCreatePipelineLayout(
-        device, &pipeline_layout_info, nullptr, &pipeline.pipeline_layout);
-    if (layout_result != VK_SUCCESS) {
-        lfs::rendering::throw_vk_result(
-            layout_result,
-            "vkCreatePipelineLayout",
-            std::format("VkSplat compute pipeline-layout creation failed (pipeline='{}', result={}({}))",
-                        pipeline.diagnostic_name,
-                        lfs::rendering::vkResultToString(layout_result),
-                        static_cast<int>(layout_result)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (debug_name_writer_.enabled()) {
-        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
-                           pipeline.pipeline_layout,
-                           std::format("vksplat.{}.pipeline_layout", pipeline.diagnostic_name));
-    }
-
-    pipeline.compatible_subgroup_size = compatible_subgroup_size;
-    pipeline.expected_workgroup_size_x = expected_workgroup_size_x;
-    pending_compute_pipelines.push_back(&pipeline);
+    program = std::move(record);
+    return {};
 }
 
-void VulkanGSPipeline::setBandedExport(const bool enabled) {
-    if (enabled == banded_export_active_)
-        return;
-
-    if (enabled && !banded_export_initialized_) {
-        const size_t count = all_compute_pipelines.size();
-        const size_t pending_count = pending_compute_pipelines.size();
-        try {
-            for (size_t i = 0; i < count; ++i) {
-                auto* const pipeline = all_compute_pipelines[i];
-                const std::filesystem::path path(pipeline->spirv_path);
-                const std::string name = lfs::core::path_to_utf8(path.stem());
-                if (!name.starts_with("projection_forward") &&
-                    !name.starts_with("rasterize_forward") &&
-                    !name.starts_with("macro_raster") &&
-                    !name.starts_with("macro_compose") && name != "generate_keys_wave") {
-                    continue;
-                }
-                auto variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
-                auto* const variant_ptr = variant.get();
-                banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
-                createComputePipeline(*variant_ptr,
-                                      lfs::core::path_to_utf8((path.parent_path() / (name + "_banded.spv"))),
-                                      pipeline->compatible_subgroup_size,
-                                      pipeline->expected_workgroup_size_x);
-            }
-            createPendingComputePipelines();
-        } catch (...) {
-            // A failed first export must leave the viewer usable and retryable.
-            for (auto& entry : banded_export_pipelines_)
-                destroyComputePipeline(*entry.second);
-            all_compute_pipelines.resize(count);
-            pending_compute_pipelines.resize(pending_count);
-            banded_export_pipelines_.clear();
-            throw;
-        }
-        banded_export_initialized_ = true;
-    }
-
-    // Swap once at the boundary, keeping ordinary dispatch recording unchanged.
-    // Both sets stay alive until renderer teardown, including in-flight uses.
-    for (auto& [pipeline, variant] : banded_export_pipelines_) {
-        std::swap(pipeline->shader, variant->shader);
-        std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
-        std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
-        std::swap(pipeline->pipeline, variant->pipeline);
-    }
-    banded_export_active_ = enabled;
-}
-
-void VulkanGSPipeline::createPendingComputePipelines() {
-    if (pending_compute_pipelines.empty())
-        return;
+lfs::Status VulkanGSPipeline::createComputePrograms(const ComputeBuildContext& context,
+                                                    const VkPipelineCache cache,
+                                                    const std::span<_ComputePipeline* const> programs) {
+    if (programs.empty())
+        return {};
 
     std::vector<VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT> subgroup_infos;
-    subgroup_infos.reserve(pending_compute_pipelines.size());
-    std::vector<VkPipelineShaderStageCreateInfo> stages;
-    stages.reserve(pending_compute_pipelines.size());
+    subgroup_infos.reserve(programs.size());
     std::vector<VkComputePipelineCreateInfo> infos;
-    infos.reserve(pending_compute_pipelines.size());
-    std::vector<VkPipeline> pipelines(pending_compute_pipelines.size(), VK_NULL_HANDLE);
+    infos.reserve(programs.size());
+    std::vector<VkPipeline> pipelines(programs.size(), VK_NULL_HANDLE);
 
-    for (auto* const pipeline : pending_compute_pipelines) {
+    for (auto* const program : programs) {
         VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_info{};
         subgroup_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT;
-        subgroup_info.requiredSubgroupSize = SUBGROUP_SIZE;
+        subgroup_info.requiredSubgroupSize = program->required_subgroup_size;
         subgroup_infos.push_back(subgroup_info);
 
         VkPipelineShaderStageCreateInfo stage{};
         stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        stage.module = pipeline->shader;
+        stage.module = program->shader;
         stage.pName = "main";
-        if (pipeline->compatible_subgroup_size && deviceInfo.subgroupSize != SUBGROUP_SIZE)
+        if (program->required_subgroup_size != 0 && context.limits.subgroupSize != program->required_subgroup_size)
             stage.pNext = &subgroup_infos.back();
-        stages.push_back(stage);
 
         VkComputePipelineCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        info.layout = pipeline->pipeline_layout;
-        info.stage = stages.back();
+        info.layout = program->pipeline_layout;
+        info.stage = stage;
         infos.push_back(info);
     }
 
-    const VkResult result = vkCreateComputePipelines(
-        device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
+    const VkResult result = context.dispatch.create_compute_pipelines(
+        context.device, cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
     if (result != VK_SUCCESS) {
-        for (const auto pipeline : pipelines) {
-            if (pipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(device, pipeline, nullptr);
+        std::string_view failed;
+        for (std::size_t i = 0; i < pipelines.size(); ++i) {
+            if (pipelines[i] != VK_NULL_HANDLE)
+                context.dispatch.destroy_pipeline(context.device, pipelines[i], nullptr);
+            else if (failed.empty())
+                failed = programs[i]->diagnostic_name;
         }
-        lfs::rendering::throw_vk_result(
+        return lfs::Status::failure(lfs::rendering::make_vk_result_error(
             result,
-            "vkCreateComputePipelines",
-            std::format("VkSplat batched compute pipeline creation failed (count={}, result={}({}))",
-                        infos.size(),
-                        lfs::rendering::vkResultToString(result),
-                        static_cast<int>(result)),
-            LFS_SOURCE_SITE_CURRENT());
+            std::format("VkSplat batched compute pipeline creation failed (count={}, first_failed='{}', result={}({}))",
+                        infos.size(), failed, lfs::rendering::vkResultToString(result), static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT()));
     }
 
-    for (std::size_t i = 0; i < pending_compute_pipelines.size(); ++i) {
-        auto& pipeline = *pending_compute_pipelines[i];
-        pipeline.pipeline = pipelines[i];
-        if (debug_name_writer_.enabled()) {
-            setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
-                               pipeline.pipeline,
-                               std::format("vksplat.{}.pipeline", pipeline.diagnostic_name));
+    for (std::size_t i = 0; i < programs.size(); ++i) {
+        auto& program = *programs[i];
+        program.pipeline = pipelines[i];
+        if (context.names.enabled()) {
+            writeDebugName(context.names, VK_OBJECT_TYPE_PIPELINE, lfs::rendering::vkHandleValue(program.pipeline),
+                           std::format("vksplat.{}.pipeline", program.diagnostic_name));
         }
     }
+    return {};
+}
+
+void VulkanGSPipeline::destroyComputeProgram(const VkDevice device,
+                                             const lfs::rendering::VulkanDispatch& dispatch,
+                                             _ComputePipeline& program) noexcept {
+    if (program.descriptor_set_layout != VK_NULL_HANDLE) {
+        dispatch.destroy_descriptor_set_layout(device, program.descriptor_set_layout, nullptr);
+        program.descriptor_set_layout = VK_NULL_HANDLE;
+    }
+    if (program.pipeline != VK_NULL_HANDLE) {
+        dispatch.destroy_pipeline(device, program.pipeline, nullptr);
+        program.pipeline = VK_NULL_HANDLE;
+    }
+    if (program.pipeline_layout != VK_NULL_HANDLE) {
+        dispatch.destroy_pipeline_layout(device, program.pipeline_layout, nullptr);
+        program.pipeline_layout = VK_NULL_HANDLE;
+    }
+    if (program.shader != VK_NULL_HANDLE) {
+        dispatch.destroy_shader_module(device, program.shader, nullptr);
+        program.shader = VK_NULL_HANDLE;
+    }
+}
+
+lfs::Status VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
+                                                    const ComputeProgramSpec& spec,
+                                                    const std::span<const uint32_t> spirv) {
+    if (auto prepared = prepareComputeProgram(computeBuildContext(), pipeline, spec, spirv); !prepared)
+        return prepared;
+    pending_compute_pipelines.push_back(&pipeline);
+    return {};
+}
+
+void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
+                                             const std::string& spirv_path,
+                                             const bool compatible_subgroup_size,
+                                             const uint32_t expected_workgroup_size_x) {
+    const auto spirv_code = loadSpirv(spirv_path);
+    const uint32_t checked = expected_workgroup_size_x != 0 ? 1u : 0u;
+    const ComputeProgramSpec spec{
+        .label = spirvDiagnosticName(spirv_path),
+        .bindings = pipeline.buffer_layouts,
+        .workgroup = {expected_workgroup_size_x, checked, checked},
+        .required_subgroup_size = compatible_subgroup_size ? uint32_t{SUBGROUP_SIZE} : 0u,
+    };
+    if (auto created = createComputePipeline(pipeline, spec, spirv_code); !created) {
+        lfs::rendering::throw_vk_error(
+            std::move(created).error().with_context(std::format("load '{}'", spirv_path), LFS_SOURCE_SITE_CURRENT()));
+    }
+    pipeline.spirv_path = spirv_path;
+    recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
+}
+
+void VulkanGSPipeline::initializeLegacyVariants(const bool reveal) {
+    const size_t count = all_compute_pipelines.size();
+    const size_t pending_count = pending_compute_pipelines.size();
+    const size_t banded_count = banded_export_pipelines_.size();
+    const size_t reveal_count = reveal_pipelines_.size();
+    auto& variants = reveal ? reveal_pipelines_ : banded_export_pipelines_;
+    const auto append = [&](auto& collection, _ComputePipeline* base, const auto& path, const std::string_view label) {
+        auto variant = std::make_unique<_ComputePipeline>(base->buffer_layouts);
+        auto* result = variant.get();
+        collection.emplace_back(base, std::move(variant));
+        createComputePipeline(*result, lfs::core::path_to_utf8(path / (std::string(label) + ".spv")),
+                              base->required_subgroup_size != 0, base->expected_workgroup_size_x);
+        return result;
+    };
+    try {
+        for (size_t i = 0; i < count; ++i) {
+            auto* const pipeline = all_compute_pipelines[i];
+            const std::filesystem::path path(pipeline->spirv_path);
+            const auto* row = lfs::rendering::shaderVariants(lfs::core::path_to_utf8(path.stem()));
+            const auto label = row ? (reveal ? row->reveal : row->banded) : std::string_view{};
+            if (label.empty())
+                continue;
+            auto* variant = append(variants, pipeline, path.parent_path(), label);
+            if (reveal && banded_export_initialized_) {
+                const auto* reveal_row = lfs::rendering::shaderVariants(label);
+                if (reveal_row && !reveal_row->banded.empty())
+                    append(banded_export_pipelines_, variant, path.parent_path(), reveal_row->banded);
+            }
+        }
+        createPendingComputePipelines();
+    } catch (...) {
+        for (size_t i = banded_count; i < banded_export_pipelines_.size(); ++i)
+            destroyComputePipeline(*banded_export_pipelines_[i].second);
+        for (size_t i = reveal_count; i < reveal_pipelines_.size(); ++i)
+            destroyComputePipeline(*reveal_pipelines_[i].second);
+        all_compute_pipelines.resize(count);
+        pending_compute_pipelines.resize(pending_count);
+        banded_export_pipelines_.resize(banded_count);
+        reveal_pipelines_.resize(reveal_count);
+        throw;
+    }
+}
+
+void VulkanGSPipeline::setRevealEffect(const bool enabled) {
+    if (enabled == reveal_active_)
+        return;
+    const bool banded = banded_export_active_;
+    if (reveal_active_) {
+        for (auto& [pipeline, variant] : reveal_pipelines_)
+            pipeline->swapProgram(*variant);
+        reveal_active_ = false;
+    }
+    if (banded)
+        setBandedExport(false);
+    if (enabled && !reveal_initialized_) {
+        try {
+            initializeLegacyVariants(true);
+        } catch (...) {
+            if (banded)
+                setBandedExport(true);
+            throw;
+        }
+        reveal_initialized_ = true;
+    }
+    if (banded)
+        setBandedExport(true);
+    if (enabled) {
+        for (auto& [pipeline, variant] : reveal_pipelines_)
+            pipeline->swapProgram(*variant);
+    }
+    reveal_active_ = enabled;
+}
+
+void VulkanGSPipeline::setBandedExport(const bool enabled) {
+    if (enabled == banded_export_active_)
+        return;
+    if (reveal_active_) {
+        setRevealEffect(false);
+        setBandedExport(enabled);
+        setRevealEffect(true);
+        return;
+    }
+    if (enabled && !banded_export_initialized_) {
+        initializeLegacyVariants(false);
+        banded_export_initialized_ = true;
+    }
+    // Swap once at the boundary; all variants survive in-flight uses until teardown.
+    for (auto& [pipeline, variant] : banded_export_pipelines_)
+        pipeline->swapProgram(*variant);
+    banded_export_active_ = enabled;
+}
+
+void VulkanGSPipeline::createPendingComputePipelines() {
+    if (auto created = createComputePrograms(computeBuildContext(), pipeline_cache, pending_compute_pipelines);
+        !created) {
+        for (auto* const pipeline : pending_compute_pipelines)
+            destroyComputePipeline(*pipeline);
+        pending_compute_pipelines.clear();
+        lfs::rendering::throw_vk_error(std::move(created).error());
+    }
+    all_compute_pipelines.insert(all_compute_pipelines.end(),
+                                 pending_compute_pipelines.begin(), pending_compute_pipelines.end());
     pending_compute_pipelines.clear();
 }
 
@@ -2379,20 +2600,5 @@ void VulkanGSPipeline::executeComputeIndirect(
 }
 
 void VulkanGSPipeline::destroyComputePipeline(_ComputePipeline& pipeline) {
-    if (pipeline.descriptor_set_layout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, pipeline.descriptor_set_layout, nullptr);
-        pipeline.descriptor_set_layout = VK_NULL_HANDLE;
-    }
-    if (pipeline.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, pipeline.pipeline, nullptr);
-        pipeline.pipeline = VK_NULL_HANDLE;
-    }
-    if (pipeline.pipeline_layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, pipeline.pipeline_layout, nullptr);
-        pipeline.pipeline_layout = VK_NULL_HANDLE;
-    }
-    if (pipeline.shader != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(device, pipeline.shader, nullptr);
-        pipeline.shader = VK_NULL_HANDLE;
-    }
+    destroyComputeProgram(device, vulkan_dispatch_, pipeline);
 }

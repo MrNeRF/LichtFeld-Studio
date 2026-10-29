@@ -15,6 +15,8 @@
                             <button id="save-as-button" class="toolbar-button btn-save-as" type="button" data-action="save-as"></button>
                             <button id="format-button" class="toolbar-button btn-format" type="button" data-action="format"></button>
                             <button id="vim-button" class="toolbar-button btn-vim" type="button" data-action="toggle-vim"></button>
+                            <button id="kind-button" type="button" data-action="toggle-kind"></button>
+                            <button id="stop-python-button" type="button" data-action="stop-python">@tr:editor.stop_python</button>
                             <button id="run-button" class="toolbar-button btn-run run-button" type="button" data-action="run"></button>
                             <button id="stop-button" class="toolbar-button btn-stop stop-button" type="button" data-action="stop"></button>
                             <button id="reset-button" class="toolbar-button btn-reset" type="button" data-action="reset"></button>
@@ -29,6 +31,23 @@
                             <button id="font-status" type="button" data-action="font-reset">100%</button>
                         </div>
                         <button id="close-panel-button" type="button" data-action="close-panel" data-tooltip="common.close">&#215;</button>
+                    </div>
+                    <div id="shader-controls">
+                        <div class="shader-row">
+                            <span id="shader-target-label">@tr:shader.target</span><span id="shader-target"></span>
+                            <button id="shader-global" type="button" data-action="shader-global">@tr:shader.global</button>
+                            <button id="shader-reveal" type="button" data-action="shader-reveal">@tr:sequencer.reveal_effect_custom</button>
+                            <button id="shader-node" type="button" data-action="shader-node">@tr:shader.selected_node</button>
+                            <select id="shader-assets"></select>
+                            <button id="shader-open" type="button" data-action="shader-open">@tr:shader.open_asset</button>
+                            <input id="shader-name" type="text"/>
+                            <button id="shader-rename" type="button" data-action="shader-rename">@tr:shader.rename</button>
+                            <button id="shader-bind" type="button" data-action="shader-bind">@tr:shader.bind</button>
+                            <button id="shader-unbind" type="button" data-action="shader-unbind">@tr:shader.unbind</button>
+                            <button id="shader-remove" type="button" data-action="shader-remove">@tr:shader.remove</button>
+                        </div>
+                        <span id="shader-parameters-label">@tr:shader.parameters</span>
+                        <div id="shader-parameters"></div>
                     </div>
                 </div>
 

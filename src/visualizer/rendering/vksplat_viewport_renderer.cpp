@@ -10,6 +10,7 @@
 
 #include "core/tensor_rad.hpp"
 
+#include "core/assert.hpp"
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_vulkan_interop.hpp"
@@ -31,11 +32,13 @@
 #include "graphics_external_tensor.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rasterizer/vulkan/src/custom_effect_layout.h"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/rasterizer/vulkan/src/visible_mask.h"
 #include "rendering/selection_ops.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "shaders/shader_service.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vksplat_shared_scratch_install.hpp"
@@ -43,6 +46,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -2103,8 +2107,85 @@ namespace lfs::vis {
         lod_page_cache_.reset();
         gpu_lod_tree_ = {};
         lod_tree_updates_.clear();
+        // cleanup() dropped every program set and invalidated unpublished builds.
+        program_sets_.clear();
         initialized_ = false;
         context_ = nullptr;
+    }
+
+    lfs::Result<bool> VksplatViewportRenderer::preparePrograms(const std::shared_ptr<const shaders::ShaderPrograms>& programs,
+                                                               ProgramSetHandle& handle, std::function<void()> finished, const bool live) {
+        if (!programs) {
+            handle.reset();
+            return true;
+        }
+        if (!initialized_)
+            return false;
+        std::erase_if(program_sets_, [&](const auto& entry) { return !entry.second.second || entry.second.first.expired() || entry.second.second->generation != renderer_.deviceGeneration(); });
+        auto& cached = program_sets_[programs.get()];
+        if (!cached.second) {
+            std::vector<VulkanGSRenderer::ComputeProgramSource> sources;
+            for (const auto& program : programs->hosts)
+                sources.push_back({{.label = program->label, .bindings = program->bindings, .workgroup = program->workgroup, .required_subgroup_size = program->subgroup_size}, program->spirv});
+            auto requested = renderer_.prepareProgramSet(std::move(sources), std::move(finished), live);
+            if (!requested)
+                return requested.error();
+            cached = {programs, *requested};
+        }
+        handle = cached.second;
+        return renderer_.programSetReady(handle);
+    }
+
+    std::expected<VksplatViewportRenderer::PreparedDraw, std::string> VksplatViewportRenderer::prepare(
+        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request,
+        const RenderTargetId target, const bool synchronize_input_upload, const bool capture, const bool deterministic_export) {
+        if (auto ready = ensureInitialized(context); !ready)
+            return std::unexpected(ready.error());
+        active_tensor_backend_ = lfs::core::gpu_backend_of(model.means_raw()).value_or(lfs::core::default_gpu_backend());
+        const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
+        const auto reconcile = ScopeExit([&] { clampOrphanedInputRetirements(); });
+        const bool lod = (request.lod_count > 0 && request.lod_indices) ||
+                         (request.lod_gpu_traversal.enabled && request.lod_gpu_traversal.node_count > 0 && request.lod_gpu_traversal.output_capacity > 0);
+        const auto degree = effectiveRenderShDegree(model, request.sh_degree, request.scene.node_active_sh_degrees);
+        if (lod && model.lod_tree && model.lod_tree->rad_source.valid() && ensureLodPageCacheSnapshot(model)) {
+            if (auto ready = ensureLodPageInputStorage(context, model, degree); !ready)
+                return std::unexpected(ready.error());
+        } else {
+            const auto slot = acquireRingSlot();
+            if (auto ready = waitForRingSlot(slot, "shader preparation"); !ready)
+                return std::unexpected(legacyErrorString(ready.error()));
+            if (auto ready = prepareInputs(context, model, slot, false, degree); !ready)
+                return std::unexpected(ready.error());
+        }
+        return prepareDecision(request, target, synchronize_input_upload, capture, deterministic_export);
+    }
+
+    VksplatViewportRenderer::PreparedDraw VksplatViewportRenderer::prepareDecision(
+        const rendering::ViewportRenderRequest& request, [[maybe_unused]] const RenderTargetId target, const bool synchronize_input_upload,
+        const bool capture, const bool deterministic_export) {
+        // The same decisions render() takes for this request; its draw asserts them.
+        const bool deterministic = deterministic_export || request.deterministic_export;
+        const bool lod = (request.lod_count > 0 && request.lod_indices) ||
+                         (request.lod_gpu_traversal.enabled && request.lod_gpu_traversal.node_count > 0 && request.lod_gpu_traversal.output_capacity > 0);
+        const int mode = static_cast<int>(request.transparency_mode);
+        const auto& guides = request.overlay.markers;
+        // A preview is read back at once and never accumulates the samples stochastic transparency needs.
+        const bool stochastic = (mode == 1 || mode == 2) && !request.gut && !lod && !depth_capture_mode_ && !capture &&
+                                !deterministic && !request.depth_view && !request.require_exact_depth && !request.require_complete_output &&
+                                !guides.show_rings && !guides.show_center_markers && !guides.show_object_outline;
+        // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
+        // input. 3DGUT and live training use the legacy per-render-tile chain.
+        const bool candidate = !stochastic && !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload && !depth_capture_mode_ && !capture;
+        // Synchronous exports keep the same raster chain across every band, including a cold first band.
+        const bool warmup = candidate && macro_chain_warmup_pending_ && !deterministic;
+        // GUT remaps full-image tiles into its local grid, which requires tile-aligned origins.
+        const glm::ivec2 origin = glm::max(request.frame_view.subregion_origin, glm::ivec2(0));
+        const bool gut_aligned_band = request.gut && origin.x % static_cast<int>(TILE_WIDTH) == 0 &&
+                                      origin.y % static_cast<int>(TILE_HEIGHT) == 0;
+        VulkanGSRenderer::HostInputs inputs{buffers_.quant_pool, buffers_.shN_q16, buffers_.shN_f16,
+                                            request.gut, candidate && !warmup,
+                                            ((candidate && !warmup) || gut_aligned_band) && deterministic && request.frame_view.subregion_full_size.y > 0};
+        return PreparedDraw{inputs, hostsFor(inputs), renderer_.deviceGeneration(), stochastic, warmup};
     }
 
     VksplatViewportRenderer::GpuLodSelectionStatus
@@ -3650,6 +3731,7 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(depths);
         RELEASE_PRIVATE_SCRATCH(inv_cov_vs_opacity);
         RELEASE_PRIVATE_SCRATCH(rgb);
+        RELEASE_PRIVATE_SCRATCH(custom_geometry);
         RELEASE_PRIVATE_SCRATCH(overlay_flags);
         RELEASE_PRIVATE_SCRATCH(primitive_depth_keys);
         RELEASE_PRIVATE_SCRATCH(primitive_sort_indices);
@@ -4043,7 +4125,8 @@ namespace lfs::vis {
         const lfs::rendering::ViewportRenderRequest& request,
         const std::size_t num_splats,
         const std::size_t ring_slot,
-        const RenderTargetId target) {
+        const RenderTargetId target,
+        const std::span<const float> custom_tail) {
         if (num_splats == 0) {
             return std::unexpected("VkSplat overlay bindings cannot bind an empty model");
         }
@@ -4127,7 +4210,7 @@ namespace lfs::vis {
         const std::size_t node_mask_region_bytes =
             alignUp(std::max<std::size_t>(node_mask_count, 1), 4);
         const std::size_t overlay_params_region_bytes =
-            static_cast<std::size_t>(detail::TableParamCount) * 4 * sizeof(float);
+            (static_cast<std::size_t>(detail::VksplatTableParamCount) * 4 + custom_tail.size()) * sizeof(float);
         const std::size_t model_transforms_region_bytes =
             modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
         std::array<std::size_t, kOverlayRegionCount> region_bytes{};
@@ -4272,6 +4355,8 @@ namespace lfs::vis {
                 if (!overlay_params_cpu) {
                     return std::unexpected(overlay_params_cpu.error());
                 }
+                detail::appendVksplatRevealParams(*overlay_params_cpu, request);
+                overlay_params_cpu->insert(overlay_params_cpu->end(), custom_tail.begin(), custom_tail.end());
                 const bool overlay_params_cache_hit =
                     slot.cached_overlay_params_cpu == *overlay_params_cpu;
                 if (!overlay_params_cache_hit) {
@@ -4462,6 +4547,7 @@ namespace lfs::vis {
         // created before a later initialization step fails. Without this rollback, retry overwrote
         // live CUDA imports/Vulkan handles while initialized_ remained false.
         initialized_ = true;
+        // The programs shown while nothing drew have no set yet.
         bool initialization_committed = false;
         auto rollback = ScopeExit([&]() {
             if (initialization_committed) {
@@ -7219,9 +7305,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
-        }
         if (input_binding->model_snapshot_changed)
             resident_raster_scratch_ = {};
         // Model snapshots invalidate bindings; tensor readiness orders producer writes.
@@ -7860,6 +7943,12 @@ namespace lfs::vis {
              !hasDeviceBuffer(buffers_.opacity_raw))) {
             return std::unexpected("VkSplat 3DGUT selection overlay cached model inputs are unavailable");
         }
+        // A custom effect projection is drawn again in full: its hosts may be
+        // gone, and the overlay pass carries no effect table.
+        if (resident_projection_custom_) {
+            return std::unexpected("VkSplat selection overlay cannot reuse a custom effect projection");
+        }
+        renderer_.disableCustomEffect();
 
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.selection_overlay.uploadOverlayBindings");
@@ -8052,7 +8141,7 @@ namespace lfs::vis {
         const bool force_input_upload,
         const RenderTargetId target,
         const bool synchronize_input_upload,
-        const bool deterministic_export) {
+        const bool deterministic_export_requested) {
         std::lock_guard target_lock(target_mutex_);
         float_color_capture_ = false;
         if (rendering_target_.valid())
@@ -8064,6 +8153,15 @@ namespace lfs::vis {
             RenderTargetId& target;
             ~TargetGuard() { target = {}; }
         } target_guard{rendering_target_};
+        // A deterministic request (HiGS export) or caller: exact gate, no warmup, no stochastic frames.
+        const bool deterministic_export = deterministic_export_requested || request.deterministic_export;
+        std::optional<PreparedDraw> custom_prepared;
+        if (request.custom_effect) {
+            auto prepared = prepare(context, splat_data, request, target, synchronize_input_upload, false, deterministic_export);
+            if (!prepared)
+                return std::unexpected(prepared.error());
+            custom_prepared = *prepared;
+        }
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -8349,9 +8447,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (input_binding->model_snapshot_changed) {
-            macro_chain_warmup_pending_ = true;
-        }
         if (lod_request_active) {
             if (auto ok = ensureGpuLodTreeStorage(splat_data); !ok) {
                 static std::string last_gpu_lod_storage_error;
@@ -8633,17 +8728,16 @@ namespace lfs::vis {
             uniforms.lod_enabled |= 2u;
         }
 
+        const auto prepared = custom_prepared ? *custom_prepared : prepareDecision(request, target, synchronize_input_upload, false, deterministic_export);
+        if (prepare_custom) {
+            auto ready = prepare_custom(prepared, request);
+            if (!ready)
+                return std::unexpected(std::string(ready.error().user_message()));
+        }
         // Editing guides and deterministic captures retain their existing exact
         // alpha-blended behavior. This option changes transparency, not projection.
         const int requested_mode = static_cast<int>(request.transparency_mode);
-        const auto& guides = request.overlay.markers;
-        const bool stochastic_active = (requested_mode == 1 || requested_mode == 2) &&
-                                       !request.gut && !lod_request_active &&
-                                       !depth_capture_mode_ && !deterministic_export &&
-                                       !request.depth_view && !request.require_exact_depth &&
-                                       !request.require_exact_depth &&
-                                       !guides.show_rings && !guides.show_center_markers &&
-                                       !guides.show_object_outline;
+        const bool stochastic_active = prepared.stochastic;
         uniforms.stochastic_mode = stochastic_active ? static_cast<std::uint32_t>(requested_mode) : 0u;
         // The setting is global: switching it off frees every view's history.
         if (requested_mode == 0) {
@@ -8653,11 +8747,6 @@ namespace lfs::vis {
             releaseUnusedStochasticBuffers(target, uniforms.stochastic_mode);
         }
 
-        // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
-        // input. 3DGUT and live training use the legacy per-render-tile chain.
-        const bool higs_candidate =
-            !stochastic_active && !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
-            !depth_capture_mode_;
         // Depth view and camera-frustum occlusion consume per-pixel median depth.
         // mip_filter bit 1
         // switches macro compose to independent FP32 depth replay through the
@@ -8670,17 +8759,10 @@ namespace lfs::vis {
         // Synchronous exports use the exact instance-count gate and must keep
         // the same raster chain across every band, including a cold first band.
         // Interactive viewport and sequencer previews retain their warmup.
-        // The legacy chain warms renderer initialization once. Every regular
-        // frame rebuilds projection and sort data from current inputs, so an
-        // input snapshot change does not make an already warmed macro chain cold.
-        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_ &&
-                                       !deterministic_export;
-        const bool higs_active = higs_candidate && !higs_warmup_frame;
-        const bool gut_aligned_band = request.gut &&
-                                      uniforms.render_origin_x % TILE_WIDTH == 0u &&
-                                      uniforms.render_origin_y % TILE_HEIGHT == 0u;
-        if ((higs_active || gut_aligned_band) && deterministic_export &&
-            request.frame_view.subregion_full_size.y > 0) {
+        // prepareDecision() takes these decisions, so planning and draw agree.
+        const bool higs_warmup_frame = prepared.warmup;
+        const bool higs_active = prepared.inputs.survivors;
+        if (prepared.inputs.banded) {
             // GUT remaps full-image tiles into its local grid, which requires
             // tile-aligned origins. Arbitrary crops use crop-local binning and
             // retain full-image ray coordinates in the alpha pass.
@@ -8700,7 +8782,15 @@ namespace lfs::vis {
         if (higs_active && request.transparent_background)
             uniforms.mip_filter |= 16u;
 #endif
-        renderer_.setBandedExport((uniforms.mip_filter & 4u) != 0u);
+        // The prepared chain is indivisible: an incomplete set draws built-ins.
+        // setCustomEffect also selects the banded export programs of the plan.
+        LFS_ASSERT_MSG(prepared.device_generation == renderer_.deviceGeneration() &&
+                           prepared.inputs.quant_pool == buffers_.quant_pool && prepared.inputs.shN_q16 == buffers_.shN_q16 &&
+                           prepared.inputs.shN_f16 == buffers_.shN_f16,
+                       "Prepared shader inputs changed before dispatch");
+        const auto custom = renderer_.setCustomEffect(request.custom_effect.has_value(), prepared.hosts);
+        if (!custom.active)
+            renderer_.setRevealEffect(request.reveal.has_value());
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
         renderer_.setDepthCapture(depth_capture_mode_);
@@ -8840,10 +8930,18 @@ namespace lfs::vis {
             }
         });
 
+        std::vector<float> custom_tail;
+        if (custom.active) {
+            auto tail = detail::buildCustomEffectTail(request, uniforms);
+            if (!tail) {
+                return std::unexpected(legacyErrorString(tail.error()));
+            }
+            custom_tail = std::move(*tail);
+        }
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.render.uploadOverlayBindings");
             return uploadOverlayBindings(
-                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, target);
+                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, target, custom_tail);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
@@ -8859,7 +8957,8 @@ namespace lfs::vis {
         std::size_t armed_depth_waves = 0;
         int depth_wave_sort_bits = 0;
         const auto stochastic_frame = prepareStochasticFrame(
-            uniforms, splat_data, target, force_input_upload || synchronize_input_upload);
+            uniforms, splat_data, target, force_input_upload || synchronize_input_upload,
+            custom.active ? StochasticEffect{renderer_.programSetSerial(), request.custom_effect} : StochasticEffect{});
         auto projection_cache = stochastic_projection_cache_;
         stochastic_projection_cache_ = {};
         const bool reuse_stochastic_projection = !shared_scratch_bound &&
@@ -9268,6 +9367,7 @@ namespace lfs::vis {
         last_render_used_macro_chain_ = higs_active;
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
+        resident_projection_custom_ = custom.active;
         resident_raster_scratch_ = makeResidentRasterScratchProvenance(target, request, splat_data.size());
         float_color_capture_ = request.capture_float_color && !request.depth_view;
         float_color_request_.frame_view.background_color = request.frame_view.background_color;
@@ -9366,7 +9466,95 @@ namespace lfs::vis {
             .stochastic_accumulation_active = stochastic_active && !synchronize_input_upload &&
                                               stochastic_frame.samples + 1u < static_cast<std::uint32_t>(
                                                                                   std::clamp(request.stochastic_max_frames, 1, 1024)),
+            .custom_active = custom.active,
+            .custom_pending = request.custom_effect.has_value() && !custom.active,
         };
+    }
+
+    lfs::Result<std::vector<float>> detail::buildCustomEffectTail(
+        const lfs::rendering::ViewportRenderRequest& request, const VulkanGSRendererUniforms& camera) {
+        using State = lfs::rendering::GaussianCustomEffectState;
+        static_assert(State::kNone == LFS_VK_CUSTOM_NONE);
+        const auto invalid = [](std::string message) {
+            return lfs::make_error(lfs::ErrorInit{.code = lfs::ErrorCode::InvalidArgument,
+                                                  .domain = lfs::ErrorDomain::Rendering,
+                                                  .user_message = std::move(message),
+                                                  .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        if (!request.custom_effect) {
+            return invalid("The draw has no custom effect");
+        }
+        const State& effect = *request.custom_effect;
+        const std::size_t binding_count = effect.bindingData().size();
+        const auto valid = [&](const std::uint32_t binding) {
+            return binding == State::kNone || binding < binding_count;
+        };
+        if (!valid(effect.global_binding) || !valid(effect.reveal_binding) ||
+            !std::ranges::all_of(effect.objects, valid, &State::Object::binding)) {
+            return invalid(std::format("A custom effect binding is out of range ({} bindings)", binding_count));
+        }
+        const std::size_t parameters = LFS_VK_CUSTOM_HEADER_SLOTS;
+        const std::size_t effects = parameters + binding_count * LFS_VK_CUSTOM_PARAMETER_SLOTS;
+        const std::size_t objects = effects + (binding_count + 3) / 4;
+        const std::size_t total = objects + effect.objects.size();
+        if (detail::VksplatTableParamCount + total > std::numeric_limits<std::uint32_t>::max() / 4u) {
+            return invalid(std::format("The custom effect table has too many slots ({})", total));
+        }
+        std::vector<float> tail(total * 4u, 0.0f);
+        const auto put = [&](const std::size_t slot, const glm::vec4& value) {
+            for (int c = 0; c < 4; ++c)
+                tail[slot * 4 + static_cast<std::size_t>(c)] = value[c];
+        };
+        const auto put_bits = [&](const std::size_t slot, const std::size_t x, const std::size_t y,
+                                  const std::size_t z, const std::size_t w) {
+            put(slot, glm::vec4(std::bit_cast<float>(static_cast<std::uint32_t>(x)),
+                                std::bit_cast<float>(static_cast<std::uint32_t>(y)),
+                                std::bit_cast<float>(static_cast<std::uint32_t>(z)),
+                                std::bit_cast<float>(static_cast<std::uint32_t>(w))));
+        };
+        put_bits(LFS_VK_CUSTOM_HEADER_SLOT, effect.objects.size(), binding_count, effect.global_binding,
+                 effect.reveal_binding);
+        glm::vec3 center = 0.5f * (effect.bounds_min + effect.bounds_max);
+        float radius = 0.5f * glm::length(effect.bounds_max - effect.bounds_min);
+        float progress = effect.reveal_progress;
+        float softness = effect.reveal_softness;
+        if (request.reveal) {
+            center = {request.reveal->center_x, 0.0f, request.reveal->center_z};
+            radius = request.reveal->radius;
+            progress = std::clamp(request.reveal->progress, 0.0f, 1.0f);
+            softness = std::clamp(request.reveal->softness, 0.001f, 1.0f);
+        } else if (effect.reveal_binding != State::kNone) {
+            center = glm::vec3(0.0f);
+            radius = glm::length(glm::vec2(std::max(std::abs(effect.bounds_min.x), std::abs(effect.bounds_max.x)),
+                                           std::max(std::abs(effect.bounds_min.z), std::abs(effect.bounds_max.z))));
+        }
+        put(LFS_VK_CUSTOM_TIMING_SLOT, glm::vec4(effect.time, progress, softness, radius));
+        put(LFS_VK_CUSTOM_BOUNDS_MIN_SLOT, glm::vec4(effect.bounds_min, 0.0f));
+        put(LFS_VK_CUSTOM_BOUNDS_MAX_SLOT, glm::vec4(effect.bounds_max, 0.0f));
+        put(LFS_VK_CUSTOM_CENTER_SLOT, glm::vec4(center, 0.0f));
+        put(LFS_VK_CUSTOM_CAMERA_POSITION_SLOT, glm::vec4(request.frame_view.translation, 0.0f));
+        put(LFS_VK_CUSTOM_INTRINSICS_SLOT, glm::vec4(camera.fx, camera.fy, camera.cx, camera.cy));
+        put(LFS_VK_CUSTOM_DISTORTION_SLOT, glm::vec4(camera.dist_coeffs[0], camera.dist_coeffs[1],
+                                                     camera.dist_coeffs[2], camera.dist_coeffs[3]));
+        // The camera model without the renderer's 3DGUT projection bit.
+        put_bits(LFS_VK_CUSTOM_IMAGE_SLOT, camera.camera_width, camera.camera_height,
+                 camera.camera_model & ((1u << kVkSplatProjectionModeShift) - 1u), 0u);
+        // world_view_transform is column-major and includes the orthographic eye setback.
+        for (std::size_t row = 0; row < 4; ++row) {
+            const auto* column = camera.world_view_transform + row;
+            put(LFS_VK_CUSTOM_WORLD_TO_VIEW_SLOT + row,
+                glm::vec4(column[0], column[4], column[8], column[12] - (row == 2 ? camera.depth_offset : 0.0f)));
+        }
+        for (std::size_t i = 0; i < binding_count; ++i) {
+            for (std::size_t slot = 0; slot < LFS_VK_CUSTOM_PARAMETER_SLOTS; ++slot) {
+                put(parameters + i * LFS_VK_CUSTOM_PARAMETER_SLOTS + slot, effect.bindingData()[i].values[slot]);
+            }
+            tail[4 * effects + i] = std::bit_cast<float>(effect.bindingData()[i].effect);
+        }
+        for (std::size_t i = 0; i < effect.objects.size(); ++i) {
+            put_bits(objects + i, effect.objects[i].binding, effect.objects[i].id, 0u, 0u);
+        }
+        return tail;
     }
 
 } // namespace lfs::vis

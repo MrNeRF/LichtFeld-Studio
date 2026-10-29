@@ -208,5 +208,15 @@ namespace lfs::vis {
             }
         }
 
+        void appendVksplatRevealParams(std::vector<float>& table, const lfs::rendering::ViewportRenderRequest& request) {
+            table.resize(static_cast<std::size_t>(VksplatTableParamCount) * 4u, 0.0f);
+            if (request.reveal) {
+                const auto& reveal = *request.reveal;
+                float* const dst = table.data();
+                writeVec4(dst, RevealParams, glm::vec4(1.0f + std::clamp(reveal.softness, 0.001f, 1.0f), reveal.min_y, reveal.max_y, std::clamp(reveal.progress, 0.0f, 1.0f)));
+                writeVec4(dst, RevealEffectBounds, glm::vec4(static_cast<float>(reveal.effect), reveal.center_x, reveal.center_z, reveal.radius));
+            }
+        }
+
     } // namespace detail
 } // namespace lfs::vis

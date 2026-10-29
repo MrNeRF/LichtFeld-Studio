@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline.hpp"
+#include "shaders/shader_service.hpp"
 #include "visualizer/nodes/modifier_error.hpp"
 #include <algorithm>
 #include <expected>
@@ -131,6 +132,16 @@ namespace lfs::vis {
         }
         void clearKeyframes();
         void clear();
+        ~SequencerController();
+        void setShaderService(shaders::ShaderService* service);
+        [[nodiscard]] shaders::ShaderService* shaderService() const { return shader_service_; }
+        Status setRevealClip(std::optional<sequencer::RevealClip> clip, bool replace_binding = false,
+                             bool record_history = true);
+        Result<core::Uuid> revealCommand(const shaders::ShaderCommand& command);
+        using RevealCommitCallback = std::function<void(std::optional<sequencer::RevealClip>, std::optional<sequencer::RevealClip>, float, float)>;
+        void setRevealCommitCallback(RevealCommitCallback callback) { reveal_commit_callback_ = std::move(callback); }
+        void beginRevealEdit();
+        void endRevealEdit();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
         [[nodiscard]] nlohmann::json saveToJson() const;
@@ -155,6 +166,7 @@ namespace lfs::vis {
         bool selectKeyframeById(sequencer::KeyframeId id);
         void deselectKeyframe();
         [[nodiscard]] std::optional<size_t> selectedKeyframe() const;
+        [[nodiscard]] std::optional<size_t> adjacentKeyframeIndex(int direction) const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> selectedKeyframeId() const { return selected_keyframe_id_; }
         [[nodiscard]] bool hasSelection() const { return selected_keyframe_id_.has_value(); }
 
@@ -185,6 +197,7 @@ namespace lfs::vis {
     private:
         [[nodiscard]] bool isFirstRealKeyframe(sequencer::KeyframeId id) const;
         [[nodiscard]] float playbackStartTime() const;
+        bool adoptTimeline(sequencer::Timeline loaded, std::optional<float> frames_per_second = std::nullopt);
         void rebuildLoopKeyframe();
         void removeLoopKeyframe();
         void markTimelineChanged();
@@ -216,6 +229,13 @@ namespace lfs::vis {
         KeyframeTimeCommitCallback keyframe_time_commit_callback_;
 
         ClipDurationCommitCallback clip_duration_commit_callback_;
+        RevealCommitCallback reveal_commit_callback_;
+        shaders::ShaderService* shader_service_ = nullptr;
+        struct PendingRevealEdit {
+            std::optional<sequencer::RevealClip> clip;
+            float duration;
+        };
+        std::optional<PendingRevealEdit> pending_reveal_edit_;
     };
 
 } // namespace lfs::vis

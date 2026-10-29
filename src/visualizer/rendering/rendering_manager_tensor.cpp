@@ -1126,6 +1126,11 @@ namespace lfs::vis {
                 .rendered = true};
     }
 
+    ViewportFrameResult RenderingManager::presentVrMirror(ViewId, const vr::EyeFrame&) {
+        // VR draws its eyes with the Vulkan viewport renderer, which tensor viewers do not use.
+        return {};
+    }
+
     void RenderingManager::publishFrameToInterop(ViewId, const ViewportFrameResult&) {
         // Tensor frames are already the compositor input. No native ownership
         // transfer or external semaphore publication is required.

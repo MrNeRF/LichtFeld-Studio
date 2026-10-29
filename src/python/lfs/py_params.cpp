@@ -12,6 +12,7 @@
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_defaults.hpp"
+#include "core/property_display_name.hpp"
 #include "python/python_runtime.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
@@ -510,6 +511,16 @@ namespace lfs::python {
             break;
         default:
             throw std::runtime_error("Unsupported property type");
+        }
+
+        if (meta->needs_restart()) {
+            if (const auto* tm = get_trainer_manager()) {
+                auto current_ref = PropertyObjectRef::cpp(&params());
+                auto current_val = meta->getter(current_ref);
+                if (!tm->canChangeProperty(*meta, current_val, new_value)) {
+                    throw std::invalid_argument(LOCF("training.reset_before_param_change", core::prop::property_display_name(*meta)));
+                }
+            }
         }
 
         if (prop_id == "iterations") {
@@ -1209,9 +1220,8 @@ namespace lfs::python {
             .def_prop_rw(
                 "eval_mask",
                 [](PyOptimizationParams& self) { return self.params().eval_mask; },
-                [](PyOptimizationParams&, const std::string& v) {
-                    modify_params([value = lfs::core::param::normalize_eval_mask(v)](
-                                      auto& p) { p.eval_mask = value; });
+                [](PyOptimizationParams& self, const std::string& v) {
+                    self.set("eval_mask", nb::cast(lfs::core::param::normalize_eval_mask(v)));
                 },
                 "Scores only part of each evaluated image (a mesh, a box, the crop box, a mask folder, a depth range, points or a splat); training is not affected")
             .def_prop_rw(
@@ -1297,7 +1307,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "use_exposure_correction",
                 [](PyOptimizationParams& self) { return self.params().use_exposure_correction; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_exposure_correction = v; }); },
+                [](PyOptimizationParams& self, bool v) { self.set("use_exposure_correction", nb::cast(v)); },
                 "Enable combined per-photo exposure correction")
             .def_prop_rw(
                 "exposure_correction_grid_start_iter",
@@ -1307,7 +1317,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "use_bilateral_grid",
                 [](PyOptimizationParams& self) { return self.params().use_bilateral_grid; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_bilateral_grid = v; }); },
+                [](PyOptimizationParams& self, bool v) { self.set("use_bilateral_grid", nb::cast(v)); },
                 "Enable bilateral grid color correction")
             .def_prop_rw(
                 "enable_sparsity",
@@ -1567,6 +1577,11 @@ namespace lfs::python {
                     return self.params().save_steps;
                 },
                 "List of iterations at which to save the project (project.licht)")
+            .def_prop_rw(
+                "keep_all_checkpoints",
+                [](PyOptimizationParams& self) { return self.params().keep_all_checkpoints; },
+                [](PyOptimizationParams&, bool value) { modify_params([value](auto& p) { p.keep_all_checkpoints = value; }); },
+                "Keep every training checkpoint; otherwise replace the superseded checkpoint and preserve existing history")
             .def(
                 "add_save_step",
                 [](PyOptimizationParams&, size_t step) {

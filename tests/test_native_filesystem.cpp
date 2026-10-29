@@ -5,6 +5,7 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <string>
+#include <thread>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -188,6 +189,28 @@ namespace {
         EXPECT_TRUE(ec);
     }
 #ifdef _WIN32
+    TEST_F(NativeFilesystemTest, RenameWaitsForABrieflyHeldSource) {
+        const auto file = deep_ / "held.bin", renamed = deep_ / "released.bin";
+        {
+            std::ofstream output(lfs::core::native_fs::native_path(file), std::ios::binary);
+            ASSERT_TRUE(output);
+            output << "held";
+        }
+        // A scanner-style open without delete sharing makes MoveFileExW fail until it closes.
+        HANDLE held = CreateFileW(fs::native_path(file).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        ASSERT_NE(held, INVALID_HANDLE_VALUE);
+        std::thread release([held] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            CloseHandle(held);
+        });
+        std::error_code error;
+        fs::rename(file, renamed, error);
+        release.join();
+        EXPECT_FALSE(error) << error.message();
+        EXPECT_TRUE(fs::exists(renamed));
+        EXPECT_FALSE(fs::exists(file));
+    }
     TEST_F(NativeFilesystemTest, UncOperationsWorkWhenTheLocalShareIsAvailable) {
         const auto drive = root_.root_name().native();
         if (drive.size() != 2 || drive[1] != L':')

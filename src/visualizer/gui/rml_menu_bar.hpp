@@ -24,6 +24,7 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    class InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
     struct Theme;
     struct ProjectDisplayInfo;
 } // namespace lfs::vis
@@ -189,6 +190,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class RmlMenuBarTestAccess;
+        friend class lfs::vis::InputControllerFocusTest_WalkRejectionDoesNotEscapeNativeDispatch_Test;
         void bindModel();
         bool updateTheme();
         void rebuildLabels();

@@ -50,6 +50,11 @@ namespace lfs::vis {
             CropPolygonCount = 16,
             // The whole table buildOverlayParamsCpuFloats returns.
             TableParamCount = CropPolygonBase + CropPolygonParamStride * CropPolygonCount,
+            // Sequencer reveal slots, read by VkSplat only.
+            RevealParams = TableParamCount,
+            RevealEffectBounds = RevealParams + 1,
+            // The table buildVksplatOverlayParamsCpuFloats returns; a custom effect tail follows it.
+            VksplatTableParamCount = RevealEffectBounds + 1,
         };
         static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
         static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ViewWindow);
@@ -64,5 +69,9 @@ namespace lfs::vis {
             bool transform_indices_enabled,
             std::size_t node_mask_count,
             bool node_visibility_cull);
+
+        // Extends that table by the reveal slots VkSplat reads.
+        LFS_VIS_API void appendVksplatRevealParams(std::vector<float>& table,
+                                                   const lfs::rendering::ViewportRenderRequest& request);
     } // namespace detail
 } // namespace lfs::vis

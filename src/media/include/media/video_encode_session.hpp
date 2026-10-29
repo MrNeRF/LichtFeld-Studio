@@ -26,6 +26,8 @@ namespace lfs::media {
         int height = 0;
         int framerate = 30;
         int crf = 18;
+        // Frames per second are framerate / framerate_denominator, e.g. 30000 / 1001.
+        int framerate_denominator = 1;
         // Requested backend; an unavailable hardware encoder falls back to software.
         VideoEncodeBackend preferred_backend = VideoEncodeBackend::Software;
         // Prepared by the producer; no application metadata factory is needed.

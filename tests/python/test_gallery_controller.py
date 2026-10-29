@@ -11,7 +11,7 @@ import struct
 
 import pytest
 
-from test_asset_manager_panel import panel_module, _gallery_fixture, _stop_gallery_controller
+from test_asset_manager_panel import panel_module, _gallery_fixture, _no_shaders_to_publish, _stop_gallery_controller
 
 @pytest.fixture
 def gallery(monkeypatch, panel_module):
@@ -627,6 +627,7 @@ def test_publish_review_save_choice_only_for_open_project(gallery, monkeypatch, 
     monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _: None, raising=False)
     monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
     monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    _no_shaders_to_publish(monkeypatch, module.lf)
     panel = GalleryFilePanel()
     panel.show(controller=controller, asset={"id": "project", "path": str(path), "name": "Project"},
                scene=None, action="publish", fields={"title": "Project", "description": "", "upload_format": "sog"})
@@ -1782,6 +1783,7 @@ def test_file_menu_review_submits_only_for_original_project_and_account(gallery,
     monkeypatch.setattr(controller_module.ui, "request_redraw", lambda: None, raising=False)
     submitted = []
     monkeypatch.setattr(controller, "publish_asset", lambda *args, **kwargs: submitted.append((args, kwargs)))
+    _no_shaders_to_publish(monkeypatch, controller_module)
     panel = GalleryFilePanel()
     panel.show(
         controller=controller,
@@ -1846,6 +1848,7 @@ def test_file_menu_update_handoff_keeps_real_conflict_review_open(gallery, monke
     monkeypatch.setattr(panel_module.lf.ui, "get_panel_object", lambda _id: None, raising=False)
     monkeypatch.setattr(panel_module.lf.ui, "set_panel_enabled", lambda _id, value: enabled.append(value), raising=False)
     monkeypatch.setattr(panel_module.lf.ui, "request_redraw", lambda: None, raising=False)
+    _no_shaders_to_publish(monkeypatch, panel_module.lf)
 
     panel = GalleryFilePanel()
     asset = {"id": "project", "path": str(project), "name": "Project",

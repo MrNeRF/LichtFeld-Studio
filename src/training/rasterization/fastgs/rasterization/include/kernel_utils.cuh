@@ -294,16 +294,31 @@ namespace fast_lfs::rasterization::kernels {
             const float x = direction.x;
             const float y = direction.y;
             const float z = direction.z;
-            float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c,
-                            sh_value_bounds, sh_value_n_cells, sh_value_bits);
-            result = result + (-0.48860251190291987f * y) * c[0] + (0.48860251190291987f * z) * c[1] + (-0.48860251190291987f * x) * c[2];
+            auto coefficient = [&]<int Index>() {
+                return load_shN_coeff<Index>(sh_coefficients_rest, primitive_idx, sh_layout_slots,
+                                             sh_value_bounds, sh_value_n_cells, sh_value_bits);
+            };
+            // Consume each decoded coefficient before loading the next one.
+            // Keep the addition order and the existing storage-specific decoders.
+            result = result + (-0.48860251190291987f * y) * coefficient.template operator()<0>();
+            result = result + (0.48860251190291987f * z) * coefficient.template operator()<1>();
+            result = result + (-0.48860251190291987f * x) * coefficient.template operator()<2>();
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
                 const float xy = x * y, xz = x * z, yz = y * z;
-                result = result + (1.0925484305920792f * xy) * c[3] + (-1.0925484305920792f * yz) * c[4] + (0.94617469575755997f * zz - 0.31539156525251999f) * c[5] + (-1.0925484305920792f * xz) * c[6] + (0.54627421529603959f * xx - 0.54627421529603959f * yy) * c[7];
+                result = result + (1.0925484305920792f * xy) * coefficient.template operator()<3>();
+                result = result + (-1.0925484305920792f * yz) * coefficient.template operator()<4>();
+                result = result + (0.94617469575755997f * zz - 0.31539156525251999f) * coefficient.template operator()<5>();
+                result = result + (-1.0925484305920792f * xz) * coefficient.template operator()<6>();
+                result = result + (0.54627421529603959f * xx - 0.54627421529603959f * yy) * coefficient.template operator()<7>();
                 if (active_sh_bases > 9) {
-                    result = result + (0.59004358992664352f * y * (-3.0f * xx + yy)) * c[8] + (2.8906114426405538f * xy * z) * c[9] + (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * c[10] + (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * c[11] + (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * c[12] + (1.4453057213202769f * z * (xx - yy)) * c[13] + (0.59004358992664352f * x * (-xx + 3.0f * yy)) * c[14];
+                    result = result + (0.59004358992664352f * y * (-3.0f * xx + yy)) * coefficient.template operator()<8>();
+                    result = result + (2.8906114426405538f * xy * z) * coefficient.template operator()<9>();
+                    result = result + (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * coefficient.template operator()<10>();
+                    result = result + (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * coefficient.template operator()<11>();
+                    result = result + (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * coefficient.template operator()<12>();
+                    result = result + (1.4453057213202769f * z * (xx - yy)) * coefficient.template operator()<13>();
+                    result = result + (0.59004358992664352f * x * (-xx + 3.0f * yy)) * coefficient.template operator()<14>();
                 }
             }
         }

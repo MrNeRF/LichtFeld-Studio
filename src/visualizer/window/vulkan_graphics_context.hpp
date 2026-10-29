@@ -13,6 +13,8 @@ namespace lfs::vis {
         ~VulkanGraphicsContext() override;
 
         void setAuxiliaryWindow(bool auxiliary) override { context_.setSceneRuntimeOwnership(!auxiliary); }
+        // Applies to the next initialize(); see VulkanDeviceHooks.
+        void setDeviceHooks(VulkanDeviceHooks hooks) { device_hooks_ = std::move(hooks); }
         bool initialize(SDL_Window* window, int framebuffer_width,
                         int framebuffer_height) override;
         bool initializeHeadless() override;
@@ -50,6 +52,7 @@ namespace lfs::vis {
 
     private:
         VulkanContext context_;
+        VulkanDeviceHooks device_hooks_;
         VulkanContext::Frame frame_{};
         std::uint64_t frame_generation_ = 0;
         bool tensor_backend_adopted_ = false;

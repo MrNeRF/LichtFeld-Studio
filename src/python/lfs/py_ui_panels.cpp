@@ -310,7 +310,7 @@ namespace lfs::python {
                 return true;
 
             for (const auto* hook :
-                 std::array{"on_bind_model", "on_mount", "on_unmount", "on_update", "on_scene_changed"}) {
+                 std::array{"on_bind_model", "on_mount", "on_unmount", "on_update", "on_scene_changed", "on_visibility_changed"}) {
                 if (class_overrides(panel_class, panel_base, hook))
                     return true;
             }

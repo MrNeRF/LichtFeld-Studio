@@ -100,6 +100,7 @@ namespace lfs::vis {
         DirtyMask frame_dirty = 0;
         bool training_active = false;
         bool depth_window_drag_preview = false;
+        bool deterministic_export = false;
         bool gaussian_selection_visible = true;
         // Surface tools must not unproject HiGS batch-approximate depth.
         bool exact_surface_picking = false;

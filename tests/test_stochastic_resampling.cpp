@@ -4,6 +4,7 @@
 
 #include "core/vulkan_queue_sync.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
+#include "vksplat_test_device.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -90,97 +91,28 @@ namespace {
 
     class StochasticResampling : public ::testing::Test {
     protected:
-        VkInstance instance_ = VK_NULL_HANDLE;
-        VkDevice device_ = VK_NULL_HANDLE;
-        VmaAllocator allocator_ = VK_NULL_HANDLE;
+        lfs::test::VkSplatTestDevice gpu_; // first member: outlives everything that uses it
         std::unique_ptr<StochasticRenderer> renderer_;
         VulkanGSPipelineBuffers buffers_;
         VulkanGSStochasticBuffers history_;
         Buffer<float> dummy_;
 
         void SetUp() override {
-            VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-            app.pApplicationName = "stochastic resampling tests";
-            app.apiVersion = VK_API_VERSION_1_3;
-            VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-            instance_info.pApplicationInfo = &app;
-            if (vkCreateInstance(&instance_info, nullptr, &instance_) != VK_SUCCESS)
-                GTEST_SKIP() << "Vulkan 1.3 is unavailable";
-            uint32_t count = 0;
-            ASSERT_EQ(vkEnumeratePhysicalDevices(instance_, &count, nullptr), VK_SUCCESS);
-            if (count == 0)
-                GTEST_SKIP() << "No Vulkan device";
-            std::vector<VkPhysicalDevice> devices(count);
-            ASSERT_EQ(vkEnumeratePhysicalDevices(instance_, &count, devices.data()), VK_SUCCESS);
-            VkPhysicalDevice physical = VK_NULL_HANDLE;
-            uint32_t queue_family = 0;
-            for (auto candidate : devices) {
-                VkPhysicalDeviceProperties properties{};
-                vkGetPhysicalDeviceProperties(candidate, &properties);
-                if (properties.apiVersion < VK_API_VERSION_1_3 || properties.limits.maxPushConstantsSize < 224)
-                    continue;
-                uint32_t extension_count = 0;
-                vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extension_count, nullptr);
-                std::vector<VkExtensionProperties> extensions(extension_count);
-                vkEnumerateDeviceExtensionProperties(candidate, nullptr, &extension_count, extensions.data());
-                if (std::none_of(extensions.begin(), extensions.end(), [](const auto& extension) {
-                        return std::strcmp(extension.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0;
-                    }))
-                    continue;
-                uint32_t family_count = 0;
-                vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, nullptr);
-                std::vector<VkQueueFamilyProperties> families(family_count);
-                vkGetPhysicalDeviceQueueFamilyProperties(candidate, &family_count, families.data());
-                for (uint32_t family = 0; family < family_count; ++family)
-                    if ((families[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
-                        physical = candidate;
-                        queue_family = family;
-                        break;
-                    }
-                if (physical != VK_NULL_HANDLE)
-                    break;
-            }
-            if (physical == VK_NULL_HANDLE)
-                GTEST_SKIP() << "No device supports the viewer's Vulkan compute contracts";
-
-            VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-            VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-            features12.pNext = &features13;
-            VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-            features.pNext = &features12;
-            vkGetPhysicalDeviceFeatures2(physical, &features);
-            if (!features13.synchronization2 || !features12.timelineSemaphore || !features12.bufferDeviceAddress ||
-                !features.features.shaderInt64)
-                GTEST_SKIP() << "Required Vulkan shader features are unavailable";
-            const float priority = 1.0f;
-            VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-            queue_info.queueFamilyIndex = queue_family;
-            queue_info.queueCount = 1;
-            queue_info.pQueuePriorities = &priority;
-            const char* extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
-            VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-            device_info.pNext = &features;
-            device_info.queueCreateInfoCount = 1;
-            device_info.pQueueCreateInfos = &queue_info;
-            device_info.enabledExtensionCount = 1;
-            device_info.ppEnabledExtensionNames = extensions;
-            ASSERT_EQ(vkCreateDevice(physical, &device_info, nullptr, &device_), VK_SUCCESS);
-            VkQueue queue = VK_NULL_HANDLE;
-            lfs::rendering::vk_get_device_queue_synced(device_, queue_family, 0, &queue);
-            VmaAllocatorCreateInfo allocator_info{};
-            allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-            allocator_info.instance = instance_;
-            allocator_info.physicalDevice = physical;
-            allocator_info.device = device_;
-            allocator_info.vulkanApiVersion = VK_API_VERSION_1_3;
-            ASSERT_EQ(vmaCreateAllocator(&allocator_info, &allocator_), VK_SUCCESS);
+            gpu_.create();
+            if (IsSkipped() || HasFatalFailure())
+                return;
+            VkPhysicalDeviceFeatures features{};
+            vkGetPhysicalDeviceFeatures(gpu_.physical, &features);
+            if (!features.shaderInt64)
+                GTEST_SKIP() << "The stochastic shaders need shaderInt64";
             renderer_ = std::make_unique<StochasticRenderer>();
-            ASSERT_NO_THROW(renderer_->initialize(instance_, physical, device_, queue, queue_family, allocator_));
+            ASSERT_NO_THROW(renderer_->initialize(gpu_.instance, gpu_.physical, gpu_.device, gpu_.queue, gpu_.family,
+                                                  gpu_.allocator));
         }
 
         void TearDown() override {
             if (renderer_) {
-                lfs::rendering::vk_device_wait_idle_synced(device_);
+                lfs::rendering::vk_device_wait_idle_synced(gpu_.device);
                 renderer_->cleanupBuffers(buffers_);
                 renderer_->destroyBuffer(dummy_.deviceBuffer);
                 renderer_->destroyBuffer(history_.occluders.deviceBuffer);
@@ -190,12 +122,6 @@ namespace {
                 renderer_->destroyBuffer(history_.rest_average.deviceBuffer);
                 renderer_.reset();
             }
-            if (allocator_)
-                vmaDestroyAllocator(allocator_);
-            if (device_)
-                lfs::rendering::vk_destroy_device_synced(device_, nullptr);
-            if (instance_)
-                vkDestroyInstance(instance_, nullptr);
         }
 
         template <typename T>
@@ -226,7 +152,7 @@ namespace {
             VkBuffer destination = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
             VmaAllocationInfo allocation_result{};
-            if (vmaCreateBuffer(allocator_, &info, &allocation_info, &destination, &allocation, &allocation_result) != VK_SUCCESS)
+            if (vmaCreateBuffer(gpu_.allocator, &info, &allocation_info, &destination, &allocation, &allocation_result) != VK_SUCCESS)
                 throw std::runtime_error("Cannot allocate test readback");
             renderer_->beginCommandBatch();
             const lfs::rendering::vulkan::DeclaredAccess access{.buffer = &source, .use = BufferUse::TransferRead};
@@ -248,10 +174,10 @@ namespace {
             vkCmdPipelineBarrier2(renderer_->activeCommandBuffer(), &dependency);
             renderer_->endCommandBatch();
             renderer_->waitForPendingBatch();
-            vmaInvalidateAllocation(allocator_, allocation, 0, bytes);
+            vmaInvalidateAllocation(gpu_.allocator, allocation, 0, bytes);
             std::vector<T> result(count);
             std::memcpy(result.data(), allocation_result.pMappedData, static_cast<size_t>(bytes));
-            vmaDestroyBuffer(allocator_, destination, allocation);
+            vmaDestroyBuffer(gpu_.allocator, destination, allocation);
             return result;
         }
 

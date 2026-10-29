@@ -154,6 +154,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        void syncGamepadIndicator();
         friend class ViewportDepthLayoutTestAccess;
         friend class VramHudHeaderClickTest;
         friend class lfs::vis::SequencerFrameDemandTest_PropagatesPlaybackStreamAndPreviewDemand_Test;
@@ -220,6 +221,7 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::Element* body_el_ = nullptr;
+        bool gamepad_indicator_visible_ = false;
 
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};

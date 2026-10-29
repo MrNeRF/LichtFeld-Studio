@@ -191,7 +191,8 @@ namespace lfs::media {
             for (unsigned int i = 0; i < context->nb_streams; ++i) {
                 const auto* stream = context->streams[i];
                 const auto* p = stream ? stream->codecpar : nullptr;
-                if (p && p->codec_type == AVMEDIA_TYPE_VIDEO && p->codec_id != AV_CODEC_ID_NONE && p->width > 0 && p->height > 0)
+                if (p && p->codec_type == AVMEDIA_TYPE_VIDEO && !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC) &&
+                    p->codec_id != AV_CODEC_ID_NONE && p->width > 0 && p->height > 0)
                     return static_cast<int>(i);
             }
             return -1;

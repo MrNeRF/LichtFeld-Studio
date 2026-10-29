@@ -38,7 +38,7 @@ namespace lfs::vis {
     bool VulkanGraphicsContext::initialize(SDL_Window* const window,
                                            const int framebuffer_width,
                                            const int framebuffer_height) {
-        if (!context_.init(window, framebuffer_width, framebuffer_height))
+        if (!context_.init(window, framebuffer_width, framebuffer_height, std::exchange(device_hooks_, {})))
             return false;
         return true;
     }

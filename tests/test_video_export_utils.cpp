@@ -264,13 +264,14 @@ TEST(VideoExportUtilsTest, UnconsolidatedAllNodeCacheVisibilityReachesCudaAndVul
                 return image ? image->image->cpu().to_vector() : std::vector<float>{};
             }
             lfs::rendering::ViewportRenderRequest request;
+            request.deterministic_export = true;
             request.frame_view.size = {64, 64};
             request.sh_degree = 0;
             request.scene = {&transforms, indices, mask};
             request.raster_backend = backend == 1 ? lfs::rendering::GaussianRasterBackend::ThreeDgs
                                                   : lfs::rendering::GaussianRasterBackend::ThreeDgut;
             request.gut = backend == 2;
-            auto result = renderer.render(context, *model, request, false, slot, false, true);
+            auto result = renderer.render(context, *model, request, false, slot, false);
             EXPECT_TRUE(result) << (result ? "" : result.error());
             if (!result)
                 return {};
@@ -366,6 +367,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         for (size_t i = 0; i < ids.size(); ++i)
             scene.setNodeVisibility(ids[i], i == marker);
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.rotation = glm::mat3(-1.0f, 0.0f, 0.0f,
                                                 0.0f, 1.0f, 0.0f,
                                                 0.0f, 0.0f, -1.0f);
@@ -376,7 +378,7 @@ TEST(VideoExportUtilsTest, EquirectangularMarkerPixelsFollowViewportCamera) {
         request.equirectangular = panorama;
         request.sh_degree = 0;
         request.scene = {&transforms, indices, scene.getNodeVisibilityMask()};
-        auto result = renderer.render(context, *model, request, false, slot, false, true);
+        auto result = renderer.render(context, *model, request, false, slot, false);
         ASSERT_TRUE(result) << (result ? "" : result.error());
         auto image = renderer.readOutputImageRgb8(context, slot);
         ASSERT_TRUE(image) << (image ? "" : image.error());
@@ -510,6 +512,7 @@ namespace {
         lfs::vis::RenderTargetRegistry targets;
         const auto slot = targets.allocate();
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.size = {64, 64};
         request.sh_degree = 0;
         request.scene.model_transforms = &snapshot->model_transforms;
@@ -518,7 +521,7 @@ namespace {
         const auto render = [&](const std::vector<bool>& mask, const bool indexed) {
             request.scene.node_visibility_mask = mask;
             request.scene.transform_indices = indexed ? explicit_indices : nullptr;
-            auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false, true);
+            auto rendered = renderer.render(context, *snapshot->combined_model, request, false, slot, false);
             EXPECT_TRUE(rendered) << (rendered ? "" : rendered.error());
             if (!rendered)
                 return std::vector<uint8_t>{};
@@ -828,7 +831,7 @@ TEST(VideoExportUtilsTest, CropPolygonsReachPointCloudAndSplatFrames) {
         ASSERT_TRUE(snapshot.has_value()) << snapshot.error();
         ASSERT_EQ(snapshot->crop_polygons.size(), 1u);
         EXPECT_EQ(snapshot->crop_polygons.front().parent_node_index, 0);
-        const auto state = lfs::vis::gui::makeVideoExportGaussianSceneState(*snapshot);
+        const auto state = lfs::vis::gui::makeVideoExportGaussianSceneState(*snapshot, std::nullopt, nullptr, 0.0f);
         ASSERT_EQ(state.crop_polygons.size(), 1u);
         EXPECT_EQ(state.crop_polygons.front().parent_node_index, 0);
         ASSERT_NE(state.crop_polygons.front().data, nullptr);
@@ -1227,6 +1230,7 @@ namespace {
         // Establish the same context that the viewer passes to the export manager.
         manager.renderFrame({.view = views.activeView(), .viewport = viewport, .settings = settings, .graphics_context = &graphics_});
         lfs::rendering::ViewportRenderRequest request;
+        request.deterministic_export = true;
         request.frame_view.size = {width, height};
         request.frame_view.focal_length_mm = 35.0f;
         request.sh_degree = 0;

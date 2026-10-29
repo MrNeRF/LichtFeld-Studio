@@ -27,6 +27,7 @@
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "io/video/video_export_options.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "media/media_options.hpp"
 #include "preferences.hpp"
@@ -70,7 +71,9 @@
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/visualizer.hpp"
+#include "window/window_manager.hpp"
 #include <RmlUi/Core/Core.h>
+#include <nanobind/stl/array.h>
 #include <stdexcept>
 #include <typeinfo>
 
@@ -115,6 +118,19 @@ extern char** environ;
 #endif
 
 namespace lfs::python {
+
+    namespace {
+        std::optional<vis::op::OperatorResult> dispatchPointPickUiAction(
+            const vis::op::BuiltinOp id, vis::PointPickState& state,
+            const vis::PointPickState::UiAction action, const float value = 0.0f) {
+            if (vis::op::operators().activeModalId() != vis::op::to_string(id))
+                return std::nullopt;
+            state.requestUiAction(action, value);
+            vis::op::ModalEvent event{};
+            event.type = vis::op::ModalEvent::Type::NONE;
+            return vis::op::operators().dispatchModalEvent(event);
+        }
+    } // namespace
 
     using lfs::training::CommandCenter;
 
@@ -3486,16 +3502,20 @@ namespace lfs::python {
 
         m.def(
             "save_json_file_dialog",
-            [](const std::string& default_name, bool with_overwrite_confirmation) -> nb::object {
-                bool confirmed = false;
-                const auto result = lfs::vis::gui::SaveJsonFileDialog(default_name, {}, &confirmed);
-                const auto path = lfs::core::path_to_utf8(result);
-                if (with_overwrite_confirmation)
-                    return nb::make_tuple(path, confirmed);
-                return nb::cast(path);
+            [](const std::string& default_name) -> std::string {
+                return lfs::core::path_to_utf8(lfs::vis::gui::SaveJsonFileDialog(default_name));
             },
-            nb::arg("default_name") = "config.json", nb::arg("with_overwrite_confirmation") = false,
-            "Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).");
+            nb::arg("default_name") = "config.json",
+            "Choose a JSON path. Returns empty string if cancelled.");
+
+        m.def(
+            "save_json_file_dialog_with_confirmation",
+            [](const std::string& default_name) -> std::tuple<std::string, bool> {
+                const auto [path, confirmed] = lfs::vis::gui::SaveJsonFileDialogWithConfirmation(default_name);
+                return {lfs::core::path_to_utf8(path), confirmed};
+            },
+            nb::arg("default_name") = "config.json",
+            "Return (JSON path, overwrite_confirmed); empty path on cancellation.");
 
         m.def(
             "save_png_file_dialog",
@@ -3664,6 +3684,7 @@ namespace lfs::python {
                     {"scale", ToolType::Scale},
                     {"mirror", ToolType::Mirror},
                     {"align", ToolType::Align},
+                    {"scale_distance", ToolType::ScaleDistance},
                 };
 
                 std::string lower_name = tool_name;
@@ -4092,6 +4113,7 @@ namespace lfs::python {
                 case vis::ToolType::Scale: return "builtin.scale";
                 case vis::ToolType::Mirror: return "builtin.mirror";
                 case vis::ToolType::Align: return "builtin.align";
+                case vis::ToolType::ScaleDistance: return "builtin.scale_distance";
                 default: return "";
                 }
             },
@@ -4114,6 +4136,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.scale_distance", vis::ToolType::ScaleDistance},
                 };
                 const auto it = tool_map.find(id);
                 if (it == tool_map.end()) {
@@ -4133,6 +4156,7 @@ namespace lfs::python {
                     {"builtin.scale", vis::ToolType::Scale},
                     {"builtin.mirror", vis::ToolType::Mirror},
                     {"builtin.align", vis::ToolType::Align},
+                    {"builtin.scale_distance", vis::ToolType::ScaleDistance},
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
@@ -4618,7 +4642,7 @@ namespace lfs::python {
             []() -> bool {
                 const auto* scene = lfs::vis::services().sceneOrNull();
                 return scene &&
-                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().alignPointPick().getPickedPoints()) &&
                        lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
             },
             "True when the align tool has 3 non-degenerate points ready to apply");
@@ -4626,41 +4650,23 @@ namespace lfs::python {
         m.def(
             "apply_align",
             []() -> bool {
-                if (lfs::vis::op::operators().activeModalId() !=
-                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                    return false;
-                }
-                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
-                lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-                lfs::vis::op::operators().dispatchModalEvent(evt);
-                return true;
+                return dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                 vis::services().alignPointPick(), vis::PointPickState::UiAction::Apply)
+                    .has_value();
             },
             "Request the running align modal to apply the current triangle");
 
         m.def(
             "clear_align_points",
             []() {
-                if (lfs::vis::op::operators().activeModalId() !=
-                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                    return;
-                }
-                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
-                lfs::vis::op::ModalEvent evt{};
-                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
-                lfs::vis::op::operators().dispatchModalEvent(evt);
+                (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                vis::services().alignPointPick(), vis::PointPickState::UiAction::Clear);
             },
             "Request the running align modal to clear all picked points");
 
         m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
-        m.def("toggle_align_preview", [] {
-            if (lfs::vis::op::operators().activeModalId() !=
-                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
-                return;
-            }
-            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
-            lfs::vis::op::ModalEvent event{};
-            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
+        m.def("toggle_align_preview", [] { (void)dispatchPointPickUiAction(vis::op::BuiltinOp::AlignPickPoint,
+                                                                           vis::services().alignPointPick(), vis::PointPickState::UiAction::TogglePreview); }, "Switch between the original scene and the alignment preview");
 
         m.def(
             "get_align_axis_snap",
@@ -4672,7 +4678,7 @@ namespace lfs::python {
             [](const bool enabled) {
                 lfs::vis::services().setAlignAxisSnapEnabled(enabled);
                 if (lfs::vis::services().getAlignPreviewEnabled()) {
-                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::services().alignPointPick().requestUiAction(lfs::vis::PointPickState::UiAction::RefreshPreview);
                     lfs::vis::op::ModalEvent event{};
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
@@ -4693,7 +4699,7 @@ namespace lfs::python {
             [](const bool enabled) {
                 lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
                 if (lfs::vis::services().getAlignPreviewEnabled()) {
-                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::services().alignPointPick().requestUiAction(lfs::vis::PointPickState::UiAction::RefreshPreview);
                     lfs::vis::op::ModalEvent event{};
                     lfs::vis::op::operators().dispatchModalEvent(event);
                 }
@@ -4703,6 +4709,48 @@ namespace lfs::python {
             },
             nb::arg("enabled"),
             "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
+
+        auto can_apply_scale_distance_fn = []() -> bool {
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
+            if (pts.size() != 2)
+                return false;
+            const float dist = glm::length(pts[1] - pts[0]);
+            return std::isfinite(dist) && dist > 1e-6f;
+        };
+        m.def("can_apply_scale_distance", can_apply_scale_distance_fn, "True when 2 valid points are picked for scale distance");
+
+        auto get_scale_distance_measured_fn = []() -> float {
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
+            if (pts.size() != 2)
+                return 0.0f;
+            const float dist = glm::length(pts[1] - pts[0]);
+            return std::isfinite(dist) ? dist : 0.0f;
+        };
+        m.def("get_scale_distance_measured", get_scale_distance_measured_fn, "Get measured distance between 2 picked points");
+
+        auto apply_scale_distance_fn = [](const float target_distance) -> bool {
+            return dispatchPointPickUiAction(vis::op::BuiltinOp::ScaleDistancePickPoint,
+                                             vis::services().scaleDistancePointPick(), vis::PointPickState::UiAction::Apply,
+                                             target_distance) == vis::op::OperatorResult::FINISHED;
+        };
+        m.def("apply_scale_distance", apply_scale_distance_fn, nb::arg("target_distance"), "Request scale distance modal to rescale scene");
+
+        auto clear_scale_distance_fn = []() {
+            (void)dispatchPointPickUiAction(vis::op::BuiltinOp::ScaleDistancePickPoint,
+                                            vis::services().scaleDistancePointPick(), vis::PointPickState::UiAction::Clear);
+        };
+        m.def("clear_scale_distance", clear_scale_distance_fn, "Request scale distance modal to clear picked points");
+
+        auto get_scale_distance_points_fn = []() -> std::vector<std::array<float, 3>> {
+            const auto& pts = lfs::vis::services().scaleDistancePointPick().getPickedPoints();
+            std::vector<std::array<float, 3>> out;
+            out.reserve(pts.size());
+            for (const auto& p : pts) {
+                out.push_back({p.x, p.y, p.z});
+            }
+            return out;
+        };
+        m.def("get_scale_distance_points", get_scale_distance_points_fn, "Get picked points for scale distance tool");
 
         m.def(
             "fit_crop_tool",
@@ -5148,6 +5196,11 @@ namespace lfs::python {
             .def_rw("pip_preview_scale", &SequencerUIStateData::pip_preview_scale, "Picture-in-picture preview scale factor")
             .def_rw("show_film_strip", &SequencerUIStateData::show_film_strip, "Whether film strip thumbnails are shown above sequencer")
             .def_rw("sequence_fps", &SequencerUIStateData::sequence_fps, "Playback FPS for loaded PLY sequences")
+            .def_rw("camera_width", &SequencerUIStateData::camera_width, "Sequence camera aspect width (1-8192)")
+            .def_rw("camera_height", &SequencerUIStateData::camera_height, "Sequence camera aspect height (1-8192)")
+            .def_ro("framerate", &SequencerUIStateData::framerate, "Video export FPS numerator")
+            .def_ro("framerate_denominator", &SequencerUIStateData::framerate_denominator, "Video export FPS denominator")
+            .def_ro("export_fit", &SequencerUIStateData::export_fit, "Video fitting: 0 fit, 1 crop, 2 stretch")
             .def_ro("selected_keyframe", &SequencerUIStateData::selected_keyframe);
 
         m.def(
@@ -5155,6 +5208,63 @@ namespace lfs::python {
             []() -> SequencerUIStateData* { return get_sequencer_ui_state(); },
             nb::rv_policy::reference,
             "Get sequencer UI state for modification");
+
+        m.def(
+            "get_reveal_clip",
+            []() {
+                const auto result = invoke_on_viewer(
+                    []() -> std::string {
+                        auto* gui = get_gui_manager();
+                        if (!gui)
+                            return "null";
+                        const auto& clip = gui->sequencer().timeline().revealClip();
+                        return clip ? clip->toJson().dump() : "null";
+                    },
+                    std::string("null"));
+                return nb::module_::import_("json").attr("loads")(result);
+            },
+            "Read the live sequencer reveal clip, including shader_id for Custom, or None if absent");
+
+        m.def(
+            "set_reveal_clip",
+            [](nb::dict value) {
+                const auto serialized = nb::cast<std::string>(nb::module_::import_("json").attr("dumps")(value));
+                return invoke_on_viewer(
+                    [serialized]() -> bool {
+                        auto* gui = get_gui_manager();
+                        if (!gui)
+                            return false;
+                        try {
+                            const auto data = nlohmann::json::parse(serialized);
+                            if (!data.contains("effect"))
+                                return false;
+                            const auto clip = lfs::sequencer::RevealClip::fromJson(data);
+                            if (!clip) {
+                                LOG_WARN("set_reveal_clip rejected the clip: {}", clip.error().user_message());
+                                return false;
+                            }
+                            const auto changed = gui->sequencer().setRevealClip(*clip);
+                            if (!changed)
+                                LOG_WARN("set_reveal_clip rejected the clip: {}", changed.error().user_message());
+                            return bool(changed);
+                        } catch (const std::exception& e) {
+                            LOG_WARN("set_reveal_clip rejected the clip: {}", e.what());
+                            return false;
+                        }
+                    },
+                    false);
+            },
+            nb::arg("value"),
+            "Set the live sequencer reveal clip; Custom (effect 12) requires shader_id; returns false for invalid "
+            "input");
+
+        m.def("remove_reveal_clip", []() { return invoke_on_viewer([]() -> bool {
+                                               auto* gui = get_gui_manager();
+                                               if (!gui)
+                                                   return false;
+                                               return bool(gui->sequencer().setRevealClip(std::nullopt));
+                                           },
+                                                                   false); }, "Remove the live sequencer reveal clip");
 
         m.def("has_keyframes", &has_keyframes,
               "Check if sequencer has any keyframes");
@@ -5231,18 +5341,42 @@ namespace lfs::python {
         m.def(
             "export_video",
             [](int width, int height, int framerate, int crf, const std::string& path,
-               bool include_provenance, const std::string& codec) {
+               bool include_provenance, const std::string& codec, int framerate_denominator, int camera_width,
+               int camera_height, const std::string& framing) {
                 if (!media::videoEncodeCodecFromId(codec))
                     throw nb::value_error("Video codec must be 'h264', 'hevc' or 'av1'");
+                using namespace lfs::io::video;
+                VideoExportOptions options;
+                options.width = width;
+                options.height = height;
+                options.framerate = framerate;
+                options.crf = crf;
+                options.framerate_denominator = framerate_denominator;
+                options.camera_width = camera_width;
+                options.camera_height = camera_height;
+                if (framing == "fit")
+                    options.framing = VideoFrameFit::FIT;
+                else if (framing == "crop" || framing == "fill")
+                    options.framing = VideoFrameFit::CROP;
+                else if (framing == "stretch")
+                    options.framing = VideoFrameFit::STRETCH;
+                else
+                    throw nb::value_error("framing must be 'fit', 'crop' (or 'fill'), or 'stretch'");
+                if (const auto result = validateVideoEncodingOptions(options); !result)
+                    throw nb::value_error(result.error().c_str());
                 const bool dispatched = invoke_on_viewer(
-                    [width, height, framerate, crf, path, include_provenance, codec] {
+                    [width, height, framerate, crf, path, include_provenance, codec, options] {
                         auto* const viewer = get_visualizer();
                         auto* const gui = get_gui_manager();
                         if (!viewer || !viewer->acceptsPostedWork() || !gui)
                             return false;
-                        gui->getSequencerUIState()
-                            .videoExportRequest(width, height, framerate, crf, path, include_provenance, codec)
-                            .emit();
+                        auto request = gui->getSequencerUIState().videoExportRequest(
+                            width, height, framerate, crf, path, include_provenance, codec);
+                        request.framerate_denominator = options.framerate_denominator;
+                        request.camera_width = options.camera_width;
+                        request.camera_height = options.camera_height;
+                        request.framing = static_cast<int>(options.framing);
+                        request.emit();
                         return true;
                     },
                     false);
@@ -5253,11 +5387,17 @@ namespace lfs::python {
             nb::arg("path") = std::string{},
             nb::arg("include_provenance") = true,
             nb::arg("codec") = "h264",
+            nb::arg("framerate_denominator") = 1,
+            nb::arg("camera_width") = 0,
+            nb::arg("camera_height") = 0,
+            nb::arg("framing") = "fit",
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
             "Uses the saved video reconstruction selection, as does the Sequencer button. "
             "codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. "
-            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
+            "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. "
+            "FPS is framerate/framerate_denominator. Camera aspect defaults to the output size (0, 0); "
+            "framing is 'fit', 'crop' (alias 'fill'), or 'stretch'.");
 
         m.def(
             "export_image_sequence",
@@ -5349,12 +5489,10 @@ namespace lfs::python {
         m.def(
             "delete_keyframe",
             [](size_t index) {
-                if (index == 0)
-                    throw nb::value_error("The first keyframe cannot be deleted");
                 lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit();
             },
             nb::arg("index"),
-            "Delete keyframe by index; raises ValueError for the protected first keyframe");
+            "Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted");
 
         m.def(
             "set_keyframe_easing",
@@ -5633,6 +5771,175 @@ namespace lfs::python {
             "get_navigation_speed_preference",
             []() -> float { return vis::loadNavigationSpeedPreference(); },
             "Get the default WASD navigation speed");
+
+        const auto gamepad_test_state = [](bool consume_presses) {
+            const auto state = invoke_on_viewer([consume_presses] {
+                if (get_visualizer())
+                    if (auto* window = vis::services().windowOrNull())
+                        return consume_presses ? window->gamepads().takeDiagnosticSnapshot() : window->gamepads().snapshot();
+                return vis::input::GamepadSnapshot{};
+            },
+                                                vis::input::GamepadSnapshot{});
+            nb::dict result;
+            result["available"] = state.available;
+            result["error"] = state.error;
+            result["selected"] = state.selected;
+            result["generation"] = state.sample.generation;
+            nb::list devices;
+            for (const auto& device : state.devices) {
+                nb::dict entry;
+                entry["id"] = device.id;
+                entry["name"] = device.name;
+                entry["mapped"] = device.mapped;
+                entry["type"] = static_cast<int>(device.type);
+                entry["error"] = device.error;
+                devices.append(entry);
+            }
+            result["devices"] = devices;
+            nb::list axes, has_axes, buttons, pressed;
+            for (auto axis : state.sample.axes)
+                axes.append(axis);
+            for (auto present : state.sample.has_axis)
+                has_axes.append(present);
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                if (state.sample.buttons[i])
+                    buttons.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+                if (state.sample.pressed[i])
+                    pressed.append(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i)));
+            }
+            result["axes"] = axes;
+            result["has_axes"] = has_axes;
+            result["buttons"] = buttons;
+            result["pressed"] = pressed;
+            nb::list raw_buttons, raw_pressed;
+            for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; ++i) {
+                raw_buttons.append(state.sample.buttons[i]);
+                raw_pressed.append(state.sample.pressed[i]);
+            }
+            result["raw_buttons"] = raw_buttons;
+            result["raw_pressed"] = raw_pressed;
+            return result;
+        };
+        m.def("get_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(false); }, "Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.");
+        m.def("take_gamepad_test_state", [gamepad_test_state] { return gamepad_test_state(true); }, "Read and consume diagnostic presses, independently of navigation commands.");
+
+        m.def("set_gamepad_test_active", [](bool active) { invoke_on_viewer([active] {
+                                                               if (auto* window = vis::services().windowOrNull())
+                                                                   window->setGamepadDiagnosticsActive(active);
+                                                           }); }, nb::arg("active"), "Acquire controller discovery while the gamepad preferences page is visible; release it on exit.");
+
+        m.def("set_gamepad_test_device", [](uint32_t id) { return invoke_on_viewer([id] {
+                                                               if (get_visualizer())
+                                                                   if (auto* window = vis::services().windowOrNull())
+                                                                       return window->gamepads().select(id);
+                                                               return false;
+                                                           },
+                                                                                   false); }, nb::arg("device_id"), "Select a connected controller for input testing, or zero for none.");
+
+        m.def("get_gamepad_navigation_state", [] {
+            using State = std::tuple<bool, uint32_t, float, float, float, std::string, std::string, std::string, uint64_t, std::string>;
+            const auto state = invoke_on_viewer([]() -> State {
+                auto* controller = vis::InputController::instance();
+                auto* window = vis::services().windowOrNull();
+                if (!controller || !window)
+                    return {false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", "", 0, ""};
+                const auto& settings = controller->gamepadNavigationSettings();
+                return {settings.enabled, window->gamepads().navigationSelected(),
+                        settings.dead_zone, settings.look_speed, settings.move_speed,
+                        controller->gamepadNavigationStatus(),
+                        vis::InputController::cameraNavigationModeName(controller->cameraNavigationMode()), controller->gamepadConfigurationError(),
+                        settings.revision, window->gamepads().navigationProfileKey()};
+            }, State{false, 0, 0.15f, 1.5f, 1.0f, "disabled", "orbit", "", 0, ""});
+            nb::dict result;
+            result["enabled"] = std::get<0>(state);
+            result["selected"] = std::get<1>(state);
+            result["dead_zone"] = std::get<2>(state);
+            result["look_speed"] = std::get<3>(state);
+            result["move_speed"] = std::get<4>(state);
+            result["status"] = std::get<5>(state);
+            result["mode"] = std::get<6>(state);
+            result["configuration_error"] = std::get<7>(state);
+            result["profile_revision"] = std::get<8>(state);
+            result["device_key"] = std::get<9>(state);
+            return result; }, "Read saved gamepad preferences, current connection and navigation routing status.");
+
+        m.def("set_gamepad_navigation", [](bool enabled, uint32_t device, float dead_zone, float look_speed, float move_speed) { return invoke_on_viewer([=] {
+                                                                                                                                     if (auto* controller = vis::InputController::instance()) {
+                                                                                                                                         auto settings = controller->gamepadNavigationSettings();
+                                                                                                                                         settings.enabled = enabled;
+                                                                                                                                         settings.dead_zone = dead_zone;
+                                                                                                                                         settings.look_speed = look_speed;
+                                                                                                                                         settings.move_speed = move_speed;
+                                                                                                                                         return controller->configureGamepadNavigation(settings, device);
+                                                                                                                                     }
+                                                                                                                                     return false;
+                                                                                                                                 },
+                                                                                                                                                         false); }, nb::arg("enabled"), nb::arg("device_id"), nb::arg("dead_zone") = 0.15f, nb::arg("look_speed") = 1.5f, nb::arg("move_speed") = 1.0f, "Persist navigation enablement, tuning and assignments; connection IDs and viewport arming remain session-local.");
+
+        m.def("get_gamepad_profiles_json", [] { return invoke_on_viewer([] { return vis::UserPreferences::instance().gamepadProfiles(); }, std::string("{}")); }, "Get the named controller layouts and optional model associations; independent of keymaps.");
+        m.def("set_gamepad_profiles_json", [](const std::string& serialized, const std::string& expected) {
+            if (serialized.size() > 4 * 1024 * 1024) throw nb::value_error("Gamepad profile library is too large");
+            return invoke_on_viewer([serialized, expected] {
+                if (auto* controller = vis::InputController::instance()) return controller->configureGamepadProfiles(serialized, false, expected);
+                return false;
+            }, false); }, nb::arg("serialized"), nb::arg("expected") = "", "Validate and atomically apply named profiles, preserving global enablement and connected-device selection.");
+        m.def("reset_gamepad_profiles", [] { return invoke_on_viewer([] {
+                                                 if (auto* controller = vis::InputController::instance()) {
+                                                     // Migration shape also describes a fresh, unassociated personal profile.
+                                                     const auto defaults = vis::UserPreferences::instance().gamepadProfiles();
+                                                     auto library = nlohmann::json::parse(defaults);
+                                                     library["active"] = "personal";
+                                                     auto settings = vis::input::GamepadNavigationSettings{}.json();
+                                                     settings.erase("enabled");
+                                                     library["profiles"] = {{{"id", "personal"}, {"name", "Personal"}, {"settings", settings}}};
+                                                     library["device_profiles"] = nlohmann::json::object();
+                                                     return controller->configureGamepadProfiles(library.dump(), true);
+                                                 }
+                                                 return false;
+                                             },
+                                                                     false); }, "Reset all controller profiles and model associations and disable navigation. Does not affect keyboard profiles.");
+
+        m.def("get_gamepad_profile_json", [] {
+            return invoke_on_viewer([] {
+                const auto* controller = vis::InputController::instance();
+                return controller ? controller->gamepadNavigationSettings().json().dump() : vis::input::GamepadNavigationSettings{}.json().dump();
+            },
+                                    std::string("{}"));
+        });
+        m.def("get_gamepad_default_profile_json", [] { return vis::input::GamepadNavigationSettings{}.json().dump(); });
+        m.def("set_gamepad_bindings_json", [](const std::string& serialized, uint64_t expected_revision) {
+            if (serialized.size() > 256 * 1024) throw nb::value_error("Gamepad bindings are too large");
+            const auto bindings = vis::input::GamepadBindings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([bindings, expected_revision] {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                auto settings = controller->gamepadNavigationSettings();
+                if (settings.revision != expected_revision)
+                    throw std::runtime_error("Gamepad configuration changed during editing");
+                settings.bindings = bindings;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false); }, nb::arg("serialized"), nb::arg("expected_revision"), "Atomically edit bindings without replacing enablement or tuning.");
+        m.def("set_gamepad_profile_json", [](const std::string& serialized) {
+            const auto settings = vis::input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(serialized));
+            return invoke_on_viewer([settings] {
+                auto* controller = vis::InputController::instance();
+                if (!controller) return false;
+                return controller->configureGamepadNavigation(settings, controller->gamepadNavigationDevice());
+            }, false); }, nb::arg("serialized"));
+        m.def("get_gamepad_binding_catalog_json", [] {
+            using namespace vis::input;
+            nlohmann::json catalog{{"actions", nlohmann::json::array()}, {"controls", nlohmann::json::array()}, {"modes", gamepad_binding_contexts}};
+            for (size_t a = 0; a < gamepad_action_count; ++a) {
+                nlohmann::json modes = nlohmann::json::array();
+                for (size_t m = 0; m < gamepad_binding_contexts.size(); ++m)
+                    if (allowedGamepadAction(m, a))
+                        modes.push_back(gamepad_binding_contexts[m]);
+                catalog["actions"].push_back({{"id", gamepad_actions[a]}, {"continuous", continuousAction(a)}, {"modes", modes}});
+            }
+            for (int c = -1; c < SDL_GAMEPAD_AXIS_COUNT + SDL_GAMEPAD_BUTTON_COUNT; ++c)
+                catalog["controls"].push_back({{"id", controlName(c)}, {"axis", c >= 0 && c < SDL_GAMEPAD_AXIS_COUNT}, {"signed", c >= 0 && c < SDL_GAMEPAD_AXIS_LEFT_TRIGGER}, {"index", c < SDL_GAMEPAD_AXIS_COUNT ? c : c - SDL_GAMEPAD_AXIS_COUNT}});
+            return catalog.dump();
+        });
 
         m.def("get_rendering_defaults_json", [] { return vis::UserPreferences::instance().renderingDefaults(); }, "Get user defaults for new projects; project VIEW values are independent overrides.");
         m.def("set_rendering_defaults_json", [](const std::string& serialized) {
@@ -5993,6 +6300,47 @@ namespace lfs::python {
             nb::arg("enabled"), nb::arg("expose_network"), nb::arg("port"),
             nb::arg("request_logging") = false,
             "Persist and immediately apply MCP HTTP server preferences");
+
+        m.def(
+            "get_vr_state",
+            [] {
+                const auto state = vis::app_store().vr_state.get();
+                nb::dict result;
+                result["available"] = state.available;
+                result["active"] = state.active;
+                result["status"] = LOCF(state.status_key, state.status_detail);
+                return result;
+            },
+            "Get whether VR can be entered, whether it is active, and the runtime status");
+
+        m.def(
+            "get_vr_preferences",
+            [] {
+                const auto preferences = vis::UserPreferences::instance().vrPreferences();
+                nb::dict result;
+                result["enabled"] = preferences.enabled;
+                result["resolution_scale"] = preferences.resolution_scale;
+                result["scene_units_per_meter"] = preferences.scene_units_per_meter;
+                result["move_speed"] = preferences.move_speed;
+                return result;
+            },
+            "Get the VR preferences");
+
+        m.def(
+            "set_vr_preferences",
+            [](const bool enabled, const float resolution_scale, const float scene_units_per_meter,
+               const float move_speed, const bool persist) {
+                invoke_on_viewer([=] {
+                    lfs::core::events::cmd::SetVrPreferences{.enabled = enabled,
+                                                             .resolution_scale = resolution_scale,
+                                                             .scene_units_per_meter = scene_units_per_meter,
+                                                             .move_speed = move_speed,
+                                                             .persist = persist}
+                        .emit();
+                });
+            },
+            nb::arg("enabled"), nb::arg("resolution_scale"), nb::arg("scene_units_per_meter"), nb::arg("move_speed"),
+            nb::arg("persist") = true, "Set the VR preferences; VR support takes effect after restart");
 
         m.def(
             "get_mcp_port_override",

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/export.hpp"
+#include <functional>
 #include <vulkan/vulkan.h>
 
 namespace lfs::rendering {
@@ -16,4 +17,8 @@ namespace lfs::rendering {
     LFS_CORE_API VkResult vk_queue_wait_idle_synced(VkQueue queue);
     LFS_CORE_API VkResult vk_queue_bind_sparse_synced(VkQueue queue, uint32_t count, const VkBindSparseInfo* binds, VkFence fence);
     LFS_CORE_API VkResult vk_device_wait_idle_synced(VkDevice device);
+    // Runs an external call that may use the queue (such as a headset runtime
+    // presenting a frame) with the access of the synced queue operations. An
+    // unregistered queue runs it without a lock: nothing else submits to it here.
+    LFS_CORE_API void vk_with_queue_access(VkQueue queue, const std::function<void()>& operation);
 } // namespace lfs::rendering

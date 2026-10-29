@@ -11,6 +11,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/video/video_export_options.hpp"
+#include "sequencer/timeline.hpp"
+#include "shaders/shader_service.hpp"
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -74,6 +76,7 @@ namespace lfs::vis::gui {
         glm::mat4 point_cloud_transform{1.0f};
         std::vector<VideoExportMeshSnapshot> meshes;
         std::vector<glm::mat4> model_transforms;
+        shaders::EffectScene effect_scene; // of the model slots
         std::vector<int> node_active_sh_degrees;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
         std::shared_ptr<lfs::core::Tensor> selection_mask;
@@ -113,8 +116,12 @@ namespace lfs::vis::gui {
                                                        const VideoExportSceneSnapshot& snapshot,
                                                        const lfs::vis::RenderSettings& render_settings);
 
-    // The scene state exported splat frames render with, crop volumes included. It points into the snapshot.
-    LFS_VIS_API lfs::vis::SceneRenderState makeVideoExportGaussianSceneState(const VideoExportSceneSnapshot& snapshot);
+    // The scene state exported splat frames render with at timeline `time`, crop volumes included, with
+    // the reveal of `reveal_clip` and the custom effect of `shader_snapshot` placed in the scene of the
+    // snapshot. It points into the snapshot.
+    LFS_VIS_API lfs::vis::SceneRenderState makeVideoExportGaussianSceneState(
+        const VideoExportSceneSnapshot& snapshot, const std::optional<lfs::sequencer::RevealClip>& reveal_clip,
+        const shaders::ShaderFrameSnapshot* shader_snapshot, float time);
 
     LFS_VIS_API std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(
         lfs::io::video::VideoExportOptions options);

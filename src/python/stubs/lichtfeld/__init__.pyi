@@ -27,6 +27,7 @@ from . import (
     scene as scene,
     scripts as scripts,
     selection as selection,
+    shaders as shaders,
     ui as ui,
     undo as undo
 )
@@ -41,7 +42,7 @@ from .scene import (
 
 class Error(RuntimeError):
     """
-    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context.
+    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context. Presentation fields .message_key and .message_details are included when provided.
     """
 
 class InvalidArgumentError(Error, ValueError):
@@ -76,6 +77,8 @@ class OperatorResult(enum.Enum):
 
 class ProjectOpenOutcome(enum.Enum):
     OPENED = 0
+
+    DEFERRED = 2
 
     RECOVERY_PROMPT_PENDING = 1
 
@@ -635,6 +638,14 @@ def free_icon(texture_id: int) -> None:
 
 def reset_camera() -> None:
     """Reset the active view's camera."""
+
+def set_vr_active(active: bool) -> None:
+    """
+    Enter or exit VR viewing; raises RuntimeError with the VR status when VR is unavailable
+    """
+
+def recenter_vr() -> None:
+    """Put the VR view back at the desktop camera"""
 
 def focus_selection() -> bool:
     """Frame the selection or the whole scene in the active view."""
@@ -2934,6 +2945,15 @@ class OptimizationParams:
     def save_steps(self) -> list[int]:
         """List of iterations at which to save the project (project.licht)"""
 
+    @property
+    def keep_all_checkpoints(self) -> bool:
+        """
+        Keep every training checkpoint; otherwise replace the superseded checkpoint and preserve existing history
+        """
+
+    @keep_all_checkpoints.setter
+    def keep_all_checkpoints(self, arg: bool, /) -> None: ...
+
     def add_save_step(self, step: int) -> None:
         """Add a save step (ignored if duplicate)"""
 
@@ -3239,4 +3259,14 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'media', 'packages', 'mcp')
+def detect_scene_apriltags(family: str = 'tag36h11', min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0) -> dict:
+    """
+    Detect and triangulate AprilTags from a background editor script; viewer-thread calls are rejected
+    """
+
+def scale_scene_by_apriltags(constraints: Sequence[tuple[int, int, float]], family: str = 'tag36h11', inlier_relative_threshold: float = 0.02, inlier_absolute_threshold: float = 0.0, min_inliers: int = 1, min_inlier_ratio: float = 0.5, min_views: int = 2, min_parallax_deg: float = 1.5, max_reprojection_error_px: float = 3.0, max_hamming: int = 1, min_decision_margin: float = 25.0, active_cameras_only: bool = False, max_image_width: int = 0, manifest_path: str = '', apply_to_scene: bool = True, targets: Sequence[str] = []) -> dict:
+    """
+    Calibrate the complete scene from a background editor script. Explicit targets allow partial scaling; viewer-thread calls are rejected
+    """
+
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'media', 'packages', 'mcp', 'shaders')

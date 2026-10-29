@@ -36,3 +36,13 @@ ffmpeg -f lavfi -i testsrc=size=64x48:rate=10 -frames:v 5 -c:v libx264 -pix_fmt 
 ```
 
 The 4:4:4 fixtures exercise software fallback when the hardware decoder rejects the chroma format. The 4:2:0 fixture guards the existing hardware decode path. They also run with software decoding on machines without CUDA.
+
+`h264_stream_copy.mp4` is a stream copy of `h264_420.mp4`, made with:
+
+```sh
+ffmpeg -i h264_420.mp4 -c copy -t 0.2 h264_stream_copy.mp4
+```
+
+Its stream duration is 0.4 seconds. Decoded frame timestamps are 0.0, 0.1,
+0.2 and 0.4 seconds, so the last frame inside that duration ends at 0.3 seconds.
+Sparse extraction at 3 fps must not request a frame at 1/3 second in that gap.

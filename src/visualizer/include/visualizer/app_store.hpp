@@ -104,6 +104,15 @@ namespace lfs::vis {
             }
         };
 
+        struct LFS_VIS_API VrState {
+            bool available = false; // OpenXR runtime and headset ready; VR can be entered
+            bool active = false;
+            std::string status_key = "vr.status_off"; // localized with status_detail when shown
+            std::string status_detail;
+
+            bool operator==(const VrState&) const = default;
+        };
+
         struct LFS_VIS_API ImportOverlayState {
             bool active = false;
             bool cancellable = false;
@@ -254,7 +263,8 @@ namespace lfs::vis {
             ViewerBackendValue,
             SceneUpscalerGeneration,
             AlignStateGeneration,
-            CollisionStateValue,
+            ScaleDistanceStateGeneration,
+            VrStateValue,
         };
 
         AppStore();
@@ -292,7 +302,6 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
         lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
-        lfs::core::reactive::Observable<TaskProgressState> collision_state;
         lfs::core::reactive::Observable<std::uint64_t> scripts_generation;
         lfs::core::reactive::Observable<std::uint64_t> language_generation;
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
@@ -303,6 +312,8 @@ namespace lfs::vis {
         // Actual scene API of the published output; empty means no scene frame.
         lfs::core::reactive::Observable<std::optional<lfs::rendering::ViewerBackend>> viewer_backend;
         lfs::core::reactive::Observable<std::uint64_t> align_state_generation;
+        lfs::core::reactive::Observable<std::uint64_t> scale_distance_state_generation;
+        lfs::core::reactive::Observable<VrState> vr_state;
 
     private:
         lfs::core::reactive::Store store_;
@@ -310,6 +321,7 @@ namespace lfs::vis {
 
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_align_state_generation();
+    LFS_VIS_API void publish_scale_distance_state_generation();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
     LFS_VIS_API void publish_depth_window_draw_commit(ViewId view, float scale_x, float scale_y);

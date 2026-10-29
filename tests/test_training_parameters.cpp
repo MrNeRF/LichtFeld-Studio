@@ -500,6 +500,17 @@ namespace {
         EXPECT_FALSE(OptimizationParameters::from_json(json).ppisp_exposure_from_exif);
     }
 
+    TEST_F(TrainingParametersTest, CheckpointRetentionDefaultsAndJsonRoundTrip) {
+        for (auto params : {OptimizationParameters::mcmc_defaults(), OptimizationParameters::mrnf_defaults()}) {
+            EXPECT_FALSE(params.keep_all_checkpoints);
+            params.keep_all_checkpoints = true;
+            EXPECT_TRUE(OptimizationParameters::from_json(params.to_json()).keep_all_checkpoints);
+            auto old_json = params.to_json();
+            old_json.erase("keep_all_checkpoints");
+            EXPECT_FALSE(OptimizationParameters::from_json(old_json).keep_all_checkpoints);
+        }
+    }
+
     TEST_F(TrainingParametersTest, MissingOptionalJsonValuesUseStrategyDefaults) {
         auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
         mrnf_json.erase("max_cap");

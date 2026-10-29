@@ -21,6 +21,7 @@ namespace lfs::vis {
         constexpr int ORDER_MIRROR = 50;
         constexpr int ORDER_CROP = 70;
         constexpr int ORDER_ALIGN = 80;
+        constexpr int ORDER_SCALE_DISTANCE = 90;
 
         bool pollTool(const ToolType tool) {
             const auto* editor = services().editorOrNull();
@@ -80,6 +81,7 @@ namespace lfs::vis {
         addTool("builtin.mirror", "Mirror", "mirror", "5", "transform", ORDER_MIRROR, ToolType::Mirror);
         addCropTool();
         addTool("builtin.align", "Align", "align", "6", "align", ORDER_ALIGN, ToolType::Align);
+        addTool("builtin.scale_distance", "Scale Distance", "bounds", "7", "align", ORDER_SCALE_DISTANCE, ToolType::ScaleDistance);
     }
 
 } // namespace lfs::vis

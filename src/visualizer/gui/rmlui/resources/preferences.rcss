@@ -16,19 +16,64 @@ body.floating-panel {
     min-height: 0;
 }
 
-.preferences-nav {
-    display: flex;
+.preferences-nav,
+.preferences-footer-sidebar {
     flex: 0 0 150dp;
-    flex-direction: column;
-    gap: 4dp;
-    margin-right: 14dp;
     padding-right: 12dp;
     border-right-width: 1dp;
 }
 
+.preferences-nav {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    gap: 4dp;
+    margin-right: 14dp;
+}
+
 .preferences-nav-item {
+    box-sizing: border-box;
+    width: 100%;
+    flex-shrink: 0;
+    min-width: 0;
+    min-height: 22dp;
+    height: auto;
     text-align: left;
-    white-space: nowrap;
+    font-size: 12dp;
+    white-space: normal;
+    padding-top: 2dp;
+    padding-bottom: 2dp;
+}
+
+.preferences-nav-group {
+    display: flex;
+    gap: 6dp;
+    align-items: center;
+}
+
+.preferences-nav-disclosure {
+    flex: 0 0 10dp;
+    font-size: 9dp;
+}
+
+.preferences-nav-group-label {
+    flex: 1;
+    min-width: 0;
+}
+
+.preferences-nav-children {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+}
+
+.preferences-nav-child {
+    border-width: 0;
+    border-left-width: 2dp;
+    padding-left: 18dp;
+    padding-right: 6dp;
+    cursor: pointer;
 }
 
 .preferences-content {
@@ -37,6 +82,94 @@ body.floating-panel {
     min-height: 0;
     overflow-y: auto;
     padding-right: 6dp;
+}
+
+.preferences-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.preferences-page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8dp;
+    margin-bottom: 12dp;
+}
+
+.preferences-page-title {
+    flex: 1 1 180dp;
+    min-width: 0;
+    font-size: 16dp;
+    font-weight: bold;
+    white-space: normal;
+}
+
+.preferences-page-header button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.preferences-binding-search input {
+    flex: 1;
+    min-width: 0;
+}
+
+.preferences-metric-heading {
+    display: block;
+    margin-top: 8dp;
+    margin-bottom: 4dp;
+    font-weight: bold;
+}
+
+.preferences-metric-row {
+    display: flex;
+    align-items: center;
+    gap: 10dp;
+    min-width: 0;
+    margin-bottom: 5dp;
+}
+
+.preferences-metric-row.unavailable {
+    opacity: 0.5;
+}
+
+.preferences-metric-label {
+    flex: 0 0 32dp;
+}
+
+.preferences-metric-row progress {
+    flex: 1;
+    min-width: 0;
+    height: 8dp;
+}
+
+.preferences-metric-value {
+    flex: 0 0 56dp;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.preferences-metric-tokens {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+    min-width: 0;
+    min-height: 18dp;
+}
+
+.preferences-metric-token {
+    padding: 2dp 6dp;
+    border-width: 1dp;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.preferences-settings-group {
+    margin-top: 12dp;
 }
 
 .preferences-section {
@@ -121,9 +254,10 @@ body.floating-panel {
 
 .preferences-select {
     box-sizing: border-box;
-    flex: 0 0 200dp;
+    flex: 0 1 200dp;
     width: 200dp;
-    min-width: 140dp;
+    min-width: 0;
+    max-width: 100%;
     margin-left: auto;
 }
 
@@ -277,12 +411,6 @@ body.floating-panel {
     display: flex;
 }
 
-.preferences-footer-sidebar {
-    flex: 0 0 150dp;
-    padding-right: 12dp;
-    border-right-width: 1dp;
-}
-
 .preferences-footer-gutter {
     flex: 0 0 14dp;
     border-top-width: 1dp;
@@ -434,3 +562,27 @@ body.floating-panel {
     height: 18dp;
     text-align: center;
 }
+
+/* Semantic controller assignments reuse the keyboard binding row component. */
+.preferences-control-assignment { flex-wrap: wrap; padding-top: 4dp; padding-bottom: 4dp; }
+.preferences-control-assignment .preferences-action-name { flex: 1 1 170dp; width: auto; min-width: 0; }
+.preferences-control-assignment .preferences-binding-desc { flex: 1 1 140dp; }
+.preferences-assignment-menu { flex-shrink: 0; min-width: 24dp; padding: 1dp 5dp; }
+.preferences-assignment-options { justify-content: flex-end; margin-bottom: 6dp; }
+
+/* Shared field + auxiliary action layout; wraps inside narrow preferences panels. */
+.preferences-field-actions {
+    display: flex;
+    flex: 0 1 240dp;
+    flex-wrap: wrap;
+    gap: 6dp;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+}
+.preferences-field-actions .preferences-select {
+    flex: 1 1 120dp;
+    width: auto;
+    margin-left: 0;
+}
+.preferences-field-actions .btn { flex: 0 0 auto; }

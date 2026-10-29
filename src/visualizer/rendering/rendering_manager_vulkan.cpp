@@ -26,6 +26,7 @@
 #include "rendering_manager.hpp"
 #include "rendering_manager_split_view.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_custom_effects.hpp"
 #include "scene_renderer.hpp"
 #include "scene_renderer_factory.hpp"
 #include "scene_temporal_frame_setup.hpp"
@@ -71,11 +72,6 @@
 namespace lfs::vis {
 
     namespace {
-        bool hasMeshOrCollisionPreview(const FrameContext& ctx) {
-            return !ctx.scene_state.meshes.empty() ||
-                   (ctx.scene_manager && hasVisibleCollisionPreview(*ctx.scene_manager));
-        }
-
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
 
@@ -526,6 +522,35 @@ namespace lfs::vis {
     }
 
     ViewportFrameResult RenderingManager::renderFrame(const RenderContext& context) {
+        custom_frame_drawing_ = false;
+        custom_frame_complete_ = true;
+        custom_hosts_planned_.clear();
+        if (auto* const effects = customEffects()) {
+            effects->select_programs = [this, effects](const std::string_view host,
+                                                       [[maybe_unused]] const lfs::rendering::ViewportRenderRequest& request) -> Status {
+                if (export_draw_)
+                    return selectExportPrograms(host);
+                assert(!request.custom_effect || std::ranges::contains(custom_hosts_planned_, host));
+                effects->usePrograms(live_programs_);
+                return {};
+            };
+        }
+        auto frame = drawFrame(context);
+        if (frame.rendered && context.on_screen) {
+            if (custom_frame_drawing_ && custom_frame_complete_)
+                last_complete_ = custom_effect_snapshot_;
+            if (!display_record_ || display_record_->snapshot != custom_effect_snapshot_ ||
+                display_record_->custom != custom_frame_drawing_ || display_record_->complete != custom_frame_complete_) {
+                display_record_ = std::make_shared<const shaders::DisplayRecord>(
+                    shaders::DisplayRecord{custom_effect_snapshot_, custom_frame_drawing_, live_programs_, custom_frame_complete_});
+                if (shader_service_)
+                    shader_service_->observeDisplay(display_record_);
+            }
+        }
+        return frame;
+    }
+
+    ViewportFrameResult RenderingManager::drawFrame(const RenderContext& context) {
         auto* const vulkan_context = vulkanContextOrNull(context.graphics_context);
         auto& view_state = viewState(context.view);
         vulkanViewRenderState(view_state).pending_frame_resources.reset();
@@ -565,6 +590,8 @@ namespace lfs::vis {
         }
 
         LOG_TIMER("renderVulkanFrame");
+        if (context.deterministic_export)
+            view_state.dirty_mask_.fetch_or(DirtyFlag::ALL);
         if (view_state.vksplat_stale_frame_guard_.takeRecoveryRequest() && scene_renderer_) {
             // clear_external_backing waits for the arena to be idle. Do this
             // before taking either trainer lock, after the failed frame's borrow
@@ -1046,8 +1073,7 @@ namespace lfs::vis {
                 scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
             has_meshes = std::any_of(scene_state.meshes.begin(),
                                      scene_state.meshes.end(),
-                                     [](const auto& mesh) { return mesh.mesh != nullptr; }) ||
-                         (scene_manager && hasVisibleCollisionPreview(*scene_manager));
+                                     [](const auto& mesh) { return mesh.mesh || mesh.collision; });
             has_environment = environmentBackgroundEnabled(frame_settings);
             has_render_content =
                 has_visible_gaussian_model || has_point_cloud || has_comparison_point_cloud || has_meshes || has_environment;
@@ -1423,6 +1449,9 @@ namespace lfs::vis {
 
         view_state.framerate_controller_.beginFrame();
 
+        scene_state.reveal = sequencer_reveal_;
+        if (scene_manager)
+            attachCustomEffect(scene_state, *scene_manager, scene_time_);
         FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
@@ -1436,6 +1465,7 @@ namespace lfs::vis {
             .frame_dirty = frame_dirty,
             .training_active = is_training,
             .depth_window_drag_preview = frame_depth_window_drag_preview,
+            .deterministic_export = context.deterministic_export,
             .gaussian_selection_visible = gaussian_selection_visible_,
             .cursor_preview = view_state.viewport_overlay_service_.cursorPreview(),
             .gizmo = gizmo_state_,
@@ -1453,6 +1483,69 @@ namespace lfs::vis {
                 if (view_state.temporal_convergence_.completeSuccessfulFrame())
                     requestViewFollowUp(view_state, DirtyFlag::TEMPORAL);
             };
+
+        // Resolve every visible family's inputs before choosing the frame's immutable publication.
+        auto* const custom_effects = customEffects();
+        if (custom_effects && shader_service_ && shader_service_->hasBindings() && (frame_ctx.scene_state.custom_effect || shader_service_->hasApplicableBindings(sequencer_custom_reveal_)) && (model || (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode))) && vulkan_context && !frame_settings.point_cloud_mode) {
+            auto base = buildViewportRenderRequest(frame_ctx, render_size);
+            std::vector<const core::SplatData*> models{model};
+            if (scene_manager && splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                models.clear();
+                const auto nodes = plyComparisonNodes(scene_manager->getScene());
+                if (const auto pair = plyComparisonPairForOffset(nodes.size(), frame_settings.split_view_offset)) {
+                    // As the panels draw: each side's own model, else the combined model for both.
+                    const auto owned = [](const PlyComparisonNode& entry) { return hasRenderableGaussians(entry.node->model.get()) ? entry.node->model.get() : nullptr; };
+                    const std::array sides{nodes[pair->first], nodes[pair->second]};
+                    const bool own = std::ranges::all_of(sides, [&](const auto& entry) { return !entry.splat_slot || owned(entry); });
+                    for (const auto& entry : sides)
+                        if (const auto* const panel = own ? owned(entry) : scene_manager->getScene().peekCombinedModel();
+                            entry.splat_slot && !entry.node->point_cloud && !entry.node->point_cloud_source && hasRenderableGaussians(panel) && !std::ranges::contains(models, panel))
+                            models.push_back(panel);
+                }
+            }
+            std::vector<std::string> hosts;
+            for (const auto* planned_model : models) {
+                auto request = base;
+                request.gut = rendering::isGutBackend(rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut));
+                if (planned_model != model && scene_manager) {
+                    for (const auto& slot : scene_manager->getScene().getVisibleSplatNodeSlots())
+                        if (slot.node && slot.node->model.get() == planned_model) {
+                            applyPlyComparisonNodeScope(request.scene, request.filters, request.overlay, frame_ctx, *slot.node, static_cast<int>(slot.slot_index));
+                            scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
+                            break;
+                        }
+                }
+                // Traversal can select its cut later in this frame. Preparation only needs
+                // the storage kind, so admit its LoD storage before the cut is available.
+                const std::uint32_t first_leaf = 0;
+                if (planned_model == model && model->lod_tree && model->lod_tree->has_tree()) {
+                    request.lod_indices = &first_leaf;
+                    request.lod_count = 1;
+                }
+                const auto planned = custom_effects->plan(*planned_model, request, view_state.main_render_target_,
+                                                          synchronize_vksplat_input_upload);
+                if (!planned)
+                    continue; // admission failures defer the frame; no discovery draw is submitted here
+                const auto add = [&](const std::string& host) {
+                    if (!host.empty() && !std::ranges::contains(hosts, host))
+                        hosts.push_back(host);
+                };
+                add(planned->host);
+                if (splitViewUsesGTComparison(frame_settings.split_view_mode) && frame_settings.gt_comparison_mode != GTComparisonMode::RGB)
+                    add(custom_effects->planHost(request, preview_render_target_, synchronize_vksplat_input_upload, true, false));
+                // The first panel can finish warmup before the second panel submits.
+                add(planned->warm_host);
+            }
+            custom_hosts_planned_ = hosts;
+            shader_service_->demandLive(hosts, last_complete_);
+            syncCustomPrograms();
+            frame_ctx.scene_state.custom_effect.reset();
+            if (scene_manager)
+                attachCustomEffect(frame_ctx.scene_state, *scene_manager, scene_time_);
+        }
+
+        if (shader_service_ && shader_service_->hasBindings() && (frame_settings.point_cloud_mode || (!frame_ctx.scene_state.custom_effect && !shader_service_->hasApplicableBindings(sequencer_custom_reveal_))))
+            shader_service_->demandLive({}, last_complete_);
 
         std::shared_ptr<lfs::core::Tensor> rendered_image;
         lfs::rendering::FrameMetadata rendered_metadata{};
@@ -1634,6 +1727,10 @@ namespace lfs::vis {
         };
         const auto note_vksplat_render_progress =
             [&](const SceneRenderer::RenderResult& result) {
+                if (!export_draw_) {
+                    custom_frame_drawing_ |= result.custom_active;
+                    custom_frame_complete_ &= !result.custom_pending;
+                }
                 if (result.lod_streaming_active) {
                     requestViewFollowUp(view_state, DirtyFlag::CAMERA);
                 }
@@ -1725,7 +1822,7 @@ namespace lfs::vis {
 
             if (!panel_has_visible_gaussian_model) {
                 if (splitViewUsesComparisonPanels(frame_settings.split_view_mode) &&
-                    hasMeshOrCollisionPreview(frame_ctx)) {
+                    !frame_ctx.scene_state.meshes.empty()) {
                     return mesh_background_panel();
                 }
                 return std::unexpected("No renderable model for split-view panel");
@@ -1818,6 +1915,7 @@ namespace lfs::vis {
                             frame_ctx,
                             *slot.node,
                             static_cast<int>(slot.slot_index));
+                        scopeCustomEffectToSlot(request.custom_effect, static_cast<int>(slot.slot_index));
                         break;
                     }
                 }
@@ -2920,7 +3018,7 @@ namespace lfs::vis {
                 view_state.viewport_interaction_context_.scene_manager = scene_manager;
                 view_state.split_view_service_.updateInfo(FrameResources{});
 
-                if (hasMeshOrCollisionPreview(frame_ctx) ||
+                if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
                     populate_split_mesh_panels(mesh_frame);
@@ -3031,7 +3129,7 @@ namespace lfs::vis {
                             // Republish here so overlays and mesh/environment passes see
                             // the current camera and splat depth view_state.
                             const bool publish_mesh_frame =
-                                hasMeshOrCollisionPreview(frame_ctx) ||
+                                !frame_ctx.scene_state.meshes.empty() ||
                                 environmentBackgroundEnabled(frame_settings) ||
                                 vulkanSceneImageView(render_result.depth_image_view) != VK_NULL_HANDLE ||
                                 pending_split_view.enabled;
@@ -3437,12 +3535,12 @@ namespace lfs::vis {
                 frame_ctx.current_camera_id);
         }
 
-        if (!hasMeshOrCollisionPreview(frame_ctx)) {
+        if (frame_ctx.scene_state.meshes.empty()) {
             clearVulkanMeshFrame(view_state);
         }
 
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
-            (environmentBackgroundEnabled(frame_settings) || hasMeshOrCollisionPreview(frame_ctx) ||
+            (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view, environment_map_path);
             populate_split_mesh_panels(gpu_mesh_frame);
@@ -3492,7 +3590,7 @@ namespace lfs::vis {
         render_lock.reset();
 
         const bool has_gpu_only_pass =
-            hasMeshOrCollisionPreview(frame_ctx) ||
+            !frame_ctx.scene_state.meshes.empty() ||
             environmentBackgroundEnabled(frame_settings) ||
             pending_split_view.enabled;
 
@@ -3804,6 +3902,24 @@ namespace lfs::vis {
                 .image_generation = view_state.vulkan_viewport_image_generation_,
                 .size = view_state.vulkan_viewport_image_size_,
                 .flip_y = view_state.vulkan_viewport_image_flip_y_,
+                .matches_viewport_extent = true,
+                .rendered = true};
+    }
+
+    ViewportFrameResult RenderingManager::presentVrMirror(const ViewId view, const vr::EyeFrame& eye) {
+        auto& view_state = viewState(view);
+        if (!eye.rendered) {
+            // VR ended: the view must stop sampling the released eye image.
+            vulkanViewRenderState(view_state).viewport_interop_.setSceneImage({}, {}, false, 0);
+            return {};
+        }
+        publishVulkanFrameResources(view_state, {}, vulkanSceneImage(eye.image), vulkanSceneImageView(eye.image_view),
+                                    vulkanSceneImageLayout(eye.image_layout), eye.image_generation,
+                                    vulkanSceneTimeline(eye.completion_timeline), eye.completion_value);
+        return {.image_generation = eye.image_generation,
+                .size = eye.size,
+                .alloc_size = eye.alloc_size.x > 0 && eye.alloc_size.y > 0 ? eye.alloc_size : eye.size,
+                .flip_y = eye.flip_y,
                 .matches_viewport_extent = true,
                 .rendered = true};
     }

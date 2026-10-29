@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace lfs::core::nn::portable {
     namespace {
@@ -188,6 +189,49 @@ namespace lfs::core::nn::portable {
         auto out = inference_output(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)});
         dispatch(InferenceKernel::Resize, x, out, {.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]), .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
         return out.to(input.dtype());
+    }
+
+    Tensor resize_antialiased(const Tensor& input, int height, int width) {
+        // Dense [in, out] weights of the triangle filter per axis: the support widens with the downscale factor and
+        // the weights renormalize at the borders, as in the CUDA kernel.
+        const auto filter = [&](const int in, const int out) {
+            std::vector<float> values(static_cast<size_t>(in) * out, 0.0f);
+            const float scale = static_cast<float>(in) / static_cast<float>(out);
+            const float support = std::max(scale, 1.0f);
+            for (int target = 0; target < out; ++target) {
+                const float center = (static_cast<float>(target) + 0.5f) * scale;
+                const int first = std::max(0, static_cast<int>(center - support + 0.5f));
+                const int end = std::min(in, static_cast<int>(center + support + 0.5f));
+                const auto weight = [&](const int source) {
+                    return std::max(0.0f, 1.0f - std::abs((static_cast<float>(source) + 0.5f - center) / support));
+                };
+                float total = 0.0f;
+                for (int source = first; source < end; ++source)
+                    total += weight(source);
+                for (int source = first; source < end; ++source)
+                    values[static_cast<size_t>(source) * out + target] = weight(source) / total;
+            }
+            auto matrix = empty(input, TensorShape{static_cast<size_t>(in), static_cast<size_t>(out)});
+            matrix.copy_from(Tensor::from_vector(values, TensorShape{static_cast<size_t>(in), static_cast<size_t>(out)},
+                                                 Device::CPU));
+            return matrix;
+        };
+        const size_t planes = input.shape()[0] * input.shape()[1];
+        const int in_h = static_cast<int>(input.shape()[2]), in_w = static_cast<int>(input.shape()[3]);
+        auto out = fp32(input).reshape(TensorShape{planes * in_h, static_cast<size_t>(in_w)});
+        if (in_w != width)
+            out = out.mm(filter(in_w, width));
+        out = out.reshape(TensorShape{planes, static_cast<size_t>(in_h), static_cast<size_t>(width)})
+                  .transpose(1, 2)
+                  .contiguous()
+                  .reshape(TensorShape{planes * width, static_cast<size_t>(in_h)});
+        if (in_h != height)
+            out = out.mm(filter(in_h, height));
+        return out.reshape(TensorShape{planes, static_cast<size_t>(width), static_cast<size_t>(height)})
+            .transpose(1, 2)
+            .contiguous()
+            .reshape(TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)})
+            .to(input.dtype());
     }
 
     Tensor pool(const Tensor& input, int kh, int kw, int sh, int sw, int ph, int pw, bool average, bool count_include_pad) {

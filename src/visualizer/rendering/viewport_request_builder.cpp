@@ -5,7 +5,6 @@
 #include "viewport_request_builder.hpp"
 #include "core/camera.hpp"
 #include "core/collision.hpp"
-#include "core/services.hpp"
 #include "frustum_depth_coverage.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/model_renderability.hpp"
@@ -572,6 +571,7 @@ namespace lfs::vis {
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
+            .deterministic_export = ctx.deterministic_export,
             .color_exposure = ctx.settings.color_exposure,
             .color_tonemapping = ctx.settings.color_tonemapping,
             .splat_render_profile = ctx.settings.splat_render_profile,
@@ -591,6 +591,8 @@ namespace lfs::vis {
                  .node_visibility_mask = ctx.scene_state.node_visibility_mask,
                  .node_active_sh_degrees = ctx.scene_state.node_active_sh_degrees},
             .filters = {},
+            .reveal = ctx.scene_state.reveal,
+            .custom_effect = ctx.scene_state.custom_effect,
             .overlay =
                 {.markers =
                      {.show_object_outline = outline,
@@ -722,14 +724,6 @@ namespace lfs::vis {
         return request;
     }
 
-    bool hasVisibleCollisionPreview(const SceneManager& manager) {
-        const auto& scene = manager.getScene();
-        for (const auto* node : scene.getNodes())
-            if (node->collision && scene.isNodeEffectivelyVisible(node->id))
-                return true;
-        return false;
-    }
-
     std::vector<ViewportMeshDrawItem> buildViewportMeshDrawItems(
         const SceneRenderState& scene_state,
         const RenderSettings& settings,
@@ -737,7 +731,7 @@ namespace lfs::vis {
         const bool any_selected_mesh = std::any_of(
             scene_state.meshes.begin(),
             scene_state.meshes.end(),
-            [](const auto& mesh) { return mesh.is_selected; });
+            [](const auto& mesh) { return mesh.mesh && mesh.is_selected; });
         const bool any_selected_node = std::any_of(
             scene_state.selected_node_mask.begin(),
             scene_state.selected_node_mask.end(),
@@ -752,11 +746,13 @@ namespace lfs::vis {
         std::vector<ViewportMeshDrawItem> items;
         items.reserve(scene_state.meshes.size());
         for (const auto& mesh : scene_state.meshes) {
-            if (!mesh.mesh) {
+            if (!mesh.mesh && !mesh.collision) {
                 continue;
             }
             ViewportMeshDrawItem item{};
             item.mesh = mesh.mesh;
+            item.collision = mesh.collision;
+            item.collision_opacity = settings.collision_preview_opacity;
             item.model = mesh.transform;
             item.light_dir = headlight_dir;
             item.camera_relative_light = true;
@@ -771,17 +767,6 @@ namespace lfs::vis {
             item.shadow_enabled = settings.mesh_shadow_enabled;
             item.shadow_map_resolution = settings.mesh_shadow_resolution;
             items.push_back(item);
-        }
-        if (const auto* manager = services().sceneOrNull()) {
-            for (const auto* node : manager->getScene().getNodes()) {
-                if (!node->collision || !manager->getScene().isNodeEffectivelyVisible(node->id))
-                    continue;
-                ViewportMeshDrawItem item{};
-                item.collision = node->collision;
-                item.collision_opacity = settings.collision_preview_opacity;
-                item.model = lfs::rendering::dataWorldTransformToVisualizerWorld(manager->getScene().getWorldTransform(node->id));
-                items.push_back(std::move(item));
-            }
         }
         return items;
     }
@@ -953,6 +938,18 @@ namespace lfs::vis {
                 : -1;
     }
 
+    void scopeCustomEffectToSlot(std::optional<lfs::rendering::GaussianCustomEffectState>& effect,
+                                 const int visible_index) {
+        if (!effect)
+            return;
+        using State = lfs::rendering::GaussianCustomEffectState;
+        const bool kept = visible_index >= 0 && static_cast<size_t>(visible_index) < effect->objects.size();
+        effect->objects = {kept ? effect->objects[static_cast<size_t>(visible_index)] : State::Object{}};
+        if (effect->global_binding == State::kNone && effect->reveal_binding == State::kNone &&
+            effect->objects[0].binding == State::kNone)
+            effect.reset();
+    }
+
     PlyComparisonDepthSample resolvePlyComparisonDepthSample(
         const core::Scene& scene,
         const size_t split_view_offset,
@@ -993,6 +990,7 @@ namespace lfs::vis {
         state.transform_indices.reset();
         state.node_visibility_mask.clear();
         state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
+        scopeCustomEffectToSlot(state.custom_effect, visible_index);
 
         const auto keep_matching = [visible_index](auto& items) {
             using Item = std::decay_t<decltype(items[0])>;

@@ -266,7 +266,8 @@ namespace lfs::training {
         }
 
         [[nodiscard]] lfs::Error snapshot_host_memory_error(
-            const std::uint64_t required_bytes,
+            const std::uint64_t checkpoint_bytes,
+            const std::uint64_t reserve_bytes,
             const std::uint64_t available_bytes,
             std::string detail,
             const lfs::core::SourceSite source) {
@@ -274,9 +275,10 @@ namespace lfs::training {
                 .code = lfs::ErrorCode::ResourceExhausted,
                 .domain = lfs::ErrorDomain::Training,
                 .user_message = std::format(
-                    "{}: needed {}, available {}.",
+                    "{}: the save copies the {} checkpoint into RAM and keeps {} free, {} of RAM is available.",
                     lfs::core::HOST_MEMORY_SAVE_ERROR_PREFIX,
-                    format_memory_size(required_bytes),
+                    format_memory_size(checkpoint_bytes),
+                    format_memory_size(reserve_bytes),
                     format_memory_size(available_bytes)),
                 .detail = std::move(detail),
                 .detection = source,
@@ -2155,17 +2157,21 @@ namespace lfs::training {
             if (request.release_host_memory &&
                 host_memory.available_bytes > 0 &&
                 host_memory.available_bytes <
-                    required_host_memory &&
+                    required_host_memory) {
+                const auto short_available = host_memory.available_bytes;
                 request.release_host_memory(
-                    required_host_memory -
-                    host_memory.available_bytes) > 0) {
+                    required_host_memory - short_available);
                 host_memory = read_host_memory_info();
+                LOG_INFO("Project save needs {} of RAM: released host memory, available {} -> {}",
+                         format_memory_size(required_host_memory), format_memory_size(short_available),
+                         format_memory_size(host_memory.available_bytes));
             }
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {
                 return snapshot_host_memory_error(
-                    required_host_memory,
+                    prepared->checkpoint_bytes,
+                    reserve_bytes,
                     host_memory.available_bytes,
                     std::format(
                         "Training snapshot {}: {} bytes available, "

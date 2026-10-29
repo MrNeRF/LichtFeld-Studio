@@ -178,6 +178,14 @@ namespace lfs::rendering {
         d.cmd_fill_buffer = ::vkCmdFillBuffer;
         d.cmd_copy_buffer = ::vkCmdCopyBuffer;
         d.reset_fences = ::vkResetFences;
+        d.create_shader_module = ::vkCreateShaderModule;
+        d.destroy_shader_module = ::vkDestroyShaderModule;
+        d.create_descriptor_set_layout = ::vkCreateDescriptorSetLayout;
+        d.destroy_descriptor_set_layout = ::vkDestroyDescriptorSetLayout;
+        d.create_pipeline_layout = ::vkCreatePipelineLayout;
+        d.destroy_pipeline_layout = ::vkDestroyPipelineLayout;
+        d.create_compute_pipelines = ::vkCreateComputePipelines;
+        d.destroy_pipeline = ::vkDestroyPipeline;
         return d;
     }
 

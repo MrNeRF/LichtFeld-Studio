@@ -8,6 +8,7 @@
 #include "gui/ui_texture.hpp"
 #include "media/video_frame_extractor.hpp"
 #include "media/video_player.hpp"
+#include "preprocessing/video_mask_extraction.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
 #include <RmlUi/Core/EventListener.h>
@@ -67,6 +68,7 @@ namespace lfs::gui {
         int window_candidates_target = 10;
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
+        preprocessing::VideoMaskExtractionOptions masking;
         bool generate_metadata = false;
         bool convert_hdr_to_sdr = false;
         int rotation = 0; // 0, 90, 180, 270
@@ -128,6 +130,7 @@ namespace lfs::gui {
 
         struct ExtractionStatusSnapshot {
             std::string error_message;
+            std::string warning_message;
             ExtractionStatusMessage status_message = ExtractionStatusMessage::None;
         };
 
@@ -153,6 +156,7 @@ namespace lfs::gui {
             bool has_existing_output = false;
             BatchItemStatus status = BatchItemStatus::Pending;
             std::string error;
+            std::string warning;
         };
 
         struct QueuedBatchProbe {
@@ -176,7 +180,7 @@ namespace lfs::gui {
         void joinExtractionThread();
 
         void updateProgress(int current, int total, int discarded = 0);
-        void setExtractionComplete();
+        void setExtractionComplete(const std::string& warning = {});
         void setExtractionStopped();
         void setExtractionError(const std::string& error, bool extraction_failure = true);
         [[nodiscard]] ExtractionStatusSnapshot getExtractionStatusSnapshot() const;
@@ -211,6 +215,7 @@ namespace lfs::gui {
         [[nodiscard]] bool resolveFilenamePattern(std::string& pattern, std::string& error) const;
         [[nodiscard]] bool resolveFilenamePattern(const std::filesystem::path& video_path,
                                                   std::string& pattern, std::string& error) const;
+        [[nodiscard]] bool collectMaskingOptions(preprocessing::VideoMaskExtractionOptions& options, std::string& error) const;
         [[nodiscard]] bool buildBatchParams(std::vector<VideoExtractionParams>& params,
                                             std::string& error);
         void beginBatchExtractionFromUi();
@@ -299,6 +304,7 @@ namespace lfs::gui {
         std::atomic<bool> extraction_status_dirty_{false};
         mutable std::mutex extraction_status_mutex_;
         std::string error_message_;
+        std::string warning_message_;
         ExtractionStatusMessage status_message_ = ExtractionStatusMessage::None;
 
         std::unique_ptr<io::VideoPlayer> player_;
@@ -372,6 +378,21 @@ namespace lfs::gui {
         Rml::Element* custom_width_input_el_ = nullptr;
         Rml::Element* custom_height_input_el_ = nullptr;
         Rml::Element* output_resolution_el_ = nullptr;
+        Rml::Element* masking_toggle_el_ = nullptr;
+        Rml::Element* masking_options_el_ = nullptr;
+        Rml::Element* mask_circle_el_ = nullptr;
+        Rml::Element* mask_recenter_el_ = nullptr;
+        Rml::Element* mask_fov_el_ = nullptr;
+        Rml::Element* mask_model_el_ = nullptr;
+        Rml::Element* mask_require_operator_el_ = nullptr;
+        Rml::Element* mask_dilation_el_ = nullptr;
+        Rml::Element* mask_view_fov_el_ = nullptr;
+        Rml::Element* mask_manual_seed_el_ = nullptr;
+        Rml::Element* mask_seed_options_el_ = nullptr;
+        Rml::Element* mask_seed_x_el_ = nullptr;
+        Rml::Element* mask_seed_y_el_ = nullptr;
+        Rml::Element* mask_seed_frame_el_ = nullptr;
+        std::atomic<bool> masking_active_{false};
         Rml::ElementFormControlSelect* naming_select_el_ = nullptr;
         Rml::Element* custom_pattern_row_el_ = nullptr;
         Rml::Element* naming_help_el_ = nullptr;

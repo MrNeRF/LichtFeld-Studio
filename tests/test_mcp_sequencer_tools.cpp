@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "user_shader_test_access.hpp"
+
 #include "app/include/app/mcp_sequencer_tools.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -29,8 +31,11 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 14> kSequencerToolNames = {
+    constexpr std::array<const char*, 17> kSequencerToolNames = {
         "sequencer.get",
+        "sequencer.reveal_get",
+        "sequencer.reveal_set",
+        "sequencer.reveal_remove",
         "sequencer.add_keyframe",
         "sequencer.update_keyframe",
         "sequencer.select_keyframe",
@@ -273,8 +278,6 @@ namespace {
         }
 
         void delete_keyframe(const size_t index) {
-            if (index == 0)
-                return;
             if (!controller.selectKeyframe(index))
                 return;
             controller.removeSelectedKeyframe();
@@ -365,6 +368,37 @@ TEST_F(McpSequencerToolsTest, RegisteredSchemasAreIdOnly) {
     EXPECT_EQ(result["error"]["code"], "InvalidArgument");
     EXPECT_EQ(result["error"]["details"]["parameter"], "keyframe_id");
     EXPECT_EQ(result["error_message"], "Missing required parameter: keyframe_id");
+}
+
+TEST_F(McpSequencerToolsTest, CustomRevealWireValidationAndSharedBinding) {
+    namespace shaders = lfs::vis::shaders;
+    lfs::core::Scene scene;
+    shaders::ShaderService service(scene, {}, [] {});
+    backend_.controller.setShaderService(&service);
+    const auto asset = lfs::vis::ShaderCommands{service}.createAsset("Reveal", "draft");
+    ASSERT_TRUE(asset);
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    const auto read = lfs::mcp::tool_to_json(find_tool("sequencer.reveal_get"));
+    EXPECT_TRUE(read["annotations"]["readOnlyHint"].get<bool>());
+    EXPECT_EQ(read["_meta"]["app.lichtfeld/category"], "sequencer");
+    const auto write = lfs::mcp::tool_to_json(find_tool("sequencer.reveal_set"));
+    EXPECT_FALSE(write["annotations"]["readOnlyHint"].get<bool>());
+    const json clip{{"start", 1}, {"end", 4}, {"softness", .25}, {"effect", 12}, {"shader_id", asset->to_string()}};
+    ASSERT_FALSE(registry.call_tool("sequencer.reveal_set", clip).contains("error"));
+    EXPECT_EQ(registry.call_tool("sequencer.reveal_get", {})["reveal"], clip);
+    for (const auto& patch : std::vector<json>{{{"shader_id", json::array()}},
+                                               {{"shader_id", "bad"}},
+                                               {{"effect", 2}},
+                                               {{"extra", 1}},
+                                               {{"softness", -1}}}) {
+        auto invalid = clip;
+        invalid.update(patch);
+        EXPECT_TRUE(registry.call_tool("sequencer.reveal_set", invalid).contains("error"));
+        EXPECT_EQ(registry.call_tool("sequencer.reveal_get", {})["reveal"], clip);
+    }
+    EXPECT_EQ(service.boundAsset({shaders::ShaderSlot::Kind::Reveal, {}}), *asset);
+    ASSERT_FALSE(registry.call_tool("sequencer.reveal_remove", {}).contains("error"));
+    EXPECT_FALSE(service.boundAsset({shaders::ShaderSlot::Kind::Reveal, {}}));
 }
 
 TEST_F(McpSequencerToolsTest, PlySequenceLoadRejectsOutOfRangeFpsWithoutSideEffects) {
@@ -581,25 +615,17 @@ TEST_F(McpSequencerToolsTest, SetEasingPreservesAllNumericAndNamedModes) {
     }
 }
 
-TEST_F(McpSequencerToolsTest, DeleteRejectsProtectedFirstKeyframeWithoutChangingState) {
-    const auto reject_deletion = [this](const lfs::sequencer::KeyframeId id) {
-        const auto before = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
-                "sequencer.delete_keyframe", json{{"keyframe_id", id}});
-            EXPECT_EQ(result.value("error", json::object()).value("code", ""), "InvalidArgument");
-            EXPECT_NE(result.value("error_message", "").find("first keyframe cannot be deleted"), std::string::npos);
-            EXPECT_EQ(lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object()), before);
-        }
-    };
+TEST_F(McpSequencerToolsTest, DeleteAcceptsTheFirstKeyframeAndTheOnlyKeyframe) {
+    auto& registry = lfs::mcp::ToolRegistry::instance();
     const auto first = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
-    reject_deletion(first);
     const auto second = backend_.add_manual_keyframe(1.0f, {1.0f, 0.0f, 0.0f});
-    reject_deletion(first);
-    backend_.controller.setKeyframeTimeById(second, -1.0f);
-    reject_deletion(second);
+    for (const auto id : {first, second}) {
+        const auto result = registry.call_tool("sequencer.delete_keyframe", json{{"keyframe_id", id}});
+        EXPECT_TRUE(result.value("success", false)) << result.dump();
+        EXPECT_EQ(backend_.controller.timeline().getKeyframeById(id), nullptr);
+    }
+    EXPECT_EQ(backend_.controller.timeline().realKeyframeCount(), 0u);
 }
-
 TEST_F(McpSequencerToolsTest, SetEasingCommandLatency) {
     const auto id = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     auto& registry = lfs::mcp::ToolRegistry::instance();

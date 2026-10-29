@@ -54,8 +54,9 @@ Then narrow further:
 | `transform_*` | Node transform inspection and edits |
 | `gaussians_*` | Raw Gaussian tensor reads and writes |
 | `history_*` | Shared undo/redo inspection, playback, and grouped transactions |
-| `editor_*` | Integrated Python console execution |
+| `editor_*` | Python execution and Shader documents |
 | `nodes_*` | [Node graphs, modifier stacks, evaluation and Node Editor](node-editor.md), without Python execution |
+| `shader_*` | Shader assets, bindings, parameter overrides and diagnostics |
 | `camera_*`, `render_*`, `sequencer_*` | View state, captures, and timeline workflows |
 
 ## Pointer Injection
@@ -99,6 +100,7 @@ When a tool can block or keep running, use the runtime APIs instead of sleeping:
 - [Connecting MCP Clients](connecting-clients.md) for client setup (Claude Desktop, Claude Code, in-repo agents)
 - [Bootstrap](bootstrap.md) for the discovery-first workflow
 - [Recipes](recipes/) for concrete task sequences
+- [User shaders](recipes/user-shaders.md) for draw-driven assets, editor targets and persistence
 - [Frame demand and idle verification](recipes/render-on-demand.md) for the runtime frame ledger and GPU idle test
 
 ## What Not To Do

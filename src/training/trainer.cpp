@@ -94,6 +94,9 @@
 #if defined(__linux__)
 #include <sys/resource.h>
 #endif
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 namespace lfs::training {
 
@@ -3162,9 +3165,15 @@ namespace lfs::training {
         return active_image_loader_;
     }
 
-    std::function<std::uint64_t(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
-        return [loader = getActiveImageLoader()](const std::uint64_t bytes) -> std::uint64_t {
-            return loader ? loader->release_host_cache(static_cast<size_t>(bytes)) : 0;
+    std::function<void(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
+        return [loader = getActiveImageLoader()](const std::uint64_t bytes) {
+            if (loader)
+                loader->release_host_cache(static_cast<size_t>(bytes));
+#ifdef __GLIBC__
+            // Image buffers freed by eviction, or by the loader a finished run already destroyed,
+            // stay in the allocator's arenas until trimmed.
+            malloc_trim(0);
+#endif
         };
     }
 
@@ -4514,8 +4523,13 @@ namespace lfs::training {
                 if (chapters->document_context) {
                     const auto& context =
                         *chapters->document_context;
+                    auto parameters = context.parameters;
+                    auto& active = checkpoint_params.optimization.strategy == "mcmc"   ? parameters.mcmc_current
+                                   : checkpoint_params.optimization.strategy == "igs+" ? parameters.igs_current
+                                                                                       : parameters.mrnf_current;
+                    active.keep_all_checkpoints = checkpoint_params.optimization.keep_all_checkpoints;
                     return capture_project_snapshot_cpu_state(
-                        *scene_, context.parameters,
+                        *scene_, parameters,
                         captured_uuid, iteration,
                         *cpu_state,
                         context.selected_node_uuids);
@@ -4650,18 +4664,14 @@ namespace lfs::training {
             training_ops_->photometric->shrink_to_required(photo_saved_);
 
         std::optional<std::filesystem::path> headless_source_path;
-        bool first_publish_to_destination =
-            false;
+        std::shared_ptr<lfs::io::project::ProjectReader> retained_source;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
             headless_source_path = headless_project_source_path_;
             project_step_regression_
                 .arm_after_snapshot(iteration);
-            first_publish_to_destination =
-                last_project_snapshot_path_
-                    .lexically_normal() !=
-                path.lexically_normal();
+            retained_source = retained_project_source_;
         }
         project_writer_done_.store(
             false, std::memory_order_release);
@@ -4675,7 +4685,8 @@ namespace lfs::training {
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
-                 first_publish_to_destination,
+                 retained_source,
+                 keep_all_checkpoints = checkpoint_params.optimization.keep_all_checkpoints,
                  recovery_session =
                      recovery_session_,
                  preview_png =
@@ -4694,7 +4705,6 @@ namespace lfs::training {
                             background_priority));
                     }
 #endif
-                    bool compact_after_publish = false;
                     auto writer_result =
                         [&]()
                         -> lfs::Result<
@@ -4786,11 +4796,17 @@ namespace lfs::training {
                             lfs::core::native_fs::exists(
                                 path)) {
                             source_path = path;
-                            compact_after_publish =
-                                first_publish_to_destination;
                         } else if (!document_context && headless_source_path) {
                             source_path = headless_source_path;
                         }
+                        auto retained_reader = document_context ? document_context->retained_source : retained_source;
+                        if (retained_source && document_context && retained_reader &&
+                            retained_source->path().lexically_normal() == retained_reader->path().lexically_normal() &&
+                            retained_source->superblock().project_uuid == retained_reader->superblock().project_uuid &&
+                            retained_source->commit().wallclock_unix_ns > retained_reader->commit().wallclock_unix_ns)
+                            retained_reader = retained_source;
+                        if (retained_reader)
+                            source_path = retained_reader->path();
                         // A redirected recovery save does not merge into or own
                         // the original master. Its owner keeps staging alive.
                         if (!document_context && recovery_session && !recovery_session->writer_lock().owns(path)) {
@@ -4844,6 +4860,7 @@ namespace lfs::training {
                                             .geometry = {},
                                             .defer_geometry_payloads =
                                                 true,
+                                            .retained_source = retained_reader.get(),
                                         });
                             if (!opened) {
                                 if (stale_trainer_default_recovery(
@@ -5005,6 +5022,7 @@ namespace lfs::training {
                                 document->edit_view() =
                                     document_context
                                         ->view;
+                                document->edit_shaders() = document_context->shaders;
                                 document->edit_editor() =
                                     document_context
                                         ->editor;
@@ -5204,6 +5222,7 @@ namespace lfs::training {
                                                              ->writer_lock()}
                                                    : std::nullopt),
                                     .writer_lock_wait = std::chrono::seconds(30),
+                                    .keep_all_checkpoints = keep_all_checkpoints,
                                 };
                         const auto save_snapshot =
                             [&]()
@@ -5262,7 +5281,7 @@ namespace lfs::training {
                                              save_options);
                         };
                         auto saved = save_snapshot();
-                        if (!saved &&
+                        if (!saved && !retained_reader &&
                             stale_trainer_default_recovery(
                                 adopt_container_identity,
                                 false,
@@ -5363,6 +5382,13 @@ namespace lfs::training {
                                 }
                             }
                         }
+                        if (write_kind != ProjectSnapshotWriteKind::Autosave && document->source_reader()) {
+                            std::lock_guard lock(project_snapshot_mutex_);
+                            // An explicit export to another path must not change
+                            // the source of subsequent saves to the bound project.
+                            if (!live_project_path_ || live_project_path_->lexically_normal() == path.lexically_normal())
+                                retained_project_source_ = std::make_shared<lfs::io::project::ProjectReader>(document->source_reader()->share());
+                        }
                         LOG_INFO(
                             "Background .licht {} complete: {} "
                             "generation={} snapshot={} rewritten={} "
@@ -5371,7 +5397,8 @@ namespace lfs::training {
                                     ProjectSnapshotWriteKind::
                                         Autosave
                                 ? "autosave"
-                                : "append",
+                            : saved->rewrote_container ? "rewrite"
+                                                       : "append",
                             lfs::core::path_to_utf8(
                                 path),
                             saved->generation,
@@ -5383,69 +5410,6 @@ namespace lfs::training {
                                 .final_drain_ms);
                         return captured->metrics;
                     }();
-
-                    if (writer_result &&
-                        compact_after_publish &&
-                        write_kind !=
-                            ProjectSnapshotWriteKind::
-                                Autosave) {
-                        const auto compact_creation_ns =
-                            static_cast<std::uint64_t>(
-                                std::chrono::
-                                    duration_cast<
-                                        std::chrono::
-                                            nanoseconds>(
-                                        std::chrono::
-                                            system_clock::
-                                                now()
-                                                    .time_since_epoch())
-                                        .count());
-                        const auto compact_wallclock_ns =
-                            static_cast<std::uint64_t>(
-                                std::chrono::
-                                    duration_cast<
-                                        std::chrono::
-                                            nanoseconds>(
-                                        std::chrono::
-                                            system_clock::
-                                                now()
-                                                    .time_since_epoch())
-                                        .count());
-                        auto compacted =
-                            lfs::io::project::
-                                ProjectWriter::compact(
-                                    path,
-                                    lfs::io::project::
-                                        CompactionOptions{
-                                            .compatibility =
-                                                {},
-                                            .new_file_uuid =
-                                                lfs::core::
-                                                    generate_uuid_v4(),
-                                            .commit_uuid =
-                                                lfs::core::
-                                                    generate_uuid_v4(),
-                                            .snapshot_uuid =
-                                                {},
-                                            .creation_time_unix_ns =
-                                                compact_creation_ns,
-                                            .wallclock_unix_ns =
-                                                compact_wallclock_ns,
-                                        });
-                        if (compacted) {
-                            LOG_INFO(
-                                "Compacted trainer project {} after first publish of this run",
-                                lfs::core::path_to_utf8(
-                                    path));
-                        } else {
-                            LOG_WARN(
-                                "Failed to compact trainer project {} after first publish of this run: {}",
-                                lfs::core::path_to_utf8(
-                                    path),
-                                lfs::format_for_developer(
-                                    compacted.error()));
-                        }
-                    }
 
                     {
                         std::lock_guard lock(
@@ -9436,6 +9400,16 @@ namespace lfs::training {
                                 .detection = LFS_SOURCE_SITE_CURRENT(),
                             }));
                         }
+                        // A headless process exits after a failed save and would take the trained model with it.
+                        auto fallback = getParams();
+                        if (fallback.optimization.headless) {
+                            fallback.export_formats = {lfs::core::param::OutputFormat::PLY};
+                            if (export_final_splats(*this, fallback))
+                                LOG_ERROR("The project was not saved at iteration {}; the trained splats were exported "
+                                          "as PLY to {}",
+                                          terminal_iteration,
+                                          lfs::core::path_to_utf8(fallback.dataset.output_path));
+                        }
                     }
                 } else {
                     if (terminal_error) {
@@ -9595,6 +9569,16 @@ namespace lfs::training {
             context_provider,
         std::optional<std::filesystem::path> headless_source_path) {
         std::lock_guard lock(project_snapshot_mutex_);
+        if (live_project_path_ != path || headless_project_source_path_ != headless_source_path)
+            retained_project_source_.reset();
+        if (!context_provider && !retained_project_source_) {
+            const auto source = headless_source_path ? headless_source_path : path;
+            if (source && lfs::core::native_fs::exists(*source)) {
+                auto reader = lfs::io::project::ProjectReader::open(*source);
+                if (reader)
+                    retained_project_source_ = std::make_shared<lfs::io::project::ProjectReader>(std::move(*reader));
+            }
+        }
         live_project_path_ = std::move(path);
         headless_project_source_path_ = std::move(headless_source_path);
         live_document_context_provider_ =

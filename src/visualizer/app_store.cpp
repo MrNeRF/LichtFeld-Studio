@@ -48,7 +48,6 @@ namespace lfs::vis {
                                Field::SplatSimplifyStateValue,
                                "splat_simplify_state",
                                TaskProgressState{}),
-          collision_state(store_, Field::CollisionStateValue, "collision_state", TaskProgressState{}),
           scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
@@ -57,7 +56,9 @@ namespace lfs::vis {
           depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0),
           depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}),
           viewer_backend(store_, Field::ViewerBackendValue, "viewer_backend", std::nullopt),
-          align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0) {}
+          align_state_generation(store_, Field::AlignStateGeneration, "align_state_generation", 0),
+          scale_distance_state_generation(store_, Field::ScaleDistanceStateGeneration, "scale_distance_state_generation", 0),
+          vr_state(store_, Field::VrStateValue, "vr_state", VrState{}) {}
 
     AppStore& app_store() {
         // Subscription tokens can outlive static destruction across module boundaries.
@@ -67,6 +68,11 @@ namespace lfs::vis {
 
     void publish_align_state_generation() {
         auto& signal = app_store().align_state_generation;
+        signal.set(signal.get() + 1);
+    }
+
+    void publish_scale_distance_state_generation() {
+        auto& signal = app_store().scale_distance_state_generation;
         signal.set(signal.get() + 1);
     }
 

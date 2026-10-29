@@ -6,6 +6,7 @@
 // trigger fatal error C1001 (msc1.cpp line 1599). Replaced with member assignment.
 
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "gui/film_strip_renderer.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -288,8 +289,6 @@ namespace lfs::vis {
                         target = TransportContextMenuRequest::Target::SNAP;
                     else if (id == "btn-preview")
                         target = TransportContextMenuRequest::Target::PREVIEW;
-                    else if (id == "btn-format")
-                        target = TransportContextMenuRequest::Target::FORMAT;
 
                     if (target != TransportContextMenuRequest::Target::NONE) {
                         transport_ctx_request_ = {target, input.mouse_x, input.mouse_y};
@@ -316,7 +315,7 @@ namespace lfs::vis {
         const float s = cached_dp_ratio_;
 
         const auto& timeline = controller_.timeline();
-        if (timeline.empty() && !controller_.hasPlySequence())
+        if (timeline.empty() && !controller_.hasPlySequence() && !timeline.revealClip())
             return;
 
         // Resolve actual rendered Y of #track-area (where diamonds live) from
@@ -353,23 +352,34 @@ namespace lfs::vis {
 
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
+        // The reveal controls overlap the timeline visually. Let RmlUi handle
+        // their input instead of interpreting the same click as a scrub or drag.
+        if (reveal_selected_ && reveal_drag_edge_ == 0 && document_) {
+            if (auto* settings = document_->GetElementById("reveal-settings")) {
+                const auto offset = settings->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = settings->GetBox().GetSize(Rml::BoxArea::Border);
+                if (size.x > 0.0f && size.y > 0.0f &&
+                    mx >= cached_panel_x_ + offset.x && mx <= cached_panel_x_ + offset.x + size.x &&
+                    my >= cached_panel_y_ + offset.y && my <= cached_panel_y_ + offset.y + size.y)
+                    return;
+            }
+        }
         const bool mouse_in_x = mx >= pos.x && mx <= pos.x + width;
         // Click-to-scrub / diamond hits stay in #track-area.
-        const bool mouse_in_timeline = mouse_in_x &&
+        const bool mouse_in_panel_y = my >= cached_panel_y_ && my <= cached_panel_y_ + cached_total_height_;
+        const bool mouse_in_timeline = mouse_in_panel_y && mouse_in_x &&
                                        my >= track_area_top && my <= track_area_bottom;
-        const bool mouse_in_ruler = mouse_in_x &&
+        const bool mouse_in_ruler = mouse_in_panel_y && mouse_in_x &&
                                     my >= ruler_top && my <= ruler_bottom;
 
         // Wheel zoom/pan covers the whole timeline column: ruler top through
         // the film strip (when visible) or the easing stripe otherwise.
-        const float easing_bottom = cached_panel_y_ + cached_height_ + EASING_STRIPE_HEIGHT * s;
-        float wheel_y_bottom = easing_bottom;
-        if (film_strip_attached_) {
-            const float strip_y = cached_panel_y_ + cached_height_ + EASING_STRIPE_HEIGHT * s -
-                                  BORDER_OVERLAP * s;
-            wheel_y_bottom = strip_y + gui::FilmStripRenderer::STRIP_HEIGHT;
+        auto* bottom_element = film_strip_attached_ ? el_film_strip_panel_ : el_easing_stripe_;
+        float wheel_y_bottom = cached_panel_y_ + cached_total_height_;
+        if (bottom_element) {
+            wheel_y_bottom = cached_panel_y_ + bottom_element->GetAbsoluteOffset(Rml::BoxArea::Border).y + bottom_element->GetOffsetHeight();
         }
-        const bool mouse_in_wheel_zone = mouse_in_x && my >= ruler_top && my <= wheel_y_bottom;
+        const bool mouse_in_wheel_zone = mouse_in_panel_y && mouse_in_x && my >= ruler_top && my <= wheel_y_bottom;
 
         if (mouse_in_wheel_zone && !input.want_capture_mouse) {
             const float wheel = input.mouse_wheel;
@@ -442,6 +452,92 @@ namespace lfs::vis {
         if (el_playhead_handle_)
             el_playhead_handle_->SetClass("hot", on_playhead_handle || dragging_playhead_);
 
+        if (const auto& reveal = timeline.revealClip(); reveal) {
+            const float left = timeToX(reveal->start, pos.x, width);
+            const float right = timeToX(reveal->end, pos.x, width);
+            bool mouse_on_reveal_row = mouse_in_timeline;
+            if (document_) {
+                if (auto* strip = document_->GetElementById("reveal-strip")) {
+                    const auto offset = strip->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    const auto size = strip->GetBox().GetSize(Rml::BoxArea::Border);
+                    if (size.y > 0.0f)
+                        mouse_on_reveal_row = mouse_in_panel_y && mouse_in_x &&
+                                              my >= cached_panel_y_ + offset.y &&
+                                              my <= cached_panel_y_ + offset.y + size.y;
+                }
+            }
+            if (input.mouse_clicked[1] && mouse_on_reveal_row && !hovered_keyframe_ &&
+                mx >= left && mx <= right) {
+                context_menu_reveal_ = true;
+                context_menu_keyframe_ = std::nullopt;
+                context_menu_open_ = true;
+                return;
+            }
+            if (input.mouse_clicked[0] && mouse_on_reveal_row && !hovered_keyframe_ && !on_playhead_handle &&
+                mx >= left - 6.0f * s && mx <= right + 6.0f * s) {
+                controller_.beginRevealEdit();
+                selectReveal(true);
+                if (std::abs(mx - left) <= 6.0f * s)
+                    reveal_drag_edge_ = -1;
+                else if (std::abs(mx - right) <= 6.0f * s)
+                    reveal_drag_edge_ = 1;
+                else {
+                    reveal_drag_edge_ = 2;
+                    reveal_drag_origin_x_ = mx;
+                    reveal_drag_origin_start_ = reveal->start;
+                    reveal_drag_origin_end_ = reveal->end;
+                    reveal_drag_seconds_per_pixel_ = getDisplayEndTime() / width;
+                }
+            }
+            if (reveal_drag_edge_ != 0) {
+                if (input.mouse_down[0]) {
+                    auto edited = *reveal;
+                    const float time = std::clamp(xToTime(mx, pos.x, width), 0.0f, sequencer::MAX_SEQUENCER_TIME_SECONDS);
+                    if (reveal_drag_edge_ == 2) {
+                        const float delta = std::clamp((mx - reveal_drag_origin_x_) * reveal_drag_seconds_per_pixel_,
+                                                       -reveal_drag_origin_start_,
+                                                       sequencer::MAX_SEQUENCER_TIME_SECONDS - reveal_drag_origin_end_);
+                        edited.start = reveal_drag_origin_start_ + delta;
+                        edited.end = reveal_drag_origin_end_ + delta;
+                    } else if (reveal_drag_edge_ < 0)
+                        edited.start = std::max(0.0f, std::min(time, edited.end - 0.01f));
+                    else
+                        edited.end = std::min(sequencer::MAX_SEQUENCER_TIME_SECONDS, std::max(time, edited.start + 0.01f));
+                    if (edited.end > edited.start)
+                        if (auto changed = controller_.setRevealClip(edited); !changed)
+                            LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
+                    selectReveal(true);
+                } else {
+                    controller_.endRevealEdit();
+                    reveal_drag_edge_ = 0;
+                }
+                return;
+            }
+        } else {
+            if (reveal_drag_edge_ != 0)
+                controller_.endRevealEdit();
+            reveal_drag_edge_ = 0;
+        }
+
+        if (input.mouse_clicked[0] && mouse_in_panel_y && mouse_in_x &&
+            !hovered_keyframe_ && !on_playhead_handle && document_) {
+            if (const auto* sequence = controller_.plySequence(); sequence && !sequence->frames.empty()) {
+                if (auto* strip = document_->GetElementById("sequence-strip")) {
+                    const auto offset = strip->GetAbsoluteOffset(Rml::BoxArea::Border);
+                    const auto size = strip->GetBox().GetSize(Rml::BoxArea::Border);
+                    const float end = timeToX(sequence->duration(), pos.x, width);
+                    if (my >= cached_panel_y_ + offset.y && my <= cached_panel_y_ + offset.y + size.y &&
+                        mx >= timeToX(0.0f, pos.x, width) && mx <= end) {
+                        selectReveal(false);
+                        ply_sequence_selected_ = true;
+                        selected_keyframes_.clear();
+                        controller_.deselectKeyframe();
+                        return;
+                    }
+                }
+            }
+        }
+
         const float clip_duration = timeline.clipDuration();
         const float max_pan = sequencer_ui::maxPanOffset(timeline, zoom_level_);
         const bool scrollbar_visible = max_pan > 0.0f && clip_duration > 0.0f;
@@ -493,39 +589,37 @@ namespace lfs::vis {
                 !mouse_in_scrollbar && !dragging_scrollbar_) {
                 const float current_time = input.time;
 
-                if (last_clicked_keyframe_ == i &&
-                    (current_time - last_click_time_) < DOUBLE_CLICK_TIME) {
-                    editing_keyframe_time_ = true;
-                    editing_keyframe_index_ = i;
-                    time_edit_buffer_ = fmt::format("{:.2f}", keyframes[i].time);
-                    last_clicked_keyframe_ = std::nullopt;
-                } else {
-                    last_click_time_ = current_time;
-                    last_clicked_keyframe_ = i;
-
-                    if (input.key_shift && controller_.hasSelection()) {
-                        const size_t first_sel = *controller_.selectedKeyframe();
-                        const size_t lo = std::min(first_sel, i);
-                        const size_t hi = std::max(first_sel, i);
-                        selected_keyframes_.clear();
-                        for (size_t j = lo; j <= hi; ++j) {
-                            if (!keyframes[j].is_loop_point)
-                                addSelectedKeyframe(selected_keyframes_, keyframes[j].id);
-                        }
-                    } else if (input.key_ctrl) {
-                        const auto id = keyframes[i].id;
-                        if (hasSelectedKeyframe(selected_keyframes_, id))
-                            removeSelectedKeyframe(selected_keyframes_, id);
-                        else
-                            addSelectedKeyframe(selected_keyframes_, id);
-                    } else {
-                        selected_keyframes_.clear();
-                        lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
-                        dragging_keyframe_ = true;
-                        dragged_keyframe_changed_ = false;
-                        dragged_keyframe_id_ = keyframes[i].id;
-                        drag_start_mouse_x_ = mx;
+                if (input.key_shift && controller_.hasSelection()) {
+                    const size_t first_sel = *controller_.selectedKeyframe();
+                    const size_t lo = std::min(first_sel, i);
+                    const size_t hi = std::max(first_sel, i);
+                    selected_keyframes_.clear();
+                    for (size_t j = lo; j <= hi; ++j) {
+                        if (!keyframes[j].is_loop_point)
+                            addSelectedKeyframe(selected_keyframes_, keyframes[j].id);
                     }
+                    last_clicked_keyframe_id_ = std::nullopt;
+                } else if (input.key_ctrl) {
+                    const auto id = keyframes[i].id;
+                    if (hasSelectedKeyframe(selected_keyframes_, id))
+                        removeSelectedKeyframe(selected_keyframes_, id);
+                    else
+                        addSelectedKeyframe(selected_keyframes_, id);
+                    last_clicked_keyframe_id_ = std::nullopt;
+                } else {
+                    keyframe_double_click_pending_ = last_clicked_keyframe_id_ == keyframes[i].id &&
+                                                     current_time >= last_click_time_ &&
+                                                     (current_time - last_click_time_) < DOUBLE_CLICK_TIME;
+                    keyframe_press_time_ = current_time;
+                    last_clicked_keyframe_id_ = std::nullopt;
+                    selected_keyframes_.clear();
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
+                    dragging_keyframe_ = true;
+                    keyframe_drag_started_ = false;
+                    dragged_keyframe_changed_ = false;
+                    dragged_keyframe_id_ = keyframes[i].id;
+                    drag_start_mouse_x_ = mx;
+                    drag_grab_offset_x_ = mx - timeToX(keyframes[i].time, pos.x, width);
                 }
             }
         }
@@ -553,23 +647,48 @@ namespace lfs::vis {
 
         if (dragging_keyframe_) {
             if (input.mouse_down[0]) {
-                float new_time = xToTime(mx, pos.x, width);
-                new_time = std::max(new_time, MIN_KEYFRAME_SPACING);
-                const bool effective_snap = ui_state_.snap_to_grid != (input.key_ctrl || input.key_super);
-                if (effective_snap)
-                    new_time = snapTime(new_time);
-                if (controller_.previewKeyframeTimeById(dragged_keyframe_id_, new_time))
-                    dragged_keyframe_changed_ = true;
+                const float delta_x = mx - drag_start_mouse_x_;
+                if (std::abs(delta_x) >= DRAG_THRESHOLD_PX * s) {
+                    keyframe_drag_started_ = true;
+                    keyframe_double_click_pending_ = false;
+                    last_clicked_keyframe_id_ = std::nullopt;
+                }
+                if (keyframe_drag_started_) {
+                    // Preserve where the diamond was grabbed instead of jumping
+                    // its center to the pointer on the initial click.
+                    float new_time = xToTime(mx - drag_grab_offset_x_, pos.x, width);
+                    new_time = std::max(new_time, MIN_KEYFRAME_SPACING);
+                    const bool effective_snap = ui_state_.snap_to_grid != (input.key_ctrl || input.key_super);
+                    if (effective_snap)
+                        new_time = snapTime(new_time);
+                    if (controller_.previewKeyframeTimeById(dragged_keyframe_id_, new_time))
+                        dragged_keyframe_changed_ = true;
+                }
             } else {
                 if (dragged_keyframe_changed_)
                     controller_.commitKeyframeTimeById(dragged_keyframe_id_);
 
-                if (!dragged_keyframe_changed_ && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
+                const float press_duration = input.time - keyframe_press_time_;
+                const bool short_click = press_duration >= 0.0f && press_duration < DOUBLE_CLICK_TIME;
+                if (!keyframe_drag_started_ && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX * s) {
                     if (const auto index = controller_.timeline().findKeyframeIndex(dragged_keyframe_id_); index.has_value()) {
-                        lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
+                        if (keyframe_double_click_pending_ && short_click) {
+                            editing_keyframe_time_ = true;
+                            editing_keyframe_index_ = *index;
+                            time_edit_buffer_ = fmt::format("{:.2f}", controller_.timeline().getKeyframe(*index)->time);
+                            last_clicked_keyframe_id_ = std::nullopt;
+                        } else {
+                            lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
+                            if (short_click) {
+                                last_clicked_keyframe_id_ = dragged_keyframe_id_;
+                                last_click_time_ = keyframe_press_time_;
+                            }
+                        }
                     }
                 }
                 dragging_keyframe_ = false;
+                keyframe_drag_started_ = false;
+                keyframe_double_click_pending_ = false;
                 const bool emit_keyframe_change = dragged_keyframe_changed_;
                 dragged_keyframe_changed_ = false;
                 dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
@@ -585,13 +704,6 @@ namespace lfs::vis {
                 to_delete.assign(selected_keyframes_.begin(), selected_keyframes_.end());
             else if (auto selected_id = controller_.selectedKeyframeId(); selected_id.has_value())
                 to_delete.push_back(*selected_id);
-
-            for (const auto& keyframe : keyframes) {
-                if (!keyframe.is_loop_point) {
-                    std::erase(to_delete, keyframe.id);
-                    break;
-                }
-            }
 
             op::TransactionGuard transaction("Delete Keyframes");
             bool removed_any = false;
@@ -620,8 +732,10 @@ namespace lfs::vis {
     void RmlSequencerPanel::handleEasingStripeInteraction(const float timeline_x, const float timeline_width,
                                                           const PanelInputState& input) {
         const float dp = cached_dp_ratio_;
-        const float stripe_y = cached_panel_y_ + cached_height_;
-        const float stripe_h = EASING_STRIPE_HEIGHT * dp;
+        if (!el_easing_stripe_)
+            return;
+        const float stripe_y = cached_panel_y_ + el_easing_stripe_->GetAbsoluteOffset(Rml::BoxArea::Border).y;
+        const float stripe_h = el_easing_stripe_->GetOffsetHeight();
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
 
@@ -629,6 +743,7 @@ namespace lfs::vis {
             return;
 
         if (mx < timeline_x || mx > timeline_x + timeline_width ||
+            my < cached_panel_y_ || my > cached_panel_y_ + cached_total_height_ ||
             my < stripe_y || my > stripe_y + stripe_h) {
             return;
         }

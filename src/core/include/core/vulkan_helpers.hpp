@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <ranges>
 #include <string>
@@ -86,12 +87,18 @@ namespace lfs::core {
     inline void enable_vulkan_device_portability(
         VkPhysicalDevice device, std::vector<const char*>& extensions);
 
+    // Another API that must own the Vulkan objects (such as a headset runtime)
+    // may create them from the finished create info; empty calls Vulkan directly.
+    using VulkanInstanceCreator = std::function<VkResult(const VkInstanceCreateInfo&, VkInstance*)>;
+    using VulkanDeviceCreator = std::function<VkResult(VkPhysicalDevice, const VkDeviceCreateInfo&, VkDevice*)>;
+
     inline VkResult create_vulkan_device(VkPhysicalDevice physical_device,
                                          const std::vector<VkDeviceQueueCreateInfo>& queues,
                                          const std::vector<const char*>& extensions,
                                          const void* feature_chain,
                                          const VkPhysicalDeviceFeatures* features,
-                                         VkDevice* device) {
+                                         VkDevice* device,
+                                         const VulkanDeviceCreator& create = {}) {
         std::vector<const char*> enabled_extensions = extensions;
         enable_vulkan_device_portability(physical_device, enabled_extensions);
         VkDeviceCreateInfo info{};
@@ -102,7 +109,7 @@ namespace lfs::core {
         info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
         info.ppEnabledExtensionNames = enabled_extensions.data();
         info.pEnabledFeatures = features;
-        return vkCreateDevice(physical_device, &info, nullptr, device);
+        return create ? create(physical_device, info, device) : vkCreateDevice(physical_device, &info, nullptr, device);
     }
 
     // The screened SH3 export assignment multiplies 16x16x16 FP16 tiles into an FP32
@@ -254,7 +261,8 @@ namespace lfs::core {
                                            const std::vector<const char*>& layers,
                                            const void* next,
                                            VkInstanceCreateFlags flags,
-                                           VkInstance* instance) {
+                                           VkInstance* instance,
+                                           const VulkanInstanceCreator& create = {}) {
         std::vector<const char*> enabled_extensions = extensions;
         if (vulkan_instance_extension_available(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) &&
             std::ranges::find_if(enabled_extensions, [](const char* extension) {
@@ -292,6 +300,6 @@ namespace lfs::core {
         info.ppEnabledLayerNames = layers.data();
         info.enabledExtensionCount = static_cast<uint32_t>(enabled_extensions.size());
         info.ppEnabledExtensionNames = enabled_extensions.data();
-        return vkCreateInstance(&info, nullptr, instance);
+        return create ? create(info, instance) : vkCreateInstance(&info, nullptr, instance);
     }
 } // namespace lfs::core

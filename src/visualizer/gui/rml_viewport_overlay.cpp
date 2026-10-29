@@ -52,7 +52,8 @@ namespace lfs::vis::gui {
             if (!element)
                 return false;
             for (auto* node = element; node; node = node->GetParentNode()) {
-                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint")
+                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint" ||
+                    node->GetId() == "gamepad-navigation-indicator")
                     return false;
             }
             return element->GetTagName() != "body" &&
@@ -544,6 +545,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.selection_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_tool.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.align_state_generation.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.scale_distance_state_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
@@ -1517,12 +1519,63 @@ namespace lfs::vis::gui {
         markRenderNeeded(RenderReason::ThemePresentation);
     }
 
+    void RmlViewportOverlay::syncGamepadIndicator() {
+        const auto* controller = InputController::instance();
+        const bool enabled = controller && controller->gamepadNavigationSettings().enabled;
+        if (!enabled && !gamepad_indicator_visible_)
+            return;
+        auto* element = document_ ? document_->GetElementById("gamepad-navigation-indicator") : nullptr;
+        if (!element)
+            return;
+        gamepad_indicator_visible_ = enabled;
+        if (element->IsClassSet("hidden") == enabled) {
+            element->SetClass("hidden", !enabled);
+            markRenderNeeded(RenderReason::DocumentHook);
+        }
+        if (!enabled)
+            return;
+        const std::string_view status = controller->gamepadNavigationStatus();
+        const bool ready = status == "ready" || status == "moving";
+        const auto set_class = [&](Rml::Element* target, const char* name, bool value) {
+            if (target && target->IsClassSet(name) != value) {
+                target->SetClass(name, value);
+                markRenderNeeded(RenderReason::DocumentHook);
+            }
+        };
+        const auto set_text = [&](const char* id, const std::string& text) {
+            if (auto* target = document_->GetElementById(id)) {
+                const auto encoded = Rml::StringUtilities::EncodeRml(text);
+                if (target->GetInnerRML() != encoded) {
+                    target->SetInnerRML(encoded);
+                    markRenderNeeded(RenderReason::DocumentHook);
+                }
+            }
+        };
+        set_text("gamepad-indicator-label", LOC("preferences.input_gamepad"));
+        set_class(element, "is-ready", ready);
+        set_class(element, "needs-action", !ready && status != "suspended");
+        const auto mode_key = controller->cameraNavigationMode() == InputController::CameraNavigationMode::Walk
+                                  ? std::string("collision.walk")
+                                  : std::string("preferences.navigation_") + InputController::cameraNavigationModeName(controller->cameraNavigationMode());
+        set_text("gamepad-indicator-mode", LOC(mode_key));
+        // Split comparison panels share their view's camera; the gamepad drives a
+        // whole 3D view (the one last clicked), so there is no panel to name.
+        set_class(document_->GetElementById("gamepad-indicator-panel"), "hidden", true);
+        set_class(document_->GetElementById("gamepad-indicator-status"), "hidden", ready);
+        if (!ready) {
+            const auto key = "gamepad.indicator." + std::string(status);
+            set_text("gamepad-indicator-status", LOC(key));
+        }
+    }
+
     void RmlViewportOverlay::renderCached() {
         if (!rml_context_ || !document_)
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
         syncNodePreviewBanner();
+
+        syncGamepadIndicator();
 
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
@@ -1581,6 +1634,8 @@ namespace lfs::vis::gui {
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
         syncNodePreviewBanner();
+
+        syncGamepadIndicator();
 
         if (!doc_registered_) {
             lfs::python::register_rml_document("viewport_overlay", document_);

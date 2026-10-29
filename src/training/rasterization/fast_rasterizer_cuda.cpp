@@ -1119,6 +1119,22 @@ namespace lfs::training {
         view.primitive_work_indices = frame.forward_ctx.primitive_work_indices;
         view.sorted_primitive_indices =
             static_cast<const unsigned*>(frame.forward_ctx.sorted_primitive_indices);
+        view.visible_sort_scratch_size = frame.forward_ctx.visible_sort_scratch_size;
+        view.tile_sort_key_bytes = frame.forward_ctx.tile_sort_key_bytes;
+        view.contributor_masks = frame.forward_ctx.contributor_masks;
+        view.contributor_positions = frame.forward_ctx.contributor_positions;
+        view.primitive_touched = frame.forward_ctx.primitive_touched;
+        // forward_capture_view throws only outside these bounds; the scalar snapshot stays valid without it.
+        const auto tiles = [&] {
+            return ((static_cast<size_t>(frame.width) + 15) / 16) * ((static_cast<size_t>(frame.height) + 15) / 16);
+        };
+        if (frame.forward_ctx.success && frame.forward_ctx.per_tile_buffers != nullptr &&
+            frame.width > 0 && frame.height > 0 && tiles() <= static_cast<size_t>(std::numeric_limits<int>::max())) {
+            const auto capture =
+                fast_lfs::rasterization::forward_capture_view(frame.forward_ctx, frame.width, frame.height);
+            view.tile_ranges = capture.tile_ranges;
+            view.last_contributors = capture.last_contributors;
+        }
         return view;
     }
 

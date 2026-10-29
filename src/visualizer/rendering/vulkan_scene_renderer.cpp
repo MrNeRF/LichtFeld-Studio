@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "point_cloud_vulkan_renderer.hpp"
+#include "scene_custom_effects.hpp"
 #include "scene_training_interop.hpp"
 #include "vksplat_viewport_renderer.hpp"
 #include "vulkan_scene_renderer_factory.hpp"
@@ -24,15 +25,69 @@ namespace lfs::vis {
             bool waitForArenaHandoff(std::chrono::milliseconds timeout) override { return renderer_.waitForArenaHandoff(timeout); }
             void setLiveSubmitCallback(std::function<void(uint64_t)> callback) override { renderer_.setLiveSubmitCallback(std::move(callback)); }
         };
+        class VulkanCustomEffects final : public SceneCustomEffects {
+            VulkanContext& context_;
+            VksplatViewportRenderer& renderer_;
+
+            static Error failure(std::string message) {
+                return make_error(ErrorInit{.code = ErrorCode::Unavailable,
+                                            .domain = ErrorDomain::Rendering,
+                                            .user_message = std::move(message),
+                                            .detection = LFS_SOURCE_SITE_CURRENT()});
+            }
+            static DrawPlan drawPlan(VksplatViewportRenderer& renderer, const VksplatViewportRenderer::PreparedDraw& prepared) {
+                DrawPlan plan{.host = std::string(prepared.hosts.host)};
+                // The first panel can finish warmup before the second panel submits.
+                if (prepared.warmup) {
+                    auto inputs = prepared.inputs;
+                    inputs.survivors = true;
+                    plan.warm_host = std::string(renderer.hostsFor(inputs).host);
+                }
+                return plan;
+            }
+
+        public:
+            VulkanCustomEffects(VulkanContext& context, VksplatViewportRenderer& renderer) : context_(context), renderer_(renderer) {
+                renderer_.prepare_custom = [this](const VksplatViewportRenderer::PreparedDraw& prepared,
+                                                  const rendering::ViewportRenderRequest& request) -> Status {
+                    return select_programs ? select_programs(prepared.hosts.host, request) : Status{};
+                };
+            }
+            std::uint64_t deviceGeneration() const override { return renderer_.deviceGeneration(); }
+            lfs::Result<void> initializePrograms() override {
+                if (auto initialized = renderer_.initializePrograms(context_); !initialized)
+                    return lfs::Result<void>::failure(failure(std::move(initialized.error())));
+                return {};
+            }
+            lfs::Result<DrawPlan> plan(const core::SplatData& model, const rendering::ViewportRenderRequest& request,
+                                       RenderTargetId target, bool synchronize, bool deterministic) override {
+                auto prepared = renderer_.prepare(context_, model, request, target, synchronize, false, deterministic);
+                if (!prepared)
+                    return failure(std::move(prepared.error()));
+                return drawPlan(renderer_, *prepared);
+            }
+            std::string planHost(const rendering::ViewportRenderRequest& request, RenderTargetId target, bool synchronize,
+                                 bool capture, bool deterministic) override {
+                return std::string(renderer_.prepareDecision(request, target, synchronize, capture, deterministic).hosts.host);
+            }
+            lfs::Result<bool> preparePrograms(const std::shared_ptr<const shaders::ShaderPrograms>& programs, rendering::ProgramSetHandle& handle,
+                                              std::function<void()> finished, bool live) override {
+                return renderer_.preparePrograms(programs, handle, std::move(finished), live);
+            }
+            void usePrograms(const rendering::ProgramSetHandle& handle) override { renderer_.usePrograms(handle); }
+        };
         class VulkanSceneRenderer final : public SceneRenderer {
             VulkanContext& context_;
             VksplatViewportRenderer renderer_;
             VulkanTrainingInterop training_;
+            VulkanCustomEffects custom_effects_;
 
         public:
-            explicit VulkanSceneRenderer(VulkanContext& context) : context_(context), training_(context, renderer_) {}
+            explicit VulkanSceneRenderer(VulkanContext& context) : context_(context), training_(context, renderer_), custom_effects_(context, renderer_) {}
+            VksplatViewportRenderer& vksplat() noexcept { return renderer_; }
             void invalidateStochasticHistory(DirtyMask flags) override { renderer_.invalidateStochasticHistory(flags); }
             SceneTrainingInterop* trainingInterop() override { return &training_; }
+            SceneCustomEffects* customEffects() override { return &custom_effects_; }
             std::expected<void, std::string> prepareDevice() override { return renderer_.prepareDevice(context_); }
             std::expected<RenderResult, std::string> render(const core::SplatData& model, const rendering::ViewportRenderRequest& request,
                                                             bool upload, RenderTargetId target, bool synchronize, bool deterministic) override {
@@ -100,4 +155,8 @@ namespace lfs::vis {
     } // namespace
     std::unique_ptr<SceneRenderer> createVulkanSceneRenderer(VulkanContext& context) { return std::make_unique<VulkanSceneRenderer>(context); }
     std::unique_ptr<PointSceneRenderer> createVulkanPointSceneRenderer(VulkanContext& context) { return std::make_unique<VulkanPointSceneRenderer>(context); }
+    VksplatViewportRenderer* vksplatRendererOf(SceneRenderer& renderer) noexcept {
+        auto* vulkan = dynamic_cast<VulkanSceneRenderer*>(&renderer);
+        return vulkan ? &vulkan->vksplat() : nullptr;
+    }
 } // namespace lfs::vis

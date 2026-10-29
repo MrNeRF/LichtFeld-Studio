@@ -112,6 +112,95 @@ class ShaderHeaderTargetTests(unittest.TestCase):
         self.assertFalse(self.outputs[0].exists())
         self.assertFalse((self.build / "consumer-ran").exists())
 
+    def configure_vulkan_validation(self, enabled, rejected_suffix=""):
+        source = self.root / f"vulkan-{enabled}-{rejected_suffix}"
+        source.mkdir()
+        build = source / "build"
+        shader = source / "slang/test.slang"
+        shader.parent.mkdir()
+        shader.write_text("fixture", encoding="utf-8")
+        self.calls.write_text("", encoding="utf-8")
+        (self.root / "fake_shader.py").write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "if '-o' in sys.argv:\n"
+            "    output = Path(sys.argv[sys.argv.index('-o') + 1])\n"
+            "    output.write_text('compiled', encoding='utf-8')\n"
+            "else:\n"
+            "    output = Path(sys.argv[1])\n"
+            "    assert output.read_text(encoding='utf-8') == 'compiled'\n"
+            f"    with Path({str(self.calls)!r}).open('a', encoding='utf-8') as calls:\n"
+            "        calls.write(output.name + '\\n')\n"
+            f"    if {bool(rejected_suffix)!r} and output.name.endswith({rejected_suffix!r}):\n"
+            "        raise SystemExit(42)\n",
+            encoding="utf-8",
+        )
+        compiler = self.root / ("fake shader.cmd" if os.name == "nt" else "fake shader")
+        cmake_source = (ROOT / "src/rendering/rasterizer/vulkan/CMakeLists.txt").read_text(encoding="utf-8")
+        start = cmake_source.index("function(lfs_add_shader_ir)")
+        end = cmake_source.index("function(_vulkan_add_glsl_shader ", start)
+        (source / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.20)\n"
+            "project(VulkanValidationFixture LANGUAGES NONE)\n"
+            f'set(SLANGC "{compiler.as_posix()}")\n'
+            f'set(_VULKAN_SPIRV_VAL "{compiler.as_posix() if enabled else ""}")\n'
+            f'set(_VULKAN_SHADER_SRC "{source.as_posix()}")\n'
+            'set(_SHARED_SLANG_SRC "${_VULKAN_SHADER_SRC}/shared")\n'
+            f'set(_VULKAN_SLANG_ALL "{shader.as_posix()}")\n'
+            'set(_VULKAN_GENERATED_OUT "${CMAKE_BINARY_DIR}/generated")\n'
+            'set(_lfs_user_shader_src "${_VULKAN_SHADER_SRC}/slang")\n'
+            'set(_lfs_user_shader_dir "${CMAKE_BINARY_DIR}/user")\n'
+            'set(_lfs_user_shader_reflection "${CMAKE_BINARY_DIR}/reflection")\n'
+            'set(_lfs_user_shader_package fixture_ir)\n'
+            'file(MAKE_DIRECTORY "${_VULKAN_GENERATED_OUT}")\n'
+            + cmake_source[start:end] + "\n"
+            "_vulkan_add_slang_shader(projection_forward_survivors test.slang LFS_PROJECTION_SURVIVORS=1)\n"
+            "_vulkan_add_slang_shader(projection_forward_3dgut test.slang LFS_3DGUT_PROJECTION=1)\n"
+            "_vulkan_add_slang_shader(cull_splats test.slang)\n"
+            "_vulkan_add_slang_shader(rasterize_forward_3dgut test.slang LFS_3DGUT_RASTERIZE=1)\n"
+            "get_property(rows GLOBAL PROPERTY LFS_SHADER_VARIANTS)\n"
+            'foreach(expected "projection_forward_survivors;Host;Survivors" '
+            '"projection_forward_3dgut;Host;Gut" "cull_splats;Spirv;Survivors" '
+            '"rasterize_forward_3dgut;Spirv;Gut")\n'
+            '  list(GET expected 0 name)\n'
+            '  list(GET expected 1 kind)\n'
+            '  list(GET expected 2 chain)\n'
+            '  if(NOT rows MATCHES "${name}[^;]*CustomKind::${kind}, CustomChain::${chain}")\n'
+            '    message(FATAL_ERROR "Missing chain for ${name}")\n'
+            '  endif()\n'
+            "endforeach()\n"
+            "add_custom_target(shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})\n",
+            encoding="utf-8",
+        )
+        configured = self.command("-S", str(source), "-B", str(build), "-G", "Ninja",
+                                  f"-DCMAKE_MAKE_PROGRAM={Path(NINJA).as_posix()}")
+        self.assertEqual(0, configured.returncode, configured.stdout + configured.stderr)
+        return build
+
+    def test_vulkan_reveal_variants_run_optional_validation_after_compilation(self):
+        expected = {f"{name}{suffix}.spv"
+                    for name in ("projection_forward_survivors", "projection_forward_3dgut")
+                    for suffix in ("", "_banded", "_reveal", "_reveal_banded")}
+        expected.update({"cull_splats.spv", "cull_splats_reveal.spv", "cull_splats_custom.spv",
+                         "rasterize_forward_3dgut.spv", "rasterize_forward_3dgut_banded.spv",
+                         "rasterize_forward_3dgut_reveal.spv", "rasterize_forward_3dgut_reveal_banded.spv",
+                         "rasterize_forward_3dgut_custom.spv", "rasterize_forward_3dgut_custom_banded.spv"})
+        for enabled in (False, True):
+            with self.subTest(validation=enabled):
+                build = self.configure_vulkan_validation(enabled)
+                result = self.command("--build", str(build), "--target", "shaders", "--parallel", "1")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(expected, {path.name for path in (build / "generated").glob("*.spv")})
+                calls = self.calls.read_text().splitlines()
+                self.assertEqual(sorted(expected) if enabled else [], sorted(calls))
+
+    def test_vulkan_reveal_validation_failure_fails_shader_target(self):
+        for suffix in ("_reveal.spv", "_reveal_banded.spv", "_custom.spv", "_custom_banded.spv"):
+            with self.subTest(suffix=suffix):
+                build = self.configure_vulkan_validation(True, suffix)
+                result = self.command("--build", str(build), "--target", "shaders", "--parallel", "1")
+                self.assertNotEqual(0, result.returncode)
+                self.assertTrue(any(name.endswith(suffix) for name in self.calls.read_text().splitlines()))
+
 
 @unittest.skipUnless(CMAKE and NINJA, "CMake and Ninja are required for the codegen fixture")
 class GpuProgramHeaderTargetTests(unittest.TestCase):

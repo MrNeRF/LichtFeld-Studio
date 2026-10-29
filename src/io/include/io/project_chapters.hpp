@@ -495,7 +495,7 @@ namespace lfs::io::project {
             invalidate_parsed_nodes();
             return dom_;
         }
-        [[nodiscard]] std::vector<std::byte> to_bytes() const;
+        [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
         training_model_uuid() const;
@@ -505,6 +505,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::optional<SceneNodeRecord>>
         find(const lfs::core::Uuid& uuid) const;
         [[nodiscard]] lfs::Result<void> upsert_node(const SceneNodeRecord& value);
+        // Replaces every node in one pass; equivalent to upserting each record in order into an empty chapter.
+        [[nodiscard]] lfs::Result<void> replace_nodes(std::span<const SceneNodeRecord> values);
+        // Stores the same records as replace_nodes. When the node order is unchanged and few
+        // records differ, only their elements are rewritten; the others keep their stored JSON.
+        [[nodiscard]] lfs::Result<void> update_nodes(std::span<const SceneNodeRecord> values);
         [[nodiscard]] lfs::Result<bool> remove_node(const lfs::core::Uuid& uuid);
         [[nodiscard]] lfs::Result<void> validate_hierarchy() const;
         [[nodiscard]] lfs::Result<void>
@@ -608,6 +613,8 @@ namespace lfs::io::project {
         [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<ParameterManagerSnapshot> snapshot() const;
+        [[nodiscard]] lfs::Result<bool> checkpoint_retention(
+            std::string_view strategy, bool fallback = false) const;
         [[nodiscard]] lfs::Result<void>
         set_snapshot(const ParameterManagerSnapshot& value);
         [[nodiscard]] lfs::Result<std::optional<EmbeddedDatasetManifest>>

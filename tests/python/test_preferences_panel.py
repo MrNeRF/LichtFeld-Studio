@@ -92,6 +92,8 @@ def preferences_panel_module(monkeypatch):
         navigation_speed=10.0,
         trackpad={"device": "mouse", "swipe_pans": False, "swipe_speed": 50.0, "zoom_speed": 50.0},
         trackpad_persist_calls=[],
+        vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5},
+        vr_writes=[],
         project_location="",
         embed_dataset_by_default=False,
         project_manager_preferences={
@@ -195,6 +197,11 @@ def preferences_panel_module(monkeypatch):
         set_clipboard_text=lambda text: setattr(state, "clipboard_text", text),
         set_mcp_preferences=set_mcp_preferences,
         get_mcp_status=lambda: dict(state.mcp_status),
+        get_vr_preferences=lambda: dict(state.vr_preferences),
+        set_vr_preferences=lambda *values, persist=True: (
+            state.vr_preferences.update(zip(state.vr_preferences, values)),
+            state.vr_writes.append(persist)),
+        get_vr_state=lambda: {"available": False, "active": False, "status": "VR support is off."},
         get_project_location=lambda: state.project_location or "/home/tester/.lichtfeld/projects",
         get_project_location_preference=lambda: state.project_location,
         get_default_project_location=lambda: "/home/tester/.lichtfeld/projects",
@@ -291,12 +298,19 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR", "EDITOR")
                 )
             },
         ),
         Action=SimpleNamespace(
             EXIT_WALK=SimpleNamespace(name="EXIT_WALK", value=999),
+            VR_SNAP_TURN_LEFT=SimpleNamespace(name="VR_SNAP_TURN_LEFT", value=100),
+            VR_SNAP_TURN_RIGHT=SimpleNamespace(name="VR_SNAP_TURN_RIGHT", value=101),
+            VR_RECENTER=SimpleNamespace(name="VR_RECENTER", value=102),
+            EXIT_VR=SimpleNamespace(name="EXIT_VR", value=103),
+            EDITOR_TOGGLE_KIND=SimpleNamespace(name="EDITOR_TOGGLE_KIND", value=111),
+            EDITOR_RUN=SimpleNamespace(name="EDITOR_RUN", value=112),
+            EDITOR_STOP=SimpleNamespace(name="EDITOR_STOP", value=113),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),
@@ -381,6 +395,7 @@ def preferences_panel_module(monkeypatch):
             TOOL_SCALE=SimpleNamespace(name="TOOL_SCALE", value=59),
             TOOL_MIRROR=SimpleNamespace(name="TOOL_MIRROR", value=60),
             TOOL_ALIGN=SimpleNamespace(name="TOOL_ALIGN", value=61),
+            TOOL_SCALE_DISTANCE=SimpleNamespace(name="TOOL_SCALE_DISTANCE", value=94),
             PIE_MENU=SimpleNamespace(name="PIE_MENU", value=62),
             TOGGLE_UI=SimpleNamespace(name="TOGGLE_UI", value=63),
             TOGGLE_FULLSCREEN=SimpleNamespace(name="TOGGLE_FULLSCREEN", value=64),
@@ -742,6 +757,52 @@ def test_trackpad_preferences_round_trip_and_reset_with_input_section(preference
     panel._reset_section()
 
     assert state.trackpad == {"device": "mouse", "swipe_pans": False, "swipe_speed": 50.0, "zoom_speed": 50.0}
+
+
+@pytest.mark.parametrize("safe_mode", [False, True])
+@pytest.mark.parametrize("scope", ["input", "all"])
+def test_gamepad_reset_failure_does_not_skip_navigation_defaults(preferences_panel_module, safe_mode, scope):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = safe_mode
+    panel._refresh_selection = lambda: None
+    state.zoom_speed = 42
+    state.navigation_speed = 73
+    state.camera_browse_repeat = False
+    state.camera_browse_repeat_rate = 17
+    state.new_project_axis = "data_z"
+    state.new_project_align_grid = False
+    state.navigation_up_axis = "data_z"
+    camera_changes, resets, messages = [], [], []
+    module.lf.set_camera_navigation_mode = lambda mode: camera_changes.append(("mode", mode))
+    module.lf.set_camera_view_snap_enabled = lambda enabled: camera_changes.append(("snap", enabled))
+    module.lf.ui.set_remember_camera_navigation = lambda enabled: camera_changes.append(("remember_mode", enabled))
+    module.lf.ui.set_remember_camera_view_snap = lambda enabled: camera_changes.append(("remember_snap", enabled))
+    panel._gamepad_test.reset = lambda all_profiles=False: "profile is read-only or unsupported"
+
+    if scope == "input":
+        assert panel._reset_section("input") == "profile is read-only or unsupported"
+    else:
+        reset = panel._reset_section
+        def reset_section(section):
+            resets.append(section)
+            return reset(section) if section == "input" else None
+        panel._reset_section = reset_section
+        module.lf.ui.reset_window_state = lambda: resets.append("window")
+        module.lf.ui.message_dialog = lambda *args: messages.append(args)
+        module.lf.ui.confirm_dialog = lambda _title, _message, buttons, callback: callback(buttons[1])
+        panel._on_reset_all_settings(None, None, None)
+        assert resets == ["general", "hardware", "appearance", "viewport", "input", "interface", "marketplace", "mcp", "window"]
+        assert "profile is read-only or unsupported" in messages[0][1]
+
+    assert state.zoom_speed == 11
+    assert state.navigation_speed == 10
+    assert state.camera_browse_repeat is True
+    assert state.camera_browse_repeat_rate == 5
+    assert state.new_project_axis == "legacy_y"
+    assert state.new_project_align_grid is True
+    assert state.navigation_up_axis == "data_z"
+    assert camera_changes == [("remember_mode", False), ("remember_snap", False), ("mode", "orbit"), ("snap", False)]
 
 
 def test_project_location_is_saved_and_can_return_to_default(
@@ -1344,6 +1405,7 @@ def test_preferences_keymap_rows_are_created_when_expanded(preferences_panel_mod
         update_record_list=lambda name, items: records.__setitem__(name, list(items)),
     )
     panel._section = "input"
+    panel._input_page = "shortcuts"
 
     assert "key_bindings" in panel._expanded_sections
     assert panel._keymap._rows_built is False
@@ -1450,6 +1512,234 @@ def test_optional_provider_names_come_from_catalog_and_do_not_require_translatio
     assert all(item[0] != "amd-fsr3" for item in panel._scene_upscaler_catalog)
 
 
+def test_hiding_mounted_preferences_releases_gamepad_discovery(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    calls = []
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel.on_visibility_changed(True)
+    assert calls == []
+    panel.on_visibility_changed(False)
+    assert calls == ["release"]
+
+
+def test_input_pages_cancel_capture_and_release_diagnostic_device(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = "gamepad"
+    panel._gamepad_page = "test"
+    calls = []
+    module.lf.keymap.cancel_capture = lambda: calls.append("cancel")
+    panel._gamepad_test.deactivate = lambda: calls.append("release")
+    panel._keymap.ensure_binding_rows = lambda: calls.append("rows")
+    assert not panel._show_section_reset()
+    panel._set_input_page("invalid")
+    assert not calls
+    panel._set_input_page("shortcuts")
+    assert calls == ["cancel", "release", "rows"]
+    assert panel._show_section_reset()
+    panel._set_input_page("navigation")
+    assert calls[-2:] == ["cancel", "release"]
+    panel._set_section("general")
+    assert calls[-2:] == ["cancel", "release"]
+
+
+@pytest.mark.parametrize("page", ["navigation", "shortcuts", "gamepad"])
+def test_input_page_reset_does_not_reset_other_pages(preferences_panel_module, page):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section = "input"
+    panel._input_page = page
+    panel._refresh_selection = lambda: None
+    panel._set_zoom_speed(42)
+    panel._set_navigation_speed(73)
+    resets = []
+    panel._keymap.reset_to_default = lambda: resets.append("shortcuts")
+    panel._gamepad_test.reset = lambda: resets.append("gamepad")
+    module.lf.ui.confirm_dialog = lambda _title, _body, buttons, callback: callback(buttons[1])
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._on_reset_current_section(None, None, None)
+    assert resets == ([] if page == "navigation" else [page])
+    assert state.zoom_speed == (11 if page == "navigation" else 42)
+    assert state.navigation_speed == (10 if page == "navigation" else 73)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("section", ["input_gamepad", "input"])
+def test_gamepad_reset_preserves_second_controller_and_discovery(preferences_panel_module, monkeypatch, enabled, section):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    owner = panel._gamepad_test
+    navigation = dict(enabled=enabled, selected=22, dead_zone=.3, look_speed=2., move_speed=3.)
+    discovery = []
+    state = dict(available=True, selected=0, devices=[
+        dict(id=11, name="Pad", mapped=True), dict(id=22, name="Pad", mapped=True)])
+
+    def active(value):
+        discovery.append(value)
+        state["available"] = value or navigation["enabled"]
+        if not state["available"]:
+            navigation["selected"] = 0
+
+    def configure(enabled, selected, dead_zone, look_speed, move_speed):
+        navigation.update(enabled=enabled, selected=selected if state["available"] else 0,
+                          dead_zone=dead_zone, look_speed=look_speed, move_speed=move_speed)
+        return True
+
+    def reset_library():
+        return configure(False, navigation["selected"], .15, 1.5, 1.)
+
+    for name, value in dict(set_gamepad_test_active=active,
+                            get_gamepad_test_state=lambda: dict(state),
+                            get_gamepad_navigation_state=lambda: dict(navigation),
+                            set_gamepad_navigation=configure,
+                            set_gamepad_profile_json=lambda _value: True,
+                            get_gamepad_default_profile_json=lambda: "{}",
+                            reset_gamepad_profiles=reset_library).items():
+        monkeypatch.setattr(module.lf.ui, name, value, raising=False)
+    owner.handle = SimpleNamespace(dirty=lambda _name: None, update_record_list=lambda *_args: None)
+    owner.activate()
+    owner.sync()
+    panel._refresh_selection = lambda: None
+    assert panel._reset_section(section) is None
+    owner.activate()
+    owner.sync()
+    assert navigation["selected"] == owner.navigation["selected"] == 22
+    assert navigation["enabled"] is False
+    assert (navigation["dead_zone"], navigation["look_speed"], navigation["move_speed"]) == (.15, 1.5, 1.)
+    assert discovery == [True]
+    panel.on_visibility_changed(False)
+    assert discovery == [True, False]
+    assert navigation["selected"] == 0
+
+
+def test_shortcut_search_keeps_matching_sections_and_typed_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    heading = dict(is_section=True, section_title="Navigazione")
+    orbit = dict(is_section=False, action_name="Orbita camera", desc_text="MMB Trascina", action_id="5", mode_id="0")
+    other = dict(is_section=True, section_title="Sequencer")
+    play = dict(is_section=False, action_name="Play/Pause", desc_text="Space", action_id="9", mode_id="0")
+    rows = [heading, orbit, other, play]
+    assert keymap._filter_rows(rows, "  ") == rows
+    assert keymap._filter_rows(rows, "NAVIGAZIONE mmb") == [heading, orbit]
+    assert keymap._filter_rows(rows, "space") == [other, play]
+    assert keymap._filter_rows(rows, "missing") == []
+    assert keymap._filter_rows(rows, "camera")[1] is orbit
+
+
+def test_input_page_labels_and_search_exist_in_all_locales():
+    root = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    keys = ["preferences." + key for key in ("input_navigation", "input_shortcuts", "input_gamepad", "input_vr", "gamepad_controls", "gamepad_diagnostics")]
+    keys += ["input_settings." + key for key in ("search_commands", "clear_search", "no_matches")]
+    for path in root.glob("*.json"):
+        values = json.loads(path.read_text(encoding="utf-8"))
+        assert all(values.get(key) for key in keys), path.name
+
+
+def test_vr_page_edits_all_preferences_and_resets_only_vr(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._refresh_selection = lambda: None
+    panel._set_input_page("vr")
+    assert panel._section == "input" and panel._input_page == "vr"
+    panel._set_vr_preference("enabled", 1)
+    panel._set_scrub_value("vr_move_speed", 3)
+    assert panel._get_scrub_value("vr_move_speed") == 3.0
+    panel._commit_scrub_value("vr_move_speed", 3)
+    assert state.vr_writes == [True, False, True]
+    assert state.vr_preferences == {"enabled": True, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 3.0}
+    panel._set_zoom_speed(42)
+    panel._reset_section("input_vr")
+    assert state.vr_preferences == module.PreferencesPanel.VR_PREFERENCE_DEFAULTS
+    assert state.zoom_speed == 42
+
+
+def test_input_group_collapses_without_changing_page_and_children_reopen_it(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    assert not panel._input_expanded
+    panel._toggle_input_group()
+    assert panel._section == "input" and panel._input_expanded
+    panel._set_input_page("gamepad")
+    panel._toggle_input_group()
+    assert not panel._input_expanded and panel._input_page == "gamepad"
+    assert panel._section == "input"
+    panel._set_section("general")
+    panel._set_input_page("gamepad")
+    assert panel._section == "input" and panel._input_expanded
+    assert panel._input_page == "gamepad"
+
+
+@pytest.mark.parametrize("section,safe,visible", [
+    ("portal", False, False), ("file_associations", False, False),
+    ("mcp", True, False), ("mcp", False, True), ("input", True, True),
+])
+def test_reset_visibility_respects_scope_and_safe_mode(preferences_panel_module, section, safe, visible):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._mcp_safe_mode = section, safe
+    confirmations = []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    assert panel._show_section_reset() == visible
+    panel._on_reset_current_section(None, None, None)
+    assert bool(confirmations) == visible
+
+
+def test_page_reset_confirmation_captures_scope_and_explains_hidden_bindings(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._section, panel._input_page, panel._mcp_safe_mode = "input", "shortcuts", True
+    confirmations, resets = [], []
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    module.lf.ui.message_dialog = lambda *_args: None
+    panel._reset_section = lambda scope: resets.append(scope)
+    panel._on_reset_current_section(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "input_settings.reset_scope" in message
+    assert "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not resets
+    panel._input_page = "gamepad"
+    callback(buttons[1])
+    assert resets == ["input_shortcuts"]
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_shortcut_table_reset_also_requires_confirmation(preferences_panel_module, confirmed):
+    module, _state = preferences_panel_module
+    keymap = module.PreferencesPanel()._keymap
+    resets, confirmations = [], []
+    keymap.reset_to_default = lambda: resets.append(True)
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    keymap._on_reset_default(None, None, None)
+    assert not resets
+    _title, message, buttons, callback = confirmations[0]
+    assert message == "input_settings.reset_scope"
+    callback(buttons[1 if confirmed else 0])
+    assert resets == ([True] if confirmed else [])
+
+
+def test_global_reset_covers_input_macro_and_documents_exclusions(preferences_panel_module):
+    module, _state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    panel._mcp_safe_mode = True
+    panel._refresh_selection = lambda: None
+    confirmations, scopes = [], []
+    panel._reset_section = lambda scope: scopes.append(scope)
+    module.lf.ui.reset_window_state = lambda: None
+    module.lf.ui.message_dialog = lambda *_args: None
+    module.lf.ui.confirm_dialog = lambda *args: confirmations.append(args)
+    panel._on_reset_all_settings(None, None, None)
+    _title, message, buttons, callback = confirmations[0]
+    assert "preferences.reset_all_scope" in message and "preferences.reset_safe_mode_note" in message
+    callback(buttons[0])
+    assert not scopes
+    callback(buttons[1])
+    assert scopes == ["general", "hardware", "appearance", "viewport", "input", "interface", "marketplace", "mcp"]
+
+
 @pytest.mark.parametrize("reset_scope", ["section", "all", "bindings"])
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_input_reset_restores_bindings_and_refreshes_rows(
@@ -1458,6 +1748,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
     module, state = preferences_panel_module
     panel = module.PreferencesPanel()
     panel._section = "input"
+    panel._input_page = "shortcuts"
     panel._refresh_selection = lambda: None
     panel._set_zoom_speed(42)
     panel._set_navigation_speed(73)
@@ -1505,7 +1796,7 @@ def test_input_reset_restores_bindings_and_refreshes_rows(
         assert panel._keymap._last_state_key == ("old bindings",)
         assert dirty == []
 
-    reset_input = confirmed and reset_scope != "bindings"
+    reset_input = confirmed and reset_scope == "all"
     assert state.zoom_speed == (11 if reset_input else 42)
     assert state.navigation_speed == (10 if reset_input else 73)
     assert panel._navigation_up_index() == ("0" if reset_input else "1")

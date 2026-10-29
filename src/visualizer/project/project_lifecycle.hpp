@@ -333,6 +333,7 @@ namespace lfs::vis::project {
         closeSaveError() const;
         void markApplicationClosePending();
         void markCloseDiscardRequested();
+        [[nodiscard]] bool isApplicationClosePending() const;
         void setSuppressTrainingAdoption(bool suppress);
         void bindTrainerSnapshotTarget(
             std::optional<std::filesystem::path> destination =
@@ -623,7 +624,16 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         openMaster(
             const std::filesystem::path& path,
-            ProjectSwitchDisposition disposition);
+            ProjectSwitchDisposition disposition,
+            std::move_only_function<lfs::Result<void>()> after_open = {});
+        lfs::Result<void> finishScratchRecovery();
+        struct PreparedOpen;
+        lfs::Result<void> commitOpen(PreparedOpen&& prepared);
+        lfs::Result<void> finishRecovered(
+            const std::filesystem::path& master, const std::filesystem::path& sidecar,
+            const std::filesystem::path& temporary, lfs::io::project::RecoverySession session);
+        bool deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry);
+        [[nodiscard]] bool collisionSwitchPending() const;
         [[nodiscard]] lfs::Result<void>
         openRecovered(
             const std::filesystem::path& master_path,
@@ -873,6 +883,7 @@ namespace lfs::vis::project {
         // payload_mutation_serial_ at each node's last SPLT capture.
         std::unordered_map<lfs::core::Uuid, std::uint64_t>
             captured_splat_serials_;
+        std::array<std::uint64_t, 2> captured_shader_token_{}, project_write_shader_token_{}, last_autosaved_shader_token_{};
         std::uint64_t
             project_write_dirty_epoch_ = 0;
         std::uint64_t

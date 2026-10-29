@@ -151,7 +151,7 @@ namespace lfs::vis {
             }
             [[nodiscard]] std::optional<
                 PreparedGuiSessionRestore>
-            takeReady();
+            takeReady(bool scene_ready = true);
             void clear() noexcept;
             [[nodiscard]] bool isCurrent(
                 GuiSessionRestoreTicket ticket) const noexcept {

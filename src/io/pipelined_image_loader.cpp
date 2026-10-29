@@ -978,6 +978,19 @@ namespace lfs::io {
         const std::shared_ptr<std::vector<uint8_t>>& data) {
         if (!data || run_spill_folder_.empty())
             return;
+        std::error_code space_error;
+        const auto space = lfs::core::native_fs::space(run_spill_folder_, space_error);
+        if (space_error || space.available < config_.min_spill_free_bytes ||
+            space.available - config_.min_spill_free_bytes < data->size()) {
+            if (!spill_floor_reported_) {
+                LOG_WARN("[PipelinedImageLoader] Run spill stopped in {} ({}); evicted images are decoded again",
+                         lfs::core::path_to_utf8(run_spill_folder_),
+                         space_error ? space_error.message()
+                                     : std::format("{:.1f} GiB free", static_cast<double>(space.available) / double(1ull << 30)));
+                spill_floor_reported_ = true;
+            }
+            return;
+        }
 
         const auto path = run_spill_folder_ /
                           ("blob_" + std::to_string(++spill_sequence_) + ".bin");

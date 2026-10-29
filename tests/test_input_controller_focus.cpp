@@ -8,9 +8,11 @@
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "input/camera_animation_cadence.hpp"
 #include "input/frame_input_buffer.hpp"
@@ -20,6 +22,7 @@
 #include "input/sdl_key_mapping.hpp"
 #include "internal/viewport.hpp"
 #include "keymap_history_helpers.hpp"
+#include "licht_test_support.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -172,7 +175,97 @@ namespace lfs::vis {
                 Tensor::zeros({size_t{2}, size_t{1}}, Device::CPU),
                 1.0f);
         }
+
+        // Two 3D views side by side, left (id 1) at x < 100 and right (id 2) at x >= 100.
+        class TwoViewTargets final : public ViewTargets {
+        public:
+            TwoViewTargets(Viewport& left, Viewport& right) : left_(left), right_(right) {}
+            ViewTarget activeView() override { return findView(active_); }
+            ViewTarget viewAt(float x, float y) override {
+                for (const ViewId id : {ViewId{1}, ViewId{2}}) {
+                    if (const auto view = findView(id); view.contains(x, y))
+                        return view;
+                }
+                return {};
+            }
+            ViewTarget findView(ViewId id) override {
+                if (id == 1)
+                    return {1, &left_, {0, 0}, {100, 200}};
+                if (id == 2)
+                    return {2, &right_, {100, 0}, {100, 200}};
+                return {};
+            }
+            ViewId viewId(const Viewport& viewport) const override {
+                return &viewport == &left_ ? 1 : &viewport == &right_ ? 2
+                                                                      : kNoView;
+            }
+            std::uint64_t viewEpoch() const override { return epoch; }
+            void activateView(ViewId id) override {
+                if (id == 1 || id == 2)
+                    active_ = id;
+            }
+            bool runViewCommand(ViewId, std::string_view) override { return false; }
+            std::uint64_t epoch = 1;
+
+        private:
+            Viewport& left_;
+            Viewport& right_;
+            ViewId active_ = 1;
+        };
     } // namespace
+
+    TEST_F(InputControllerFocusTest, WalkRejectionDoesNotEscapeNativeDispatch) {
+        SceneManager manager;
+        services().set(&manager);
+        auto& scene = manager.getScene();
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.initialize();
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::Orbit);
+        gui::RmlMenuBar bar;
+        bar.rebuildToolbarButtons();
+        EXPECT_FALSE(bar.camera_buttons_.back().enabled);
+        EXPECT_NO_THROW(bar.dispatchToolbarAction("set_camera_navigation_mode", "walk"));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_collision"));
+        const auto floor = scene.addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        scene.setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        scene.setNodeVisibility(floor, false);
+        bar.rebuildToolbarButtons();
+        EXPECT_TRUE(bar.camera_buttons_.back().enabled);
+        viewport.camera.t = {0, 20, 0};
+        EXPECT_NO_THROW(bar.dispatchToolbarAction("set_camera_navigation_mode", "walk"));
+        EXPECT_EQ(controller.walk_error, LOC("collision.walk_no_support"));
+        EXPECT_EQ(controller.cameraNavigationMode(), InputController::CameraNavigationMode::Orbit);
+        EXPECT_EQ(viewport.camera.t, glm::vec3(0, 20, 0));
+    }
+
+    TEST_F(InputControllerFocusTest, WalkIdleAndSettingsKeepThePhysicsOwnerAcrossActiveViewChanges) {
+        SceneManager manager;
+        services().set(&manager);
+        auto& scene = manager.getScene();
+        const auto floor = scene.addCollision("Floor", collision_test::box({-8, -1, -8}, {16, 1, 16}));
+        scene.setNodeTransform(floor, lfs::rendering::VISUALIZER_TO_DATA_WORLD_AXES_4);
+        Viewport primary(100, 200);
+        Viewport secondary(100, 200);
+        TwoViewTargets views{primary, secondary};
+        InputController controller(nullptr, views);
+        primary.camera.t = {-4, 1.7f, 0};
+        secondary.camera.t = {4, 1.7f, 0};
+        views.activateView(2);
+        ASSERT_TRUE(controller.setCameraNavigationMode(InputController::CameraNavigationMode::Walk));
+        const auto primary_before = primary.camera.t;
+        views.activateView(1);
+        controller.update(.016f);
+        EXPECT_EQ(primary.camera.t, primary_before);
+        EXPECT_NEAR(secondary.camera.t.x, 4, 1e-5f);
+        auto settings = controller.walk_settings;
+        settings.height = 1.9f;
+        ASSERT_NO_THROW(controller.setWalkSettings(settings));
+        EXPECT_EQ(primary.camera.t, primary_before);
+        EXPECT_NEAR(secondary.camera.t.y, 1.9f, .02f);
+        services().clear();
+    }
 
     TEST_F(InputControllerFocusTest, NavigationModeChangesRequestGuiRedraw) {
         using Mode = InputController::CameraNavigationMode;
@@ -531,6 +624,9 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, CameraViewKeysUseSceneUidsWithoutTrainerAndPreserveComparison) {
+        // core::Camera keeps its transforms on the GPU; the CPU-only CI runners have none.
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         Viewport viewport(200, 200);
         TestViewTargets controller_views{viewport};
         InputController controller{nullptr, controller_views};
@@ -1591,6 +1687,82 @@ namespace lfs::vis {
         EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-5f);
     }
 
+    TEST_F(InputControllerFocusTest, VrViewingBlocksRelativeMouseLookAndRestoresItOnExit) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
+        viewport.camera.setPivot(glm::vec3(0.0f));
+        viewport.camera.R = glm::mat3(1.0f);
+        controller.setCameraNavigationMode(InputController::CameraNavigationMode::FPV);
+
+        const auto button = static_cast<int>(input::AppMouseButton::MIDDLE);
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        ASSERT_TRUE(controller.isCameraDragging());
+        controller.setVrViewing(true);
+        EXPECT_FALSE(controller.isCameraDragging());
+        const auto rotation = viewport.camera.R;
+        const auto position = viewport.camera.t;
+        const auto pivot = viewport.camera.getPivot();
+
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        controller.handleMouseMove(40.0, 0.0);
+        EXPECT_EQ(viewport.camera.R, rotation);
+        EXPECT_EQ(viewport.camera.t, position);
+        EXPECT_EQ(viewport.camera.getPivot(), pivot);
+        EXPECT_FALSE(controller.isCameraDragging());
+
+        controller.setVrViewing(false);
+        controller.handleMouseButton(button, input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseMove(0.0, 50.0, glm::dvec2(-40.0, 0.0));
+        EXPECT_GT(glm::distance(lfs::rendering::cameraForward(viewport.camera.R),
+                                lfs::rendering::cameraForward(rotation)),
+                  0.01f);
+        EXPECT_EQ(viewport.camera.t, position);
+        controller.handleMouseButton(button, input::ACTION_RELEASE, 0.0, 50.0);
+        EXPECT_FALSE(controller.isCameraDragging());
+    }
+
+    TEST_F(InputControllerFocusTest, VrViewingTurnsKeysIntoVrCommandsAndHeldMovement) {
+        Viewport viewport(200, 200);
+        TestViewTargets controller_views{viewport};
+        InputController controller(nullptr, controller_views);
+        controller.initialize();
+        lfs::event::ScopedHandler handlers;
+        std::vector<bool> active_requests;
+        std::vector<int> turns;
+        int recenters = 0;
+        handlers.subscribe<core::events::cmd::SetVrActive>(
+            [&](const auto& event) { active_requests.push_back(event.active); });
+        handlers.subscribe<core::events::cmd::SnapTurnVr>([&](const auto& event) { turns.push_back(event.direction); });
+        handlers.subscribe<core::events::cmd::RecenterVr>([&](const auto&) { ++recenters; });
+        const auto key = [&](const int code, const int action) {
+            controller.handleKey(code, action, input::KEYMOD_NONE);
+        };
+
+        controller.setVrViewing(true);
+        key(input::KEY_LEFT, input::ACTION_PRESS);
+        key(input::KEY_RIGHT, input::ACTION_PRESS);
+        key(input::KEY_R, input::ACTION_PRESS);
+        key(input::KEY_W, input::ACTION_PRESS);
+        key(input::KEY_Q, input::ACTION_PRESS);
+        EXPECT_EQ(turns, (std::vector<int>{-1, 1}));
+        EXPECT_EQ(recenters, 1);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f, 1.0f, -1.0f));
+        key(input::KEY_W, input::ACTION_RELEASE);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f, 1.0f, 0.0f));
+        key(input::KEY_ESCAPE, input::ACTION_PRESS);
+        EXPECT_EQ(active_requests, std::vector<bool>{false});
+
+        controller.setVrViewing(false);
+        EXPECT_EQ(controller.vrMovement(), glm::vec3(0.0f));
+        key(input::KEY_R, input::ACTION_PRESS);
+        key(input::KEY_ESCAPE, input::ACTION_PRESS);
+        EXPECT_EQ(recenters, 1);
+        EXPECT_EQ(active_requests.size(), 1u);
+    }
+
     TEST_F(InputControllerFocusTest, TrackballModeAllowsPerfectTopView) {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
@@ -2599,6 +2771,7 @@ namespace lfs::vis {
         struct MenuAccelerator {
             std::string source;
             Action action = Action::NONE;
+            ToolMode mode = ToolMode::GLOBAL;
             bool save_project = false;
         };
         const auto menu_root = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/lfs_plugins";
@@ -2620,23 +2793,28 @@ namespace lfs::vis {
                          .save_project = true});
                     continue;
                 }
+                const auto identifier = [&](const std::size_t from) {
+                    auto end = from;
+                    while (end < line.size() &&
+                           (std::isalnum(static_cast<unsigned char>(line[end])) || line[end] == '_'))
+                        ++end;
+                    return std::string_view(line).substr(from, end - from);
+                };
                 auto action_start = line.find("Action.", start);
                 if (action_start == std::string::npos)
                     action_start = line.find("action.", start);
                 ASSERT_NE(action_start, std::string::npos)
                     << entry.path().filename().string() << ": " << line;
-                action_start += 7;
-                auto action_end = action_start;
-                while (action_end < line.size() &&
-                       (std::isalnum(static_cast<unsigned char>(line[action_end])) ||
-                        line[action_end] == '_'))
-                    ++action_end;
-                const auto action = actionFromName(
-                    std::string_view(line).substr(action_start, action_end - action_start));
+                const auto action = actionFromName(identifier(action_start + 7));
                 ASSERT_TRUE(action)
                     << entry.path().filename().string() << ": " << line;
+                // Mode shortcuts name their mode: keymap_shortcut(action, ToolMode.X).
+                const auto mode_start = line.find("ToolMode.", action_start);
                 menu_accelerators.push_back(
-                    {.source = entry.path().filename().string(), .action = *action});
+                    {.source = entry.path().filename().string(),
+                     .action = *action,
+                     .mode = mode_start == std::string::npos ? ToolMode::GLOBAL
+                                                             : toolModeFromName(identifier(mode_start + 9))});
             }
         }
         ASSERT_FALSE(menu_accelerators.empty());
@@ -2657,10 +2835,13 @@ namespace lfs::vis {
         handlers.subscribe<core::events::ui::ToggleVramHud>(record(Action::TOGGLE_PERFORMANCE_HUD));
         handlers.subscribe<core::events::ui::ToggleUI>(record(Action::TOGGLE_UI));
         handlers.subscribe<core::events::cmd::ProjectSave>(record(Action::NONE));
+        handlers.subscribe<core::events::cmd::SetVrActive>(record(Action::EXIT_VR));
+        handlers.subscribe<core::events::cmd::RecenterVr>(record(Action::VR_RECENTER));
 
         const auto default_profile = InputBindings::createDefaultProfile();
         for (const auto& accelerator : menu_accelerators) {
             SCOPED_TRACE(accelerator.source);
+            controller.setVrViewing(accelerator.mode == ToolMode::VR);
             if (accelerator.save_project) {
                 const auto before = dispatched[Action::NONE];
                 const int physical_key = sdlScancodeToAppKey(SDL_SCANCODE_S);
@@ -2678,7 +2859,7 @@ namespace lfs::vis {
 
             const auto binding = std::ranges::find_if(
                 default_profile.bindings, [&](const auto& candidate) {
-                    return candidate.mode == ToolMode::GLOBAL &&
+                    return candidate.mode == accelerator.mode &&
                            candidate.action == accelerator.action;
                 });
             ASSERT_NE(binding, default_profile.bindings.end())
@@ -2691,7 +2872,7 @@ namespace lfs::vis {
             const int physical_key = sdlScancodeToAppKey(scancode);
             const int logical_key = sdlShortcutKeyToAppKey(
                 scancode, SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
-            EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, logical_key,
+            EXPECT_EQ(bindings.getActionForKey(accelerator.mode, logical_key,
                                                trigger->modifiers),
                       accelerator.action);
             const auto before = dispatched[accelerator.action];
@@ -3322,6 +3503,63 @@ namespace lfs::vis {
         router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0, {});
         router.endMouseButton(input::ACTION_RELEASE, 40.0, 50.0);
         EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Viewport);
+    }
+
+    TEST_F(InputControllerFocusTest, JoypadAssignmentSurvivesSidebarFocusAndApplicationFocusLoss) {
+        Viewport primary(100, 200);
+        Viewport secondary(100, 200);
+        TwoViewTargets views{primary, secondary};
+        InputController controller(nullptr, views);
+        controller.updateViewportBounds(0, 0, 200, 200);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        const auto click = [&](double x, double y) {
+            router.beginMouseButton(input::ACTION_PRESS, x, y);
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS, x, y);
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE, x, y);
+            router.endMouseButton(input::ACTION_RELEASE, x, y);
+        };
+        click(160, 80);
+        ASSERT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        click(250, 80); // panel outside the 3D views
+        EXPECT_FALSE(controller.hasViewportKeyboardFocus());
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        controller.onWindowFocusLost();
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        views.activateView(1);
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        click(40, 80);
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{1});
+    }
+
+    TEST_F(InputControllerFocusTest, JoypadViewAssignmentIsRevokedOnSceneAndLayoutChanges) {
+        Viewport primary(100, 200);
+        Viewport secondary(100, 200);
+        TwoViewTargets views{primary, secondary};
+        InputController controller(nullptr, views);
+        controller.updateViewportBounds(0, 0, 200, 200);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        const auto click_right = [&] {
+            router.beginMouseButton(input::ACTION_PRESS, 160, 80);
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_PRESS, 160, 80);
+            controller.handleMouseButton(static_cast<int>(input::AppMouseButton::LEFT), input::ACTION_RELEASE, 160, 80);
+            router.endMouseButton(input::ACTION_RELEASE, 160, 80);
+        };
+        click_right();
+        views.activateView(1);
+        ASSERT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        // Without an assignment the gamepad follows the active view.
+        core::events::state::SceneCleared{}.emit();
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{1});
+
+        click_right();
+        views.activateView(1);
+        ASSERT_EQ(controller.gamepadNavigationView(), ViewId{2});
+        ++views.epoch; // an area/layout change may replace the views
+        EXPECT_EQ(controller.gamepadNavigationView(), ViewId{1});
     }
 
 } // namespace lfs::vis

@@ -33,9 +33,12 @@
 #include <unordered_set>
 #include <vector>
 
+class Viewport;
+
 namespace lfs::vis::gui {
     class RmlSequencerOverlay;
-}
+    class SequencerExportWorkflowTest;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis {
     class SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
@@ -47,6 +50,7 @@ namespace lfs::vis {
 
     class SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
     class SequencerFrameDemandTest_CameraFollowSettlesAfterPlaybackStops_Test;
+    class SequencerPanelClockTest_PreservesIdleTimeForGestures_Test;
 
     namespace gui {
 
@@ -57,6 +61,13 @@ namespace lfs::vis {
             ~SequencerUIManager();
 
             void setupEvents();
+            void addKeyframeFromView(const Viewport& source, std::optional<float> time = {});
+            bool captureKeyframeFromView(const Viewport& source);
+            bool updateSelectedKeyframeFromView(const Viewport& source);
+            bool deselectKeyframe();
+            [[nodiscard]] bool isTimelineGestureActive() const { return panel_->isTimelineGestureActive(); }
+            bool removeSelectedKeyframe();
+            bool selectAdjacentKeyframe(int direction, Viewport* target = nullptr);
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);
@@ -89,6 +100,7 @@ namespace lfs::vis {
             void setTimelineView(float zoom, float pan);
 
         private:
+            friend class SequencerExportWorkflowTest;
             friend class lfs::vis::SequencerFrameDemandTest_ApplyCurrentViewRecordsHistory_Test;
             friend class lfs::vis::SequencerPreviewLayoutTest;
             friend class lfs::vis::SequencerFrameIntegrityTest;
@@ -97,12 +109,17 @@ namespace lfs::vis {
 
             friend class lfs::vis::SequencerFrameDemandTest_ExportUsesExactFrameAndRestoresPlayback_Test;
             friend class lfs::vis::SequencerFrameDemandTest_CameraFollowSettlesAfterPlaybackStops_Test;
+            friend class lfs::vis::SequencerPanelClockTest_PreservesIdleTimeForGestures_Test;
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
+            void showExportSettings();
+            void showCameraAspectSettings();
+            void setCameraAspect(int width, int height);
+            void showTransportContextMenu(const TransportContextMenuRequest& request);
             void recordKeyframeAddition(std::optional<sequencer::Keyframe> before,
                                         sequencer::KeyframeId id, float duration_before);
             bool updateKeyframeFromView(sequencer::KeyframeId id, const sequencer::CameraState& view_state);
@@ -144,11 +161,14 @@ namespace lfs::vis {
             struct PipPreviewKey {
                 std::optional<sequencer::KeyframeId> selected_id;
                 uint64_t timeline_revision = 0;
-                float playhead = 0.0f;
+                float playhead = 0.0f; // the time shown, also a selected keyframe's
+                uint64_t custom_effect_generation = 0;
                 glm::vec3 position{0.0f};
                 glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
                 float focal_length_mm = 0.0f;
                 bool equirectangular = false;
+                bool orthographic = false;
+                float ortho_scale = 1.0f;
                 int width = 0;
                 int height = 0;
 
@@ -247,6 +267,14 @@ namespace lfs::vis {
             size_t ply_stream_cache_write_fail_count_ = 0;
             std::chrono::steady_clock::time_point pip_last_render_time_ = std::chrono::steady_clock::now();
             std::optional<sequencer::Keyframe> viewport_keyframe_edit_snapshot_;
+            struct KeyframeNavigationBoundary {
+                sequencer::KeyframeId id;
+                int direction;
+                float playhead;
+                uint64_t timeline_revision;
+                uint64_t selection_revision;
+            };
+            std::optional<KeyframeNavigationBoundary> keyframe_navigation_boundary_;
         };
 
     } // namespace gui

@@ -146,6 +146,7 @@ namespace lfs::vis {
                 Rml::RemoveContext(context_->GetName());
             context_ = nullptr;
             document_ = nullptr;
+            gui::guiFocusState().reset();
         }
 
         static inline NullRenderInterface* render_interface_ = nullptr;
@@ -527,6 +528,38 @@ namespace lfs::vis {
         view->setEditor(nullptr);
     }
 
+    TEST_F(OrderedPointerReplayTest, ShaderDocumentRendersEditsAndUndoesWithoutPythonAnalysis) {
+        static Rml::ElementInstancerGeneric<gui::PythonEditorElement> instancer;
+        Rml::Factory::RegisterElementInstancer("python-editor", &instancer);
+        editor::PythonEditor editor;
+        editor.setDocumentKind(editor::DocumentKind::Shader);
+        editor.setText("import lfs;\n");
+        auto element = document_->CreateElement("python-editor");
+        auto* view = dynamic_cast<gui::PythonEditorElement*>(element.get());
+        ASSERT_NE(view, nullptr);
+        view->setEditor(&editor);
+        document_->AppendChild(std::move(element));
+        context_->Update();
+        ASSERT_TRUE(view->Focus());
+        gui::rml_input::processKeyboardEvent(*context_, {.kind = FrameInputEventKind::Text, .text = "x"});
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_FALSE(editor.pythonAnalysisActive());
+        EXPECT_FALSE(editor.hasActiveCompletion());
+        EXPECT_TRUE(editor.syntaxSymbols().empty());
+        const auto edited = editor.getText();
+        editor.setDocumentKind(editor::DocumentKind::Python);
+        editor.setDocumentKind(editor::DocumentKind::Shader);
+        EXPECT_EQ(editor.getText(), edited);
+        gui::rml_input::processKeyboardEvent(*context_, {.scancode = SDL_SCANCODE_Z, .modifiers = SDL_KMOD_CTRL});
+        EXPECT_EQ(editor.getText(), "import lfs;\n");
+        gui::rml_input::processKeyboardEvent(*context_, {.scancode = SDL_SCANCODE_SPACE, .modifiers = SDL_KMOD_CTRL});
+        editor.refreshSyntaxDiagnostics();
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_FALSE(editor.pythonAnalysisActive());
+        EXPECT_FALSE(editor.hasActiveCompletion());
+        view->setEditor(nullptr);
+    }
+
     TEST_F(OrderedPointerReplayTest, DotOffersCompletionAfterThePanelConsumesTheEdit) {
 #ifdef _WIN32
         GTEST_SKIP() << "Mock language server fixture is POSIX-only.";
@@ -555,6 +588,8 @@ namespace lfs::vis {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         EXPECT_TRUE(editor.hasActiveCompletion());
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_TRUE(gui::guiFocusState().want_text_input);
         view->setEditor(nullptr);
         unsetenv("LFS_PYTHON_LSP");
         unsetenv("LFS_PYTHON_LSP_WORKSPACE");
@@ -633,6 +668,7 @@ namespace lfs::vis {
             gui::guiFocusState().reset();
         }
         gui::RmlUIManager& manager() { return gui_->rmlui_manager_; }
+        void setEventWatchActive(bool active) { window_->watching_event_ = active; }
         bool hasDesktopHost(const Rml::Context* context) { return manager().native_windows_.contains(context); }
         void failExternalGraphics(int& attempts) {
             manager().native_windows_enabled_ = true;
@@ -1490,6 +1526,70 @@ namespace lfs::vis {
         uint64_t timestamp_ = 0;
         gui::rml_input::TextInputEscapeRevertController revert_;
     };
+
+    TEST_F(WindowInputDispatchTest, GamepadDiscoveryLifetimeFollowsVisibleDiagnostics) {
+        window_->setInputController(nullptr);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        window_->setGamepadDiagnosticsActive(true);
+        ASSERT_TRUE(window_->gamepads().snapshot().available);
+        window_->pollEvents();
+        EXPECT_TRUE(window_->gamepads().snapshot().available);
+        window_->setGamepadDiagnosticsActive(false);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        window_->pollEvents();
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+    }
+
+    TEST_F(WindowInputDispatchTest, GamepadHandleChangesWaitUntilTheEventWatchReturns) {
+        window_->setInputController(nullptr);
+        setEventWatchActive(true);
+        window_->setGamepadDiagnosticsActive(true);
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+        setEventWatchActive(false);
+        window_->pollEvents();
+        ASSERT_TRUE(window_->gamepads().snapshot().available);
+        setEventWatchActive(true);
+        window_->setGamepadDiagnosticsActive(false);
+        EXPECT_TRUE(window_->gamepads().snapshot().available);
+        setEventWatchActive(false);
+        window_->pollEvents();
+        EXPECT_FALSE(window_->gamepads().snapshot().available);
+    }
+
+    TEST_F(WindowInputDispatchTest, WindowPumpPreservesShortTriggerCrossingsAcrossDiagnosticReads) {
+        window_->setInputController(nullptr);
+        window_->setGamepadDiagnosticsActive(true);
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+        desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+        desc.name = "LichtFeld trigger dispatch test";
+        const auto id = SDL_AttachVirtualJoystick(&desc);
+        ASSERT_NE(id, 0u);
+        window_->pollEvents();
+        ASSERT_TRUE(window_->gamepads().selectNavigation(id));
+        ASSERT_TRUE(window_->gamepads().select(id));
+        SDL_Event event{};
+        event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+        event.gaxis.which = id;
+        event.gaxis.axis = SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+        event.gaxis.value = 24000;
+        ASSERT_TRUE(SDL_PushEvent(&event));
+        event.gaxis.value = 0;
+        ASSERT_TRUE(SDL_PushEvent(&event));
+        window_->pollEvents();
+        window_->pollEvents();
+        EXPECT_FLOAT_EQ(window_->gamepads().navigationSample().axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER], 0.f);
+        EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
+        EXPECT_FLOAT_EQ(window_->gamepads().takeDiagnosticSnapshot().sample.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER], 0.f);
+        (void)window_->gamepads().takeDiagnosticSnapshot();
+        EXPECT_TRUE(window_->gamepads().navigationSample().trigger_pressed[1]);
+        EXPECT_TRUE(SDL_DetachVirtualJoystick(id));
+        window_->setGamepadDiagnosticsActive(false);
+    }
 
     TEST_F(WindowInputDispatchTest, MainWindowFocusLossPreservesFocusedFieldWithExternalWindowsOnOrOff) {
         for (const bool enabled : {false, true}) {

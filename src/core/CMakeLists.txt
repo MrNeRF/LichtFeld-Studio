@@ -128,6 +128,7 @@ set(TENSOR_SOURCES
         nn/activation_arena.cpp
         nn/models/moge2.cpp
         nn/models/sam2.cpp
+        nn/models/sam2_video.cpp
         nn/models/lpips.cpp
         nn/models/romav1.cpp
 )

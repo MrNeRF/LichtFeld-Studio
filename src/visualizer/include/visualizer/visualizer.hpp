@@ -40,6 +40,8 @@ namespace lfs::vis {
     enum class ProjectOpenOutcome {
         Opened,
         RecoveryPromptPending,
+        // The destination is validated; collision completion will resume the switch.
+        Deferred,
     };
 
     enum class RuntimeServicePhase : std::uint8_t {

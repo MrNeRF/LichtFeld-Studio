@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/batch_trainer.hpp"
 #include "app/compare.hpp"
 #include "app/converter.hpp"
 #include "app/gpu_preflight.hpp"
 #include "app/licht_command.hpp"
-#include "app/voxelizer.hpp"
 #include "core/abi.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -27,6 +27,7 @@
 #include "lfs_core_abi_stamp.h"
 #include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
+#include "preprocessing/video_mask_command.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
@@ -247,6 +248,10 @@ namespace {
                     preflightGpuOrExit(false);
                 }
                 return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::VideoMaskMode>) {
+                if (!mode.params.download_only)
+                    preflightGpuOrExit(false);
+                return lfs::preprocessing::run_video_masking(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::io::args::CompareMode>) {
                 if constexpr (!LFS_BUILD_TRAINER) {
                     std::println(stderr, "Image comparison is not included in this build.");
@@ -259,6 +264,16 @@ namespace {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::io::args::LichtMode>) {
                 return lfs::app::run_licht_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::BatchTrainingMode>) {
+                if constexpr (!LFS_BUILD_TRAINER) {
+                    std::println(stderr, "Batch training is not included in this build.");
+                    return 1;
+                } else {
+                    if (!mode.params.dry_run) {
+                        preflightGpuOrExit(false);
+                    }
+                    return lfs::app::run_batch_training(mode.params);
+                }
             } else if constexpr (std::is_same_v<T, lfs::io::args::TrainingMode>) {
                 if constexpr (!LFS_BUILD_TRAINER) {
                     if (mode.params->optimization.headless && !mode.params->render_path) {

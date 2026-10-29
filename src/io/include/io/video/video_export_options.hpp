@@ -5,6 +5,7 @@
 
 #include "core/provenance.hpp"
 #include "io/image_sequence_options.hpp"
+#include "io/video/video_frame_geometry.hpp"
 #include "io/video/video_reconstruction.hpp"
 #include "media/video_encode_codec.hpp"
 #include "media/video_output_extent.hpp"
@@ -75,19 +76,37 @@ namespace lfs::io::video {
         bool spherical_video = false;
         media::VideoEncodeCodec codec = media::VideoEncodeCodec::H264;
         std::optional<TensorImageSequenceOptions> image_sequence;
+        // FPS is framerate / framerate_denominator, e.g. 30000 / 1001.
+        int framerate_denominator = 1;
+        // Optional camera aspect terms. Zero retains legacy output-sized input.
+        // Otherwise writeFrame receives videoCameraRenderSize(...), and the
+        // encoder fits that camera image into width/height without changing FOV.
+        int camera_width = 0;
+        int camera_height = 0;
+        VideoFrameFit framing = VideoFrameFit::FIT;
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
         const VideoExportOptions& options) {
+        if ((options.camera_width != 0 || options.camera_height != 0) &&
+            (options.camera_width < 1 || options.camera_width > 8192 || options.camera_height < 1 || options.camera_height > 8192))
+            return std::unexpected("Invalid camera aspect ratio");
+        if (options.framing < VideoFrameFit::FIT || options.framing > VideoFrameFit::STRETCH)
+            return std::unexpected("Invalid video framing options");
         if (options.image_sequence) {
-            if (options.width <= 0 || options.height <= 0 || options.framerate <= 0 || options.framerate > 1000 ||
+            if (options.width <= 0 || options.height <= 0 || videoFrameRateError(options.framerate, options.framerate_denominator) ||
                 static_cast<uint64_t>(options.width) * static_cast<uint64_t>(options.height) > static_cast<uint64_t>(std::numeric_limits<int>::max() / 4))
                 return std::unexpected("Invalid image sequence dimensions or framerate");
+            // Sequence writers take frames at the output size; only the video encoder reframes another camera aspect.
+            const auto camera = videoCameraRenderSize(options.width, options.height, options.camera_width,
+                                                      options.camera_height, options.framing);
+            if (!options.spherical_video && (camera.width != options.width || camera.height != options.height))
+                return std::unexpected("Image sequences need a camera aspect ratio matching their size");
             return {};
         }
         if (const auto error = videoOutputExtentError(options.width, options.height))
             return std::unexpected(std::string(*error));
-        if (auto error = videoEncodingRangeError(options.framerate, options.crf))
+        if (auto error = videoEncodingRangeError(options.framerate, options.crf, options.framerate_denominator))
             return std::unexpected(std::move(*error));
         if (options.codec != media::VideoEncodeCodec::H264 && options.codec != media::VideoEncodeCodec::HEVC && options.codec != media::VideoEncodeCodec::AV1)
             return std::unexpected("Unknown video codec (got " + std::to_string(static_cast<int>(options.codec)) + ")");

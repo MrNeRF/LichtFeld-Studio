@@ -26,7 +26,11 @@ namespace lfs::vis::gui::panels {
         lfs::io::video::VideoPreset preset = lfs::io::video::VideoPreset::YOUTUBE_1080P;
         int custom_width = 1920;
         int custom_height = 1080;
+        int camera_width = 16;
+        int camera_height = 9;
         int framerate = 30;
+        int framerate_denominator = 1;
+        int export_fit = 0;
         int quality = 18;
         lfs::io::video::VideoReconstructionSelection reconstruction{};
 

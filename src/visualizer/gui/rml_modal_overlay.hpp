@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
     class ModalFormBehaviorTest;
+    class SequencerExportWorkflowTest;
     struct PanelInputState;
 
     struct LFS_VIS_API ModalSnapshot {
@@ -80,6 +81,7 @@ namespace lfs::vis::gui {
         bool dismiss(const std::string& button_label);
         bool updateForm(const std::string& key, const std::optional<std::string>& body_rml,
                         const std::vector<lfs::core::ModalButtonSpec>& buttons);
+        bool setFormValues(const std::string& key, const std::unordered_map<std::string, std::string>& values);
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
@@ -88,6 +90,7 @@ namespace lfs::vis::gui {
 
     private:
         friend class ModalFormBehaviorTest;
+        friend class SequencerExportWorkflowTest;
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
         friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -149,6 +152,7 @@ namespace lfs::vis::gui {
 
         RmlUIManager* rml_manager_;
         OverlayEventListener listener_;
+        bool setting_form_values_ = false;
         rml_input::TextInputEscapeRevertController text_input_revert_;
 
         Rml::Context* rml_context_ = nullptr;

@@ -177,6 +177,144 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        // Register-blocked fp32 GEMM for A [M,K] or [K,M] (kTransA) and B [N,K] (kTransB) or [K,N]: 256 threads, each owning
+        // (BM/64 x BN/64) 4x4 output blocks, float4 loads into double-buffered shared tiles of BK keys. Every output
+        // still sums its K products in order with one FMA each, zero products padding K to a multiple of eight as
+        // sgemm_epilogue_kernel does, so the results are bitwise equal.
+        template <int BM, int BN, int BK, bool kTransA, bool kTransB>
+        __global__ void __launch_bounds__(256)
+            sgemm_tiled_kernel(const float* __restrict__ A, const float* __restrict__ B,
+                               float* __restrict__ C, const float* __restrict__ bias,
+                               int m, int n, int k, long long stride_a, long long stride_b,
+                               long long stride_c, int activation, bool trans_c,
+                               const float* __restrict__ residual, const float* __restrict__ scale) {
+            constexpr int kPad = 4;
+            constexpr int kRowGroups = BM / 64;
+            constexpr int kColGroups = BN / 64;
+            constexpr int kALoads = BM * BK / 4;
+            constexpr int kBLoads = BN * BK / 4;
+            static_assert(BK % 8 == 0 && kALoads <= 256 && kBLoads <= 256, "one float4 of A and of B per thread");
+            const int batch = static_cast<int>(blockIdx.z);
+            A += batch * stride_a;
+            B += batch * stride_b;
+            C += batch * stride_c;
+            if (residual) {
+                residual += batch * stride_c;
+            }
+
+            __shared__ __align__(16) float As[2][BK][BM + kPad];
+            __shared__ __align__(16) float Bs[2][BK][BN + kPad];
+
+            const int tid = static_cast<int>(threadIdx.x);
+            const int tx = tid % 16;
+            const int ty = tid / 16;
+            const int block_row = static_cast<int>(blockIdx.x) * BM;
+            const int block_col = static_cast<int>(blockIdx.y) * BN;
+            const int a_row = kTransA ? (tid % (BM / 4)) * 4 : tid / (BK / 4);
+            const int a_k = kTransA ? tid / (BM / 4) : (tid % (BK / 4)) * 4;
+            const int b_n = kTransB ? tid / (BK / 4) : (tid % (BN / 4)) * 4;
+            const int b_k = kTransB ? (tid % (BK / 4)) * 4 : tid / (BN / 4);
+            const int k_padded = (k + 7) / 8 * 8;
+
+            const auto load_a = [&](int tile) {
+                const int row = block_row + a_row;
+                const int col = tile + a_k;
+                if (tid >= kALoads || row >= m || col >= k) {
+                    return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                }
+                const long long offset = kTransA ? static_cast<long long>(col) * m + row
+                                                 : static_cast<long long>(row) * k + col;
+                return __ldg(reinterpret_cast<const float4*>(A + offset));
+            };
+            const auto load_b = [&](int tile) {
+                const int col = block_col + b_n;
+                const int row = tile + b_k;
+                if (tid >= kBLoads || col >= n || row >= k) {
+                    return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                }
+                const long long offset = kTransB ? static_cast<long long>(col) * k + row
+                                                 : static_cast<long long>(row) * n + col;
+                return __ldg(reinterpret_cast<const float4*>(B + offset));
+            };
+            const auto store_tiles = [&](int buffer, float4 a, float4 b) {
+                if (tid < kALoads) {
+                    if constexpr (kTransA) {
+                        *reinterpret_cast<float4*>(&As[buffer][a_k][a_row]) = a;
+                    } else {
+                        As[buffer][a_k + 0][a_row] = a.x;
+                        As[buffer][a_k + 1][a_row] = a.y;
+                        As[buffer][a_k + 2][a_row] = a.z;
+                        As[buffer][a_k + 3][a_row] = a.w;
+                    }
+                }
+                if (tid < kBLoads) {
+                    if constexpr (kTransB) {
+                        Bs[buffer][b_k + 0][b_n] = b.x;
+                        Bs[buffer][b_k + 1][b_n] = b.y;
+                        Bs[buffer][b_k + 2][b_n] = b.z;
+                        Bs[buffer][b_k + 3][b_n] = b.w;
+                    } else {
+                        *reinterpret_cast<float4*>(&Bs[buffer][b_k][b_n]) = b;
+                    }
+                }
+            };
+
+            float acc[4 * kRowGroups][4 * kColGroups] = {};
+            store_tiles(0, load_a(0), load_b(0));
+            __syncthreads();
+            int buffer = 0;
+            for (int tile = 0; tile < k; tile += BK) {
+                const bool more = tile + BK < k;
+                float4 next_a;
+                float4 next_b;
+                if (more) {
+                    next_a = load_a(tile + BK);
+                    next_b = load_b(tile + BK);
+                }
+                const int steps = BK > 8 ? min(BK, k_padded - tile) : BK;
+#pragma unroll
+                for (int kk = 0; kk < BK; ++kk) {
+                    if (BK > 8 && kk >= steps) {
+                        break;
+                    }
+                    float a_frag[4 * kRowGroups];
+                    float b_frag[4 * kColGroups];
+#pragma unroll
+                    for (int g = 0; g < kRowGroups; ++g) {
+                        *reinterpret_cast<float4*>(a_frag + 4 * g) =
+                            *reinterpret_cast<const float4*>(&As[buffer][kk][64 * g + ty * 4]);
+                    }
+#pragma unroll
+                    for (int g = 0; g < kColGroups; ++g) {
+                        *reinterpret_cast<float4*>(b_frag + 4 * g) =
+                            *reinterpret_cast<const float4*>(&Bs[buffer][kk][64 * g + tx * 4]);
+                    }
+#pragma unroll
+                    for (int i = 0; i < 4 * kRowGroups; ++i) {
+#pragma unroll
+                        for (int j = 0; j < 4 * kColGroups; ++j) {
+                            acc[i][j] = fmaf(a_frag[i], b_frag[j], acc[i][j]);
+                        }
+                    }
+                }
+                if (more) {
+                    store_tiles(buffer ^ 1, next_a, next_b);
+                    __syncthreads();
+                    buffer ^= 1;
+                }
+            }
+
+#pragma unroll
+            for (int i = 0; i < 4 * kRowGroups; ++i) {
+#pragma unroll
+                for (int j = 0; j < 4 * kColGroups; ++j) {
+                    const int gr = block_row + (i / 4) * 64 + ty * 4 + i % 4;
+                    const int gc = block_col + (j / 4) * 64 + tx * 4 + j % 4;
+                    store_c_f32(C, gr, gc, m, n, acc[i][j], bias, activation, trans_c, residual, scale);
+                }
+            }
+        }
+
         // Ampere/Ada tensor-core GEMM. 16x16x16 WMMA tiles lower to
         // mma.sync.aligned.m16n8k16 with fp16 inputs and fp32 accumulate.
         // Block tile 64x64, K-tile 32. trans_b selects C = A @ Bᵀ (B is [N,K]).
@@ -318,11 +456,56 @@ namespace lfs::core::nn::kernels {
 #endif
         }
 
+        template <int BM, int BN, int BK, bool kTransA>
+        void launch_sgemm_tiled(const float* a, const float* b, float* c, const float* bias, int m, int n, int k,
+                                long long stride_a, long long stride_b, long long stride_c, int batch, bool trans_b,
+                                int activation, bool trans_c, cudaStream_t stream, const float* residual,
+                                const float* scale) {
+            const dim3 grid((m + BM - 1) / BM, (n + BN - 1) / BN, batch);
+            const auto kernel = trans_b ? sgemm_tiled_kernel<BM, BN, BK, kTransA, true>
+                                        : sgemm_tiled_kernel<BM, BN, BK, kTransA, false>;
+            kernel<<<grid, 256, 0, stream>>>(a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, activation, trans_c,
+                                             residual, scale);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.gemm.sgemm_tiled");
+        }
+
         void launch_sgemm_epilogue(const float* a, const float* b, float* c, const float* bias,
                                    int m, int n, int k, long long stride_a, long long stride_b,
                                    long long stride_c, int batch, bool trans_a, bool trans_b,
                                    int activation, bool trans_c, cudaStream_t stream,
                                    const float* residual, const float* scale) {
+            const auto aligned = [](const void* pointer) { return reinterpret_cast<std::uintptr_t>(pointer) % 16 == 0; };
+            // Every float4 of A and B lies in one row of its stored layout.
+            const bool a_vectors = trans_a ? m % 4 == 0 : k % 4 == 0;
+            const bool b_vectors = trans_b ? k % 4 == 0 : n % 4 == 0;
+            if (a_vectors && b_vectors && stride_a % 4 == 0 && stride_b % 4 == 0 && aligned(a) && aligned(b)) {
+                // Queried once, as the tensor library's private GPUConfig does.
+                static const long long sm_count = [] {
+                    int device = 0;
+                    int count = 0;
+                    LFS_CUDA_CHECK(cudaGetDevice(&device));
+                    LFS_CUDA_CHECK(cudaDeviceGetAttribute(&count, cudaDevAttrMultiProcessorCount, device));
+                    return static_cast<long long>(count);
+                }();
+                const auto blocks = [&](int rows, int cols) {
+                    return static_cast<long long>((n + cols - 1) / cols) * ((m + rows - 1) / rows) * batch;
+                };
+                // Larger tiles reuse more of each load; smaller ones keep every SM busy when outputs are few and K is
+                // long, as in attention over many memory tokens, where deeper K tiles hide the load latency.
+                const int config = blocks(128, 128) >= 4 * sm_count ? 0 : blocks(128, 64) >= sm_count ? 1
+                                                                                                      : 2;
+                using Launch = void (*)(const float*, const float*, float*, const float*, int, int, int, long long,
+                                        long long, long long, int, bool, int, bool, cudaStream_t, const float*,
+                                        const float*);
+                constexpr Launch launches[2][3] = {
+                    {launch_sgemm_tiled<128, 128, 8, false>, launch_sgemm_tiled<128, 64, 8, false>,
+                     launch_sgemm_tiled<64, 64, 16, false>},
+                    {launch_sgemm_tiled<128, 128, 8, true>, launch_sgemm_tiled<128, 64, 8, true>,
+                     launch_sgemm_tiled<64, 64, 16, true>}};
+                launches[trans_a ? 1 : 0][config](a, b, c, bias, m, n, k, stride_a, stride_b, stride_c, batch, trans_b,
+                                                  activation, trans_c, stream, residual, scale);
+                return;
+            }
             constexpr int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
             dim3 block(BN / TN, BM / TM);
             // trans_a / trans_c use the full M as the leading dimension, so the

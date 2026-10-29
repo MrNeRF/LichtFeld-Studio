@@ -22,6 +22,7 @@
 #include <exception>
 #include <expected>
 #include <format>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -47,6 +48,15 @@ struct SDL_Window;
 
 namespace lfs::vis {
 
+    // Lets another API that must own the Vulkan objects (such as a headset
+    // runtime) create the instance and device. Unset hooks use plain Vulkan.
+    struct VulkanDeviceHooks {
+        std::function<VkResult(const VkInstanceCreateInfo&, VkInstance&)> create_instance;
+        // Init fails when the GPU chosen for rendering is not this device.
+        std::function<VkPhysicalDevice(VkInstance)> required_physical_device;
+        std::function<VkResult(VkPhysicalDevice, const VkDeviceCreateInfo&, VkDevice&)> create_device;
+    };
+
     class VulkanContext {
         friend struct VulkanContextTestAccess;
 
@@ -63,7 +73,20 @@ namespace lfs::vis {
         VulkanContext& operator=(const VulkanContext&) = delete;
 
         LFS_VIS_API bool initHeadless();
-        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
+        LFS_VIS_API bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height,
+                              VulkanDeviceHooks hooks = {});
+        // Runs an external API call that may submit to the shared graphics queue.
+        template <class Operation>
+        auto withGraphicsQueue(Operation&& operation) {
+            using Result = std::invoke_result_t<Operation&>;
+            if constexpr (std::is_void_v<Result>) {
+                lfs::rendering::vk_with_queue_access(graphics_queue_, [&] { operation(); });
+            } else {
+                std::optional<Result> result;
+                lfs::rendering::vk_with_queue_access(graphics_queue_, [&] { result.emplace(operation()); });
+                return Result(std::move(*result));
+            }
+        }
         void setSceneRuntimeOwnership(bool owns) { owns_scene_runtimes_ = owns; }
         LFS_VIS_API void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
@@ -642,6 +665,7 @@ namespace lfs::vis {
         std::mutex graphics_queue_mutex_;
         std::mutex tensor_interop_mutex_;
         std::unique_ptr<lfs::core::TensorVulkanInterop> tensor_interop_;
+        VulkanDeviceHooks device_hooks_;
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;

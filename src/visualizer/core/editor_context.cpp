@@ -33,6 +33,7 @@ namespace lfs::vis {
             case ToolType::Scale: return "builtin.scale";
             case ToolType::Mirror: return "builtin.mirror";
             case ToolType::Align: return "builtin.align";
+            case ToolType::ScaleDistance: return "builtin.scale_distance";
             case ToolType::None:
             default: return {};
             }
@@ -210,6 +211,7 @@ namespace lfs::vis {
         case ToolType::Scale:
             return canTransformSelectedNode();
         case ToolType::Align:
+        case ToolType::ScaleDistance:
             return has_editable_align_selection_;
         }
         return false;

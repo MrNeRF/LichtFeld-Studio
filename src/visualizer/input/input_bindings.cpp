@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 38; // Merge dev and master v37 defaults, including Walk exit.
+        constexpr int PROFILE_VERSION = 41; // Merge dev v38 and master v40 defaults: Scale Distance, VR, editor.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::EXIT_WALK;
+        constexpr Action LAST_ACTION = Action::EDITOR_STOP;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -343,7 +343,7 @@ namespace lfs::vis::input {
         }
 
         [[nodiscard]] bool isKnownToolMode(const int value) noexcept {
-            return std::ranges::any_of(kAllToolModes, [value](const ToolMode mode) {
+            return std::ranges::any_of(kAllKeymapScopes, [value](const ToolMode mode) {
                 return static_cast<int>(mode) == value;
             });
         }
@@ -1841,6 +1841,7 @@ namespace lfs::vis::input {
             Action::TOOL_SCALE,
             Action::TOOL_MIRROR,
             Action::TOOL_ALIGN,
+            Action::TOOL_SCALE_DISTANCE,
             Action::CANCEL_POLYGON,
         };
         const auto defaults = createDefaultProfile().bindings;
@@ -1874,8 +1875,13 @@ namespace lfs::vis::input {
         std::vector<std::pair<ToolMode, Action>> missing;
         for (const auto mode : kAllToolModes) {
             for (const auto action : core_actions) {
+                // A mode's own default on the same trigger shadows a global one,
+                // as Escape exits walk and VR instead of cancelling a polygon.
                 const bool required = std::ranges::any_of(defaults, [&](const Binding& b) {
-                    return b.action == action && applies(b, mode);
+                    return b.action == action && applies(b, mode) &&
+                           (b.mode == mode || std::ranges::none_of(defaults, [&](const Binding& local) {
+                                return local.mode == mode && triggersOverlap(local.trigger, b.trigger);
+                            }));
                 });
                 if (!required)
                     continue;
@@ -2164,6 +2170,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_4}, Action::TOOL_SCALE, "Scale"},
             {KeyTrigger{KEY_5}, Action::TOOL_MIRROR, "Mirror"},
             {KeyTrigger{KEY_6}, Action::TOOL_ALIGN, "Align"},
+            {KeyTrigger{KEY_7}, Action::TOOL_SCALE_DISTANCE, "Scale Distance"},
             {KeyTrigger{KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"},
         };
 
@@ -2221,7 +2228,15 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_ALT},
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_F5}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_KP_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_C, MODIFIER_CTRL}, Action::EDITOR_STOP, "Stop Document"});
         profile.bindings.push_back({ToolMode::WALK, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_WALK, "Exit Walk"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_LEFT, MODIFIER_NONE}, Action::VR_SNAP_TURN_LEFT, "Snap Turn Left"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_RIGHT, MODIFIER_NONE}, Action::VR_SNAP_TURN_RIGHT, "Snap Turn Right"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_R, MODIFIER_NONE}, Action::VR_RECENTER, "Recenter VR"});
+        profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_VR, "Exit VR"});
         profile.bindings.push_back({ToolMode::CROP_BOX,
                                     KeyTrigger{KEY_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
@@ -2347,6 +2362,10 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "Scale Tool";
         case Action::TOOL_MIRROR: return "Mirror Tool";
         case Action::TOOL_ALIGN: return "Align Tool";
+        case Action::TOOL_SCALE_DISTANCE: return "Scale Distance Tool";
+        case Action::EDITOR_TOGGLE_KIND: return "Toggle Document Kind";
+        case Action::EDITOR_RUN: return "Run Document";
+        case Action::EDITOR_STOP: return "Stop Document";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
@@ -2356,6 +2375,10 @@ namespace lfs::vis::input {
         case Action::INSERT_CROP_POLYGON_VERTEX: return "Insert Crop Polygon Vertex";
         case Action::REMOVE_CROP_POLYGON_VERTEX: return "Remove Crop Polygon Vertex";
         case Action::EXIT_WALK: return "Exit Walk";
+        case Action::VR_SNAP_TURN_LEFT: return "Snap Turn Left";
+        case Action::VR_SNAP_TURN_RIGHT: return "Snap Turn Right";
+        case Action::VR_RECENTER: return "Recenter VR";
+        case Action::EXIT_VR: return "Exit VR";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         case Action::OPEN_PREFERENCES: return "Open Preferences";
         case Action::TOGGLE_MCP_SERVER: return "Toggle MCP Server";
@@ -2463,6 +2486,10 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE: return "tool_scale";
         case Action::TOOL_MIRROR: return "tool_mirror";
         case Action::TOOL_ALIGN: return "tool_align";
+        case Action::TOOL_SCALE_DISTANCE: return "tool_scale_distance";
+        case Action::EDITOR_TOGGLE_KIND: return "editor_toggle_kind";
+        case Action::EDITOR_RUN: return "editor_run";
+        case Action::EDITOR_STOP: return "editor_stop";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
@@ -2472,6 +2499,10 @@ namespace lfs::vis::input {
         case Action::INSERT_CROP_POLYGON_VERTEX: return "insert_crop_polygon_vertex";
         case Action::REMOVE_CROP_POLYGON_VERTEX: return "remove_crop_polygon_vertex";
         case Action::EXIT_WALK: return "exit_walk";
+        case Action::VR_SNAP_TURN_LEFT: return "vr_snap_turn_left";
+        case Action::VR_SNAP_TURN_RIGHT: return "vr_snap_turn_right";
+        case Action::VR_RECENTER: return "vr_recenter";
+        case Action::EXIT_VR: return "exit_vr";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         case Action::OPEN_PREFERENCES: return "open_preferences";
         case Action::TOGGLE_MCP_SERVER: return "toggle_mcp_server";
@@ -2526,6 +2557,8 @@ namespace lfs::vis::input {
             {ToolMode::ALIGN, "align", "Align"},
             {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
             {ToolMode::WALK, "walk", "Walk"},
+            {ToolMode::VR, "vr", "VR"},
+            {ToolMode::EDITOR, "editor", "Editor"},
         };
     } // namespace
 
@@ -2793,7 +2826,7 @@ namespace lfs::vis::input {
 
         // Escape cancels capture except when capturing its own Cancel action.
         if (key == KEY_ESCAPE && capture_state_.action != Action::CANCEL_POLYGON &&
-            capture_state_.action != Action::EXIT_WALK) {
+            capture_state_.action != Action::EXIT_WALK && capture_state_.action != Action::EXIT_VR) {
             cancelCapture();
             return;
         }
@@ -3188,6 +3221,10 @@ namespace lfs::vis::input {
         case Action::CAMERA_SET_HOME:
         case Action::CAMERA_RESTORE_HOME:
         case Action::EXIT_WALK:
+        case Action::VR_SNAP_TURN_LEFT:
+        case Action::VR_SNAP_TURN_RIGHT:
+        case Action::VR_RECENTER:
+        case Action::EXIT_VR:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -3300,6 +3337,9 @@ namespace lfs::vis::input {
         case Action::TOGGLE_PYTHON_CONSOLE:
         case Action::TOGGLE_NODE_EDITOR:
         case Action::UNGROUP_SELECTED_SCENE_NODE:
+        case Action::EDITOR_TOGGLE_KIND:
+        case Action::EDITOR_RUN:
+        case Action::EDITOR_STOP:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -3315,6 +3355,7 @@ namespace lfs::vis::input {
         case Action::TOOL_SCALE:
         case Action::TOOL_MIRROR:
         case Action::TOOL_ALIGN:
+        case Action::TOOL_SCALE_DISTANCE:
             return d_tools_key;
 
         case Action::PIE_MENU:

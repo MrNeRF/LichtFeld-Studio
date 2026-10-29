@@ -5,6 +5,15 @@
 <body id="overlay-body">
     <div id="viewport-content">
     <div class="node-preview-position"><div id="node-preview-banner" class="node-preview-banner hidden"></div></div>
+    <div id="gamepad-navigation-indicator" class="comparison-name gamepad-navigation-indicator hidden">
+        <div class="gamepad-indicator-heading">
+            <span class="gamepad-indicator-dot"></span>
+            <span id="gamepad-indicator-label" class="gamepad-indicator-label">@tr:preferences.input_gamepad</span>
+            <span id="gamepad-indicator-mode" class="gamepad-indicator-mode"></span>
+            <span id="gamepad-indicator-panel" class="gamepad-indicator-panel hidden"></span>
+        </div>
+        <div id="gamepad-indicator-status" class="gamepad-indicator-status hidden"></div>
+    </div>
     <div id="comparison-name-left" class="comparison-name hidden"></div>
     <div id="comparison-name-right" class="comparison-name hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
@@ -115,7 +124,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar" data-class-scale-distance-active="show_scale_distance_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -158,6 +167,32 @@
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
                     <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
+                </div>
+            </div>
+            <div id="primary-scale-distance-toolbar" class="toolbar-container scale-distance-toolbar hidden"
+                 data-class-hidden="!show_scale_distance_toolbar">
+                <span class="scale-distance-title">@tr:toolbar.scale_distance_tool</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_measured</span>
+                <span class="scale-distance-value">{{scale_distance_measured_str}}</span>
+                <div class="toolbar-separator"></div>
+                <span class="scale-distance-label">@tr:toolbar.scale_distance_set</span>
+                <input type="text" class="number-input scale-distance-input" id="primary-scale-distance-target" data-value="scale_distance_target_str" />
+                <div class="icon-btn"
+                     id="primary-scale-distance-confirm"
+                     title="@tr:toolbar.scale_distance_apply"
+                     data-attrif-disabled="!scale_distance_can_apply"
+                     data-class-disabled="!scale_distance_can_apply"
+                     data-event-click="toolbar_action('scale_distance_apply', '')">
+                    <img src="../icon/check.png" />
+                </div>
+                <div class="icon-btn"
+                     id="primary-scale-distance-reset"
+                     title="@tr:toolbar.scale_distance_reset"
+                     data-attrif-disabled="!scale_distance_can_reset"
+                     data-class-disabled="!scale_distance_can_reset"
+                     data-event-click="toolbar_action('scale_distance_reset', '')">
+                    <img src="../icon/reset.png" />
                 </div>
             </div>
             <div id="primary-crop-toolbar" class="toolbar-container hidden"

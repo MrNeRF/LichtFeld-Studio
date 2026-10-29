@@ -104,6 +104,10 @@ namespace lfs::core {
             EVENT(ForceExit, bool discard_autosave = false;);
             EVENT(SwitchToEditMode, );
             EVENT(ResetCamera, );
+            EVENT(SetVrActive, bool active;);
+            EVENT(RecenterVr, );
+            EVENT(SnapTurnVr, int direction;); // -1 left, +1 right
+            EVENT(SetVrPreferences, bool enabled; float resolution_scale; float scene_units_per_meter; float move_speed; bool persist;);
             EVENT(ShowWindow, std::string window_name; bool show;);
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
@@ -172,7 +176,7 @@ namespace lfs::core {
             EVENT(SequencerPlayPause, );
             // Empty path opens the save dialog; a path set by a script exports straight
             // to it, since a modal dialog cannot be answered from an automation client.
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {}; bool include_provenance = true; std::string reconstruction_backend_id = "native"; std::string reconstruction_preset_id = "native"; std::string reconstruction_fallback = "abort"; std::string codec = "h264"; std::string image_sequence_format = {}; bool transparent_images = false; std::string filename_pattern = "frame_%06d"; int first_frame_number = 0; bool overwrite_images = false;);
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path = {}; bool include_provenance = true; std::string reconstruction_backend_id = "native"; std::string reconstruction_preset_id = "native"; std::string reconstruction_fallback = "abort"; std::string codec = "h264"; std::string image_sequence_format = {}; bool transparent_images = false; std::string filename_pattern = "frame_%06d"; int first_frame_number = 0; bool overwrite_images = false; int framerate_denominator = 1; int camera_width = 0; int camera_height = 0; int framing = 0;);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);

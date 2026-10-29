@@ -48,7 +48,8 @@ namespace lfs::python {
             .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset)
             .value("DepthWindowDrag", vis::op::BuiltinOp::DepthWindowDrag)
             .value("CropPolygonDraw", vis::op::BuiltinOp::CropPolygonDraw)
-            .value("CropPolygonSet", vis::op::BuiltinOp::CropPolygonSet);
+            .value("CropPolygonSet", vis::op::BuiltinOp::CropPolygonSet)
+            .value("ScaleDistancePickPoint", vis::op::BuiltinOp::ScaleDistancePickPoint);
 
         nb::enum_<vis::op::BuiltinTool>(ops, "BuiltinTool")
             .value("Select", vis::op::BuiltinTool::Select)
@@ -56,7 +57,8 @@ namespace lfs::python {
             .value("Rotate", vis::op::BuiltinTool::Rotate)
             .value("Scale", vis::op::BuiltinTool::Scale)
             .value("Mirror", vis::op::BuiltinTool::Mirror)
-            .value("Align", vis::op::BuiltinTool::Align);
+            .value("Align", vis::op::BuiltinTool::Align)
+            .value("ScaleDistance", vis::op::BuiltinTool::ScaleDistance);
 
         nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags", nb::is_flag())
             .value("NONE", vis::op::OperatorFlags::NONE)

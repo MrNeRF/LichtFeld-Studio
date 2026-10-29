@@ -8,8 +8,9 @@
 #include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
-#include <thrust/iterator/constant_iterator.h>
 #include <thrust/transform.h>
+
+#include "core/tensor/internal/tensor_functors.hpp"
 
 // Include vectorized operations for float4 / half128 optimizations
 #include "tensor_vectorized_ops.cuh"
@@ -134,7 +135,6 @@ namespace lfs::core::tensor_ops {
 
     /**
      * Scalar operation: Applies binary operation with a scalar value
-     * OPTIMIZED: Uses constant_iterator for zero-memory scalar broadcasting
      */
     template <typename T, typename OutputT, typename Op>
     void launch_scalar_op_generic(const T* data, T scalar, OutputT* result, size_t n,
@@ -153,16 +153,13 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        // FALLBACK: Use Thrust constant_iterator for unaligned or non-float types
+        // FALLBACK: unaligned or non-float data binds the scalar into a unary transform
         auto data_ptr = thrust::device_pointer_cast(data);
         auto result_ptr = thrust::device_pointer_cast(result);
 
-        // Use constant_iterator for zero-memory scalar - generated on-the-fly!
-        auto constant_scalar = thrust::make_constant_iterator(scalar);
-
         run_with_thrust_policy(stream, [&](auto policy) {
-            // Binary transform: tensor op constant_iterator
-            thrust::transform(policy, data_ptr, data_ptr + n, constant_scalar, result_ptr, op);
+            thrust::transform(policy, data_ptr, data_ptr + n, result_ptr,
+                              ops::scalar_right_op<Op, T>(scalar, op));
         });
     }
 

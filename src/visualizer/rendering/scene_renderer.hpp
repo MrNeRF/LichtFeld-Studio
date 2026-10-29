@@ -18,6 +18,7 @@
 
 namespace lfs::vis {
     class SceneTrainingInterop;
+    class SceneCustomEffects;
     // Scene APIs are selected once per platform. Opaque output handles describe
     // compositor transport, independent of the API that rasterizes the scene.
     class LFS_VIS_API SceneRenderer {
@@ -40,6 +41,10 @@ namespace lfs::vis {
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
             bool stochastic_accumulation_active = false;
+            // The host a requested custom effect draw runs; it drew with the
+            // built-in programs while no published program set holds it.
+            bool custom_active = false;
+            bool custom_pending = false;
             rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
         };
         enum class SelectionMaskShape : std::uint32_t {
@@ -165,6 +170,8 @@ namespace lfs::vis {
         virtual bool takeRefinementRequest() { return false; }
         // Optional capability; its trainer protocol is defined separately.
         virtual SceneTrainingInterop* trainingInterop() { return nullptr; }
+        // Optional capability: user shader programs (scene_custom_effects.hpp).
+        virtual SceneCustomEffects* customEffects() { return nullptr; }
     };
     class LFS_VIS_API PointSceneRenderer {
     public:

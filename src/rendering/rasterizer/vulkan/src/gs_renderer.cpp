@@ -1,6 +1,8 @@
 #include "gs_renderer.h"
+#include "shader_variants.hpp"
 
 #include "core/logger.hpp"
+#include "custom_effect_layout.h"
 #include "viewport_scratch_bucket.h"
 #include "visible_mask.h"
 
@@ -1297,6 +1299,67 @@ _VulkanBuffer& VulkanGSRenderer::prepareOverlayFlags(
     return clearDeviceBuffer(buffers.overlay_flags, bytes);
 }
 
+_VulkanBuffer* VulkanGSRenderer::prepareCustomGeometry(VulkanGSPipelineBuffers& buffers,
+                                                       const size_t slots,
+                                                       const bool gut) {
+    if (gut && customEffectActive())
+        return &resizeDeviceBuffer(buffers.custom_geometry, 4 * LFS_VK_CUSTOM_GEOMETRY_FLOAT4S * slots);
+    releaseDeviceBuffer(buffers.custom_geometry.deviceBuffer);
+    return nullptr;
+}
+
+VulkanGSPipeline::_ComputePipeline& VulkanGSRenderer::forwardProjectionProgram(
+    const VulkanGSPipelineBuffers& buffers, const bool gut) {
+    auto& program = projectionProgram({buffers.quant_pool, buffers.shN_q16, buffers.shN_f16, gut, false, false});
+    assert(!customEffectActive() || planned_custom_projection_ == &program);
+    return program;
+}
+
+VulkanGSPipeline::_ComputePipeline& VulkanGSRenderer::survivorProjectionProgram(const VulkanGSPipelineBuffers& buffers) {
+    auto& program = projectionProgram({buffers.quant_pool, buffers.shN_q16, buffers.shN_f16, false, true, false});
+    assert(!customEffectActive() || planned_custom_projection_ == &program);
+    return program;
+}
+
+VulkanGSPipeline::_ComputePipeline& VulkanGSRenderer::projectionProgram(const HostInputs& i) {
+    if (i.survivors)
+        return i.quant_pool ? pipeline_projection_forward_quant_survivors
+               : i.shN_q16  ? pipeline_projection_forward_shn_q16_survivors
+               : i.shN_f16  ? pipeline_projection_forward_shn_f16_survivors
+                            : pipeline_projection_forward_survivors;
+    return i.quant_pool ? (i.gut ? pipeline_projection_forward_quant_3dgut : pipeline_projection_forward_quant)
+           : i.shN_q16  ? (i.gut ? pipeline_projection_forward_shn_q16_3dgut : pipeline_projection_forward_shn_q16)
+           : i.shN_f16  ? (i.gut ? pipeline_projection_forward_shn_f16_3dgut : pipeline_projection_forward_shn_f16)
+                        : (i.gut ? pipeline_projection_forward_3dgut : pipeline_projection_forward);
+}
+
+VulkanGSRenderer::HostPlan VulkanGSRenderer::hostsFor(const HostInputs& inputs) {
+    HostPlan plan;
+    plan.banded = inputs.banded;
+    plan.programs[plan.count++] = &projectionProgram(inputs);
+    if (inputs.survivors)
+        plan.programs[plan.count++] = &pipeline_cull_splats;
+    if (inputs.gut) {
+        for (auto* raster : {&pipeline_rasterize_forward_3dgut, &pipeline_rasterize_forward_3dgut_plain,
+                             &pipeline_rasterize_forward_3dgut_rad, &pipeline_rasterize_forward_3dgut_plain_rad,
+                             &pipeline_rasterize_outline_gut, &pipeline_rasterize_outline_gut_plain,
+                             &pipeline_rasterize_outline_gut_rad, &pipeline_rasterize_outline_gut_plain_rad})
+            plan.programs[plan.count++] = &(*raster)[true];
+    }
+    std::string_view name = plan.programs[0]->spirv_path;
+    name.remove_prefix(name.find_last_of("/\\") + 1);
+    name = name.substr(0, name.find_last_of('.'));
+    if (const auto* row = lfs::rendering::shaderVariants(name))
+        plan.host = row->customVariantLabel(inputs.banded);
+    return plan;
+}
+
+VulkanGSPipeline::CustomEffectDraw VulkanGSRenderer::setCustomEffect(const bool enabled, const HostPlan& plan) {
+    setBandedExport(plan.banded);
+    planned_custom_projection_ = plan.programs[0];
+    return VulkanGSPipeline::setCustomEffect(enabled, std::span(plan.programs.data(), plan.count));
+}
+
 void VulkanGSRenderer::executeProjectionForward(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
@@ -1427,17 +1490,10 @@ void VulkanGSRenderer::executeProjectionForward(
                       BufferUse::ComputeRead});
     applyShNUniforms(projection_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
-    auto& pipeline = buffers.quant_pool
-                         ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
-                                               : pipeline_projection_forward_quant)
-                     : buffers.shN_q16
-                         ? (use_gut_projection ? pipeline_projection_forward_shn_q16_3dgut
-                                               : pipeline_projection_forward_shn_q16)
-                     : buffers.shN_f16
-                         ? (use_gut_projection ? pipeline_projection_forward_shn_f16_3dgut
-                                               : pipeline_projection_forward_shn_f16)
-                         : (use_gut_projection ? pipeline_projection_forward_3dgut
-                                               : pipeline_projection_forward);
+    auto& pipeline = customVariant(forwardProjectionProgram(buffers, use_gut_projection));
+    // Custom 3DGUT hosts write the raster's geometry after the deleted mask.
+    if (auto* geometry = prepareCustomGeometry(buffers, alloc_size, use_gut_projection))
+        tagged.push_back({*geometry, BufferUse::ComputeWrite});
     // fp32: 25 layouts; quant/q16: 26 with the extra SH binding; q16/f16 skip
     // binding 2 (shN is BDA). tagged keeps placeholder slots so indices match
     // shader binding numbers.
@@ -1947,6 +2003,10 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                                                           : buffers.primitive_depth_keys.deviceBuffer,
                                            BufferUse::ComputeRead});
             }
+            // Custom 3DGUT hosts read the projection's geometry after the
+            // raster's own bindings.
+            const bool custom_geometry = use_gut_rasterization && customEffectActive();
+            const TaggedBinding geometry{buffers.custom_geometry.deviceBuffer, BufferUse::ComputeRead};
             if (raster_outline) {
                 // Keep the normal color raster's register pressure and early
                 // termination unchanged. Only selected tiles run the mask shader.
@@ -1955,10 +2015,14 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                            ? (spark_rad ? (overlays_active ? pipeline_rasterize_forward_3dgut_rad : pipeline_rasterize_forward_3dgut_plain_rad)
                                                         : (overlays_active ? pipeline_rasterize_forward_3dgut : pipeline_rasterize_forward_3dgut_plain))
                                            : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain);
+                if (custom_geometry)
+                    raster_bindings.push_back(geometry);
                 executeComputeIndirect(record,
                                        indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
                                        &wave_uniforms, sizeof(wave_uniforms),
-                                       color_pipeline[buffers.is_unsorted_1], raster_bindings);
+                                       customVariant(color_pipeline[buffers.is_unsorted_1]), raster_bindings);
+                if (custom_geometry)
+                    raster_bindings.pop_back();
                 raster_bindings.push_back({*outline_ids, BufferUse::ComputeReadWrite});
                 if (!use_gut_rasterization)
                     raster_bindings.push_back({transform_indices, BufferUse::ComputeRead});
@@ -1977,10 +2041,12 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                                           : (uniforms.stochastic_mode != 0u
                                                                  ? (overlays_active ? pipeline_rasterize_stochastic : pipeline_rasterize_stochastic_plain)
                                                                  : (overlays_active ? pipeline_rasterize_forward : pipeline_rasterize_forward_plain)));
+            if (custom_geometry)
+                raster_bindings.push_back(geometry);
             executeComputeIndirect(record,
                                    indirect::byteOffset(indirect::DepthWave::kFullscreenWordOffset),
                                    &wave_uniforms, sizeof(wave_uniforms),
-                                   raster_pipeline[buffers.is_unsorted_1], raster_bindings);
+                                   customVariant(raster_pipeline[buffers.is_unsorted_1]), raster_bindings);
         }
     }
 
@@ -2805,7 +2871,7 @@ void VulkanGSRenderer::executeCullSplats(
     executeCompute(
         {{num_splats, 256}},
         &uniforms, sizeof(uniforms),
-        pipeline_cull_splats,
+        customVariant(pipeline_cull_splats),
         std::vector<TaggedBinding>{
             {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
             {transform_indices, BufferUse::ComputeRead},
@@ -2941,16 +3007,15 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
                           : unsorted_keys,
                       BufferUse::ComputeRead});
     applyShNUniforms(survivor_uniforms, buffers, deviceInfo.maxStorageBufferRange);
+    // Survivor projection is never 3DGUT.
+    releaseDeviceBuffer(buffers.custom_geometry.deviceBuffer);
 
     // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
     executeComputeIndirect(
         buffers.survivor_state.deviceBuffer,
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
-        buffers.quant_pool ? pipeline_projection_forward_quant_survivors
-        : buffers.shN_q16  ? pipeline_projection_forward_shn_q16_survivors
-        : buffers.shN_f16  ? pipeline_projection_forward_shn_f16_survivors
-                           : pipeline_projection_forward_survivors,
+        customVariant(survivorProjectionProgram(buffers)),
         tagged);
 }
 

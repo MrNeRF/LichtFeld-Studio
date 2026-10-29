@@ -50,6 +50,35 @@ TEST(OutputSlotRing, AcquireRoundRobinWraps) {
     EXPECT_EQ(ring.acquire({1}), 1u);
 }
 
+TEST(OutputSlotRing, VrEyeSlotsDoNotAliasDesktopOrPreview) {
+    OutputSlotRing ring;
+    // The VR eyes render into their own targets beside the desktop view and the preview.
+    lfs::vis::RenderTargetRegistry targets;
+    const auto desktop = targets.allocate();
+    const auto preview = targets.allocate();
+    const auto left = targets.allocate();
+    const auto right = targets.allocate();
+    const auto desktop_cell = ring.acquire(desktop);
+    const auto preview_cell = ring.acquire(preview);
+    (void)ring.acquire(left);
+    const auto left_cell = ring.acquire(left);
+    (void)ring.acquire(right);
+    (void)ring.acquire(right);
+    const auto right_cell = ring.acquire(right);
+    ring.slotAt(desktop, desktop_cell) = makeSlot(0x10);
+    ring.slotAt(preview, preview_cell) = makeSlot(0x20);
+    ring.slotAt(left, left_cell) = makeSlot(0x30);
+    ring.slotAt(right, right_cell) = makeSlot(0x40);
+    ring.markLatest(left, left_cell);
+    ring.markLatest(right, right_cell);
+    EXPECT_EQ(ring.latestSlot(left).image.image, fakeImage(0x30));
+    EXPECT_EQ(ring.latestSlot(right).image.image, fakeImage(0x40));
+    ring.clearLogical(left, {});
+    EXPECT_EQ(ring.slotAt(desktop, desktop_cell).image.image, fakeImage(0x10));
+    EXPECT_EQ(ring.slotAt(preview, preview_cell).image.image, fakeImage(0x20));
+    EXPECT_EQ(ring.latestSlot(right).image.image, fakeImage(0x40));
+}
+
 TEST(OutputSlotRing, WaitNoOpOnZeroWatermark) {
     OutputSlotRing ring;
     (void)ring.acquire({1});

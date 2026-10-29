@@ -122,3 +122,19 @@ def test_template_normalization_preserves_real_api_changes_and_non_annotations(t
     ):
         (generated / "lichtfeld" / "__init__.pyi").write_text(changed, encoding="utf-8")
         assert manage.check_stubs(generated, committed) == 1
+
+
+def test_collision_aliases_reexport_one_canonical_signature():
+    import ast
+    root = Path(__file__).resolve().parents[2]
+    stubs = root / "src/python/stubs/lichtfeld"
+    names = {"generate_collision", "export_collision", "cancel_collision", "get_collision_state", "set_walk_settings"}
+    scene = ast.parse((stubs / "scene.pyi").read_text())
+    top = ast.parse((stubs / "__init__.pyi").read_text())
+    for name in names:
+        assert sum(isinstance(node, ast.FunctionDef) and node.name == name for node in scene.body) == 1
+        assert not any(isinstance(node, ast.FunctionDef) and node.name == name for node in top.body)
+    aliases = {alias.name: alias.asname for node in top.body
+               if isinstance(node, ast.ImportFrom) and node.module == "scene" and node.level == 1
+               for alias in node.names}
+    assert all(aliases[name] == name for name in names)

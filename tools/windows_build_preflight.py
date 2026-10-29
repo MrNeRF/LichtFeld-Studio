@@ -64,6 +64,7 @@ VISUALIZER_QUALIFIED_CALL_RE = re.compile(
 EXPORT_EXEMPT_TOKENS = frozenset(
     {"constexpr", "friend", "inline", "static", "template", "typedef", "using"}
 )
+STATEMENT_TOKENS = frozenset({"case", "do", "else", "for", "if", "return", "switch", "while"})
 
 
 @dataclass(frozen=True, order=True)
@@ -194,6 +195,22 @@ def _resolve_visualizer_header(root: Path, include: str) -> Path | None:
     return None
 
 
+def _is_call_expression(masked: str, name_offset: int) -> bool:
+    """True when the name follows an operator or ``return``: a call, not a declaration.
+
+    Characters that can end a return type (``*``, ``&``, ``>``) do not count.
+    """
+
+    before = masked[:name_offset].rstrip()
+    if not before:
+        return False
+    if before[-1] in "!(=,?[":
+        return True
+    if before.endswith(("&&", "||")) and len(before) > 2 and before[-3].isspace():
+        return True
+    return re.search(r"\b(?:return|co_return|throw)$", before) is not None
+
+
 def _function_segment(masked: str, name_offset: int) -> tuple[int, str] | None:
     open_paren = masked.find("(", name_offset)
     if open_paren < 0:
@@ -267,11 +284,15 @@ def check_visualizer_test_exports(root: Path) -> list[Finding]:
                     prefix = masked_header[max(0, match.start() - 2) : match.start()]
                     if prefix.endswith("::") or prefix.endswith("->"):
                         continue
+                    if _is_call_expression(masked_header, match.start()):
+                        continue
                     function = _function_segment(masked_header, match.start())
                     if function is None:
                         continue
                     _start, segment = function
                     tokens = set(re.findall(r"\b[A-Za-z_]\w*\b", segment))
+                    if tokens & STATEMENT_TOKENS:
+                        continue
                     if (
                         tokens & EXPORT_EXEMPT_TOKENS
                         or "operator" in tokens

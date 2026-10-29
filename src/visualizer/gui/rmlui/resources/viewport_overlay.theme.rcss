@@ -618,3 +618,9 @@
     color: @{text};
     box-shadow: 0 4dp 14dp @{alpha(background,0.22)};
 }
+
+.gamepad-navigation-indicator { background-color: @{alpha(surface,0.9)}; color: @{text}; }
+.gamepad-indicator-label, .gamepad-indicator-panel, .gamepad-indicator-status { color: @{text_dim}; }
+.gamepad-indicator-dot { background-color: @{text_dim}; }
+.gamepad-navigation-indicator.is-ready .gamepad-indicator-dot { background-color: @{success}; }
+.gamepad-navigation-indicator.needs-action .gamepad-indicator-dot { background-color: @{warning}; }

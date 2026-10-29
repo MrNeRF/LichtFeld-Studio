@@ -36,6 +36,7 @@
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/native_fs.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
@@ -1979,6 +1980,8 @@ namespace {
             params.optimization.save_steps = {
                 static_cast<size_t>(std::max(1, checkpoint_iter / 2)),
                 static_cast<size_t>(checkpoint_iter)};
+            // Each save would otherwise replace the checkpoint it supersedes.
+            params.optimization.keep_all_checkpoints = true;
             lfs::core::Scene scene;
 
             auto load_result = lfs::training::loadTrainingDataIntoScene(params, scene);
@@ -3330,6 +3333,7 @@ namespace {
         params.optimization.popspa_sparsify_steps = 1;
         params.optimization.popspa_refine_steps = 0;
         params.optimization.save_steps = {1};
+        params.optimization.keep_all_checkpoints = true;
 
         lfs::core::Scene scene;
         ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
@@ -3585,6 +3589,68 @@ namespace {
         std::filesystem::remove_all(output_path, ec);
     }
 
+    TEST_F(ProjectCheckpointTrainerInstall, CheckpointRetentionRecreatesUnlinkedProjectAndRejectsConflict) {
+        for (const bool conflict : {false, true}) {
+            SCOPED_TRACE(conflict);
+            lfs::test::licht::TemporaryDirectory temporary;
+            const auto path = temporary.path / "project.licht";
+            auto params = make_tiny_headless_params(temporary.path, 6);
+            params.optimization.save_steps = {1, 3, 5};
+            params.optimization.enable_eval = false;
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            ASSERT_TRUE(trainer.initialize(params));
+            lfs::training::grant_headless_project_saves(trainer, params);
+            bool removed = false;
+            std::vector<std::byte> foreign_bytes;
+            auto& boundary = lfs::training::ControlBoundary::instance();
+            const auto handle = boundary.register_callback(lfs::training::ControlHook::PostStep,
+                                                           [&](const lfs::training::HookContext& context) {
+                                                               if (context.iteration != 2)
+                                                                   return;
+                                                               if (!waitUntil([&] {
+                                                                       const auto metrics = trainer.get_project_snapshot_metrics();
+                                                                       return metrics.last_path == path && !metrics.writer_in_flight;
+                                                                   },
+                                                                              std::chrono::seconds(30)))
+                                                                   return;
+                                                               removed = lfs::core::native_fs::remove(path);
+                                                               if (conflict && removed) {
+                                                                   auto foreign = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::create(
+                                                                       lfs::core::generate_uuid_v4(), 100));
+                                                                   (void)lfs::test::licht::require_result(foreign.save(path));
+                                                                   foreign_bytes = lfs::test::licht::read_file_bytes(path);
+                                                               }
+                                                           });
+            const auto trained = trainer.train();
+            boundary.unregister_callback(lfs::training::ControlHook::PostStep, handle);
+            trainer.shutdown();
+            ASSERT_TRUE(removed);
+            if (conflict) {
+                EXPECT_FALSE(trainer.get_project_snapshot_metrics().last_writer_error.empty());
+                EXPECT_EQ(lfs::test::licht::read_file_bytes(path), foreign_bytes);
+            } else {
+                ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+                auto document = lfs::test::licht::require_result(lfs::io::project::ProjectDocument::open(path));
+                ASSERT_EQ(document.checkpoint_uuids().size(), 1u);
+                const auto bound = lfs::test::licht::require_result(document.bound_checkpoint_uuid());
+                ASSERT_TRUE(bound);
+                const auto* checkpoint = document.find_checkpoint(*bound);
+                ASSERT_NE(checkpoint, nullptr);
+                lfs::test::licht::require_status(checkpoint->visit_stream([](std::istream& stream, std::uint64_t bytes) -> lfs::Result<void> {
+                    const auto header = lfs::core::load_checkpoint_header(stream, bytes);
+                    EXPECT_TRUE(header);
+                    if (header)
+                        EXPECT_EQ(header->iteration, 6);
+                    return {};
+                }));
+                lfs::test::licht::require_status(document.source_reader()->verify_all());
+            }
+        }
+    }
+
     TEST_F(ProjectCheckpointTrainerInstall,
            ConfiguredStepSavesSurviveAnActiveWriter) {
         const auto output_path =
@@ -3596,6 +3662,7 @@ namespace {
 
         auto params = make_tiny_headless_params(output_path, 40);
         params.optimization.save_steps = {10, 20, 30};
+        params.optimization.keep_all_checkpoints = true;
 
         lfs::core::Scene scene;
         ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));

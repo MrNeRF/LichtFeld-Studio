@@ -9,8 +9,11 @@
 #include "project/session_state.hpp"
 #include "sequencer/timeline.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <initializer_list>
 #include <utility>
 
 namespace lfs::test::licht {
@@ -322,6 +325,81 @@ namespace lfs::test::licht {
         const auto bytes = std::as_bytes(
             std::span(PNG, sizeof(PNG) - 1));
         return {bytes.begin(), bytes.end()};
+    }
+
+    std::unique_ptr<core::SplatData> make_matrix_splat(const bool cuda) {
+        const Device device = cuda ? Device::GPU : Device::CPU;
+        constexpr std::size_t count = 4;
+        std::vector<float> means{
+            1.0f,
+            2.0f,
+            3.0f,
+            4.0f,
+            5.0f,
+            6.0f,
+            7.0f,
+            8.0f,
+            9.0f,
+            10.0f,
+            11.0f,
+            12.0f,
+        };
+        std::vector<float> sh0(count * 3);
+        std::vector<float> shn(count * 3 * 3);
+        std::vector<float> scaling(count * 3);
+        std::vector<float> rotation(count * 4, 0.0f);
+        std::vector<float> opacity(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            sh0[index * 3] = static_cast<float>(index) + 0.1f;
+            sh0[index * 3 + 1] = static_cast<float>(index) + 0.2f;
+            sh0[index * 3 + 2] = static_cast<float>(index) + 0.3f;
+            scaling[index * 3] = -1.0f - static_cast<float>(index);
+            scaling[index * 3 + 1] = -2.0f;
+            scaling[index * 3 + 2] = -3.0f;
+            rotation[index * 4] = 1.0f;
+            opacity[index] = -0.5f + static_cast<float>(index) * 0.1f;
+        }
+        for (std::size_t index = 0; index < shn.size(); ++index) {
+            shn[index] = static_cast<float>(index) / 100.0f;
+        }
+
+        auto result = std::make_unique<lfs::core::SplatData>(
+            1,
+            Tensor::from_vector(
+                means, {count, std::size_t{3}}, device),
+            Tensor::from_vector(
+                sh0, {count, std::size_t{1}, std::size_t{3}},
+                device),
+            Tensor::from_vector(
+                shn, {count, std::size_t{3}, std::size_t{3}},
+                device),
+            Tensor::from_vector(
+                scaling, {count, std::size_t{3}}, device),
+            Tensor::from_vector(
+                rotation, {count, std::size_t{4}}, device),
+            Tensor::from_vector(
+                opacity, {count, std::size_t{1}}, device),
+            2.5f);
+        result->set_active_sh_degree(0);
+        auto deleted = Tensor::empty({count}, Device::CPU, DataType::UInt8);
+        std::ranges::copy(std::initializer_list<std::uint8_t>{0, 1, 0, 1}, deleted.ptr<std::uint8_t>());
+        result->deleted() = deleted.to(device);
+        result->_densification_info = Tensor::from_vector(
+            std::vector<float>{
+                0.1f,
+                0.2f,
+                0.3f,
+                0.4f,
+                1.1f,
+                1.2f,
+                1.3f,
+                1.4f,
+            },
+            {std::size_t{2}, count}, device);
+        result->set_frozen_ranges({
+            {.start = 1, .count = 2},
+        });
+        return result;
     }
 
     std::unique_ptr<core::SplatData> make_splat(const std::size_t count) {

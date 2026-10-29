@@ -29,6 +29,7 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering/temporal_frame_tracker.hpp"
 #include "rendering_types.hpp"
+#include "shaders/shader_service.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_cpu_desc.hpp"
 #include "split_view_service.hpp"
@@ -40,7 +41,9 @@
 #include "viewport_interaction_context.hpp"
 #include "viewport_overlay_service.hpp"
 #include "visualizer/app_store.hpp"
+#include "vr/vr_eye_frame.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -53,9 +56,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -82,6 +87,7 @@ namespace lfs::vis::op {
 namespace lfs::vis {
     class GraphicsContext;
     class SceneRenderer;
+    class SceneCustomEffects;
     class PointSceneRenderer;
 
     class SceneManager;
@@ -104,8 +110,10 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             GraphicsContext* graphics_context = nullptr;
+            bool deterministic_export = false;
             bool preparing_import = false;
             core::Uuid provisional_import_node;
+            bool on_screen = false; // the viewer shows the frame, so its custom effects count as displayed
         };
 
         explicit RenderingManager(ViewSource& views);
@@ -127,6 +135,16 @@ namespace lfs::vis {
         // Main render function
         ViewportFrameResult renderFrame(const RenderContext& context);
         void publishFrameToInterop(ViewId view, const ViewportFrameResult& frame);
+        // Stereo eyes at the given poses into the two VR render targets.
+        [[nodiscard]] lfs::Result<std::array<vr::EyeFrame, 2>> renderVrEyes(
+            GraphicsContext& context, SceneManager& scene,
+            const std::array<lfs::rendering::FrameView, 2>& views);
+        // Publishes a rendered eye as `view`'s scene image, for the desktop mirror; an eye
+        // not rendered clears that image.
+        ViewportFrameResult presentVrMirror(ViewId view, const vr::EyeFrame& eye);
+        void releaseVrResources();
+        // Turns off the view modes and overlays a headset view cannot show.
+        [[nodiscard]] static RenderSettings vrRenderSettings(RenderSettings settings);
         [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
             GraphicsContext& context,
             const lfs::core::SplatData& model,
@@ -151,6 +169,7 @@ namespace lfs::vis {
             std::uint32_t* picked_ring_id_out = nullptr);
 
         // Render preview image without touching the shared viewport presentation textures.
+        // Custom effects see `scene_time`, the scene time by default.
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
                                                               const glm::mat3& camera_rotation,
                                                               const glm::vec3& camera_position,
@@ -159,7 +178,9 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true,
+                                                              std::optional<float> scene_time = std::nullopt);
         // Renders the scene from a dataset camera's pose and intrinsics, as the GT comparison
         // view does, at max(image, camera) size: the size selection projects that camera at.
         // Returns a CPU float [H,W,3] image without touching the viewport presentation, or
@@ -214,7 +235,8 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt,
-                                                              bool equirectangular = false);
+                                                              bool equirectangular = false,
+                                                              bool deterministic_export = true);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
@@ -259,6 +281,10 @@ namespace lfs::vis {
         [[nodiscard]] Result<core::Tensor> renderLinearImage(SceneManager*, const ExportImageRequest&);
         [[nodiscard]] Result<core::Tensor> renderLinearImage(const core::SplatData&, SceneRenderState, const ExportImageRequest&);
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> renderExportImage(
+            SceneManager* scene_manager, const ExportImageRequest& request);
+
+        // BW2A fallback, inside the same exporting draw as renderExportImage.
+        [[nodiscard]] Result<core::Tensor> renderTransparentExportFallback(
             SceneManager* scene_manager, const ExportImageRequest& request);
 
         [[nodiscard]] lfs::io::SplatTensorAllocator makeSplatTensorAllocator() const;
@@ -308,6 +334,63 @@ namespace lfs::vis {
         void setOverlayAnimationActive(const bool active) {
             this->state().animation_state_.setOverlayAnimationActive(active);
         }
+        void setSequencerReveal(std::optional<lfs::rendering::GaussianRevealState> reveal,
+                                std::optional<shaders::CustomRevealContext> custom = {}) {
+            if (sequencer_reveal_ == reveal && sequencer_custom_reveal_ == custom)
+                return;
+            sequencer_reveal_ = reveal;
+            sequencer_custom_reveal_ = custom;
+            markDirty(DirtyFlag::SPLATS, FrameReason::SettingsChange);
+        }
+
+        void setShaderService(shaders::ShaderService* service) { shader_service_ = service; }
+        void syncCustomPrograms();
+        [[nodiscard]] std::uint64_t customEffectGeneration() const { return custom_effect_generation_; }
+        void setSceneTime(float seconds);
+        using ExportLease = shaders::ShaderService::ExportLease;
+        template <class T>
+        static T shaderPreparationValue() {
+            if constexpr (std::is_default_constructible_v<T>)
+                return T{};
+            else
+                return T(shaderPreparationValue<typename T::value_type>());
+        }
+        using ExportFrame = shaders::ShaderService::ExportFrame;
+        // A lease plans the hosts its `frame` draws. Without a frame its draws link what they find missing.
+        [[nodiscard]] ExportLease prepareShaderExport(ExportFrame frame, const core::SplatData* model = nullptr, const RenderSettings* settings = nullptr, bool dynamic = false);
+        [[nodiscard]] Result<bool> prepareShaderExport(const ExportLease& lease, const core::SplatData* model = nullptr, const RenderSettings* settings = nullptr);
+        // The frame of renderExportImage: its size, and banded splat depth when meshes are on screen.
+        [[nodiscard]] ExportFrame exportImageFrame(SceneManager* scene_manager, const ExportImageRequest& request);
+        Status selectExportPrograms(std::string_view host);
+        template <class Post, class Draw>
+        auto drawWithShaders(const ExportLease* lease, Post&& post, Draw&& draw, std::stop_token stop = {}, const std::function<Result<bool>()>& prepare = {}) -> std::invoke_result_t<Draw&>;
+        // `frame` describes what `draw` renders; it runs on the viewer thread, only when shaders are bound.
+        template <class Post, class Draw>
+        auto drawWithShaders(bool exporting, Post&& post, Draw&& draw, const std::function<ExportFrame()>& frame) -> std::invoke_result_t<Draw&> {
+            using Image = std::invoke_result_t<Draw&>;
+            ExportLease lease;
+            bool use_lease = exporting;
+            const auto caller = std::this_thread::get_id();
+            auto captured = post([&]() -> Image {
+                use_lease |= caller != std::this_thread::get_id();
+                if (use_lease) {
+                    lease = prepareShaderExport(shader_service_ && shader_service_->hasBindings() ? frame() : ExportFrame{});
+                    lease.live_request = !exporting;
+                }
+                return shaderPreparationValue<typename Image::value_type>();
+            });
+            if (!captured)
+                return captured;
+            return drawWithShaders(use_lease ? &lease : nullptr, std::forward<Post>(post), std::forward<Draw>(draw));
+        }
+
+        // Why displayed splats may stand elsewhere than their stored positions.
+        enum class SplatMotion : std::uint8_t {
+            None,
+            Reveal,       // a reveal effect moves them
+            CustomEffect, // the frame on screen ran a custom program, which may move them
+        };
+        [[nodiscard]] SplatMotion displayedSplatMotion() const;
 
         // Interactive edits validate changed environment maps before committing settings.
         [[nodiscard]] lfs::Result<void> updateSettingsFromUser(const RenderSettings& settings,
@@ -317,6 +400,7 @@ namespace lfs::vis {
         // Settings management (also used for restoring saved state).
         void restoreSettingsFromProject(const RenderSettings& settings);
         void updateSettings(const RenderSettings& settings);
+        bool setViewportRenderMode(std::string_view mode);
         void updateSettings(
             const RenderSettings& settings,
             DirtyMask dirty_flags,
@@ -853,7 +937,8 @@ namespace lfs::vis {
             float rasterization_scale = 1.0f,
             bool equirectangular = false,
             const RenderSettings* settings_override = nullptr,
-            bool gaussian_selection_visible = true);
+            bool gaussian_selection_visible = true,
+            bool deterministic_export = true);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             const RenderSettings& settings,
             SceneManager* scene_manager,
@@ -905,7 +990,8 @@ namespace lfs::vis {
             std::optional<float> ortho_scale_override,
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f,
-            bool equirectangular = false);
+            bool equirectangular = false,
+            bool deterministic_export = true);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;
@@ -986,6 +1072,16 @@ namespace lfs::vis {
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void requestViewFollowUp(ViewRenderState& view, DirtyMask flags, FrameReason reason = FrameReason::AsyncCompletion);
         void queueSharedScratchRetry(ViewRenderState& view, DirtyMask retry_dirty);
+        // The frame renderFrame draws; that notes the custom effects it ran.
+        ViewportFrameResult drawFrame(const RenderContext& context);
+        // The custom-effect programs of the scene renderer, null when it has none.
+        [[nodiscard]] SceneCustomEffects* customEffects() const;
+        // Gives `state` the custom effect of the displayed bindings, or of an
+        // export's, at timeline `time`, if one applies.
+        void attachCustomEffect(SceneRenderState& state, const SceneManager& scene_manager, float time) const;
+        // The image error of a failed wait for an export's shaders; `stop` is the export's own.
+        [[nodiscard]] static Error shaderWaitError(const Error& error, const std::stop_token& stop);
+        [[nodiscard]] static Error shadersNotReady();
         void notifyAsyncLodResultsReady();
         // Fills the request's level-of-detail cut for `model` (rendering_manager_lod.cpp).
         void prepareLodRequest(const RenderSettings& settings, const lfs::core::SplatData* model,
@@ -1174,6 +1270,24 @@ namespace lfs::vis {
         std::optional<GTComparisonFullSourceSlot> gt_comparison_full_source_slot_;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
+        // User shaders are device state: one program set serves every view.
+        std::optional<lfs::rendering::GaussianRevealState> sequencer_reveal_;
+        std::optional<shaders::CustomRevealContext> sequencer_custom_reveal_;
+        shaders::ShaderService* shader_service_ = nullptr;
+        std::uint64_t shader_sync_generation_ = 0;
+        std::shared_ptr<const shaders::ShaderFrameSnapshot> custom_effect_snapshot_;
+        const ExportLease* export_draw_ = nullptr;
+        shaders::SnapshotPtr last_complete_;
+        std::uint64_t shader_device_generation_ = 0;
+        rendering::ProgramSetHandle live_programs_;
+        std::shared_ptr<const shaders::DisplayRecord> display_record_;
+        std::vector<std::string> custom_hosts_planned_;
+        bool custom_frame_complete_ = true;
+        std::uint64_t custom_effect_generation_ = 0;
+        bool custom_frame_drawing_ = false; // the frame being drawn ran a custom effect
+        float scene_time_ = 0.0f;
+        std::array<RenderTargetId, 2> vr_render_targets_{};
+
         CameraInteractionService camera_interaction_service_;
 
         RenderSettings activeSettingsLocked() const;
@@ -1223,6 +1337,56 @@ namespace lfs::vis {
         friend class RenderingManagerGTComparisonReviewTest;
         friend class SceneManager;
         friend class AlignDepthIntegrationTest;
+        friend struct HiGSExportTestAccess;
+        friend struct UserShaderTestAccess;
     };
+
+    template <class Post, class Draw>
+    auto RenderingManager::drawWithShaders(const ExportLease* lease, Post&& post, Draw&& draw, std::stop_token stop, const std::function<Result<bool>()>& prepare) -> std::invoke_result_t<Draw&> {
+        using Image = std::invoke_result_t<Draw&>;
+        const auto fail = [](Error error) -> Image {
+            if constexpr (std::is_same_v<typename Image::error_type, Error>)
+                return error;
+            else
+                return std::unexpected(std::string(error.user_message()));
+        };
+        const auto caller = std::this_thread::get_id();
+        for (;;) {
+            const auto generation = lease && lease->changes ? lease->changes->generation.load() : 0;
+            bool ready = true, inline_wait = false;
+            auto result = post([&]() -> Image {
+                if (stop.stop_requested())
+                    return fail(shaderWaitError(make_error(ErrorInit{.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering, .user_message = "The export was cancelled.", .detection = LFS_SOURCE_SITE_CURRENT()}), stop));
+                const ExportLease* submission = lease;
+                if (lease) {
+                    auto prepared = prepare ? prepare() : prepareShaderExport(*lease);
+                    if (!prepared && (!lease->live_request || prepared.error().code() == ErrorCode::Cancelled))
+                        return fail(shaderWaitError(prepared.error(), stop));
+                    if (!prepared)
+                        submission = nullptr;
+                    ready = !prepared || *prepared;
+                    if (!ready) {
+                        inline_wait = shader_service_ && shader_service_->onOwnerThread() && caller == std::this_thread::get_id();
+                        return shaderPreparationValue<typename Image::value_type>();
+                    }
+                }
+                struct Scope {
+                    RenderingManager& manager;
+                    const ExportLease* outer;
+                    ~Scope() { manager.export_draw_ = outer; }
+                } scope{*this, std::exchange(export_draw_, submission)};
+                return draw();
+            });
+            if (lease && !lease->missing.empty())
+                continue; // the draw lacked a host: the next preflight links it
+            if (!result || ready)
+                return result;
+            if (inline_wait || !lease->changes)
+                return fail(shadersNotReady());
+            if (stop.stop_requested() || lease->ended())
+                return fail(shaderWaitError(make_error(ErrorInit{.code = ErrorCode::Cancelled, .domain = ErrorDomain::Rendering, .user_message = "The export was cancelled.", .detection = LFS_SOURCE_SITE_CURRENT()}), stop));
+            lease->changes->wait(generation, std::chrono::steady_clock::time_point::max(), stop);
+        }
+    }
 
 } // namespace lfs::vis

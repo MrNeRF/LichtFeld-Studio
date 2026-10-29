@@ -82,7 +82,7 @@ jobs:
           git clone --filter=blob:none https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
           # The vcpkg tool checkout must include the versions used by our overlays;
           # vcpkg.json separately pins the baseline for registry dependencies.
-          git -C "$VCPKG_ROOT" checkout a35a4bc4b5beb29c20cd8653f7d2248010de1223
+          git -C "$VCPKG_ROOT" checkout 9eec002df1cd109f8f104cd966a763daf9751489
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure

@@ -1,7 +1,24 @@
 #include "config.slang"
 
+#ifndef LFS_REVEAL
+#define LFS_REVEAL 0
+#endif
+
+// Custom effect hosts (user shaders) build on the reveal variants and evaluate
+// the bound effect once per projected element.
+#ifndef LFS_CUSTOM_EFFECT
+#define LFS_CUSTOM_EFFECT 0
+#endif
+
 import utils;
 import spherical_harmonics;
+#include "reveal_stages.inc"
+#if LFS_CUSTOM_EFFECT
+#ifndef NO_MAIN
+import lfs;
+#endif
+#include "custom_effect_layout.inc"
+#endif
 
 #define LFS_COLOR_INLINE
 #define LFS_COLOR_VEC3 float3
@@ -174,6 +191,9 @@ struct SplatActiveState {
     float3 projected_center;
     uint model_transform_base;
     bool model_transform_enabled;
+#if LFS_CUSTOM_EFFECT
+    int node_idx;
+#endif
 };
 // crop_flags must already be loaded; callers gate on the enable bit before
 // any transform/min/max loads (and skip whole slot groups when none are active).
@@ -457,8 +477,36 @@ SplatActiveState compute_splat_active_state(
     state.projected_center = projected_center;
     state.model_transform_base = model_transform_base;
     state.model_transform_enabled = model_transform_enabled;
+#if LFS_CUSTOM_EFFECT
+    state.node_idx = node_idx;
+#endif
     return state;
 }
+
+#if LFS_CUSTOM_EFFECT
+// The custom bindings of a node's elements in evaluation order (global, the
+// node's own, the reveal binding while a reveal is set; LFS_VK_CUSTOM_NONE when
+// absent) and the node's object id in .w.
+uint4 custom_chain(StructuredBuffer<float4> overlay_params, int node_idx) {
+    const uint tail = OVERLAY_PARAM_COUNT;
+    const uint4 header = asuint(overlay_params[tail + LFS_VK_CUSTOM_HEADER_SLOT]);
+    uint2 object = uint2(LFS_VK_CUSTOM_NONE, LFS_VK_CUSTOM_NONE);
+    if (node_idx >= 0 && uint(node_idx) < header.x) {
+        const uint objects = tail + LFS_VK_CUSTOM_HEADER_SLOTS + header.y * LFS_VK_CUSTOM_PARAMETER_SLOTS +
+                             (header.y + 3u) / 4u;
+        object = asuint(overlay_params[objects + uint(node_idx)].xy);
+    }
+    uint4 chain = uint4(header.z, object.x, header.w, object.y);
+    for (uint i = 0u; i < 3u; ++i)
+        if (chain[i] >= header.y)
+            chain[i] = LFS_VK_CUSTOM_NONE;
+    return chain;
+}
+
+bool custom_chain_bound(uint4 chain) {
+    return any(chain.xyz != LFS_VK_CUSTOM_NONE);
+}
+#endif
 
 // Position-level visibility tests, exact mirrors of the center rejects inside
 // project_gaussian_to_camera_model / _gut. The cull prepass must never reject
@@ -477,6 +525,18 @@ bool splat_center_potentially_visible_gut(float3 mean_ws, Camera cam) {
     float3 mean_vs = project_point(mean_ws, cam);
     return mean_vs.z > NEAR_CLIP && isfinite(dot(mean_vs, mean_vs));
 }
+
+// Declares `dir`, the view direction to a world-space mean rotated back into
+// the node's source frame where the SH coefficients live. A macro, so the
+// legacy projection functions compile exactly as before.
+#define LFS_SOURCE_VIEW_DIRECTION(mean_ws, cam, model_transform_rows, model_transform_base, model_transform_enabled) \
+    float3 dir = view_direction_to_point(mean_ws, cam); \
+    if (model_transform_enabled) { \
+        float3 r0, r1, r2; \
+        if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) { \
+            dir = transpose_mul_rows(r0, r1, r2, dir); \
+        } \
+    }
 
 Splat_2D_Vertex project_gaussian_to_camera_model(
     Gaussian_3D g,
@@ -501,13 +561,7 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     }
     xyz_vs.xy -= 0.5;  // pixel offset
 
-    float3 dir = view_direction_to_point(mean_ws, cam);
-    if (model_transform_enabled) {
-        float3 r0, r1, r2;
-        if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) {
-            dir = transpose_mul_rows(r0, r1, r2, dir);
-        }
-    }
+    LFS_SOURCE_VIEW_DIRECTION(mean_ws, cam, model_transform_rows, model_transform_base, model_transform_enabled)
     float3 rgb = compute_color_from_sh_coeffs(g.sh_coeffs, dir, active_sh);
 
     float3x3 cov_ws = get_covariance_from_quat_scales(
@@ -629,6 +683,11 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
     // 3DGUT uses the unscented transform for screen-space binning; final alpha
     // is evaluated against the pixel ray in the raster shader.
     float3x3 rotation = quat_to_rotmat(safe_quat_normalize(g.rotations));
+#if LFS_REVEAL
+    float3 original_mean = model_transform_enabled
+        ? transform_point_rows(model_transform_rows, model_transform_base, g.xyz_ws) : g.xyz_ws;
+    float3 reveal_offset = mean_ws - original_mean;
+#endif
     float3 sigma_points[NUM_SIGMA_POINTS];
     sigma_points[0] = mean_ws;
     for (uint i = 0u; i < D; ++i) {
@@ -639,9 +698,15 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         sigma_points[1u + i] = model_transform_enabled
                                     ? transform_point_rows(model_transform_rows, model_transform_base, source_plus)
                                     : source_plus;
+#if LFS_REVEAL
+        sigma_points[1u + i] += reveal_offset;
+#endif
         sigma_points[1u + D + i] = model_transform_enabled
                                         ? transform_point_rows(model_transform_rows, model_transform_base, source_minus)
                                         : source_minus;
+#if LFS_REVEAL
+        sigma_points[1u + D + i] += reveal_offset;
+#endif
     }
 
     float2 image_points[NUM_SIGMA_POINTS];
@@ -678,13 +743,7 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
     }
 
-    float3 dir = view_direction_to_point(mean_ws, cam);
-    if (model_transform_enabled) {
-        float3 r0, r1, r2;
-        if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) {
-            dir = transpose_mul_rows(r0, r1, r2, dir);
-        }
-    }
+    LFS_SOURCE_VIEW_DIRECTION(mean_ws, cam, model_transform_rows, model_transform_base, model_transform_enabled)
     float3 rgb = compute_color_from_sh_coeffs(g.sh_coeffs, dir, active_sh);
     float3 inv_cov_vs = compute_inverse(cov_vs.xyz);
     float opac = g.opacities * cov_vs.w;
@@ -864,6 +923,62 @@ layout(binding=24) ByteAddressBuffer deleted_mask;
   #endif
 #endif
 
+#if LFS_CUSTOM_EFFECT
+extern struct LfsBoundEffect : _LfsEffects;
+
+// Context of the bound effect for one element, from the custom tail.
+LfsContext custom_context(uint binding, float4x4 object_to_world) {
+    const uint tail = OVERLAY_PARAM_COUNT;
+    const float4 timing = overlay_params[tail + LFS_VK_CUSTOM_TIMING_SLOT];
+    const uint view = tail + LFS_VK_CUSTOM_WORLD_TO_VIEW_SLOT;
+    LfsContext ctx;
+    ctx.time = timing.x;
+    ctx.progress = timing.y;
+    ctx.softness = timing.z;
+    ctx.radius = timing.w;
+    ctx.boundsMin = overlay_params[tail + LFS_VK_CUSTOM_BOUNDS_MIN_SLOT].xyz;
+    ctx.boundsMax = overlay_params[tail + LFS_VK_CUSTOM_BOUNDS_MAX_SLOT].xyz;
+    ctx.center = overlay_params[tail + LFS_VK_CUSTOM_CENTER_SLOT].xyz;
+    ctx.objectToWorld = object_to_world;
+    ctx.worldToView = float4x4(overlay_params[view], overlay_params[view + 1u],
+                               overlay_params[view + 2u], overlay_params[view + 3u]);
+    ctx.cameraPosition = overlay_params[tail + LFS_VK_CUSTOM_CAMERA_POSITION_SLOT].xyz;
+    ctx.cameraIntrinsics = overlay_params[tail + LFS_VK_CUSTOM_INTRINSICS_SLOT];
+    ctx.distortionCoefficients = overlay_params[tail + LFS_VK_CUSTOM_DISTORTION_SLOT];
+    const uint4 image = asuint(overlay_params[tail + LFS_VK_CUSTOM_IMAGE_SLOT]);
+    ctx.imageSize = image.xy;
+    ctx.cameraModel = image.z;
+    const uint parameters = tail + LFS_VK_CUSTOM_HEADER_SLOTS + binding * LFS_VK_CUSTOM_PARAMETER_SLOTS;
+    for (uint i = 0u; i < LFS_VK_CUSTOM_PARAMETER_SLOTS; ++i)
+        ctx.values[i] = overlay_params[parameters + i];
+    return ctx;
+}
+
+// The effect of the published program set `binding` runs.
+uint custom_effect(uint binding) {
+    const uint tail = OVERLAY_PARAM_COUNT;
+    const uint bindings = asuint(overlay_params[tail + LFS_VK_CUSTOM_HEADER_SLOT]).y;
+    const uint effects = tail + LFS_VK_CUSTOM_HEADER_SLOTS + bindings * LFS_VK_CUSTOM_PARAMETER_SLOTS;
+    return asuint(overlay_params[effects + binding / 4u])[binding % 4u];
+}
+
+[ForceInline]
+bool custom_element_finite(LfsElement e) {
+    return all(isfinite(e.position)) && all(isfinite(e.scale)) && all(isfinite(e.rotation)) &&
+           all(isfinite(e.color)) && isfinite(e.opacity);
+}
+
+#if LFS_3DGUT_PROJECTION
+// Geometry for the custom 3DGUT raster (custom_effect_layout.inc), bound after
+// the deleted mask.
+  #if LFS_QUANT_POOL || LFS_SHN_Q16
+layout(binding=26) RWStructuredBuffer<float4> out_custom_geometry;
+  #else
+layout(binding=25) RWStructuredBuffer<float4> out_custom_geometry;
+  #endif
+#endif
+#endif
+
 #if !LFS_PROJECTION_SURVIVORS
 // Legacy N-wide variant only: the survivor-list variant never clears, because
 // rejected splats simply do not append a compact slot.
@@ -997,9 +1112,11 @@ void main(
         uniforms.shN_layout_slots
       );
     #endif
+#if !LFS_REVEAL
     if (lod_active && (uniforms.lod_enabled & 16u) != 0u) {
         gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
     }
+#endif
 
     const SplatActiveState active_state = compute_splat_active_state(
         logical_idx, gauss.xyz_ws, cam, model_transform_count,
@@ -1034,6 +1151,134 @@ void main(
         gauss.scales = lfsPortalCompactScales(gauss.scales);
         gauss.opacities = lfsPortalCompactOpacity(gauss.opacities);
     }
+#if LFS_CUSTOM_EFFECT && LFS_3DGUT_PROJECTION
+    const float4 gut_source_rotation = gauss.rotations;
+    const float3 gut_source_scale = gauss.scales;
+    const float gut_source_opacity = gauss.opacities;
+#endif
+#if LFS_REVEAL
+    float4 reveal = overlay_params[OVERLAY_PARAM_REVEAL];
+    float reveal_color = 1.0f;
+    float reveal_color_add = 0.0f;
+    float reveal_color_multiplier = 1.0f;
+    float3 reveal_edge_rgb = float3(0.0f);
+    float reveal_grayscale = 0.0f;
+    if (overlay_enabled(reveal.x)) {
+        float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS];
+        LfsRevealEffect effect = lfs_reveal_effect(mean_ws, gauss.scales, reveal, bounds);
+        if (effect.scale_mix <= 0.0001f && effect.seed_scale <= 0.0001f) {
+          #if LFS_PROJECTION_SURVIVORS
+            return;
+          #else
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
+            return;
+          #endif
+        }
+        gauss.opacities = lerp(0.3f, gauss.opacities, effect.color_mix) * effect.opacity_multiplier + effect.color_add;
+        gauss.scales = gauss.scales * effect.scale_mix + effect.seed_scale;
+        float4 q = gauss.rotations;
+        float c = cos(effect.spin*0.5f), s = sin(effect.spin*0.5f);
+        gauss.rotations = float4(c*q.x-s*q.z, c*q.y+s*q.w, c*q.z+s*q.x, c*q.w-s*q.y);
+        reveal_color = effect.color_mix;
+        reveal_color_multiplier = effect.opacity_multiplier;
+        reveal_color_add = effect.color_add;
+        reveal_edge_rgb = effect.edge_rgb;
+        reveal_grayscale = effect.grayscale;
+        if (int(round(bounds.x)) == 11 && reveal.w < 1.0f) {
+            // The light follows the viewing position.
+            float4x3 view = transpose(cam.world_view_transform);
+            float3 eye = -mul(float3x3(view), view[3]);
+            float range = max(length(float2(bounds.w, max(abs(reveal.y), abs(reveal.z)))), 0.0001f);
+            float fade = saturate((length(mean_ws - eye) - range * 0.1f) / (range * 0.02f));
+            reveal_grayscale = fade * (1.0f - smoothstep(0.9f, 1.0f, reveal.w));
+        }
+        mean_ws = effect.position;
+    }
+#if LFS_CUSTOM_EFFECT
+    // One evaluation of the binding chain after the built-in geometry and color
+    // stages. SH is evaluated before the chain and its color is final: a moved
+    // element keeps the view-dependent color of its position before the
+    // chain. Projection normalizes the rotation as it does stored ones.
+    const uint4 custom = custom_chain(overlay_params, active_state.node_idx);
+    const bool custom_bound = custom_chain_bound(custom);
+    float3 custom_rgb = float3(0.0f);
+  #if LFS_3DGUT_PROJECTION
+    bool custom_moved = false;
+    bool custom_reshaped = false;
+    bool custom_faded = false;
+  #endif
+    if (custom_bound) {
+        LFS_SOURCE_VIEW_DIRECTION(mean_ws, cam, model_transforms, model_transform_base, model_transform_enabled)
+        custom_rgb = compute_color_from_sh_coeffs(gauss.sh_coeffs, dir, active_sh);
+        LFS_REVEAL_SHADE(custom_rgb, reveal_color, reveal_color_multiplier, reveal_color_add,
+                         reveal_grayscale, reveal_edge_rgb)
+        const LfsElement element = {mean_ws, gauss.scales, gauss.rotations, custom_rgb, gauss.opacities,
+                                    float3(0.0f), logical_idx, custom.w, 0u};
+        const float4x4 object_to_world = model_transform_enabled
+            ? float4x4(model_transforms[model_transform_base], model_transforms[model_transform_base + 1u],
+                       model_transforms[model_transform_base + 2u], float4(0.0f, 0.0f, 0.0f, 1.0f))
+            : float4x4(1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                       0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+        LfsElement result = element;
+        for (uint i = 0u; i < 3u; ++i) {
+            if (custom[i] == LFS_VK_CUSTOM_NONE)
+                continue;
+            LfsBoundEffect bound;
+            result = bound.apply(custom_effect(custom[i]), result, custom_context(custom[i], object_to_world));
+            // Host metadata is read-only.
+            result.normal = element.normal;
+            result.index = element.index;
+            result.objectId = element.objectId;
+            result.kind = element.kind;
+        }
+        if (!custom_element_finite(result)) {
+          #if LFS_PROJECTION_SURVIVORS
+            return;
+          #else
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
+            return;
+          #endif
+        }
+        // Scales are positive and bounded like loaded ones.
+        result.scale = min(abs(result.scale), float3(exp(MAX_RAW_SCALE)));
+        result.opacity = max(result.opacity, 0.0f);
+      #if LFS_3DGUT_PROJECTION
+        custom_moved = any(result.position != element.position);
+        custom_reshaped = any(result.scale != element.scale) || any(result.rotation != element.rotation);
+        custom_faded = result.opacity != element.opacity;
+      #endif
+        mean_ws = result.position;
+        gauss.scales = result.scale;
+        gauss.rotations = result.rotation;
+        gauss.opacities = result.opacity;
+        custom_rgb = result.color;
+    }
+  #if LFS_3DGUT_PROJECTION
+    // The custom raster's geometry: the legacy raster's built-in reconstruction
+    // from the source attributes, with what the effect changed taken from it.
+    float3 gut_center = active_state.mean_ws;
+    float3x3 gut_rows = gut_inverse_scale_rotation(gut_source_rotation, gut_source_scale);
+    float gut_opacity = gut_source_opacity;
+    if (overlay_enabled(reveal.x)) {
+        float3 row_scales = 1.0f / max(float3(length(gut_rows[0]), length(gut_rows[1]), length(gut_rows[2])), 1e-8f);
+        float4 bounds = overlay_params[OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS];
+        LFS_REVEAL_GUT(gut_center, gut_rows, gut_opacity, row_scales, reveal, bounds)
+    }
+    if (custom_moved)
+        gut_center = mean_ws;
+    if (custom_reshaped)
+        gut_rows = gut_inverse_scale_rotation(gauss.rotations, gauss.scales);
+    if (custom_faded)
+        gut_opacity = gauss.opacities;
+    float3x3 inv_linear;
+    if (model_transform_enabled &&
+        inverse_3x3(linear_transform_rows(model_transforms, model_transform_base), inv_linear))
+        gut_rows = mul(gut_rows, inv_linear);
+  #endif
+#endif
+    if (lod_active && (uniforms.lod_enabled & 16u) != 0u)
+        gauss.opacities *= clamp(lod_weights[render_idx], 0.0f, 1.0f);
+#endif // LFS_REVEAL
 #endif
 
     // projection (differentiable)
@@ -1242,6 +1487,27 @@ void main(
 
 
 
+#if LFS_CUSTOM_EFFECT
+    // Unbound elements take SH here, after the visibility tests, as legacy
+    // projection does. Its own color is unused in custom hosts.
+    if (!custom_bound) {
+        LFS_SOURCE_VIEW_DIRECTION(mean_ws, cam, model_transforms, model_transform_base, model_transform_enabled)
+        custom_rgb = compute_color_from_sh_coeffs(gauss.sh_coeffs, dir, active_sh);
+        LFS_REVEAL_SHADE(custom_rgb, reveal_color, reveal_color_multiplier, reveal_color_add,
+                         reveal_grayscale, reveal_edge_rgb)
+    }
+    splat.rgb = custom_rgb;
+  #if LFS_3DGUT_PROJECTION
+    const uint geometry = out_idx * LFS_VK_CUSTOM_GEOMETRY_FLOAT4S;
+    out_custom_geometry[geometry] = float4(gut_center, gut_opacity);
+    out_custom_geometry[geometry + 1u] = float4(gut_rows[0], 0.0f);
+    out_custom_geometry[geometry + 2u] = float4(gut_rows[1], 0.0f);
+    out_custom_geometry[geometry + 3u] = float4(gut_rows[2], 0.0f);
+  #endif
+#elif LFS_REVEAL
+    LFS_REVEAL_SHADE(splat.rgb, reveal_color, reveal_color_multiplier, reveal_color_add,
+                     reveal_grayscale, reveal_edge_rgb)
+#endif
     if ((uniforms.lod_enabled & 2u) != 0u) {
         const float3 debug_rgb = lod_debug_color(lod_levels[render_idx]);
         splat.rgb *= debug_rgb;

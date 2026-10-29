@@ -338,6 +338,11 @@ class Panel:
 
     def on_unmount(self, doc): ...
 
+    def on_visibility_changed(self, visible):
+        """
+        Release transient resources on hide, even when the document stays mounted.
+        """
+
     def on_update(self, doc): ...
 
     def on_scene_changed(self, doc): ...
@@ -1991,10 +1996,11 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
 def save_text_file_dialog(default_name: str = 'lichtfeld_logs') -> str:
     """Choose a text log export path. Returns empty string if cancelled."""
 
-def save_json_file_dialog(default_name: str = 'config.json', with_overwrite_confirmation: bool = False) -> object:
-    """
-    Choose a JSON path; empty on cancellation. Optionally return (path, overwrite_confirmed).
-    """
+def save_json_file_dialog(default_name: str = 'config.json') -> str:
+    """Choose a JSON path. Returns empty string if cancelled."""
+
+def save_json_file_dialog_with_confirmation(default_name: str = 'config.json') -> tuple[str, bool]:
+    """Return (JSON path, overwrite_confirmed); empty path on cancellation."""
 
 def save_png_file_dialog(default_name: str = 'export.png') -> str:
     """
@@ -2402,6 +2408,21 @@ def get_align_edge_to_axis() -> bool:
 def set_align_edge_to_axis(enabled: bool) -> None:
     """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
 
+def can_apply_scale_distance() -> bool:
+    """True when 2 valid points are picked for scale distance"""
+
+def get_scale_distance_measured() -> float:
+    """Get measured distance between 2 picked points"""
+
+def apply_scale_distance(target_distance: float) -> bool:
+    """Request scale distance modal to rescale scene"""
+
+def clear_scale_distance() -> None:
+    """Request scale distance modal to clear picked points"""
+
+def get_scale_distance_points() -> list[list[float]]:
+    """Get picked points for scale distance tool"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path
@@ -2600,10 +2621,49 @@ class SequencerUIState:
     def sequence_fps(self, arg: float, /) -> None: ...
 
     @property
+    def camera_width(self) -> int:
+        """Sequence camera aspect width (1-8192)"""
+
+    @camera_width.setter
+    def camera_width(self, arg: int, /) -> None: ...
+
+    @property
+    def camera_height(self) -> int:
+        """Sequence camera aspect height (1-8192)"""
+
+    @camera_height.setter
+    def camera_height(self, arg: int, /) -> None: ...
+
+    @property
+    def framerate(self) -> int:
+        """Video export FPS numerator"""
+
+    @property
+    def framerate_denominator(self) -> int:
+        """Video export FPS denominator"""
+
+    @property
+    def export_fit(self) -> int:
+        """Video fitting: 0 fit, 1 crop, 2 stretch"""
+
+    @property
     def selected_keyframe(self) -> int: ...
 
 def get_sequencer_state() -> SequencerUIState:
     """Get sequencer UI state for modification"""
+
+def get_reveal_clip() -> object:
+    """
+    Read the live sequencer reveal clip, including shader_id for Custom, or None if absent
+    """
+
+def set_reveal_clip(value: dict) -> bool:
+    """
+    Set the live sequencer reveal clip; Custom (effect 12) requires shader_id; returns false for invalid input
+    """
+
+def remove_reveal_clip() -> bool:
+    """Remove the live sequencer reveal clip"""
 
 def has_keyframes() -> bool:
     """Check if sequencer has any keyframes"""
@@ -2643,9 +2703,9 @@ def reset_video_reconstruction_selection() -> None:
     Reset the saved video reconstruction selection to native/native with abort policy.
     """
 
-def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True, codec: str = 'h264') -> None:
+def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True, codec: str = 'h264', framerate_denominator: int = 1, camera_width: int = 0, camera_height: int = 0, framing: str = 'fit') -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. codec selects 'h264' (default), 'hevc' or 'av1'; AV1 uses NVENC where available or the built-in libaom CPU fallback, without changing codec. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. FPS is framerate/framerate_denominator. Camera aspect defaults to the output size (0, 0); framing is 'fit', 'crop' (alias 'fill'), or 'stretch'.
     """
 
 def export_image_sequence(width: int, height: int, framerate: int, path: str, format: str = 'png', filename_pattern: str = 'frame_%06d', first_frame_number: int = 0, overwrite: bool = False, transparent: bool = False, include_provenance: bool = True) -> None:
@@ -2670,7 +2730,7 @@ def select_keyframe(index: int) -> None:
 
 def delete_keyframe(index: int) -> None:
     """
-    Delete keyframe by index; raises ValueError for the protected first keyframe
+    Delete a real keyframe by index, including the first; synthetic loop points cannot be deleted
     """
 
 def set_keyframe_easing(index: int, easing: int) -> None:
@@ -2863,6 +2923,60 @@ def set_camera_browse_repeat_rate(rate: float, persist: bool = True) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_gamepad_test_state() -> dict:
+    """
+    Read connected controllers and the selected diagnostic sample; never consumes input or moves the camera.
+    """
+
+def take_gamepad_test_state() -> dict:
+    """
+    Read and consume diagnostic presses, independently of navigation commands.
+    """
+
+def set_gamepad_test_active(active: bool) -> None:
+    """
+    Acquire controller discovery while the gamepad preferences page is visible; release it on exit.
+    """
+
+def set_gamepad_test_device(device_id: int) -> bool:
+    """Select a connected controller for input testing, or zero for none."""
+
+def get_gamepad_navigation_state() -> dict:
+    """
+    Read saved gamepad preferences, current connection and navigation routing status.
+    """
+
+def set_gamepad_navigation(enabled: bool, device_id: int, dead_zone: float = 0.15000000596046448, look_speed: float = 1.5, move_speed: float = 1.0) -> bool:
+    """
+    Persist navigation enablement, tuning and assignments; connection IDs and viewport arming remain session-local.
+    """
+
+def get_gamepad_profiles_json() -> str:
+    """
+    Get the named controller layouts and optional model associations; independent of keymaps.
+    """
+
+def set_gamepad_profiles_json(serialized: str, expected: str = '') -> bool:
+    """
+    Validate and atomically apply named profiles, preserving global enablement and connected-device selection.
+    """
+
+def reset_gamepad_profiles() -> bool:
+    """
+    Reset all controller profiles and model associations and disable navigation. Does not affect keyboard profiles.
+    """
+
+def get_gamepad_profile_json() -> str: ...
+
+def get_gamepad_default_profile_json() -> str: ...
+
+def set_gamepad_bindings_json(serialized: str, expected_revision: int) -> bool:
+    """Atomically edit bindings without replacing enablement or tuning."""
+
+def set_gamepad_profile_json(serialized: str) -> bool: ...
+
+def get_gamepad_binding_catalog_json() -> str: ...
+
 def get_rendering_defaults_json() -> str:
     """
     Get user defaults for new projects; project VIEW values are independent overrides.
@@ -2970,6 +3084,17 @@ def get_mcp_access_token() -> str:
 
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
+
+def get_vr_state() -> dict:
+    """
+    Get whether VR can be entered, whether it is active, and the runtime status
+    """
+
+def get_vr_preferences() -> dict:
+    """Get the VR preferences"""
+
+def set_vr_preferences(enabled: bool, resolution_scale: float, scene_units_per_meter: float, move_speed: float, persist: bool = True) -> None:
+    """Set the VR preferences; VR support takes effect after restart"""
 
 def get_mcp_port_override() -> int | None:
     """Get the MCP port set on the command line for this session, or None"""

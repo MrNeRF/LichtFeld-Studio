@@ -1,75 +1,95 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "collision_fixture.hpp"
-#include "core/collision_walk.hpp"
-#include "core/cuda/collision_voxelization.hpp"
+#include "app/converter.hpp"
+#include "core/collision.hpp"
+#include "core/cuda/collision_voxelization_kernels.hpp"
 #include "core/cuda_error.hpp"
+#include "core/native_fs.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
+#include "io/argument_parser.hpp"
+#include "io/collision_export.hpp"
+#include "io/project/collision_serialization.hpp"
+#include "licht_test_support.hpp"
 #include "tensor_test_support.hpp"
-#include <atomic>
+#include <array>
 #include <chrono>
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <thread>
 #include <tuple>
 
 using namespace lfs::core;
 
-TEST(Collision, LogicalBoundsAndPackedBricks) {
-    CollisionVolume v{.dimensions = {1, 3, 3}, .edge = 4, .occupied_count = 4, .words = {CollisionVolume::brick_tag | 1, 0x00110011, 0}};
-    ASSERT_NO_THROW(v.validate());
-    EXPECT_TRUE(v.occupied({0, 1, 1}));
-    EXPECT_FALSE(v.occupied({1, 1, 1}));
-    EXPECT_FALSE(v.occupied({0, 3, 1}));
-    EXPECT_FALSE(v.occupied({-1, 0, 0}));
-    v.words[1] |= 2;
-    EXPECT_THROW(v.validate(), std::invalid_argument);
-    v.words = {1};
-    v.occupied_count = 9;
-    EXPECT_NO_THROW(v.validate());
-}
-
 TEST(Collision, MalformedTopologyAndSettings) {
-    CollisionVolume v{.dimensions = {5, 5, 5}, .edge = 8, .words = {3, 0, 0, 0, 0, 0, 0, 0, 0}};
-    EXPECT_NO_THROW(v.validate());
-    for (const auto pointer : {2u, 4u, 0x80000000u, 0xffffffffu}) {
-        v.words[1] = pointer;
-        EXPECT_THROW(v.validate(), std::invalid_argument);
+    CollisionVolume volume{.dimensions = {5, 5, 5}, .edge = 8, .words = {3, 0, 0, 0, 0, 0, 0, 0, 0}};
+    ASSERT_NO_THROW(volume.validate());
+    for (const auto pointer : {2u, 4u, CollisionVolume::brick_tag, UINT32_MAX}) {
+        SCOPED_TRACE(pointer);
+        volume.words[1] = pointer;
+        collision_test::expectError([&] { volume.validate(); }, "collision.data_invalid");
     }
-    v.words = {1};
-    v.occupied_count = 125;
-    EXPECT_NO_THROW(v.validate());
-    v.occupied_count++;
-    EXPECT_THROW(v.validate(), std::invalid_argument);
-    for (const float invalid : {0.f, -1.f, INFINITY, NAN}) {
-        v.settings.voxel_size = invalid;
-        EXPECT_THROW(v.settings.validate(), std::invalid_argument);
+    volume.words = {1};
+    volume.occupied_count = 125;
+    ASSERT_NO_THROW(volume.validate());
+    for (const uint64_t count : {uint64_t(126), UINT64_MAX}) {
+        volume.occupied_count = count;
+        collision_test::expectError([&] { volume.validate(); }, "collision.data_invalid");
     }
-    for (const auto settings : {CollisionSettings{}, CollisionSettings{.max_gaussian_area = 1}, CollisionSettings{.cleanup = false}})
-        EXPECT_NO_THROW(settings.validate());
-    EXPECT_THROW((CollisionSettings{.max_gaussian_area = 1, .cleanup = false}.validate()), std::invalid_argument);
-    std::stop_source stop;
-    stop.request_stop();
-    EXPECT_THROW(generateCollision({}, {}, stop.get_token()), std::runtime_error);
-    const CollisionSource invalid;
-    EXPECT_THROW(generateCollision(invalid, {}), std::invalid_argument);
+    for (const float invalid : {-1.f, INFINITY, NAN})
+        for (const auto field : {&CollisionSettings::voxel_size, &CollisionSettings::opacity, &CollisionSettings::max_gaussian_area}) {
+            CollisionSettings settings;
+            settings.*field = invalid;
+            collision_test::expectError([&] { settings.validate(); }, "collision.settings_invalid");
+        }
+    for (const auto settings : {CollisionSettings{.voxel_size = 0}, CollisionSettings{.opacity = 1},
+                                CollisionSettings{.max_gaussian_area = 1, .cleanup = false}})
+        collision_test::expectError([&] { settings.validate(); }, "collision.settings_invalid");
+    volume.occupied_count = 125;
+    for (const auto settings : {CollisionSettings{}, CollisionSettings{.opacity = 0},
+                                CollisionSettings{.max_gaussian_area = 1}, CollisionSettings{.cleanup = false}}) {
+        volume.settings = settings;
+        EXPECT_NO_THROW(volume.validate());
+    }
 }
 
-TEST(Collision, OutputLayoutAcrossDispatchesAndAddressOverflow) {
-    constexpr size_t records = 61 * (1u << 20);
-    for (size_t batch = 0; batch < 61; ++batch)
-        EXPECT_EQ(cuda::collisionOutputBytes(batch * (1u << 20), 1u << 20), (batch + 1) * (1u << 20) * sizeof(cuda::CollisionBrick));
-    EXPECT_THROW(cuda::collisionOutputBytes(records, 1u << 20), std::length_error);
-    EXPECT_EQ(cuda::collisionOutputBytes(records, 36'864), size_t(64'000'000) * sizeof(cuda::CollisionBrick));
-    EXPECT_THROW(cuda::collisionOutputBytes(records, 36'865), std::length_error);
-    EXPECT_EQ(cuda::collisionOutputBytes(records, 17), cuda::collisionOutputBytes(records + 17));
-    EXPECT_THROW(cuda::collisionOutputBytes(SIZE_MAX, 1), std::length_error);
-    EXPECT_THROW(cuda::collisionOutputBytes(std::vector<cuda::CollisionBrick>().max_size(), 1), std::length_error);
+TEST(Collision, InvalidVolumeAndPayloadErrorsKeepKeysAndDiagnostics) {
+    const CollisionVolume valid{.dimensions = {4, 4, 4}, .edge = 4, .words = {0}};
+    for (const auto words : {std::vector<uint32_t>{}, {2}, {CollisionVolume::brick_tag}, {CollisionVolume::brick_tag | 1, 0}, {0, 0}}) {
+        auto volume = valid;
+        volume.words = words;
+        collision_test::expectError([&] { volume.validate(); }, "collision.data_invalid");
+    }
+    auto padded = valid;
+    padded.dimensions = {1, 1, 1};
+    padded.words = {CollisionVolume::brick_tag | 1, 2, 0};
+    collision_test::expectError([&] { padded.validate(); }, "collision.data_invalid");
+    using namespace lfs::io::project;
+    const auto bytes = encodeCollision(valid);
+    ASSERT_NO_THROW(decodeCollision(bytes));
+    collision_test::expectError([&] { decodeCollision(std::span(bytes).first(3)); }, "collision.data_invalid");
+    for (const auto [offset, value] : {std::pair{0u, 0u}, {4u, 2u}, {56u, 2u}, {60u, 2u}, {64u, 2u}, {68u, 2u}}) {
+        auto damaged = bytes;
+        chapter_binary::write_u32(damaged, offset, value);
+        collision_test::expectError([&] { decodeCollision(damaged); }, "collision.data_invalid");
+    }
+}
+
+TEST(Collision, PresentationTranslatesKeysAndHidesUnexpectedDiagnostics) {
+    auto& locale = lfs::event::LocalizationManager::getInstance();
+    const auto language = locale.getCurrentLanguage();
+    ASSERT_TRUE(locale.initialize(PROJECT_ROOT_PATH "/src/visualizer/gui/resources/locales"));
+    ASSERT_TRUE(locale.setLanguage("de"));
+    const auto failure = collisionError("collision.data_invalid", "Invalid collision pointer or shared subtree", lfs::ErrorCode::DataLoss, "37 / 17");
+    EXPECT_EQ(localizedCollisionError(failure), std::string(LOC("collision.data_invalid")) + "\n37 / 17");
+    EXPECT_NE(std::string(failure.what()).find("Invalid collision pointer"), std::string::npos);
+    EXPECT_EQ(localizedCollisionError(std::runtime_error("unexpected diagnostic")), LOC("selection.operation_failed_generic"));
+    ASSERT_TRUE(locale.setLanguage(language.empty() ? "en" : language));
 }
 
 namespace {
@@ -82,10 +102,8 @@ namespace {
     CollisionSource source(const std::vector<Gaussian>& gs) {
         std::vector<float> means, scales, rotations, opacity;
         for (const auto& g : gs) {
-            for (int a = 0; a < 3; ++a) {
-                means.push_back(g.center[a]);
-                scales.push_back(g.scale[a]);
-            }
+            means.insert(means.end(), {g.center.x, g.center.y, g.center.z});
+            scales.insert(scales.end(), {g.scale.x, g.scale.y, g.scale.z});
             rotations.insert(rotations.end(), {g.rotation.w, g.rotation.x, g.rotation.y, g.rotation.z});
             opacity.push_back(g.alpha);
         }
@@ -110,6 +128,19 @@ namespace {
         return density > 0 && density >= -std::log1p(-double(opacity));
     }
     class CollisionGpu : public lfs::test::CudaBackendTest {};
+    TEST_F(CollisionGpu, InvalidGeometryErrorsCarryLocaleKeys) {
+        const auto valid = source({{{0, 0, 0}, {.1f, .1f, .1f}}});
+        for (const auto means : {Tensor{}, Tensor::zeros({1, 2}), Tensor::zeros({0, 3})}) {
+            auto input = valid;
+            input.means = means;
+            collision_test::expectError([&] { generateCollision(input, {}); }, "collision.geometry_invalid");
+        }
+        for (auto field : {&CollisionSource::means, &CollisionSource::scales, &CollisionSource::rotations, &CollisionSource::opacity, &CollisionSource::deleted}) {
+            auto input = valid;
+            input.*field = Tensor::zeros({1, 3}, Device::CPU, DataType::Bool);
+            collision_test::expectError([&] { generateCollision(input, {}); }, "collision.geometry_invalid");
+        }
+    }
     TEST_F(CollisionGpu, RotatedThinFaintOverlapAndDuplicateMortonKeys) {
         std::mt19937 rng(791);
         std::uniform_real_distribution<float> p(-.3f, .3f);
@@ -130,6 +161,7 @@ namespace {
             const auto count = std::ranges::count_if(cells(glm::ivec3(4)), [&](auto p) { return volume.occupied(block * 4 + p); });
             expected_mixed += count > 0 && count < 64;
         }
+        EXPECT_GT(expected_mixed, 0);
         EXPECT_EQ(mixed, expected_mixed);
         EXPECT_THROW(generateCollision(input, settings, {}, {}, {}, [](uint64_t value) {
                          if (value)
@@ -156,29 +188,56 @@ namespace {
         for (const float x : {0.f, 100.f})
             EXPECT_TRUE(v.occupied(glm::ivec3(glm::floor((glm::vec3(x, 0, 0) - v.origin) / .1f))));
         input = source(std::vector<Gaussian>(8192, {{0, 0, 0}, {.01f, .01f, .01f}, {1, 0, 0, 0}, 1e-6f}));
-        EXPECT_THROW(generateCollision(input, {.1f, .1f, 0, false, false}), std::runtime_error);
+        EXPECT_THROW(generateCollision(input, {.1f, .1f, 0, false, false}), lfs::Exception);
     }
-    TEST_F(CollisionGpu, CaptureSuccessAndExceptionFenceReadsBeforeCrossStreamMutation) {
-        struct FailingRead : TensorExpr<FailingRead> {
-            Tensor input;
-            Tensor* copy;
-            std::atomic<bool>* completed;
-            const TensorShape& shape_impl() const { return input.shape(); }
-            Device device_impl() const { return input.device(); }
-            auto gpu_backend_impl() const { return gpu_backend_of(input); }
-            DataType dtype_impl() const { return input.dtype(); }
-            cudaStream_t stream_hint_impl() const { return input.stream(); }
-            FailingRead snapshot_impl() const { return *this; }
-            Tensor eval_impl() const {
-                CUDAStreamGuard home(input.stream());
-                const auto delay = [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); };
-                LFS_CUDA_CHECK_MSG(cudaLaunchHostFunc(input.stream(), delay, nullptr), "delay partial snapshot read");
-                *copy = input.clone();
-                const auto mark = [](void* state) { static_cast<std::atomic<bool>*>(state)->store(true); };
-                LFS_CUDA_CHECK_MSG(cudaLaunchHostFunc(input.stream(), mark, completed), "observe partial snapshot read");
-                throw std::runtime_error("injected snapshot failure");
+    struct FailingRead : TensorExpr<FailingRead> {
+        Tensor input;
+        Tensor* copy;
+        const TensorShape& shape_impl() const { return input.shape(); }
+        Device device_impl() const { return input.device(); }
+        auto gpu_backend_impl() const { return gpu_backend_of(input); }
+        DataType dtype_impl() const { return input.dtype(); }
+        cudaStream_t stream_hint_impl() const { return input.stream(); }
+        FailingRead snapshot_impl() const { return *this; }
+        Tensor eval_impl() const {
+            CUDAStreamGuard home(input.stream());
+            const auto delay = [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); };
+            LFS_CUDA_CHECK_MSG(cudaLaunchHostFunc(input.stream(), delay, nullptr), "delay partial snapshot read");
+            *copy = input.clone();
+            throw std::runtime_error("injected snapshot failure");
+        }
+    };
+    struct CaptureCase {
+        static constexpr size_t n = 100000, begin = 37, count = 17;
+        Tensor raw_rotation = Tensor::full({n, 4}, 2.f, Device::GPU), partial_copy;
+        SplatData model{0, Tensor::arange(0, n * 3, 1, Device::GPU).reshape({n, 3}), Tensor::zeros({n, 1, 3}, Device::GPU), {}, Tensor::full({n, 3}, std::log(2.f), Device::GPU), raw_rotation, Tensor::zeros({n, 1}, Device::GPU), 1};
+        CollisionSource captured;
+        explicit CaptureCase(bool fail) {
+            model.deleted() = Tensor::zeros({n}, Device::GPU, DataType::Bool);
+            if (fail)
+                model.rotation_raw() = FailingRead{{}, raw_rotation, &partial_copy};
+        }
+        void mutate(cudaStream_t writer) {
+            for (auto* tensor : {&model.means_raw(), &model.scaling_raw(), &raw_rotation, &model.opacity_raw()})
+                ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0, tensor->bytes(), writer), cudaSuccess);
+            ASSERT_EQ(cudaMemsetAsync(model.deleted().data_ptr(), 1, model.deleted().bytes(), writer), cudaSuccess);
+        }
+        void expectOwnedRange() const {
+            for (const auto& [tensor, columns, expected, step] : {
+                     std::tuple{captured.means, 3u, float(begin * 3), 1.f},
+                     {captured.scales, 3u, 2.f, 0.f},
+                     {captured.rotations, 4u, .5f, 0.f},
+                     {captured.opacity, 1u, .5f, 0.f},
+                     {captured.deleted, 1u, 0.f, 0.f}}) {
+                EXPECT_EQ(tensor.size(0), count);
+                EXPECT_EQ(tensor.numel(), count * columns);
+                const auto cpu = tensor.to(DataType::Float32).cpu();
+                for (size_t i = 0; i < cpu.numel(); ++i)
+                    EXPECT_FLOAT_EQ(cpu.ptr<float>()[i], expected + step * i);
             }
-        };
+        }
+    };
+    TEST_F(CollisionGpu, CaptureSuccessAndExceptionFenceReadsBeforeCrossStreamMutation) {
         lfs::test::ForceDeferredTensorExecution force_deferred;
         cudaStream_t writer, reader;
         ASSERT_EQ(cudaStreamCreateWithFlags(&writer, cudaStreamNonBlocking), cudaSuccess);
@@ -187,67 +246,41 @@ namespace {
             for (bool fail : {false, true}) {
                 SCOPED_TRACE(fail);
                 CUDAStreamGuard writing(writer);
-                constexpr size_t n = 100000;
-                std::vector<float> rotations(n * 4);
-                for (size_t i = 0; i < n; ++i)
-                    rotations[i * 4] = 2;
-                auto raw_rotation = Tensor::from_vector(rotations, {n, 4}, Device::GPU);
-                SplatData model(0, Tensor::ones({n, 3}, Device::GPU), Tensor::zeros({n, 1, 3}, Device::GPU), {},
-                                Tensor::full({n, 3}, std::log(2.f), Device::GPU), raw_rotation, Tensor::zeros({n, 1}, Device::GPU), 1);
-                model.deleted() = Tensor::zeros({n}, Device::GPU, DataType::Bool);
-                Tensor partial_copy;
-                std::atomic<bool> read_completed{false};
-                if (fail)
-                    model.rotation_raw() = FailingRead{{}, raw_rotation, &partial_copy, &read_completed};
-                CollisionSource captured;
+                CaptureCase sample(fail);
                 {
                     CUDAStreamGuard reading(capture_stream);
                     if (fail) {
-                        ASSERT_TRUE(model.rotation_raw().is_deferred());
-                        EXPECT_THROW(captureCollisionSource(model), std::runtime_error);
-                        EXPECT_TRUE(read_completed.load());
-                    } else {
-                        captured = captureCollisionSource(model);
-                    }
+                        ASSERT_TRUE(sample.model.rotation_raw().is_deferred());
+                        EXPECT_THROW(captureCollisionSource(sample.model), std::runtime_error);
+                    } else
+                        sample.captured = captureCollisionSource(sample.model, glm::mat4(1), CaptureCase::begin, CaptureCase::count);
                 }
                 EXPECT_EQ(cudaStreamQuery(capture_stream), cudaSuccess);
                 EXPECT_EQ(cudaStreamQuery(writer), cudaSuccess);
-                for (auto* tensor : {&model.means_raw(), &model.scaling_raw(), &raw_rotation, &model.opacity_raw()})
-                    ASSERT_EQ(cudaMemsetAsync(tensor->data_ptr(), 0, tensor->bytes(), writer), cudaSuccess);
-                ASSERT_EQ(cudaMemsetAsync(model.deleted().data_ptr(), 1, model.deleted().bytes(), writer), cudaSuccess);
-                if (fail) {
-                    ASSERT_TRUE(partial_copy.is_valid());
-                    EXPECT_FLOAT_EQ(partial_copy.to(Device::CPU).ptr<float>()[0], 2);
-                } else {
-                    for (const auto& [tensor, expected] : {std::pair{captured.means, 1.f}, {captured.scales, 2.f}, {captured.opacity, .5f}}) {
-                        const auto cpu = tensor.cpu();
-                        EXPECT_TRUE(std::ranges::all_of(std::span(cpu.ptr<float>(), cpu.numel()), [expected](float x) { return x == expected; }));
-                    }
-                    const auto rotation = captured.rotations.cpu(), deleted = captured.deleted.cpu();
-                    for (size_t i = 0; i < rotation.numel(); ++i)
-                        ASSERT_FLOAT_EQ(rotation.ptr<float>()[i], i % 4 == 0 ? 1 : 0);
-                    EXPECT_TRUE(std::ranges::all_of(std::span(deleted.ptr<unsigned char>(), deleted.numel()), [](auto x) { return x == 0; }));
-                }
+                ASSERT_NO_FATAL_FAILURE(sample.mutate(writer));
+                if (fail)
+                    EXPECT_FLOAT_EQ(sample.partial_copy.to(Device::CPU).ptr<float>()[0], 2);
+                else
+                    sample.expectOwnedRange();
                 ASSERT_EQ(cudaStreamSynchronize(writer), cudaSuccess);
             }
         EXPECT_EQ(cudaStreamDestroy(reader), cudaSuccess);
         EXPECT_EQ(cudaStreamDestroy(writer), cudaSuccess);
     }
-    TEST_F(CollisionGpu, BoundsOutputBeforeAllocationAndPlansSortWorkspace) {
-        constexpr size_t records = 64'000'000; // Append/overflow boundaries are covered by Collision.OutputLayout.
-        const auto workspace = cuda::collisionSortWorkspaceBytes(records);
-        EXPECT_GT(workspace, 0u);
-        EXPECT_GE(workspace, cuda::collisionSortWorkspaceBytes(records / 2));
-        EXPECT_THROW(cuda::collisionSortWorkspaceBytes(SIZE_MAX), std::length_error);
-    }
     TEST_F(CollisionGpu, AutoResolutionIsRelativeForBakedAndNodeScaleAndRejectsInvalidSources) {
         const std::vector<Gaussian> gs{{{-.13f, .07f, .11f}, {.1f, .2f, .3f}},
                                        {{.31f, -.09f, -.21f}, {.2f, .1f, .15f}}};
-        auto original = source(gs);
         const CollisionSettings settings{.05f, .1f, 0, true, true};
         float resolved = 0;
-        const auto base = generateCollision(original, settings, {}, {}, [&](float size) { resolved = size; });
+        const auto base = generateCollision(source(gs), settings, {}, {}, [&](float size) { resolved = size; });
         EXPECT_FLOAT_EQ(resolved, base.settings.voxel_size);
+        auto explicit_settings = base.settings;
+        explicit_settings.auto_resolution = false;
+        const auto explicit_volume = generateCollision(source(gs), explicit_settings);
+        EXPECT_EQ(base.words, explicit_volume.words);
+        EXPECT_EQ(base.origin, explicit_volume.origin);
+        EXPECT_EQ(base.dimensions, explicit_volume.dimensions);
+        EXPECT_EQ(base.occupied_count, explicit_volume.occupied_count);
         for (float scale : {.01f, 10.f})
             for (bool baked : {false, true}) {
                 auto scaled = gs;
@@ -269,9 +302,9 @@ namespace {
             }
         auto input = source({{{0, 0, 0}, {.1f, .2f, .3f}}});
         input.opacity = Tensor::zeros({1});
-        EXPECT_THROW(generateCollision(input, settings), std::runtime_error);
+        EXPECT_THROW(generateCollision(input, settings), lfs::Exception);
         input = source({{{0, 0, 0}, {INFINITY, .1f, .1f}}});
-        EXPECT_THROW(generateCollision(input, settings), std::invalid_argument);
+        collision_test::expectError([&] { generateCollision(input, settings); }, "collision.geometry_nonfinite");
         input = source({{{0, 0, 0}, {.1f, .1f, .1f}}});
         EXPECT_THROW(generateCollision(input, settings, {}, [](float, const auto&) { return false; }), std::runtime_error);
     }
@@ -280,6 +313,17 @@ namespace {
         return [volumes = std::move(volumes), transform](auto feet, auto up, float height, float radius) {
             return std::ranges::any_of(volumes, [&](const auto& v) { return collisionCapsuleIntersects(*v, transform, feet, up, height, radius); });
         };
+    }
+    void advanceFrames(WalkState& state, const WalkSettings& settings, const CapsuleQuery& query, glm::vec3 up,
+                       glm::vec3 velocity, int frames, float dt, bool hold_position = false) {
+        const auto grounded = state.feet;
+        for (int frame = 0; frame < frames; ++frame) {
+            ASSERT_NO_THROW(advanceWalk(state, settings, up, velocity, dt, query));
+            ASSERT_FALSE(query(state.feet, up, settings.height, settings.radius));
+            ASSERT_TRUE(state.grounded);
+            if (hold_position)
+                ASSERT_EQ(state.feet, grounded);
+        }
     }
     TEST(CollisionWalk, AnalyticalClearanceAndTransformedSegment) {
         const auto v = box({}, glm::ivec3(1));
@@ -302,29 +346,24 @@ namespace {
         };
         WalkSettings settings;
         WalkState state{.eye = {0, 1.8f, -1.99f}};
-        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::invalid_argument);
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), lfs::Exception);
         settleWalk(state, settings, {0, 1, 0}, query);
         EXPECT_NEAR(state.eye.y, settings.height, .001f);
-        for (int i = 0; i < 500; ++i)
-            advanceWalk(state, settings, {0, 1, 0}, {10, 0, 0}, .1f, query);
+        advanceFrames(state, settings, query, {0, 1, 0}, {10, 0, 0}, 500, .1f);
         EXPECT_LE(state.eye.x, .251f);
         const auto grounded = state.feet;
-        for (int i = 0; i < 500; ++i) {
-            ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {0, 0, 100}, .1f, query));
-            EXPECT_EQ(state.feet, grounded);
-            EXPECT_TRUE(state.grounded);
-        }
+        advanceFrames(state, settings, query, {0, 1, 0}, {0, 0, 100}, 500, .1f, true);
         for (bool edit_geometry : {false, true}) {
             settings.height = edit_geometry ? 1.7f : 2.1f;
             transform[3].y = edit_geometry ? .1f : 0;
-            EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), std::runtime_error);
+            EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query), lfs::Exception);
             EXPECT_EQ(state.feet, grounded);
         }
         transform[3].y = 0;
         EXPECT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, query));
         WalkState unsupported{.eye = {100, 100, 100}};
-        EXPECT_THROW(settleWalk(unsupported, settings, {0, 1, 0}, query), std::runtime_error);
-        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, [](auto, auto, float, float) { return false; }), std::runtime_error);
+        EXPECT_THROW(settleWalk(unsupported, settings, {0, 1, 0}, query), lfs::Exception);
+        EXPECT_THROW(advanceWalk(state, settings, {0, 1, 0}, {}, .016f, [](auto, auto, float, float) { return false; }), lfs::Exception);
     }
     TEST(CollisionWalk, MinimumStepFitsButLowerCeilingBlocksLift) {
         for (float height : {1.85f, 1.75f}) {
@@ -333,10 +372,8 @@ namespace {
             WalkSettings settings;
             WalkState state{.eye = {0, 1.7f, 0}, .presentation = {0, 1.7f, 0}};
             settleWalk(state, settings, {0, 1, 0}, query);
-            for (int i = 0; i < 550; ++i) {
-                ASSERT_NO_THROW(advanceWalk(state, settings, {0, 1, 0}, i < 50 ? glm::vec3(.5f, 0, 0) : glm::vec3(0), i < 50 ? .05f : .016f, query));
-                ASSERT_FALSE(query(state.feet, {0, 1, 0}, settings.height, settings.radius));
-            }
+            advanceFrames(state, settings, query, {0, 1, 0}, {.5f, 0, 0}, 50, .05f);
+            advanceFrames(state, settings, query, {0, 1, 0}, {}, 500, .016f);
             EXPECT_EQ(state.eye.x > 1, height == 1.85f);
             if (height == 1.85f)
                 EXPECT_NEAR(state.eye.y, 1.8f, .001f);
@@ -347,14 +384,8 @@ namespace {
         auto exercise = [](const auto& query, WalkSettings settings, glm::vec3 up, glm::vec3 eye, glm::vec3 velocity) {
             WalkState state{.eye = eye};
             ASSERT_NO_THROW(settleWalk(state, settings, up, query));
-            const auto grounded = state.feet;
-            for (int frame = 0; frame < 700; ++frame) {
-                ASSERT_NO_THROW(advanceWalk(state, settings, up, frame < 500 ? glm::vec3(0) : velocity, .016f, query));
-                ASSERT_FALSE(query(state.feet, up, settings.height, settings.radius));
-                ASSERT_TRUE(state.grounded);
-                if (velocity == glm::vec3(0))
-                    ASSERT_EQ(state.feet, grounded);
-            }
+            advanceFrames(state, settings, query, up, {}, 500, .016f, velocity == glm::vec3(0));
+            advanceFrames(state, settings, query, up, velocity, 200, .016f, velocity == glm::vec3(0));
         };
         for (float translation : {0.f, 100.f, 1000.f, -10000.f})
             for (float scale : {.01f, 1.f, 100.f})
@@ -367,5 +398,211 @@ namespace {
             for (float height : {.7f, 1.7f, 3.14159f, 17.f})
                 for (float radius : {.025f, .25f})
                     exercise(queryVolumes({box({-20, altitude - 1, -20}, {40, 1, 40})}), {height, radius, .3f, 2}, {0, 1, 0}, {0, altitude + height + radius, 0}, {});
+    }
+    auto parse(std::initializer_list<const char*> args) {
+        return lfs::io::args::parse_args(int(args.size()), args.begin());
+    }
+    TEST(VoxelizeCli, ParsesControlsAndRejectsDeferredOrInvalidOptions) {
+        const auto source = PROJECT_ROOT_PATH "/tests/test_collision.cpp";
+        auto result = parse({"lfs", "voxelize", source, "out.voxel.json", "--auto", "--filter", "none", "--max-gaussian-area", "0"});
+        ASSERT_TRUE(result) << result.error();
+        const auto& mode = std::get<lfs::io::args::VoxelizeMode>(*result);
+        EXPECT_TRUE(mode.settings.auto_resolution);
+        EXPECT_FALSE(mode.settings.cleanup);
+        EXPECT_FALSE(parse({"lfs", "voxelize", source, "out.voxel.json", "--filter", "none", "--max-gaussian-area", "1"}));
+        EXPECT_FALSE(parse({"lfs", "voxelize", source, "out.voxel.json", "--filter", "connected"}));
+        EXPECT_FALSE(parse({"lfs", "voxelize", source, "out.voxel.json", "--voxel-size", "nan"}));
+        EXPECT_FALSE(parse({"lfs", "voxelize", source, "out.voxel.json", "--auto", "--voxel-size", ".01"}));
+        EXPECT_FALSE(parse({"lfs", "voxelize", source, "out.bin"}));
+    }
+    namespace fs = lfs::core::native_fs;
+    using namespace lfs::test::licht;
+    struct CollisionExportTest : testing::Test {
+        TemporaryDirectory temporary{"voxel_test"};
+        const fs::path& directory = temporary.path;
+        fs::path path = directory / "scene.voxel.json", binary = directory / "scene.voxel.bin";
+        static std::string read(const fs::path& p) {
+            const auto bytes = read_file_bytes(fs::native_path(p));
+            return bytes.empty() ? std::string{} : std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        }
+        static void write(const fs::path& p, std::string_view text) { write_file_bytes(fs::native_path(p), std::as_bytes(std::span(text))); }
+        static CollisionVolume volume(glm::ivec3 dims = {5, 3, 2}) {
+            return *collision_test::box({2, 4, 6}, dims, .25f);
+        }
+        // Independent little-endian v1.1 decoder, with bounds checks on both pointer spaces.
+        std::vector<bool> decode() {
+            const auto j = nlohmann::json::parse(read(path));
+            EXPECT_EQ(j.at("version"), "1.1");
+            EXPECT_EQ(j.at("leafSize"), 4);
+            const auto bytes = read(binary);
+            const size_t nodes = j.at("nodeCount"), leaves = j.at("leafDataCount");
+            EXPECT_EQ(bytes.size(), 4 * (nodes + leaves));
+            EXPECT_EQ(leaves, 2 * j.at("numMixedLeaves").get<size_t>());
+            auto word = [&](size_t i) {
+                if (i >= bytes.size() / 4)
+                    throw std::runtime_error("Decoder pointer exceeds binary");
+                uint32_t value = 0;
+                for (int b = 0; b < 4; ++b)
+                    value |= uint32_t(uint8_t(bytes[4 * i + b])) << (8 * b);
+                return value;
+            };
+            const int edge = 4 << j.at("treeDepth").get<int>();
+            std::vector<bool> result(size_t(edge) * edge * edge);
+            auto visit = [&](auto&& self, size_t index, glm::ivec3 origin, int size) -> void {
+                if (index >= nodes || size < 4)
+                    throw std::runtime_error("Decoder node exceeds topology bounds");
+                const auto value = word(index), mask = value >> 24, pointer = value & 0xffffff;
+                if (value == 0xff000000 || size == 4) {
+                    if (value != 0xff000000 && size_t(pointer) * 2 + 1 >= leaves)
+                        throw std::runtime_error("Decoder leaf exceeds leafDataCount");
+                    for (const auto p : cells(glm::ivec3(size))) {
+                        const auto cell = origin + p;
+                        const int bit = p.x + 4 * p.y + 16 * p.z;
+                        result[cell.x + edge * (cell.y + edge * cell.z)] = value == 0xff000000 ||
+                                                                           ((word(nodes + 2 * pointer + bit / 32) >> (bit % 32)) & 1);
+                    }
+                } else {
+                    size_t child_index = pointer;
+                    for (const auto p : cells(glm::ivec3(2)))
+                        if (mask & (1u << (p.x + 2 * p.y + 4 * p.z)))
+                            self(self, child_index++, origin + p * (size / 2), size / 2);
+                }
+            };
+            if (nodes)
+                visit(visit, 0, {}, edge);
+            return result;
+        }
+    };
+    TEST(CollisionExportLimits, MixedLeafBoundary) {
+        EXPECT_EQ(lfs::core::cuda::collisionOutputBytes(64'000'000), 64'000'000 * sizeof(lfs::core::cuda::CollisionBrick));
+        for (const auto count : {size_t(64'000'000), SIZE_MAX})
+            EXPECT_THROW(lfs::core::cuda::collisionOutputBytes(count, 1), lfs::Exception);
+        EXPECT_NO_THROW(lfs::io::checkCollisionExportMixedBlocks(14'680'064));
+        for (uint64_t count : {uint64_t(14'680'065), UINT64_MAX})
+            collision_test::expectError([&] { lfs::io::checkCollisionExportMixedBlocks(count); }, "collision.output_limit");
+    }
+    TEST_F(CollisionExportTest, EverySignedPermutationPreservesCellsAndLogicalBlockBounds) {
+        for (const auto [dims, kind] : {std::tuple{glm::ivec3(4), 0}, {glm::ivec3(4), 1}, {glm::ivec3(4), 2}, {glm::ivec3(8), 1}, {glm::ivec3(24, 16, 12), 1}, {glm::ivec3(21, 13, 9), 1}, {glm::ivec3(5, 3, 2), 2}}) {
+            auto v = volume(dims);
+            const auto padded = ((dims + 3) / 4) * 4;
+            if (kind == 0) {
+                v.words = {0};
+                v.occupied_count = 0;
+            } else if (kind == 2) {
+                const auto q = (dims - 1) % 4;
+                const uint64_t bit = uint64_t(1) << (q.x + 4 * q.y + 16 * q.z);
+                // A minimum native brick, or an interior with only its +X child populated.
+                v.words = dims.x == 4 ? std::vector<uint32_t>{CollisionVolume::brick_tag | 1, uint32_t(bit), uint32_t(bit >> 32)} : std::vector<uint32_t>{3, 0, CollisionVolume::brick_tag | 9, 0, 0, 0, 0, 0, 0, uint32_t(bit), uint32_t(bit >> 32)};
+                v.occupied_count = 1;
+            }
+            auto occupied = [&](glm::ivec3 p) {
+                return glm::all(glm::greaterThanEqual(p, glm::ivec3(0))) && glm::all(glm::lessThan(p, dims)) &&
+                       (kind == 1 || (kind == 2 && p == dims - 1));
+            };
+            v.validate();
+            std::array axes{0, 1, 2};
+            do {
+                for (int signs = 0; signs < 8; ++signs) {
+                    SCOPED_TRACE(::testing::Message() << dims.x << ":" << axes[0] << axes[1] << axes[2] << ":" << signs);
+                    glm::mat4 world(0);
+                    world[3] = {3, 4, 5, 1};
+                    for (int s = 0; s < 3; ++s)
+                        world[s][axes[s]] = 2.f * ((signs & (1 << s)) ? -1 : 1) * (axes[s] < 2 ? -1 : 1);
+                    lfs::io::exportCollision(v, path, world);
+                    if (dims == glm::ivec3(4) && axes == std::array{0, 1, 2} && signs == 0) {
+                        const std::array<std::string, 3> expected{"", std::string("\1\0\0\1\0\0\0\xff", 8),
+                                                                  std::string("\1\0\0\1\0\0\0\0\0\0\0\0\0\0\0\x80", 16)};
+                        EXPECT_EQ(read(binary), expected[kind]);
+                    }
+                    const auto decoded = decode();
+                    const int edge = std::max(8, v.edge);
+                    ASSERT_EQ(decoded.size(), size_t(edge) * edge * edge);
+                    for (const auto p : cells(glm::ivec3(edge))) {
+                        glm::ivec3 source;
+                        for (int s = 0; s < 3; ++s)
+                            source[s] = signs & (1 << s) ? padded[s] - 1 - p[axes[s]] : p[axes[s]];
+                        ASSERT_EQ(decoded[p.x + edge * (p.y + edge * p.z)], occupied(source));
+                    }
+                    auto bounds = [&](glm::ivec3 size) {
+                        const auto a = glm::vec3(world * glm::vec4(v.origin, 1)) * glm::vec3(-1, -1, 1);
+                        const auto corner = v.origin + v.settings.voxel_size * glm::vec3(size);
+                        const auto b = glm::vec3(world * glm::vec4(corner, 1)) * glm::vec3(-1, -1, 1);
+                        const auto lo = glm::min(a, b), hi = glm::max(a, b);
+                        return nlohmann::json{{"min", {lo.x, lo.y, lo.z}}, {"max", {hi.x, hi.y, hi.z}}};
+                    };
+                    const auto j = nlohmann::json::parse(read(path));
+                    EXPECT_EQ(j["gridBounds"], bounds(padded));
+                    EXPECT_EQ(j["sceneBounds"], bounds(dims));
+                    EXPECT_EQ(j["voxelResolution"], .5);
+                }
+            } while (std::next_permutation(axes.begin(), axes.end()));
+        }
+    }
+    TEST_F(CollisionExportTest, InvalidTransformAndPairInstallFailuresPreserveDestinations) {
+        for (bool previous : {false, true}) {
+            if (previous) {
+                write(path, "old-json");
+                write(binary, "old-bin");
+            }
+            auto preserved = [&] {
+                EXPECT_EQ(fs::exists(path), previous);
+                EXPECT_EQ(fs::exists(binary), previous);
+                if (previous) {
+                    EXPECT_EQ(read(path), "old-json");
+                    EXPECT_EQ(read(binary), "old-bin");
+                }
+                EXPECT_EQ(std::distance(fs::directory_iterator(directory), std::filesystem::directory_iterator{}), previous ? 2 : 0);
+            };
+            for (const auto [column, row, value] : {std::tuple{0, 0, 2.f}, {0, 1, .2f}, {0, 3, .1f}, {3, 0, INFINITY}}) {
+                glm::mat4 transform(1);
+                transform[column][row] = value;
+                EXPECT_THROW(lfs::io::exportCollision(volume(), path, transform), lfs::Exception);
+                preserved();
+            }
+            for (bool cancel : {false, true}) {
+                auto inject = [&](float p, const std::string&) {
+                    if (p != .95f)
+                        return true;
+                    if (cancel)
+                        return false;
+                    for (const auto& entry : fs::directory_iterator(directory))
+                        if (entry.path() != path && read(entry.path()).starts_with('{'))
+                            fs::remove(entry.path());
+                    return true;
+                };
+                if (cancel)
+                    EXPECT_THROW(lfs::io::exportCollision(volume(), path, glm::mat4(1), {}, inject), lfs::core::OperationCancelled);
+                else
+                    collision_test::expectError([&] { lfs::io::exportCollision(volume(), path, glm::mat4(1), {}, inject); }, "collision.export_publish");
+                preserved();
+            }
+        }
+    }
+    TEST_F(CollisionExportTest, DatasetSourceCarriesLocaleKey) {
+        const auto dataset = directory / "transforms.json";
+        write(dataset, "{}");
+        collision_test::expectError([&] { lfs::io::loadCollisionSource(dataset); }, "collision.source_unsupported");
+    }
+    TEST_F(CollisionGpu, PointCloudSourceCarriesLocaleKey) {
+        TemporaryDirectory temporary{"collision_source"};
+        const auto points = temporary.path / "points.ply";
+        CollisionExportTest::write(points, "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n");
+        collision_test::expectError([&] { lfs::io::loadCollisionSource(points); }, "collision.source_unsupported");
+    }
+    TEST_F(CollisionExportTest, SourceProtectionLongNamesAndBlockedPaths) {
+        path = directory / (std::string(240, 'a') + ".voxel.json");
+        lfs::io::exportCollision(volume(), path);
+        lfs::io::exportCollision(volume(), path);
+        const auto blocked = directory / "file";
+        write(blocked, "source-preserved");
+        collision_test::expectError([&] { lfs::io::loadCollisionSource(directory / "missing.ply"); }, "collision.source_load_failed");
+        EXPECT_EQ(lfs::app::run_voxelizer({.input_path = blocked, .output_path = blocked, .overwrite = true}), 1);
+        try {
+            lfs::io::exportCollision(volume(), blocked / "out.voxel.json");
+            FAIL();
+        } catch (const std::exception& e) {
+            EXPECT_NE(std::string(e.what()).find("file"), std::string::npos);
+        }
+        EXPECT_EQ(read(blocked), "source-preserved");
     }
 } // namespace

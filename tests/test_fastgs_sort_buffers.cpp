@@ -12,6 +12,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "fast_raster_test_helpers.hpp"
 #include "io/formats/colmap.hpp"
+#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <algorithm>
@@ -111,6 +112,66 @@ protected:
     std::unique_ptr<Camera> camera_;
     std::unique_ptr<SplatData> splat_;
 };
+
+TEST_F(FastGSSortBufferTest, StableTileSortMatchesFullDepthKeysAndOriginalIds) {
+    struct RestoreMode {
+        int mode = fast_lfs::rasterization::sort_mode_for_testing();
+        ~RestoreMode() { fast_lfs::rasterization::set_sort_mode_for_testing(mode); }
+    } restore;
+    camera_ = std::make_unique<Camera>(make_camera(65, 63));
+    splat_ = make_splat(259);
+    auto means = splat_->means().to(Device::CPU);
+    for (size_t i = 0; i < splat_->size(); ++i) {
+        means.ptr<float>()[3 * i] = i % 7 == 0 ? 100.0f : (static_cast<int>(i % 11) - 5) * 0.08f;
+        means.ptr<float>()[3 * i + 1] = (static_cast<int>((i / 11) % 9) - 4) * 0.08f;
+        means.ptr<float>()[3 * i + 2] = i % 3 == 0 ? std::nextafter(4.0f, 5.0f) - 4.0f : (i % 3 == 1 ? 0.0f : 0.5f);
+    }
+    splat_->means().copy_from(means);
+    struct Snapshot {
+        Tensor image, alpha, depth;
+        std::vector<uint> ids, last;
+        std::vector<uint2> ranges;
+        int visible;
+    } snapshots[2];
+    for (int mode = 0; mode < 2; ++mode) {
+        fast_lfs::rasterization::set_sort_mode_for_testing(mode);
+        auto result = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false, {}, false);
+        ASSERT_TRUE(result) << lfs::format_for_developer(result.error());
+        auto& raw = result->second.forward_ctx;
+        auto& snapshot = snapshots[mode];
+        snapshot.visible = raw.n_visible;
+        snapshot.ids.resize(raw.n_instances);
+        snapshot.last.resize(65 * 63);
+        snapshot.ranges.resize(5 * 4);
+        ASSERT_GT(raw.n_visible, 0);
+        EXPECT_LT(raw.n_visible, 259);
+        EXPECT_EQ(raw.tile_sort_key_bytes, mode == 0 ? 8u : 2u);
+        EXPECT_EQ(raw.visible_sort_scratch_size == 0, mode == 0);
+        ASSERT_EQ(cudaMemcpyAsync(snapshot.ids.data(), raw.sorted_primitive_indices,
+                                  snapshot.ids.size() * sizeof(uint), cudaMemcpyDeviceToHost, raw.completion_stream),
+                  cudaSuccess);
+        ASSERT_EQ(cudaMemcpyAsync(snapshot.last.data(), raw.last_contributors,
+                                  snapshot.last.size() * sizeof(uint), cudaMemcpyDeviceToHost, raw.completion_stream),
+                  cudaSuccess);
+        ASSERT_EQ(cudaMemcpyAsync(snapshot.ranges.data(), raw.tile_ranges,
+                                  snapshot.ranges.size() * sizeof(uint2), cudaMemcpyDeviceToHost, raw.completion_stream),
+                  cudaSuccess);
+        ASSERT_EQ(cudaStreamSynchronize(raw.completion_stream), cudaSuccess);
+        snapshot.image = result->first.image.to(Device::CPU).contiguous();
+        snapshot.alpha = result->first.alpha.to(Device::CPU).contiguous();
+        snapshot.depth = result->first.depth.to(Device::CPU).contiguous();
+    }
+    EXPECT_EQ(snapshots[0].visible, snapshots[1].visible);
+    EXPECT_EQ(snapshots[0].ids, snapshots[1].ids);
+    EXPECT_EQ(snapshots[0].last, snapshots[1].last);
+    EXPECT_EQ(std::memcmp(snapshots[0].ranges.data(), snapshots[1].ranges.data(), snapshots[0].ranges.size() * sizeof(uint2)), 0);
+    for (const auto pair : {std::pair{&snapshots[0].image, &snapshots[1].image},
+                            std::pair{&snapshots[0].alpha, &snapshots[1].alpha},
+                            std::pair{&snapshots[0].depth, &snapshots[1].depth}}) {
+        ASSERT_EQ(pair.first->numel(), pair.second->numel());
+        EXPECT_EQ(std::memcmp(pair.first->data_ptr(), pair.second->data_ptr(), pair.first->numel() * sizeof(float)), 0);
+    }
+}
 
 TEST_F(FastGSSortBufferTest, SortWorkspaceIsExactAndArenaOwned) {
 

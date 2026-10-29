@@ -457,6 +457,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
     } // namespace Align
 
+    namespace ScaleDistance {
+        inline constexpr const char* CLICK_1ST = "scale_distance.click_1st";
+        inline constexpr const char* CLICK_2ND = "scale_distance.click_2nd";
+        inline constexpr const char* POINTS_COUNT = "scale_distance.points_count";
+        inline constexpr const char* HINT_PICKING = "scale_distance.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "scale_distance.hint_review";
+        inline constexpr const char* STATUS_INVALID_DISTANCE = "scale_distance.status_invalid_distance";
+        inline constexpr const char* STATUS_NO_SURFACE = "scale_distance.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "scale_distance.status_no_target";
+    } // namespace ScaleDistance
+
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";
@@ -922,7 +933,10 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
         inline constexpr const char* VIDEO_EXPORT_SEQUENCE_CHANGED = "runtime.video_export_sequence_changed";
         inline constexpr const char* VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT = "runtime.video_export_sequence_frame_timeout";
+        inline constexpr const char* EXPORT_SHADER_UNAVAILABLE = "runtime.export_shader_unavailable";
+        inline constexpr const char* EXPORT_SHADER_NOT_READY = "runtime.export_shader_not_ready";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
+        inline constexpr const char* EXPORT_STOPPED = "runtime.export_stopped";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
         inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
         inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";

@@ -657,7 +657,7 @@
           </div>
         </div>
       </div>
-      <div data-if="collision_has_error"><span>@tr:status.error</span>: {{collision_error}}</div>
+      <div data-if="collision_error != ''"><span>@tr:status.error</span>: {{collision_error}}</div>
       </div>
     </div>
     <div id="color-picker-popup" class="color-picker-popup">

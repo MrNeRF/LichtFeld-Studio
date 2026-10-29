@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "sequencer_controller.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/logger.hpp"
+#include "operation/undo_history.hpp"
 #include "visualizer/nodes/modifier_manager.hpp"
 
 #include <algorithm>
@@ -55,10 +58,11 @@ namespace lfs::vis {
         [[nodiscard]] bool hasTimelineCameraContent(const sequencer::Timeline& timeline) {
             return timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip();
         }
+
     } // namespace
 
     bool SequencerController::hasPlayableContent() const {
-        return hasTimelineCameraContent(timeline_) || hasPlySequence();
+        return hasTimelineCameraContent(timeline_) || timeline_.revealClip().has_value() || hasPlySequence();
     }
 
     void SequencerController::animationTracksChanged() {
@@ -72,7 +76,111 @@ namespace lfs::vis {
     }
 
     float SequencerController::playbackStartTime() const {
-        return (hasPlySequence() || timeline_.hasAnimationClip()) ? 0.0f : timeline_.startTime();
+        return (hasPlySequence() || timeline_.hasAnimationClip() || timeline_.revealClip()) ? 0.0f : timeline_.startTime();
+    }
+
+    SequencerController::~SequencerController() { setShaderService(nullptr); }
+
+    void SequencerController::setShaderService(shaders::ShaderService* service) {
+        if (shader_service_)
+            shader_service_->setRevealController(nullptr);
+        shader_service_ = service;
+        if (service)
+            service->setRevealController(this);
+    }
+
+    Status SequencerController::setRevealClip(std::optional<sequencer::RevealClip> clip, const bool replace_binding,
+                                              const bool record_history) {
+        if (clip) {
+            if (auto valid = clip->validate(); !valid)
+                return valid;
+        }
+        const auto before = timeline_.revealClip();
+        const auto asset = clip ? clip->shader_id : std::nullopt;
+        const shaders::ShaderSlot slot{shaders::ShaderSlot::Kind::Reveal, {}};
+        if (asset && !shader_service_)
+            return Status::failure(make_error(ErrorInit{.code = ErrorCode::Unavailable,
+                                                        .domain = ErrorDomain::App,
+                                                        .user_message = "Custom reveal requires a shader service.",
+                                                        .detection = LFS_SOURCE_SITE_CURRENT()}));
+        if (shader_service_) {
+            if (asset) {
+                if (auto valid = shader_service_->validateBinding(slot, *asset); !valid)
+                    return valid;
+                if (replace_binding || shader_service_->boundAsset(slot) != asset) {
+                    if (auto bound = shader_service_->setRevealBinding(asset); !bound)
+                        return bound;
+                }
+            } else if (shader_service_->boundAsset(slot)) {
+                if (auto unbound = shader_service_->setRevealBinding(std::nullopt); !unbound)
+                    return unbound;
+            }
+        }
+        const float duration_before = clipDuration();
+        timeline_.setRevealClip(clip);
+        if (before != clip || replace_binding) {
+            markTimelineChanged();
+            if (record_history && !pending_reveal_edit_ && reveal_commit_callback_)
+                reveal_commit_callback_(before, clip, duration_before, clipDuration());
+        }
+        return {};
+    }
+
+    Result<core::Uuid> SequencerController::revealCommand(const shaders::ShaderCommand& command) {
+        if (auto valid = shader_service_->validateRevealTarget(); !valid)
+            return valid.error();
+        auto clip = *timeline_.revealClip();
+        const shaders::ShaderSlot slot{shaders::ShaderSlot::Kind::Reveal, {}};
+        if (const auto* unbind = std::get_if<shaders::UnbindShader>(&command)) {
+            const auto bound = shader_service_->boundAsset(slot);
+            if (!bound || (unbind->asset && unbind->asset != bound))
+                return make_error(ErrorInit{.code = ErrorCode::FailedPrecondition,
+                                            .domain = ErrorDomain::App,
+                                            .user_message = "Shader binding does not match.",
+                                            .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (auto removed = setRevealClip(std::nullopt); !removed)
+                return removed.error();
+            return *bound;
+        }
+        const auto* run = std::get_if<shaders::RunShader>(&command);
+        const auto id = run ? run->asset.value_or(core::Uuid{}) : std::get<shaders::BindShader>(command).asset;
+        if (run && run->source.size() > shaders::kMaxShaderSourceBytes)
+            return make_error(ErrorInit{.code = ErrorCode::InvalidArgument,
+                                        .domain = ErrorDomain::App,
+                                        .user_message = "Shader source exceeds 1 MiB.",
+                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+        if (auto valid = shader_service_->validateBinding(slot, id); !valid)
+            return valid.error();
+        endRevealEdit();
+        op::TransactionGuard history(LOC("sequencer.change_reveal"));
+        core::Uuid asset = id;
+        if (run) {
+            auto updated =
+                shader_service_->command(shaders::SetShaderSource{run->asset, run->source, {}, {}}, slot);
+            if (!updated)
+                return updated.error();
+            asset = *updated;
+        }
+        clip.effect = sequencer::RevealEffect::Custom;
+        clip.shader_id = asset;
+        if (auto bound = setRevealClip(clip, true); !bound)
+            return bound.error();
+        history.commit();
+        return asset;
+    }
+
+    void SequencerController::beginRevealEdit() {
+        if (!pending_reveal_edit_)
+            pending_reveal_edit_ = PendingRevealEdit{timeline_.revealClip(), clipDuration()};
+    }
+
+    void SequencerController::endRevealEdit() {
+        if (!pending_reveal_edit_)
+            return;
+        const auto before = *pending_reveal_edit_;
+        pending_reveal_edit_.reset();
+        if (reveal_commit_callback_ && (before.clip != timeline_.revealClip() || before.duration != clipDuration()))
+            reveal_commit_callback_(before.clip, timeline_.revealClip(), before.duration, clipDuration());
     }
 
     void SequencerController::play() {
@@ -518,6 +626,8 @@ namespace lfs::vis {
     }
 
     void SequencerController::clearKeyframes() {
+        if (auto cleared = setRevealClip(std::nullopt, false, false); !cleared)
+            return;
         stop();
         deselectKeyframe();
         timeline_.clear();
@@ -527,8 +637,11 @@ namespace lfs::vis {
     }
 
     void SequencerController::clear() {
+        if (auto cleared = setRevealClip(std::nullopt, false, false); !cleared)
+            return;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
+        pending_reveal_edit_.reset();
         deselectKeyframe();
         ply_sequence_.reset();
         timeline_.clear();
@@ -547,27 +660,30 @@ namespace lfs::vis {
     }
 
     bool SequencerController::loadFromJson(const std::string& path) {
-        stop();
-        deselectKeyframe();
-        const bool loaded = timeline_.loadFromJson(path);
-        if (!loaded)
-            return false;
-        ++timeline_generation_;
-        pending_keyframe_time_edit_.reset();
-        rebuildLoopKeyframe();
-        markTimelineChanged();
-        return true;
+        sequencer::Timeline loaded;
+        return loaded.loadFromJson(path) && adoptTimeline(std::move(loaded));
     }
 
-    bool SequencerController::loadFromJson(
-        const nlohmann::json& json) {
+    bool SequencerController::loadFromJson(const nlohmann::json& json) {
+        sequencer::Timeline loaded;
+        return loaded.loadFromJson(json) &&
+               adoptTimeline(std::move(loaded),
+                             clampSequenceFps(json.value("frames_per_second", DEFAULT_SEQUENCE_FPS)));
+    }
+
+    bool SequencerController::adoptTimeline(sequencer::Timeline loaded, const std::optional<float> frames_per_second) {
+        if (auto reveal = setRevealClip(loaded.revealClip(), true, false); !reveal) {
+            LOG_ERROR("Timeline reveal rejected: {}", reveal.error().user_message());
+            return false;
+        }
+        timeline_ = std::move(loaded);
         stop();
         deselectKeyframe();
-        if (!timeline_.loadFromJson(json))
-            return false;
-        frames_per_second_ = clampSequenceFps(json.value("frames_per_second", DEFAULT_SEQUENCE_FPS));
+        if (frames_per_second)
+            frames_per_second_ = *frames_per_second;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
+        pending_reveal_edit_.reset();
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;
@@ -675,6 +791,32 @@ namespace lfs::vis {
             return;
         selected_keyframe_id_ = std::nullopt;
         markSelectionChanged();
+    }
+
+    std::optional<size_t> SequencerController::adjacentKeyframeIndex(const int direction) const {
+        if (direction != -1 && direction != 1)
+            return std::nullopt;
+        const auto& keys = timeline_.keyframes();
+        if (const auto selected = selectedKeyframe()) {
+            for (auto i = static_cast<int64_t>(*selected) + direction;
+                 i >= 0 && i < static_cast<int64_t>(keys.size()); i += direction)
+                if (!keys[static_cast<size_t>(i)].is_loop_point)
+                    return static_cast<size_t>(i);
+            return std::nullopt; // no wraparound at either end
+        }
+        std::optional<size_t> first, last, candidate;
+        for (size_t i = 0; i < keys.size(); ++i) {
+            if (keys[i].is_loop_point)
+                continue;
+            if (!first)
+                first = i;
+            last = i;
+            if (direction > 0 && keys[i].time > playhead_ + 0.001f && !candidate)
+                candidate = i;
+            if (direction < 0 && keys[i].time < playhead_ - 0.001f)
+                candidate = i;
+        }
+        return candidate ? candidate : (direction > 0 ? last : first);
     }
 
     std::optional<size_t> SequencerController::selectedKeyframe() const {

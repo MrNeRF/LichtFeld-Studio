@@ -41,7 +41,8 @@ namespace lfs::vis {
         Rotate,
         Scale,
         Mirror,
-        Align
+        Align,
+        ScaleDistance
     };
 
     // Selection sub-modes (for selection tool)
@@ -79,8 +80,9 @@ namespace lfs::vis {
         // Mode queries
         [[nodiscard]] bool isTraining() const { return mode_ == EditorMode::TRAINING; }
         [[nodiscard]] bool isToolsDisabled() const {
-            return mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED || mode_ == EditorMode::FINISHED;
+            return vr_viewing_ || mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED || mode_ == EditorMode::FINISHED;
         }
+        void setVrViewing(bool enabled) { vr_viewing_ = enabled; }
         [[nodiscard]] bool isEmpty() const { return mode_ == EditorMode::EMPTY; }
 
         // Selection queries
@@ -136,6 +138,7 @@ namespace lfs::vis {
         bool dispatchModalEvent(const ModalEvent& evt) const override { return modal_event_cb_ ? modal_event_cb_(evt) : false; }
 
     private:
+        bool vr_viewing_ = false;
         std::uint64_t last_scene_generation_ = 0;
         std::uint64_t last_selection_generation_ = 0;
         bool last_has_scene_manager_ = false;

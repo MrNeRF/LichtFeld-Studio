@@ -14,8 +14,6 @@
 
 namespace lfs::vis {
 
-    [[nodiscard]] LFS_VIS_API bool hasVisibleCollisionPreview(const SceneManager& manager);
-
     // Centralized request builders for the public renderer boundary.
     // Visualizer-side code should prefer building FrameView/GpuFrame contracts first
     // and only translate to renderer request types here.
@@ -84,6 +82,11 @@ namespace lfs::vis {
         const FrameContext& ctx,
         const core::SceneNode& node,
         int visible_index);
+
+    // Keeps the object record of one slot, for a draw of that slot's model
+    // alone; drops the effect when no binding applies to it.
+    void scopeCustomEffectToSlot(std::optional<lfs::rendering::GaussianCustomEffectState>& effect,
+                                 int visible_index);
 
     struct PlyComparisonDepthSample {
         const core::SceneNode* node = nullptr;

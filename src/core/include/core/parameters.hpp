@@ -311,8 +311,9 @@ namespace lfs::core {
             float init_scaling = 0.1f;
             int max_cap = 1000000;
 
-            std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
-            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
+            std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
+            std::vector<size_t> save_steps = {7'000, 30'000}; // Steps at which to save the project (project.licht)
+            bool keep_all_checkpoints = false;
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
@@ -814,7 +815,7 @@ namespace lfs::core {
             int max_side = 518;
             std::int64_t num_tokens = 1800;
             int threads = 0;
-            int png_compression = 1;
+            int png_compression = 6;
             int bit_depth = 16;
             bool overwrite = false;
             bool no_download = false;
@@ -822,6 +823,44 @@ namespace lfs::core {
             std::vector<std::filesystem::path> image_paths; // Empty = scan images_folder
             std::string depth_folder = "depth";
             std::string normals_folder = "normals";
+        };
+
+        // Parameters for an individual batch training job
+        struct LFS_CORE_API BatchJobItem {
+            std::filesystem::path dataset_path;
+            std::string name;                                 // Friendly name; defaults to stem of dataset_path
+            std::filesystem::path output_path;                // Explicit output directory
+            std::vector<std::string> extra_args;              // Extra CLI args for this specific job
+            std::optional<std::filesystem::path> config_file; // Optional per-job JSON config
+        };
+
+        // Parameters for the batch-train command
+        struct LFS_CORE_API BatchTrainingParameters {
+            std::vector<std::filesystem::path> input_paths; // Folders to scan, dataset paths, or manifest JSONs
+            std::filesystem::path output_dir;               // Base output directory
+            std::filesystem::path config_file;              // Path to batch manifest JSON
+            std::vector<BatchJobItem> jobs;                 // Explicit jobs
+            std::vector<std::string> shared_args;           // Command-line training flags passed to all jobs
+            bool recursive = false;                         // Recursively scan directories for datasets
+            bool continue_on_failure = true;                // Keep running subsequent jobs on failure
+            bool dry_run = false;                           // Inspect resolved jobs without running
+            int timeout_minutes = 0;                        // Timeout per job in minutes (0 = disabled)
+            std::filesystem::path summary_file;             // Path for batch_summary.json
+            std::filesystem::path report_file;              // Path for batch_report.txt
+            std::string log_level = "info";
+        };
+
+        struct VideoMaskParameters {
+            std::filesystem::path input_path, output_path, model_path;
+            std::vector<std::array<float, 3>> points;
+            std::optional<std::array<float, 4>> box;
+            std::array<double, 4> circle{0.5, 0.5, 0.0, 0.0};
+            int seed_frame = 0;
+            double fps = 1.0, start_time = 0.0, end_time = -1.0;
+            float fisheye_fov = 200, view_fov = 160;
+            int dilation = 12;
+            bool recenter = false, require_operator = false;
+            bool overwrite = false, no_download = false, download_only = false;
         };
 
         // Modern C++23 functions returning expected values
@@ -832,6 +871,9 @@ namespace lfs::core {
         LFS_CORE_API std::expected<TrainingParameters, lfs::Error> read_training_parameters_from_json(
             const std::filesystem::path& path,
             const TrainingParameters& defaults = {});
+        LFS_CORE_API std::expected<BatchTrainingParameters, lfs::Error> read_batch_training_parameters_from_json(
+            const std::filesystem::path& path,
+            const BatchTrainingParameters& defaults = {});
 
         // Save training parameters to JSON
         LFS_CORE_API std::expected<void, std::string> save_training_parameters_to_json(

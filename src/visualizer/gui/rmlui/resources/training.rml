@@ -947,6 +947,12 @@
         <span class="text-accent">{{pv_header_save_steps}}</span>
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
+        <div class="setting-row" data-for="row : pv_save_retention_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label" data-attr-data-reset-prop="row.id">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
+        </div>
         <div data-if="save_edit_mode">
           <div class="setting-row">
             <input data-tooltip="training.tooltip.save_step_input" type="text" id="num-new_step" class="number-input" data-value="new_step_str" />

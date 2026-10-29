@@ -4733,6 +4733,7 @@ namespace lfs::vis {
         static_assert(ov::CropPolygonBase == ov::ParamCount);
         static_assert(ov::CropPolygonParamStride == ov::CropPolygonVertices + core::kMaxCropPolygonVertices / 2);
         static_assert(ov::TableParamCount == ov::CropPolygonBase + ov::CropPolygonParamStride * ov::CropPolygonCount);
+        static_assert(ov::RevealParams == ov::TableParamCount);
 
         const glm::mat4 transform =
             glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 3.0f)), glm::vec3(2.0f, 3.0f, 4.0f));
@@ -4780,6 +4781,24 @@ namespace lfs::vis {
         params = ov::buildOverlayParamsCpuFloats(request, false, false, false, 0, false).value();
         ASSERT_EQ(params.size(), std::size_t{ov::TableParamCount} * 4u);
         EXPECT_EQ(slot(first + (ov::CropPolygonCount - 1) * ov::CropPolygonParamStride).w, 7.0f);
+    }
+
+    TEST(VksplatOverlayParamsTest, RevealParametersArePackedForProjection) {
+        namespace ov = detail;
+        lfs::rendering::ViewportRenderRequest request{};
+        request.reveal = lfs::rendering::GaussianRevealState{0.25f, 0.2f, 1.0f, 2.0f, 5.0f, 2, -3.0f, 6.0f};
+        auto params = ov::buildOverlayParamsCpuFloats(request, false, false, false, 0, false).value();
+        ASSERT_EQ(params.size(), std::size_t{ov::TableParamCount} * 4u);
+        ov::appendVksplatRevealParams(params, request);
+        ASSERT_EQ(params.size(), std::size_t{ov::VksplatTableParamCount} * 4u);
+        EXPECT_FLOAT_EQ(params[ov::RevealParams * 4], 1.2f);
+        EXPECT_FLOAT_EQ(params[ov::RevealParams * 4 + 1], -3.0f);
+        EXPECT_FLOAT_EQ(params[ov::RevealParams * 4 + 2], 6.0f);
+        EXPECT_FLOAT_EQ(params[ov::RevealParams * 4 + 3], 0.25f);
+        EXPECT_FLOAT_EQ(params[ov::RevealEffectBounds * 4], 2.0f);
+        EXPECT_FLOAT_EQ(params[ov::RevealEffectBounds * 4 + 1], 1.0f);
+        EXPECT_FLOAT_EQ(params[ov::RevealEffectBounds * 4 + 2], 2.0f);
+        EXPECT_FLOAT_EQ(params[ov::RevealEffectBounds * 4 + 3], 5.0f);
     }
 
     TEST_F(SceneManagerRenderStateTest, DeleteSelectedGaussiansRejectsSelectedCropVolumeWithoutRemovingIt) {

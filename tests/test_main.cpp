@@ -29,7 +29,9 @@ int main(int argc, char** argv) {
         else if (level == "error")
             log_level = lfs::core::LogLevel::Error;
     }
-    lfs::core::Logger::get().init(log_level);
+    const auto user_dir = lfs::core::environment::value("LFS_HOME");
+    lfs::core::Logger::get().init(log_level, {}, {}, false,
+                                  user_dir ? std::string(*user_dir) : std::string{});
 
     lfs::core::TensorBackendOptions options;
     auto backend = lfs::core::GpuBackend::CUDA;
@@ -77,7 +79,9 @@ int main(int argc, char** argv) {
 
     // Pre-warm pinned memory cache for fast CPU-GPU transfers
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)
+#ifndef LFS_TEST_SKIP_GPU_PREWARM
     lfs::core::PinnedMemoryAllocator::instance().prewarm();
+#endif
 
     const int result = RUN_ALL_TESTS();
 
