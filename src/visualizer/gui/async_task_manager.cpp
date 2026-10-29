@@ -4225,7 +4225,7 @@ namespace lfs::vis::gui {
         collision_replacement_ = {};
     }
 
-    bool AsyncTaskManager::deferSceneReplacement(std::move_only_function<void()> replacement) {
+    bool AsyncTaskManager::deferSceneReplacement(lfs::core::MoveOnlyFunction<void()> replacement) {
         if (!sceneReplacementRequired())
             return false;
         cancelCollision();

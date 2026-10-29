@@ -286,6 +286,7 @@ if(BUILD_TESTS)
         target_compile_definitions(tensor_mesh_offscreen_contracts PRIVATE
             LFS_TEST_VULKAN_MESH_REFERENCE=$<BOOL:${LFS_GRAPHICS_VULKAN_BUILD}>)
         target_include_directories(tensor_mesh_offscreen_contracts PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/src/visualizer
             ${CMAKE_SOURCE_DIR}/src/rendering/include)
         target_link_libraries(tensor_mesh_offscreen_contracts PRIVATE
