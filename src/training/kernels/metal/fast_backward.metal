@@ -131,8 +131,7 @@ static FastBackwardPixel fast_backward_pixel(constant FastBlendBackwardParams& p
 }
 
 struct FastBlendAccum {
-    float2 mean;
-    float3 conic;
+    float3 column_sums;
     float opacity;
     float3 color;
     float depth;
@@ -189,8 +188,7 @@ static bool fast_accumulate_pixel(thread FastBackwardPixel& s, thread FastBlendA
     if (kFastNormalChannel != 0u)
         a.normal += weight * s.grad_normal;
     const float helper = saturated ? 0.0f : -alpha * dL_dalpha;
-    a.conic += 0.5f * helper * float3(d.x * d.x, d.x * d.y, d.y * d.y);
-    a.mean += helper * float2(conic_opacity.x * d.x + conic_opacity.y * d.y, conic_opacity.y * d.x + conic_opacity.z * d.y);
+    a.column_sums += helper * float3(1.0f, d.y, d.y * d.y);
     s.grad_transmittance = dot(s.grad_color, alpha * color) + alpha * depth * s.grad_depth + alpha * normal_dot +
                            s.grad_transmittance * one_minus_alpha;
     s.transmittance = transmittance_before;
@@ -317,7 +315,7 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
             const float depth = s_depth[j];
             const float3 normal = kFastNormalChannel != 0u ? s_normal[j] : float3(0.0f);
 
-            FastBlendAccum a = {float2(0.0f), float3(0.0f), 0.0f, float3(0.0f), 0.0f, float3(0.0f), 0.0f, 0.0f, 0.0f,
+            FastBlendAccum a = {float3(0.0f), 0.0f, float3(0.0f), 0.0f, float3(0.0f), 0.0f, 0.0f, 0.0f,
                                0.0f, 0.0f};
             bool contributed = false;
 #pragma unroll
@@ -325,6 +323,12 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
                 if ((mask[k] >> bit) & 1u)
                     contributed |= fast_accumulate_pixel(px[k], a, tile_primitive, mean, co, c.xyz, factor, depth, normal);
             }
+            // The rows share dx. Form mean/conic gradients once from H, Hy, Hyy.
+            const float3 sums = a.column_sums;
+            const float dx = mean.x - px[0].pixel.x;
+            const float h_dx = dx * sums.x;
+            const float2 grad_mean = float2(co.x * h_dx + co.y * sums.y, co.y * h_dx + co.z * sums.y);
+            const float3 grad_conic = 0.5f * float3(dx * h_dx, dx * sums.y, sums.z);
             if (!simd_any(contributed))
                 continue;
             if (kFastImpactScore != 0u) {
@@ -340,7 +344,7 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
             }
             if (kFastImpactScore == 2u)
                 continue;
-            float v[16] = {a.mean.x, a.mean.y, a.conic.x, a.conic.y, a.conic.z, a.opacity,
+            float v[16] = {grad_mean.x, grad_mean.y, grad_conic.x, grad_conic.y, grad_conic.z, a.opacity,
                            a.color.x, a.color.y, a.color.z, a.depth, a.normal.x, a.normal.y,
                            a.normal.z, a.densification_weight, a.densification_error, a.edge};
             const float total = fast_transpose_sum16(v, lane);
