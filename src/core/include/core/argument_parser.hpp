@@ -69,6 +69,9 @@ namespace lfs::core::args {
     struct PreprocessMode {
         param::PreprocessParameters params;
     };
+    struct VideoMaskMode {
+        param::VideoMaskParameters params;
+    };
     struct CompareMode {
         param::CompareParameters params;
     };
@@ -90,8 +93,9 @@ namespace lfs::core::args {
         param::BatchTrainingParameters params;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, CompareMode, HelpMode,
-                                    VersionMode, WarmupMode, PluginMode, LichtMode, VoxelizeMode, BatchTrainingMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, VideoMaskMode, CompareMode,
+                                    HelpMode, VersionMode, WarmupMode, PluginMode, LichtMode, VoxelizeMode,
+                                    BatchTrainingMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

@@ -36,6 +36,7 @@ For most tasks, resources answer the first two questions an agent needs:
 - Need operator ids or schemas: start with `operator_*` or `lichtfeld://operators/registry`
 - Need visible Gaussians or scene nodes: start with `selection_*`, `gaussians_*`, or `scene_*`
 - Need Python execution inside the app: start with `editor_*`
+- Need splat shaders: read `lichtfeld://shaders/catalog` and `lichtfeld://shaders/state`, then use `shader_*` ([recipe](recipes/user-shaders.md))
 
 ## Minimal Mutation Pattern
 

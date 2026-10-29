@@ -140,7 +140,7 @@ namespace lfs::vis::input {
                 ++locale_count;
                 const auto locale = nlohmann::json::parse(std::ifstream(entry.path()));
                 const auto& labels = locale.at("input_settings");
-                for (int i = 0; i <= static_cast<int>(Action::PREVIOUS_SIDEBAR_CATEGORY); ++i) {
+                for (int i = 0; i <= static_cast<int>(Action::EDITOR_STOP); ++i) {
                     const auto action = static_cast<Action>(i);
                     const auto name = actionNameKey(action);
                     if (name.empty())
@@ -242,6 +242,40 @@ namespace lfs::vis::input {
             std::string message;
             std::optional<lfs::ErrorAction> restore;
         };
+
+        TEST_F(KeymapTest, EditorDefaultsHaveNoCollisionsAndDoNotAffectViewportReachability) {
+            InputBindings bindings;
+            const auto path = std::filesystem::temp_directory_path() / "lfs_editor_scope_defaults.json";
+            ASSERT_TRUE(bindings.saveProfileToFile(path));
+            CoreShortcutWarning warning;
+            auto subscription = lfs::ErrorBus::instance().subscribe(warning);
+            ASSERT_TRUE(bindings.loadProfileFromFile(path));
+            EXPECT_EQ(bindings.getBindingsForMode(ToolMode::EDITOR).size(), 4u);
+            const int with_editor_count = warning.count;
+            const auto with_editor_message = warning.message;
+            InputBindings without_editor;
+            for (const auto action : {Action::EDITOR_RUN, Action::EDITOR_STOP, Action::EDITOR_TOGGLE_KIND})
+                without_editor.clearBinding(ToolMode::EDITOR, action);
+            ASSERT_TRUE(without_editor.saveProfileToFile(path));
+            warning.count = 0;
+            warning.message.clear();
+            ASSERT_TRUE(without_editor.loadProfileFromFile(path));
+            EXPECT_TRUE(without_editor.getBindingsForMode(ToolMode::EDITOR).empty());
+            EXPECT_EQ(warning.count, with_editor_count);
+            EXPECT_EQ(warning.message, with_editor_message);
+            for (const auto mode : kAllToolModes)
+                EXPECT_EQ(without_editor.getBindingsForMode(mode), bindings.getBindingsForMode(mode));
+            std::filesystem::remove(path);
+            const auto profile = InputBindings::createDefaultProfile();
+            std::vector<Binding> editor;
+            for (const auto& binding : profile.bindings)
+                if (binding.mode == ToolMode::EDITOR)
+                    editor.push_back(binding);
+            ASSERT_EQ(editor.size(), 4u);
+            for (size_t i = 0; i < editor.size(); ++i)
+                for (size_t j = i + 1; j < editor.size(); ++j)
+                    EXPECT_FALSE(sameDispatchTrigger(editor[i].trigger, editor[j].trigger));
+        }
 
         TEST_F(KeymapTest, WarnsThenRestoresOnlyUnreachableCoreActions) {
             const std::filesystem::path path =

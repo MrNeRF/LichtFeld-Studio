@@ -114,6 +114,7 @@ namespace Zep {
 
         void Clear();
         void SetText(const std::string& strText, bool initFromFile = false);
+        void SetPreserveCarriageReturns(bool preserve) { m_preserveCarriageReturns = preserve; }
         void Load(const fs::path& path);
         bool Save(int64_t& size);
 
@@ -299,6 +300,7 @@ namespace Zep {
         // Syntax and theme
         std::shared_ptr<ZepSyntax> m_spSyntax;
         std::shared_ptr<ZepTheme> m_spOverrideTheme;
+        bool m_preserveCarriageReturns = false;
         SyntaxProvider m_syntaxProvider;
         NVec4f m_toneColor = NVec4f(0.0f);
 

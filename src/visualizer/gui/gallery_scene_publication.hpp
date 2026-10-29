@@ -48,6 +48,7 @@ namespace lfs::vis::gui {
         std::filesystem::path environment_source;
         bool created_directory = false;
         bool materialized_payload = false;
+        bool shaders_omitted = false;
     };
 
     struct GalleryProjectExportRequest {

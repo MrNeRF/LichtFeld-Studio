@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn/ops.hpp"
+#include "core/nn/activation_arena.hpp"
 
 #include "core/cuda_error.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -333,8 +334,52 @@ namespace lfs::core::nn {
                            value.shape()[2] == static_cast<std::size_t>(n_k) &&
                            value.shape()[3] == static_cast<std::size_t>(d),
                        "attention value shape mismatch");
-        LFS_ASSERT_MSG(d <= 128, "attention supports head dim d <= 128");
         const float used_scale = scale > 0.0f ? scale : 1.0f / std::sqrt(static_cast<float>(d));
+
+        if (d > 128) {
+            // Wide memory attention uses bounded query tiles: the full video score matrix is several hundred MiB, while
+            // tiles of a few query rows leave a GEMM with a handful of blocks reducing over every key.
+            constexpr size_t kScoreTileBytes = size_t(256) << 20;
+            const size_t score_row_bytes = size_t(b) * h * size_t(n_k) * dtype_size(query.dtype());
+            const int max_rows = std::max(128, int(std::min<size_t>(size_t(n_q), kScoreTileBytes / score_row_bytes)) / 128 * 128);
+            // Equal tiles: a short remainder tile, or one just above a full wave of blocks, idles most SMs while the
+            // value GEMM reduces over every key.
+            const int tiles = (n_q + max_rows - 1) / max_rows;
+            const int tile_rows = ((n_q + tiles - 1) / tiles + 63) / 64 * 64;
+            auto output = empty_like_shape(query, query.shape());
+            struct RestoreArena {
+                ActivationArena* previous = ActivationArena::current();
+                ~RestoreArena() { ActivationArena::bind(previous); }
+            } restore_arena;
+            ActivationArena::bind(nullptr);
+            if (mask && mask->is_valid()) {
+                require_nn_tensor(*mask, "attention", "mask");
+                require_same_dtype_device(query, *mask, "attention", "query", "mask");
+                LFS_ASSERT_MSG(mask->ndim() == 2 || mask->ndim() == 4, "Attention mask must be rank two or four");
+            }
+            const auto keys = key.contiguous().reshape(TensorShape{std::vector<size_t>{size_t(b * h), size_t(n_k), size_t(d)}});
+            const auto values = value.contiguous().reshape(TensorShape{std::vector<size_t>{size_t(b * h), size_t(n_k), size_t(d)}});
+            for (int first = 0; first < n_q; first += tile_rows) {
+                const int count = std::min(tile_rows, n_q - first);
+                const auto queries = query.slice(2, first, first + count).contiguous().reshape(TensorShape{std::vector<size_t>{size_t(b * h), size_t(count), size_t(d)}});
+                const auto scaled_queries = queries.to(DataType::Float32).mul(used_scale).to(query.dtype());
+                const auto scores = bmm(scaled_queries, keys, false, true);
+                Tensor score_mask;
+                if (mask && mask->is_valid()) {
+                    const auto expanded = mask->expand(TensorShape{std::vector<size_t>{size_t(b), size_t(h), size_t(n_q), size_t(n_k)}});
+                    score_mask = expanded.slice(2, first, first + count).contiguous().reshape(scores.shape());
+                }
+                const auto tile = bmm(softmax(scores, score_mask.is_valid() ? &score_mask : nullptr), values);
+                pin_operands({&tile});
+                output.set_stream(prepare_inputs_for_stream({&tile}, output.stream()));
+                const size_t row_bytes = size_t(count) * d * dtype_size(query.dtype());
+                LFS_CUDA_CHECK(cudaMemcpy2DAsync(
+                    static_cast<char*>(output.data_ptr()) + size_t(first) * d * dtype_size(query.dtype()),
+                    size_t(n_q) * d * dtype_size(query.dtype()), tile.data_ptr(), row_bytes,
+                    row_bytes, size_t(b * h), cudaMemcpyDeviceToDevice, output.stream()));
+            }
+            return output;
+        }
 
         Tensor m_s;
         const Tensor q_c = query.contiguous();
@@ -665,6 +710,22 @@ namespace lfs::core::nn {
         }
         LFS_ASSERT_MSG(params.activation == Activation::None,
                        "conv2d fused activation is only supported on the pointwise and 3x3 paths");
+        if (params.groups == cin && cout == cin && in_c.dtype() == DataType::Float32) {
+            auto nchw = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            if (b_c)
+                b_c->sync_to_stream(stream);
+            nchw.set_stream(stream);
+            kernels::depthwise_conv2d(in_c.ptr<float>(), w_c.ptr<float>(), b_c ? b_c->ptr<float>() : nullptr,
+                                      nchw.ptr<float>(), n, cin, h, w, kh, kw, out_h, out_w, params.stride_h,
+                                      params.stride_w, params.pad_h, params.pad_w, params.dilation_h,
+                                      params.dilation_w, static_cast<int>(params.pad_mode), stream);
+            return nchw;
+        }
         const std::size_t bytes = conv2d_workspace_bytes(in_c.shape(), w_c.shape(), params, in_c.dtype());
         Tensor scratch = ensure_workspace(workspace, bytes, in_c, "conv2d");
         auto nhwc = empty_like_shape(
@@ -847,6 +908,159 @@ namespace lfs::core::nn {
                           static_cast<int>(in_c.shape()[1]), static_cast<int>(in_c.shape()[2]),
                           static_cast<int>(in_c.shape()[3]), out_h, out_w, static_cast<int>(mode),
                           static_cast<int>(coord), in_c.dtype(), stream);
+        return out;
+    }
+
+    Tensor resize2d_pil_bicubic(const Tensor& input, int out_h, int out_w) {
+        require_nn_tensor(input, "resize2d_pil_bicubic", "input");
+        LFS_ASSERT_MSG(input.ndim() == 4 && input.dtype() == DataType::Float32,
+                       "PIL resampling expects Float32 NCHW");
+        LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "PIL resampling size must be positive");
+        Tensor current = input.contiguous();
+        for (const bool horizontal : {true, false}) {
+            const int in_h = int(current.size(2)), in_w = int(current.size(3));
+            const int in_size = horizontal ? in_w : in_h;
+            const int out_size = horizontal ? out_w : out_h;
+            if (in_size == out_size)
+                continue;
+            const double scale = double(in_size) / out_size;
+            const double filter_scale = std::max(1.0, scale);
+            const double support = 2 * filter_scale;
+            const int taps = 2 * int(std::ceil(support)) + 1;
+            std::vector<int> bounds(size_t(out_size) * 2), coefficients(size_t(out_size) * taps);
+            const auto cubic = [](double x) {
+                x = std::abs(x);
+                if (x < 1)
+                    return ((1.5 * x - 2.5) * x) * x + 1;
+                if (x < 2)
+                    return (((x - 5) * x + 8) * x - 4) * -0.5;
+                return 0.0;
+            };
+            for (int pixel = 0; pixel < out_size; ++pixel) {
+                const double center = (pixel + 0.5) * scale;
+                const int first = std::max(0, int(center - support + 0.5));
+                const int end = std::min(in_size, int(center + support + 0.5));
+                bounds[2 * pixel] = first;
+                bounds[2 * pixel + 1] = end - first;
+                std::vector<double> weights(size_t(end - first));
+                double total = 0;
+                for (int i = first; i < end; ++i) {
+                    weights[size_t(i - first)] = cubic((i - center + 0.5) / filter_scale);
+                    total += weights[size_t(i - first)];
+                }
+                for (int i = first; i < end; ++i) {
+                    const double weight = weights[size_t(i - first)] / total;
+                    coefficients[size_t(pixel) * taps + i - first] =
+                        int(weight * double(1 << 22) + (weight < 0 ? -0.5 : 0.5));
+                }
+            }
+            const auto b = Tensor::from_vector(bounds, {size_t(out_size), 2}, Device::CPU)
+                               .to(input.device(), current.stream());
+            const auto c = Tensor::from_vector(coefficients, {size_t(out_size), size_t(taps)}, Device::CPU)
+                               .to(input.device(), current.stream());
+            const int height = horizontal ? in_h : out_h, width = horizontal ? out_w : in_w;
+            auto output = empty_like_shape(current, {current.size(0), current.size(1), size_t(height), size_t(width)});
+            pin_operands({&current, &b, &c});
+            output.set_stream(prepare_inputs_for_stream({&current, &b, &c}, output.stream()));
+            kernels::resample_pil_axis(current.ptr<float>(), output.ptr<float>(), b.ptr<int>(), c.ptr<int>(),
+                                       taps, int(current.size(0) * current.size(1)), in_h, in_w,
+                                       height, width, horizontal, output.stream());
+            current = std::move(output);
+        }
+        return current;
+    }
+
+    Tensor dilate_binary_disk(const Tensor& input, int radius) {
+        require_nn_tensor(input, "dilate_binary_disk", "input");
+        LFS_ASSERT_MSG(input.ndim() == 4 && input.dtype() == DataType::Float32 && radius >= 0,
+                       "Disk dilation expects Float32 NCHW and a nonnegative radius");
+        const auto contiguous = input.contiguous();
+        auto distance = empty_like_shape(contiguous, contiguous.shape());
+        auto output = empty_like_shape(contiguous, contiguous.shape());
+        pin_operands({&contiguous, &distance});
+        output.set_stream(prepare_inputs_for_stream({&contiguous}, output.stream()));
+        kernels::dilate_binary_disk(contiguous.ptr<float>(), distance.ptr<float>(), output.ptr<float>(),
+                                    int(input.size(0) * input.size(1)), int(input.size(2)), int(input.size(3)), radius,
+                                    output.stream());
+        return output;
+    }
+
+    namespace {
+        Tensor replace_small_components(const Tensor& scores, const float fill, const bool foreground) {
+            require_nn_tensor(scores, "replace_small_components", "scores");
+            LFS_ASSERT_MSG(scores.ndim() == 4 && scores.dtype() == DataType::Float32,
+                           "Small component replacement expects Float32 NCHW scores");
+            const auto contiguous = scores.contiguous();
+            auto output = empty_like_shape(contiguous, contiguous.shape());
+            pin_operands({&contiguous});
+            output.set_stream(prepare_inputs_for_stream({&contiguous}, output.stream()));
+            const auto launch = foreground ? kernels::remove_small_foreground : kernels::fill_small_background;
+            launch(contiguous.ptr<float>(), output.ptr<float>(), int(scores.size(0) * scores.size(1)), int(scores.size(2)),
+                   int(scores.size(3)), fill, output.stream());
+            return output;
+        }
+    } // namespace
+
+    Tensor fill_small_background(const Tensor& scores, const float fill) {
+        return replace_small_components(scores, fill, false);
+    }
+
+    Tensor remove_small_foreground(const Tensor& scores, const float fill) {
+        return replace_small_components(scores, fill, true);
+    }
+
+    Tensor round_bfloat16(const Tensor& input) {
+        require_nn_tensor(input, "round_bfloat16", "input");
+        LFS_ASSERT_MSG(input.dtype() == DataType::Float32, "Memory rounding expects Float32");
+        const auto contiguous = input.contiguous();
+        auto output = empty_like_shape(contiguous, contiguous.shape());
+        pin_operands({&contiguous});
+        output.set_stream(prepare_inputs_for_stream({&contiguous}, output.stream()));
+        kernels::round_bfloat16(contiguous.ptr<float>(), output.ptr<float>(), output.numel(), output.stream());
+        return output;
+    }
+
+    Tensor rotary_embedding_2d(const Tensor& input, int height, int width, int excluded_tokens) {
+        require_nn_tensor(input, "rotary_embedding_2d", "input");
+        LFS_ASSERT_MSG(input.ndim() == 4 && input.size(3) % 4 == 0, "Rotary encoding expects BHND with d divisible by four");
+        LFS_ASSERT_MSG(height > 0 && width > 0 && excluded_tokens >= 0 && size_t(excluded_tokens) <= input.size(2),
+                       "Invalid rotary encoding extent");
+        LFS_ASSERT_MSG((input.size(2) - excluded_tokens) % size_t(height * width) == 0, "Incomplete rotary spatial grid");
+        const auto contiguous = input.contiguous();
+        auto output = empty_like_shape(contiguous, contiguous.shape());
+        pin_operands({&contiguous});
+        output.set_stream(prepare_inputs_for_stream({&contiguous}, output.stream()));
+        kernels::rotary_embedding_2d(raw(contiguous), raw_mut(output), int(input.size(0) * input.size(1)),
+                                     int(input.size(2)), int(input.size(3)), height, width, excluded_tokens,
+                                     input.dtype(), output.stream());
+        return output;
+    }
+
+    Tensor resize2d_bilinear_antialiased(const Tensor& input, const int out_h, const int out_w) {
+        require_nn_tensor(input, "resize2d_bilinear_antialiased", "input");
+        LFS_ASSERT_MSG(input.ndim() == 4, "resize2d_bilinear_antialiased expects NCHW");
+        LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "resize output size must be positive");
+        const Tensor in_c = input.contiguous();
+        const int in_h = static_cast<int>(in_c.shape()[2]);
+        const int in_w = static_cast<int>(in_c.shape()[3]);
+        if (in_h == out_h && in_w == out_w) {
+            return in_c;
+        }
+        auto horizontal = empty_like_shape(in_c, TensorShape{std::vector<std::size_t>{
+                                                     in_c.shape()[0], in_c.shape()[1],
+                                                     static_cast<std::size_t>(in_h), static_cast<std::size_t>(out_w)}});
+        auto out = empty_like_shape(in_c, TensorShape{std::vector<std::size_t>{
+                                              in_c.shape()[0], in_c.shape()[1],
+                                              static_cast<std::size_t>(out_h), static_cast<std::size_t>(out_w)}});
+        pin_operands({&in_c, &horizontal});
+        const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
+        horizontal.set_stream(stream);
+        out.set_stream(stream);
+        const int planes = static_cast<int>(in_c.shape()[0] * in_c.shape()[1]);
+        kernels::resize_bilinear_antialiased_axis(raw(in_c), raw_mut(horizontal), planes,
+                                                  in_h, in_w, in_h, out_w, true, in_c.dtype(), stream);
+        kernels::resize_bilinear_antialiased_axis(raw(horizontal), raw_mut(out), planes,
+                                                  in_h, out_w, out_h, out_w, false, in_c.dtype(), stream);
         return out;
     }
 

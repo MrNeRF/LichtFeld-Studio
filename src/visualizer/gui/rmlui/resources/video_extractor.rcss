@@ -266,6 +266,11 @@ body {
     width: 58dp;
 }
 
+#masking-options .field-label {
+    width: auto;
+    white-space: nowrap;
+}
+
 .time-input {
     width: 80dp;
     min-width: 80dp;

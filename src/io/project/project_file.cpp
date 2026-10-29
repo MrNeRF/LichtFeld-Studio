@@ -1164,31 +1164,21 @@ namespace lfs::io::project::detail {
 
 #ifndef _WIN32
     lfs::Result<AtomicReplaceState>
-    replace_with_rename_backup(const std::filesystem::path& replacement,
-                               const std::filesystem::path& destination,
-                               const std::filesystem::path& backup) {
-        if (::rename(destination.c_str(), backup.c_str()) != 0) {
-            const int error = errno;
-            return project_error(
-                native_error_code(error, true),
-                "A recoverable project replacement backup could not be created.",
-                std::format("rename backup failed: {}", std::strerror(error)), backup,
-                std::nullopt, "atomic_replace_backup", error, std::strerror(error));
-        }
+    replace_without_backup(const std::filesystem::path& replacement,
+                           const std::filesystem::path& destination) {
+        // Filesystems without hard links still support one replacing rename.
+        // Moving the destination aside first would leave a crash-visible gap.
         if (::rename(replacement.c_str(), destination.c_str()) != 0) {
             const int error = errno;
-            const bool restored = ::rename(backup.c_str(), destination.c_str()) == 0;
             return project_error(native_error_code(error, true),
                                  "The project could not be atomically published.",
-                                 std::format("rename failed: {}{}", std::strerror(error),
-                                             restored ? "" : "; prior project kept at the backup path"),
+                                 std::format("rename failed: {}", std::strerror(error)),
                                  destination, std::nullopt, "atomic_replace", error,
                                  std::strerror(error));
         }
-        if (auto sync = sync_parent_directory(destination); !sync) {
+        if (auto sync = sync_parent_directory(destination); !sync)
             return std::move(sync).error();
-        }
-        return AtomicReplaceState{.backup_path = backup};
+        return AtomicReplaceState{};
     }
 #endif
 
@@ -1239,7 +1229,7 @@ namespace lfs::io::project::detail {
                 const bool filesystem_without_hard_links =
                     error == EPERM || error == EOPNOTSUPP || error == ENOSYS;
                 if (filesystem_without_hard_links) {
-                    return replace_with_rename_backup(replacement, destination, backup);
+                    return replace_without_backup(replacement, destination);
                 }
                 return project_error(
                     native_error_code(error, true),
@@ -1293,7 +1283,7 @@ namespace lfs::io::project::detail {
             return status_failure(project_error(
                 lfs::ErrorCode::DataLoss,
                 "The newly published project failed validation and has no prior backup.",
-                "first publication cannot be rolled back automatically", destination));
+                "publication without a backup cannot be rolled back automatically", destination));
         }
 #ifdef _WIN32
         if (!MoveFileExW(project_fs::native_path((*state.backup_path)).c_str(), project_fs::native_path(destination).c_str(),

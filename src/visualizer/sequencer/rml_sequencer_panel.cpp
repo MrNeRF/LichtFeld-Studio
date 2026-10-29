@@ -24,6 +24,7 @@
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <array>
@@ -215,7 +216,8 @@ namespace lfs::vis {
                                              panel->cached_panel_x_ + offset.x,
                                              panel->cached_panel_y_ + offset.y + el->GetBox().GetSize().y};
         } else if (id == "btn-remove-reveal") {
-            ctrl.setRevealClip(std::nullopt);
+            if (auto changed = ctrl.setRevealClip(std::nullopt); !changed)
+                LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
             panel->selectReveal(false);
         } else if (id == "ply-sequence-clip") {
             panel->selectReveal(false);
@@ -626,6 +628,8 @@ namespace lfs::vis {
                 el->AddEventListener(Rml::EventId::Click, &transport_listener_);
         }
 
+        if (auto* select = document_->GetElementById("reveal-shader"))
+            select->AddEventListener(Rml::EventId::Change, &reveal_listener_);
         for (const char* id : {"reveal-start", "reveal-end", "reveal-softness"}) {
             if (auto* el = document_->GetElementById(id)) {
                 el->AddEventListener(Rml::EventId::Change, &reveal_listener_);
@@ -1197,6 +1201,18 @@ namespace lfs::vis {
         controller_.deselectKeyframe();
         selected_keyframes_.clear();
         const auto& clip = *controller_.timeline().revealClip();
+        if (auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("reveal-shader"))) {
+            select->SetClass("hidden", !clip.shader_id.has_value());
+            if (auto* service = controller_.shaderService(); service && clip.shader_id) {
+                std::string options;
+                for (const auto& asset : service->assets())
+                    options += fmt::format("<option value=\"{}\">{}</option>", asset.id.to_string(),
+                                           Rml::StringUtilities::EncodeRml(asset.name));
+                if (select->GetInnerRML() != options)
+                    select->SetInnerRML(options);
+                select->SetValue(clip.shader_id->to_string());
+            }
+        }
         for (const auto& [id, value] : {std::pair{"reveal-start", clip.start},
                                         std::pair{"reveal-end", clip.end},
                                         std::pair{"reveal-softness", clip.softness}}) {
@@ -1208,6 +1224,14 @@ namespace lfs::vis {
     void RmlSequencerPanel::RevealEditListener::ProcessEvent(Rml::Event& event) {
         if (!panel || !panel->reveal_selected_ || !panel->controller_.timeline().revealClip())
             return;
+        if (auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(event.GetCurrentElement())) {
+            auto clip = *panel->controller_.timeline().revealClip();
+            clip.shader_id = core::Uuid::from_string(select->GetValue());
+            if (auto changed = panel->controller_.setRevealClip(clip, true); !changed)
+                LOG_WARN("Reveal asset rejected: {}", changed.error().user_message());
+            panel->selectReveal(true);
+            return;
+        }
         if (event.GetId() == Rml::EventId::Change && !event.GetParameter<bool>("linebreak", false))
             return;
         auto* el = event.GetCurrentElement();
@@ -1225,7 +1249,8 @@ namespace lfs::vis {
             else if (el->GetId() == "reveal-softness")
                 clip.softness = value;
             try {
-                panel->controller_.setRevealClip(clip);
+                if (auto changed = panel->controller_.setRevealClip(clip); !changed)
+                    LOG_WARN("Reveal edit rejected: {}", changed.error().user_message());
             } catch (const std::invalid_argument&) {}
         }
         panel->selectReveal(true);

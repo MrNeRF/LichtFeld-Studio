@@ -133,6 +133,7 @@ namespace lfs::vis::gui {
         bool equirectangular_ = false;
         bool orthographic_ = false;
         float ortho_scale_ = 1.0f;
+        std::uint64_t custom_effect_generation_ = 0; // thumbnails show its effects
         uint32_t generation_ = 0;
         int burst_remaining_ = 0;
         std::optional<HoverState> hover_state_;

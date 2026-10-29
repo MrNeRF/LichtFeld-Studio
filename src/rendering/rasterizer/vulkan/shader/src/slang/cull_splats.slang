@@ -107,6 +107,12 @@ void main(
                 if (overlay_enabled(reveal.x) && (reveal_type == 1 || (reveal_type >= 3 && reveal_type <= 5) || reveal_type == 10))
                     survives = true;
 #endif
+#if LFS_CUSTOM_EFFECT
+                // A bound effect may move the element anywhere, so it is not
+                // culled at its stored center.
+                if (custom_chain_bound(custom_chain(overlay_params, state.node_idx)))
+                    survives = true;
+#endif
             }
         }
     }

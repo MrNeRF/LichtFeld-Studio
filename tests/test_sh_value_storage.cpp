@@ -303,6 +303,52 @@ TEST(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
         cpu.index_select(0, rows), selected, "ieee-f16 selected canonical rows");
 }
 
+TEST(ShValueStorageTest, EveryActiveDegreeRendersDecodedStoredCoefficients) {
+    struct ResetQuantization {
+        ~ResetQuantization() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
+    } reset;
+    auto translation = Tensor::zeros({3}, Device::CPU);
+    translation.ptr<float>()[2] = 3.0f;
+    Camera camera(Tensor::eye(3, Device::CUDA), translation.cuda(), 60.0f, 61.0f, 32.0f, 31.0f,
+                  Tensor{}, Tensor{}, CameraModelType::PINHOLE, "sh", "", std::filesystem::path{}, 65, 63, 0);
+    auto background = Tensor::zeros({3}, Device::CUDA);
+    for (int storage = 0; storage < 3; ++storage) {
+        sh_value::set_sh_value_quant_enabled_for_testing(false);
+        auto stored = make_random_sh3(259);
+        auto positions = stored.means().cpu();
+        for (size_t i = 0; i < stored.size(); ++i) {
+            positions.ptr<float>()[3 * i] = (static_cast<int>(i % 17) - 8) * 0.1f;
+            positions.ptr<float>()[3 * i + 1] = (static_cast<int>(i / 17) - 7) * 0.1f;
+        }
+        stored.means().copy_from(positions);
+        stored.scaling_raw().fill_(-3.0f);
+        stored.opacity_raw().fill_(-1.5f);
+        if (storage == 1)
+            stored.shN() = stored.shN().to(DataType::Float16);
+        if (storage == 2) {
+            sh_value::set_sh_value_quant_enabled_for_testing(true);
+            ASSERT_TRUE(sh_value::apply_shN_value_quant(stored));
+            sh_value::set_sh_value_quant_enabled_for_testing(false);
+        }
+        SplatData decoded(3, stored.means().clone(), stored.sh0().clone(), stored.shN_canonical(),
+                          stored.scaling_raw().clone(), stored.rotation_raw().clone(), stored.opacity_raw().clone(), 1.0f);
+        for (int degree = 0; degree <= 3; ++degree) {
+            SCOPED_TRACE(::testing::Message() << "storage=" << storage << " degree=" << degree);
+            stored.set_active_sh_degree(degree);
+            decoded.set_active_sh_degree(degree);
+            Tensor stored_image;
+            {
+                auto result = fast_rasterize_forward(camera, stored, background, 0, 0, 0, 0, false);
+                ASSERT_TRUE(result) << lfs::format_for_developer(result.error());
+                stored_image = result->first.image.cpu().contiguous();
+            }
+            auto reference = fast_rasterize_forward(camera, decoded, background, 0, 0, 0, 0, false);
+            ASSERT_TRUE(reference) << lfs::format_for_developer(reference.error());
+            EXPECT_LE(max_abs_diff(stored_image, reference->first.image), 2e-5f);
+        }
+    }
+}
+
 TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto source = make_random_sh3(kN);

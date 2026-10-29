@@ -26,7 +26,9 @@ int main(int argc, char** argv) {
         else if (level == "error")
             log_level = lfs::core::LogLevel::Error;
     }
-    lfs::core::Logger::get().init(log_level);
+    const auto user_dir = lfs::core::environment::value("LFS_HOME");
+    lfs::core::Logger::get().init(log_level, {}, {}, false,
+                                  user_dir ? std::string(*user_dir) : std::string{});
 
     ::testing::InitGoogleTest(&argc, argv);
 

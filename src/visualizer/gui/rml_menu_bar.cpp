@@ -657,13 +657,13 @@ namespace lfs::vis::gui {
 
         bool altLetterBoundInActiveMap(int app_key) {
             using lfs::vis::input::Action;
-            using lfs::vis::input::kAllToolModes;
+            using lfs::vis::input::kAllKeymapScopes;
             using lfs::vis::input::KEYMOD_ALT;
             const auto* controller = lfs::vis::InputController::instance();
             if (controller == nullptr)
                 return false;
             const auto& bindings = controller->getBindings();
-            for (const auto mode : kAllToolModes) {
+            for (const auto mode : kAllKeymapScopes) {
                 if (bindings.getActionForKey(mode, app_key, KEYMOD_ALT) != Action::NONE)
                     return true;
             }

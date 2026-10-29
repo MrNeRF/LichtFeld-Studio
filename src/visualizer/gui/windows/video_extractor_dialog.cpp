@@ -304,19 +304,28 @@ namespace lfs::gui {
         // such as photos already in the folder, are never part of the list.
         std::vector<std::filesystem::path> generatedExtractionFiles(const VideoExtractionParams& params) {
             std::vector<std::filesystem::path> files;
-            std::error_code ec;
-            for (std::filesystem::directory_iterator it(lfs::core::native_fs::traversal_path(params.output_dir), ec), end;
-                 !ec && it != end; it.increment(ec)) {
-                std::error_code type_ec;
-                if (!it->is_regular_file(type_ec))
-                    continue;
-                const std::string name = lfs::core::path_to_utf8(it->path().filename());
-                // Recognize zero-numbered frames from an earlier extraction even when this run
-                // starts at one, so Delete Existing removes all output for the current pattern.
-                if ((params.generate_metadata && name == "extraction_metadata.json") ||
-                    io::isGeneratedFrameFilename(params.filename_pattern, name, true))
-                    files.push_back(lfs::core::native_fs::entry_path(params.output_dir, it->path()));
-            }
+            const auto frames = preprocessing::video_frames_directory(params.output_dir, params.masking.enabled);
+            const auto scan = [&](const std::filesystem::path& directory, const bool masks) {
+                std::error_code ec;
+                for (std::filesystem::directory_iterator it = lfs::core::native_fs::directory_iterator(directory, ec), end;
+                     !ec && it != end; it.increment(ec)) {
+                    std::error_code type_ec;
+                    if (!it->is_regular_file(type_ec))
+                        continue;
+                    auto name = lfs::core::path_to_utf8(it->path().filename());
+                    if (masks) {
+                        if (!name.ends_with(".png"))
+                            continue;
+                        name.resize(name.size() - 4);
+                    }
+                    if ((!masks && params.generate_metadata && name == "extraction_metadata.json") ||
+                        io::isGeneratedFrameFilename(params.filename_pattern, name, true))
+                        files.push_back(lfs::core::native_fs::entry_path(directory, it->path()));
+                }
+            };
+            scan(frames, false);
+            if (params.masking.enabled)
+                scan(params.output_dir / "masks", true);
             return files;
         }
 
@@ -507,8 +516,6 @@ namespace lfs::gui {
         joinExtractionThread();
 
         extraction_thread_.emplace([this, params]() {
-            io::VideoFrameExtractor extractor;
-
             io::VideoFrameExtractor::Params extract_params;
             extract_params.video_path = params.video_path;
             extract_params.output_dir = params.output_dir;
@@ -541,9 +548,17 @@ namespace lfs::gui {
                 updateProgress(current, total, discarded);
             };
 
-            std::string error;
-            if (!extractor.extract(extract_params, error)) {
-                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled) {
+            std::string error, warning;
+            auto masking = params.masking;
+            masking.masking.progress = [this](const preprocessing::VideoMaskProgress& p) {
+                masking_active_.store(true);
+                updateProgress(static_cast<int>(p.completed), static_cast<int>(p.total), 0);
+            };
+            masking_active_.store(false);
+            const auto outcome = preprocessing::extract_video_frames(extract_params, masking, error, &warning);
+            masking_active_.store(false);
+            if (outcome != io::ExtractionOutcome::Completed) {
+                if (outcome == io::ExtractionOutcome::Cancelled) {
                     LOG_INFO("Video frame extraction stopped");
                     setExtractionStopped();
                 } else {
@@ -551,8 +566,7 @@ namespace lfs::gui {
                     setExtractionError(error);
                 }
             } else {
-                LOG_INFO("Video frame extraction completed successfully");
-                setExtractionComplete();
+                setExtractionComplete(warning);
             }
         });
     }
@@ -596,6 +610,7 @@ namespace lfs::gui {
                 return extract_params;
             };
 
+            std::string warnings;
             for (std::size_t i = 0; i < params.size(); ++i) {
                 if (stop_extraction_requested_.load()) {
                     {
@@ -616,23 +631,39 @@ namespace lfs::gui {
                     if (i < batch_items_.size()) {
                         batch_items_[i].status = BatchItemStatus::Running;
                         batch_items_[i].error.clear();
+                        batch_items_[i].warning.clear();
                     }
                 }
                 batch_list_dirty_.store(true);
                 extraction_status_dirty_.store(true);
 
-                io::VideoFrameExtractor extractor;
-                std::string error;
-                if (extractor.extract(make_extractor_params(params[i], static_cast<int>(i)), error)) {
+                std::string error, warning;
+                auto masking = params[i].masking;
+                masking.masking.progress = [this](const preprocessing::VideoMaskProgress& p) {
+                    masking_active_.store(true);
+                    updateProgress(static_cast<int>(p.completed), static_cast<int>(p.total), 0);
+                };
+                masking_active_.store(false);
+                const auto outcome = preprocessing::extract_video_frames(
+                    make_extractor_params(params[i], static_cast<int>(i)), masking, error, &warning);
+                masking_active_.store(false);
+                if (outcome == io::ExtractionOutcome::Completed) {
                     std::lock_guard lock(batch_mutex_);
-                    if (i < batch_items_.size())
+                    if (i < batch_items_.size()) {
                         batch_items_[i].status = BatchItemStatus::Complete;
+                        batch_items_[i].warning = warning;
+                    }
+                    if (!warning.empty()) {
+                        if (!warnings.empty())
+                            warnings += "\n";
+                        warnings += lfs::core::path_to_utf8(params[i].video_path.filename()) + ": " + warning;
+                    }
                     completed_batch_items_.fetch_add(1);
                     batch_list_dirty_.store(true);
                     continue;
                 }
 
-                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled ||
+                if (outcome == io::ExtractionOutcome::Cancelled ||
                     stop_extraction_requested_.load()) {
                     {
                         std::lock_guard lock(batch_mutex_);
@@ -668,7 +699,7 @@ namespace lfs::gui {
                     return;
                 }
             }
-            setExtractionComplete();
+            setExtractionComplete(warnings);
         });
     }
 
@@ -689,11 +720,12 @@ namespace lfs::gui {
         extraction_status_dirty_.store(true);
     }
 
-    void VideoExtractorDialog::setExtractionComplete() {
+    void VideoExtractorDialog::setExtractionComplete(const std::string& warning) {
         extracting_.store(false);
         stop_extraction_requested_.store(false);
         std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
+        warning_message_ = warning;
         status_message_ = ExtractionStatusMessage::Complete;
         extraction_status_dirty_.store(true);
     }
@@ -703,6 +735,7 @@ namespace lfs::gui {
         stop_extraction_requested_.store(false);
         std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
+        warning_message_.clear();
         status_message_ = ExtractionStatusMessage::Stopped;
         extraction_status_dirty_.store(true);
     }
@@ -715,6 +748,7 @@ namespace lfs::gui {
         }
         std::lock_guard lock(extraction_status_mutex_);
         error_message_ = error;
+        warning_message_.clear();
         status_message_ = ExtractionStatusMessage::None;
         extraction_status_dirty_.store(true);
     }
@@ -723,6 +757,7 @@ namespace lfs::gui {
         std::lock_guard lock(extraction_status_mutex_);
         return {
             .error_message = error_message_,
+            .warning_message = warning_message_,
             .status_message = status_message_,
         };
     }
@@ -730,12 +765,14 @@ namespace lfs::gui {
     void VideoExtractorDialog::clearExtractionStatus() {
         std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
+        warning_message_.clear();
         status_message_ = ExtractionStatusMessage::None;
         markContentDirty();
     }
 
     void VideoExtractorDialog::clearStatusMessage() {
         std::lock_guard lock(extraction_status_mutex_);
+        warning_message_.clear();
         status_message_ = ExtractionStatusMessage::None;
         markContentDirty();
     }
@@ -1086,6 +1123,8 @@ namespace lfs::gui {
     }
 
     std::string VideoExtractorDialog::batchStatusLabel(const BatchVideoItem& item) const {
+        if (!item.warning.empty())
+            return LOC("video_extractor.masking_warning_label");
         switch (item.status) {
         case BatchItemStatus::Pending: return LOC("video_extractor.batch_pending");
         case BatchItemStatus::Running: return LOC("video_extractor.batch_running");
@@ -1132,6 +1171,8 @@ namespace lfs::gui {
                                                   lfs::core::path_to_utf8(item.video_path),
                                                   LOC(VideoExtractor::OUTPUT),
                                                   lfs::core::path_to_utf8(item.output_dir));
+                if (!item.warning.empty())
+                    tooltip += std::format("\n{}", item.warning);
                 if (!item.error.empty())
                     tooltip += std::format("\n{}", item.error);
                 rows += std::format("<button id=\"batch-video-{}\" class=\"batch-video-item{}\" "
@@ -1310,6 +1351,21 @@ namespace lfs::gui {
         custom_width_input_el_ = nullptr;
         custom_height_input_el_ = nullptr;
         output_resolution_el_ = nullptr;
+        masking_toggle_el_ = nullptr;
+        masking_options_el_ = nullptr;
+        mask_circle_el_ = nullptr;
+        mask_recenter_el_ = nullptr;
+        mask_fov_el_ = nullptr;
+        mask_model_el_ = nullptr;
+        mask_require_operator_el_ = nullptr;
+        mask_dilation_el_ = nullptr;
+        mask_view_fov_el_ = nullptr;
+        mask_manual_seed_el_ = nullptr;
+        mask_seed_options_el_ = nullptr;
+        mask_seed_x_el_ = nullptr;
+        mask_seed_y_el_ = nullptr;
+        mask_seed_frame_el_ = nullptr;
+
         naming_select_el_ = nullptr;
         custom_pattern_row_el_ = nullptr;
         naming_help_el_ = nullptr;
@@ -1402,6 +1458,21 @@ namespace lfs::gui {
         custom_width_input_el_ = document_->GetElementById("custom-width-input");
         custom_height_input_el_ = document_->GetElementById("custom-height-input");
         output_resolution_el_ = document_->GetElementById("output-resolution");
+        masking_toggle_el_ = document_->GetElementById("masking-toggle");
+        masking_options_el_ = document_->GetElementById("masking-options");
+        mask_circle_el_ = document_->GetElementById("mask-circle");
+        mask_recenter_el_ = document_->GetElementById("mask-recenter");
+        mask_fov_el_ = document_->GetElementById("mask-fov");
+        mask_model_el_ = document_->GetElementById("mask-model");
+        mask_require_operator_el_ = document_->GetElementById("mask-require-operator");
+        mask_dilation_el_ = document_->GetElementById("mask-dilation");
+        mask_view_fov_el_ = document_->GetElementById("mask-view-fov");
+        mask_manual_seed_el_ = document_->GetElementById("mask-manual-seed");
+        mask_seed_options_el_ = document_->GetElementById("mask-seed-options");
+        mask_seed_x_el_ = document_->GetElementById("mask-seed-x");
+        mask_seed_y_el_ = document_->GetElementById("mask-seed-y");
+        mask_seed_frame_el_ = document_->GetElementById("mask-seed-frame");
+
         naming_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("naming-select"));
         custom_pattern_row_el_ = document_->GetElementById("custom-pattern-row");
         naming_help_el_ = document_->GetElementById("naming-help");
@@ -1538,6 +1609,11 @@ namespace lfs::gui {
         listen_change(quality_slider_el_);
         listen_input(quality_slider_el_);
         listen_change(resolution_select_el_);
+        for (auto* control : {masking_toggle_el_, mask_circle_el_, mask_recenter_el_, mask_fov_el_,
+                              mask_model_el_, mask_require_operator_el_, mask_dilation_el_, mask_view_fov_el_,
+                              mask_manual_seed_el_, mask_seed_x_el_, mask_seed_y_el_, mask_seed_frame_el_})
+            listen_change(control);
+
         listen_change(scale_select_el_);
         listen_change(custom_width_input_el_);
         listen_change(custom_height_input_el_);
@@ -1656,6 +1732,11 @@ namespace lfs::gui {
                                            ? "video_extractor.batch_overwrite_prompt_metadata"
                                            : "video_extractor.batch_overwrite_prompt";
             if (setCachedText(overwrite_message_el_, LOCF(prompt, pending_batch_conflict_count_)))
+                markContentDirty();
+            return;
+        }
+        if (pending_params_set_ && pending_params_.masking.enabled) {
+            if (setCachedText(overwrite_message_el_, LOC("video_extractor.masking_overwrite_prompt")))
                 markContentDirty();
             return;
         }
@@ -1896,6 +1977,18 @@ namespace lfs::gui {
         changed |= setCachedChecked(continue_batch_on_failure_el_, continue_batch_on_failure_);
         changed |= setCachedDisabled(continue_batch_on_failure_el_, extracting);
 
+        const bool masking_on = masking_toggle_el_ && masking_toggle_el_->HasAttribute("checked");
+        const bool circle_on = mask_circle_el_ && mask_circle_el_->HasAttribute("checked");
+        const bool manual_seed = mask_manual_seed_el_ && mask_manual_seed_el_->HasAttribute("checked");
+        changed |= setCachedProperty(masking_options_el_, "display", masking_on ? "block" : "none");
+        changed |= setCachedProperty(mask_seed_options_el_, "display", manual_seed ? "flex" : "none");
+        for (auto* control : {masking_toggle_el_, mask_circle_el_, mask_manual_seed_el_, mask_seed_x_el_,
+                              mask_seed_y_el_, mask_seed_frame_el_, mask_model_el_, mask_require_operator_el_, mask_dilation_el_})
+            changed |= setCachedDisabled(control, extracting);
+        changed |= setCachedDisabled(mask_recenter_el_, extracting || !circle_on);
+        changed |= setCachedDisabled(mask_fov_el_, extracting || !circle_on);
+        changed |= setCachedDisabled(mask_view_fov_el_, extracting || !circle_on || !mask_recenter_el_->HasAttribute("checked"));
+
         const bool sharpness_on = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
         changed |= setCachedProperty(sharpness_options_el_, "display", sharpness_on ? "block" : "none");
 
@@ -2004,7 +2097,9 @@ namespace lfs::gui {
                                              static_cast<float>(batch_total)
                                        : item_progress;
             changed |= setCachedAttribute(progress_bar_el_, "value", std::format("{:.4f}", progress));
-            if (total > 0) {
+            if (masking_active_.load()) {
+                changed |= setCachedText(progress_text_el_, batch_prefix + LOCF("video_extractor.masking_progress", current, total));
+            } else if (total > 0) {
                 const int discarded = discarded_frames_.load();
                 const std::string discard_str = discarded > 0
                                                     ? LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded))
@@ -2035,6 +2130,9 @@ namespace lfs::gui {
                 if (discarded > 0)
                     complete_msg += LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded));
             }
+            if (!snapshot.warning_message.empty())
+                complete_msg = LOCF("video_extractor.masking_warning", snapshot.warning_message);
+            changed |= setCachedAttribute(complete_section_el_, "class", snapshot.warning_message.empty() ? "status-section status-section--success" : "status-section status-section--warning");
             changed |= setCachedText(complete_text_el_, complete_msg);
         }
 
@@ -2328,6 +2426,11 @@ namespace lfs::gui {
                 }
             }
             changed_control = window_candidates_select_el_;
+        } else if (id == "masking-toggle" || id == "mask-circle" || id == "mask-recenter" ||
+                   id == "mask-view-fov" || id == "mask-dilation" || id == "mask-require-operator" ||
+                   id == "mask-model" || id == "mask-fov" || id == "mask-manual-seed" ||
+                   id == "mask-seed-x" || id == "mask-seed-y" || id == "mask-seed-frame") {
+            changed_control = document_ ? document_->GetElementById(id) : nullptr;
         } else if (id == "sharpness-toggle") {
             changed_control = sharpness_toggle_el_;
         } else if (id == "sharpness-algorithm-select") {
@@ -2539,6 +2642,58 @@ namespace lfs::gui {
         return true;
     }
 
+    bool VideoExtractorDialog::collectMaskingOptions(preprocessing::VideoMaskExtractionOptions& options,
+                                                     std::string& error) const {
+        options = {};
+        options.enabled = masking_toggle_el_ && masking_toggle_el_->HasAttribute("checked");
+        if (!options.enabled)
+            return true;
+        const auto checked = [](const Rml::Element* el) { return el && el->HasAttribute("checked"); };
+        const auto number = [](const Rml::Element* el, auto& value) {
+            const auto text = controlValue(el);
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+            return ec == std::errc{} && end == text.data() + text.size() && std::isfinite(double(value));
+        };
+        options.masking.require_operator = checked(mask_require_operator_el_);
+        if (!number(mask_dilation_el_, options.masking.dilation_radius) ||
+            options.masking.dilation_radius < 0 || options.masking.dilation_radius > 128) {
+            error = LOC("video_extractor.masking_invalid_dilation");
+            return false;
+        }
+        options.masking.weights = lfs::core::utf8_to_path(controlValue(mask_model_el_));
+        if (!options.masking.weights.empty() && !lfs::core::native_fs::is_regular_file(options.masking.weights)) {
+            error = LOC("video_extractor.masking_invalid_model");
+            return false;
+        }
+        if (checked(mask_circle_el_)) {
+            options.circle = {0.5, 0.5, 0.5, 0.5};
+            options.masking.recenter_fisheye = checked(mask_recenter_el_);
+            if (!number(mask_fov_el_, options.masking.fisheye_fov_degrees) ||
+                !(options.masking.fisheye_fov_degrees > 0 && options.masking.fisheye_fov_degrees < 360)) {
+                error = LOC("video_extractor.masking_invalid_fov");
+                return false;
+            }
+        }
+        if (options.masking.recenter_fisheye &&
+            (!number(mask_view_fov_el_, options.masking.view_fov_degrees) ||
+             !(options.masking.view_fov_degrees > 0 && options.masking.view_fov_degrees < 360))) {
+            error = LOC("video_extractor.masking_invalid_fov");
+            return false;
+        }
+        if (checked(mask_manual_seed_el_)) {
+            preprocessing::VideoMaskSeedPrompt seed;
+            float x = 0, y = 0;
+            if (!number(mask_seed_x_el_, x) || !number(mask_seed_y_el_, y) ||
+                !number(mask_seed_frame_el_, seed.frame) || !(x >= 0 && x <= 1 && y >= 0 && y <= 1) || seed.frame < 0) {
+                error = LOC("video_extractor.masking_invalid_seed");
+                return false;
+            }
+            seed.points.push_back({x, y, 1});
+            options.masking.prompt = std::move(seed);
+        }
+        return true;
+    }
+
     bool VideoExtractorDialog::buildBatchParams(std::vector<VideoExtractionParams>& params,
                                                 std::string& error) {
         applyTextInput("trim-start-input");
@@ -2562,6 +2717,8 @@ namespace lfs::gui {
         refreshBatchOutputDirectories();
 
         VideoExtractionParams shared;
+        if (!collectMaskingOptions(shared.masking, error))
+            return false;
         shared.mode = mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
         shared.fps = static_cast<double>(fps_);
         shared.frame_interval = frame_interval_;
@@ -2697,6 +2854,7 @@ namespace lfs::gui {
             for (auto& item : batch_items_) {
                 item.has_existing_output = false;
                 item.status = BatchItemStatus::Pending;
+                item.warning.clear();
                 item.error.clear();
             }
         }
@@ -2720,6 +2878,11 @@ namespace lfs::gui {
             return;
 
         VideoExtractionParams params;
+        std::string masking_error;
+        if (!collectMaskingOptions(params.masking, masking_error)) {
+            setExtractionError(masking_error);
+            return;
+        }
         params.video_path = video_path_;
         params.output_dir = output_dir_;
         params.mode = mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;

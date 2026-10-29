@@ -6,6 +6,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "shaders/shader_api.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +25,12 @@ namespace lfs::app {
         SubscriptionQueue,
     };
 
-    inline constexpr std::array<std::string_view, 21> kMcpRuntimeEventTypes = {
+    inline constexpr std::array<std::string_view, 26> kMcpRuntimeEventTypes = {
+        "shader.compile.started",
+        "shader.compile.completed",
+        "shader.compile.failed",
+        "shader.bindings.changed",
+        "shader.applied",
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -48,7 +54,12 @@ namespace lfs::app {
         "disk_space.save_failed",
     };
 
-    inline constexpr std::array<std::string_view, 27> kMcpSubscriptionEventTypes = {
+    inline constexpr std::array<std::string_view, 32> kMcpSubscriptionEventTypes = {
+        "shader.compile.started",
+        "shader.compile.completed",
+        "shader.compile.failed",
+        "shader.bindings.changed",
+        "shader.applied",
         "editor.started",
         "editor.completed",
         "scene.loaded",
@@ -133,6 +144,10 @@ namespace lfs::app {
                                      const McpEventStreamKind kind,
                                      PublishFn&& publish) {
         auto publisher = std::make_shared<std::decay_t<PublishFn>>(std::forward<PublishFn>(publish));
+        handlers.subscribe<vis::shaders::ShaderEvent>([publisher](const auto& event) {
+            std::invoke(*publisher, std::string(vis::shaders::shaderEventName(event.kind)),
+                        vis::shaders::shaderEvent(event));
+        });
         auto register_handler = [&handlers, publisher]<typename Event, typename Builder>(
                                     std::string_view type,
                                     Builder&& builder) {

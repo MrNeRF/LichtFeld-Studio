@@ -7,6 +7,11 @@ find_package(OpenSSL REQUIRED)
 
 add_library(lfs_preprocessing STATIC
     preprocess.cpp
+    video_masking.cpp
+    video_mask_cells.cpp
+    video_mask_extraction.cpp
+    video_mask_command.cpp
+    operator_view.cu
     lens_priors.cpp
     lens_views.cu
     lens_views.hpp

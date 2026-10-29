@@ -1524,6 +1524,75 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
     }
 }
 
+TEST(FastGSNormalChannelTest, DeferredNormalRotationGradientMatchesFiniteDifferences) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    NormalChannelScene scene;
+    // Generic quaternion away from symmetry; keeps the smallest-axis column
+    // pointed toward the camera so the orientation sign stays fixed.
+    const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
+    const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
+    auto camera = scene.make_camera();
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    const auto render_loss = [&](const std::vector<float>& quat) {
+        auto splat = scene.make_splat(quat);
+        auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        if (!forward.has_value()) {
+            throw lfs::Exception(std::move(forward.error()));
+        }
+        const auto normal_cpu = forward->first.normal.to(Device::CPU);
+        const float* n = normal_cpu.ptr<float>();
+        const float loss = upstream[0] * n[0] + upstream[1] * n[1] + upstream[2] * n[2];
+        forward->second.release_forward_context();
+        return loss;
+    };
+
+    auto splat = scene.make_splat(base_quat);
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    std::vector<float> upstream_data = upstream;
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        {},
+        grad_normal, true);
+
+    const auto rotation_grad = opt.get_grad(ParamType::Rotation).to(Device::CPU);
+    const float* actual = rotation_grad.ptr<float>();
+
+    // The splat sits exactly on the pixel center, so the blend weight has zero
+    // derivative w.r.t. rotation there and central differences through the full
+    // forward isolate exactly the detached-weight value path the kernel emits.
+    const float h = 2.0e-2f;
+    for (int c = 0; c < 4; ++c) {
+        std::vector<float> plus = base_quat;
+        std::vector<float> minus = base_quat;
+        plus[c] += h;
+        minus[c] -= h;
+        const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
+        EXPECT_NEAR(actual[c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
+            << "rotation gradient mismatch for quaternion component " << c;
+    }
+}
+
 TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIndex) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
@@ -3410,6 +3479,105 @@ TEST(JointAdamUpdates, ZeroHistoryStaysFixedInOrdinaryAndFusedAllGroups) {
                 }
             }
             EXPECT_GT(history_travel, 0.0) << "Zero gradient must still decay real momentum";
+        }
+    }
+}
+
+TEST(FastGSTouchedGating, OccludedRowsKeepStatisticsRegularizersAndOptimizerHistory) {
+    struct Restore {
+        const bool touched = fast_lfs::rasterization::touched_gating_for_testing();
+        ~Restore() { fast_lfs::rasterization::set_touched_gating_for_testing(touched); }
+    } restore;
+    constexpr size_t count = 259;
+    const auto run = [&](bool gated, bool mip) {
+        fast_lfs::rasterization::set_touched_gating_for_testing(gated);
+        auto model = make_adam_test_splat(count, 3);
+        AdamOptimizer optimizer(model, AdamConfig{});
+        optimizer.allocate_gradients();
+        for (auto type : AdamOptimizer::all_param_types())
+            optimizer.get_grad(type).fill_(0.1f);
+        optimizer.step(1000);
+        auto frozen = Tensor::zeros_bool({count}, Device::CPU);
+        auto cropped = Tensor::zeros_bool({count}, Device::CPU);
+        frozen.ptr<bool>()[63] = true;
+        cropped.ptr<bool>()[64] = true;
+        optimizer.set_frozen_mask(frozen.cuda());
+        optimizer.set_frozen_lr_scale(0.25f);
+        optimizer.set_crop_damping_mask(cropped.cuda());
+        optimizer.set_cropbox_lr_scale(0.3f);
+        model.scaling_raw().fill_(2.0f);
+        model.opacity_raw().fill_(12.0f);
+        auto means = model.means().cpu();
+        for (size_t i = 0; i < count; ++i) {
+            means.ptr<float>()[3 * i] = i == count - 1 ? 10000.0f : 0.0f;
+            means.ptr<float>()[3 * i + 1] = 0.0f;
+            means.ptr<float>()[3 * i + 2] = 0.001f * i;
+        }
+        model.means() = means.cuda();
+        model._densification_info = Tensor::zeros({2, count}, Device::CUDA);
+        auto rendered = Tensor::zeros({count}, Device::CUDA);
+        auto losses = Tensor::zeros({5}, Device::CUDA);
+        FastGSFusedExtraGradients extra;
+        extra.scale_reg_weight = 0.01f;
+        extra.opacity_reg_weight = 0.01f;
+        extra.erank_reg_weight = 0.01f;
+        extra.dc_reg_weight = 0.01f;
+        extra.sh_rest_reg_weight = 0.01f;
+        extra.flatten_reg_weight = 0.01f;
+        extra.rendered_count = rendered.ptr<float>();
+        extra.scale_reg_loss_out = losses.ptr<float>();
+        extra.opacity_reg_loss_out = losses.ptr<float>() + 1;
+        extra.erank_reg_loss_out = losses.ptr<float>() + 2;
+        extra.dc_reg_loss_out = losses.ptr<float>() + 3;
+        extra.sh_rest_reg_loss_out = losses.ptr<float>() + 4;
+        Camera camera(Tensor::eye(3, Device::CUDA),
+                      Tensor::from_vector(std::vector<float>{0, 0, 4}, {3}, Device::CUDA),
+                      8.0f, 8.0f, 0.5f, 0.5f, {}, {}, CameraModelType::PINHOLE,
+                      "touched", "", {}, 1, 1, 0);
+        auto background = Tensor::full({3}, 0.17f, Device::CUDA);
+        auto forward = fast_rasterize_forward(camera, model, background,
+                                              0, 0, 0, 0, mip, {}, true, true);
+        if (!forward)
+            throw lfs::Exception(std::move(forward.error()));
+        const auto& raw = forward->second.forward_ctx;
+        EXPECT_EQ(raw.primitive_touched != nullptr, gated);
+        const auto touched_rows = raw.primitive_touched;
+        const auto visible = raw.n_visible;
+        optimizer.zero_grad(1001);
+        fast_rasterize_backward(forward->second, Tensor::full_like(forward->first.image, 0.01f),
+                                model, optimizer, Tensor::full_like(forward->first.alpha, 0.02f), {},
+                                DensificationType::None, 1001, extra,
+                                Tensor::full_like(forward->first.depth, 0.03f), Tensor::full_like(forward->first.normal, 0.04f));
+        if (gated) {
+            // The backward walk marks the rows it reaches; occluded rows stay clear.
+            std::vector<unsigned> touched(visible);
+            EXPECT_EQ(cudaMemcpy(touched.data(), touched_rows, touched.size() * sizeof(unsigned), cudaMemcpyDeviceToHost), cudaSuccess);
+            const auto touched_count = std::count(touched.begin(), touched.end(), 1u);
+            EXPECT_GT(touched_count, 0);
+            EXPECT_LT(touched_count, visible / 2);
+        }
+        std::vector<Tensor> result;
+        for (const auto* parameter : {&model.means(), &model.scaling_raw(), &model.rotation_raw(),
+                                      &model.opacity_raw(), &model.sh0(), &model.shN()})
+            result.push_back(parameter->cpu());
+        for (auto type : AdamOptimizer::all_param_types()) {
+            const auto* state = optimizer.get_state(type);
+            result.push_back(state->exp_avg.cpu());
+            result.push_back(state->joint_bounds.cpu());
+        }
+        result.push_back(model._densification_info.cpu());
+        result.push_back(rendered.cpu());
+        result.push_back(losses.cpu());
+        return result;
+    };
+    for (bool mip : {false, true}) {
+        const auto reference = run(false, mip);
+        const auto candidate = run(true, mip);
+        ASSERT_EQ(reference.size(), candidate.size());
+        for (size_t i = 0; i < reference.size(); ++i) {
+            SCOPED_TRACE(::testing::Message() << "mip=" << mip << " buffer=" << i);
+            ASSERT_EQ(reference[i].bytes(), candidate[i].bytes());
+            EXPECT_EQ(std::memcmp(reference[i].data_ptr(), candidate[i].data_ptr(), reference[i].bytes()), 0);
         }
     }
 }

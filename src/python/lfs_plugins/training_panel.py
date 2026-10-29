@@ -2083,7 +2083,7 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         if params is None or not params.has_params():
             return None
-        if not self._can_edit_configuration():
+        if prop != "keep_all_checkpoints" and not self._can_edit_configuration():
             return None
         # Preserve the coupled-step lock, even if an event is dispatched directly.
         if self._auto_scale_steps_locked and any(

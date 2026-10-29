@@ -348,6 +348,7 @@ namespace lfs::vis::gui {
                 if (camera.value("panel", "") == "primary")
                     publication.published_camera = camera;
         }
+        publication.shaders_omitted = !document->shaders().dom().get_json("assets")->empty();
         publication.published_timeline = document->sequencer().dom().get_json("timeline").value_or(project::SessionJson());
         publication.published_loop_mode = document->sequencer().dom().get<std::string>("loop_mode").value_or("once");
         publication.published_playback_speed = document->sequencer().dom().get<float>("playback_speed").value_or(1.0f);
@@ -412,6 +413,13 @@ namespace lfs::vis::gui {
     void writeGalleryScenePublication(GalleryScenePublishRequest& request,
                                       const std::function<bool(float, const std::string&)>& report,
                                       const std::function<bool()>& canceled) {
+        if (request.published_timeline.is_object()) {
+            const auto clip = request.published_timeline.find("reveal_clip");
+            if (clip != request.published_timeline.end() && clip->is_object() && clip->contains("effect") && (*clip)["effect"] == 12) {
+                request.published_timeline.erase(clip);
+                request.shaders_omitted = true;
+            }
+        }
         const auto preparation_started = std::chrono::steady_clock::now();
         LOG_INFO("gallery stage=preparation_start node_count={} staging_path={} format={}",
                  request.nodes.size(), lfs::core::path_to_utf8(request.path),

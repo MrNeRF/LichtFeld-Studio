@@ -5,6 +5,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -341,7 +342,9 @@ namespace {
         lfs::vis::VisualizerImpl viewer(options());
         lfs::vis::gui::panels::SequencerUIState state;
         state.follow_playback = true;
-        lfs::vis::gui::SequencerUIManager ui(&viewer, state, nullptr);
+        // Panels require a live manager even when this test never renders them.
+        lfs::vis::gui::RmlUIManager rml_manager;
+        lfs::vis::gui::SequencerUIManager ui(&viewer, state, &rml_manager);
         auto first = makeKeyframe(0);
         first.position = {1, 2, 3};
         ui.controller().addKeyframe(first);

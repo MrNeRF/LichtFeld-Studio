@@ -300,15 +300,17 @@ namespace {
         EXPECT_EQ(controller.timeline().getKeyframeById(deleted), nullptr);
     }
 
-    TEST_F(SequencerHistoryRegressionTest, ProtectedAndMissingDeleteCommandsDoNotCreateHistory) {
+    TEST_F(SequencerHistoryRegressionTest, FirstKeyDeleteIsOneUndoStepAndMissingDeleteAddsNone) {
         lfs::vis::VisualizerImpl viewer(options());
         auto& controller = viewer.getGuiManager()->sequencerUI().controller();
         const auto first = controller.addKeyframe(makeKeyframe(0.0f));
         auto& history = lfs::vis::op::undoHistory();
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 0}.emit();
+        EXPECT_EQ(controller.timeline().getKeyframeById(first), nullptr);
         lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = 99}.emit();
+        ASSERT_EQ(history.undoCount(), 1u);
+        ASSERT_TRUE(history.undo().success);
         EXPECT_NE(controller.timeline().getKeyframeById(first), nullptr);
-        EXPECT_EQ(history.undoCount(), 0u);
     }
 
     TEST_F(SequencerHistoryRegressionTest, GroupedControllerDeletionIsOneUndoStep) {
@@ -1084,6 +1086,7 @@ namespace {
             EXPECT_EQ(loaded.revealClip()->effect, effect);
         }
         auto legacy = timeline.saveToJson();
+        legacy["reveal_clip"]["extension"] = true;
         legacy["reveal_clip"].erase("effect");
         ASSERT_TRUE(loaded.loadFromJson(legacy));
         EXPECT_EQ(loaded.revealClip()->effect, lfs::sequencer::RevealEffect::Spread);
@@ -1100,6 +1103,39 @@ namespace {
         EXPECT_FLOAT_EQ(loaded.clipDuration(), 5.0f);
         loaded.clear();
         EXPECT_FALSE(loaded.revealClip().has_value());
+    }
+
+    TEST(SequencerTimelineRegressionTest, CustomRevealRequiresExactlyOneValidAssetAndLoadsAtomically) {
+        const auto asset = lfs::core::generate_uuid_v4();
+        lfs::sequencer::RevealClip clip{1.0f, 4.0f, 0.2f, lfs::sequencer::RevealEffect::Custom, asset};
+        Timeline timeline;
+        timeline.setRevealClip(clip);
+        const auto saved = timeline.saveToJson();
+        EXPECT_EQ(saved["reveal_clip"]["shader_id"], asset.to_string());
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(saved));
+        EXPECT_EQ(loaded.revealClip(), clip);
+        for (const auto& bad : std::vector<nlohmann::json>{{{"effect", 12}},
+                                                           {{"shader_id", "invalid"}},
+                                                           {{"shader_id", nullptr}},
+                                                           {{"shader_id", lfs::core::Uuid{}.to_string()}},
+                                                           {{"effect", 2}},
+                                                           {{"effect", 13}},
+                                                           {{"effect", 12.5}},
+                                                           {{"softness", 0}},
+                                                           {{"start", 5}}}) {
+            auto invalid = saved;
+            invalid["reveal_clip"].update(bad);
+            if (bad == nlohmann::json{{"effect", 12}})
+                invalid["reveal_clip"].erase("shader_id");
+            EXPECT_FALSE(loaded.loadFromJson(invalid)) << invalid.dump();
+            EXPECT_EQ(loaded.saveToJson(), saved);
+        }
+        clip.effect = lfs::sequencer::RevealEffect::Spread;
+        EXPECT_FALSE(clip.validate());
+        clip.shader_id.reset();
+        EXPECT_TRUE(clip.validate());
+        EXPECT_FALSE(clip.toJson().contains("shader_id"));
     }
 
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {

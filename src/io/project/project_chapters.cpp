@@ -3440,6 +3440,19 @@ namespace lfs::io::project {
             reinterpret_cast<const char*>(bytes.data()), bytes.size()));
     }
 
+    lfs::Result<bool> ParametersChapter::checkpoint_retention(
+        const std::string_view strategy, const bool fallback) const {
+        const auto value = dom_.get_json(
+            std::format("presets.{}.current.keep_all_checkpoints", strategy));
+        if (!value)
+            return fallback;
+        if (!value->is_boolean())
+            return fail<bool>(lfs::ErrorCode::DataLoss,
+                              "The checkpoint retention preference is invalid.",
+                              "keep_all_checkpoints must be boolean", "PRMS");
+        return value->get<bool>();
+    }
+
     lfs::Result<ParameterManagerSnapshot> ParametersChapter::snapshot() const {
         if (cached_snapshot_) {
             return *cached_snapshot_;

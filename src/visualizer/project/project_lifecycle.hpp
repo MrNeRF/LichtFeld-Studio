@@ -899,6 +899,7 @@ namespace lfs::vis::project {
         // payload_mutation_serial_ at each node's last SPLT capture.
         std::unordered_map<lfs::core::Uuid, std::uint64_t>
             captured_splat_serials_;
+        std::array<std::uint64_t, 2> captured_shader_token_{}, project_write_shader_token_{}, last_autosaved_shader_token_{};
         std::uint64_t
             project_write_dirty_epoch_ = 0;
         std::uint64_t

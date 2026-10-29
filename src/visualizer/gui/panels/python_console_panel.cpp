@@ -19,18 +19,23 @@
 #include "gui/terminal/terminal_input.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer_impl.hpp"
 #include <algorithm>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_scancode.h>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -80,7 +85,7 @@ namespace {
 
     void format_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
         auto* editor = state.getEditor();
-        if (!editor) {
+        if (!editor || editor->document().kind != lfs::vis::editor::DocumentKind::Python) {
             return;
         }
 
@@ -104,7 +109,7 @@ namespace {
 
     void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
         auto* editor = state.getEditor();
-        if (!editor) {
+        if (!editor || editor->document().kind != lfs::vis::editor::DocumentKind::Python) {
             return;
         }
 
@@ -220,6 +225,14 @@ namespace {
         bool splitter_dragging = false;
         ConsolePopover active_popover = ConsolePopover::None;
         std::vector<PendingConsoleAction> pending_actions;
+        std::string shader_assets_rml;
+        std::string shader_parameters_rml;
+        std::string shader_name_identity;
+        std::uint64_t shader_generation = 0, shader_locale = 0;
+        lfs::core::Uuid shader_document;
+        bool can_stop_shader = false;
+        std::uint64_t binding_generation = 0;
+        lfs::core::Uuid binding_document;
         float panel_x = 0.0f;
         float panel_y = 0.0f;
         float panel_w = 0.0f;
@@ -251,6 +264,10 @@ namespace {
 
     void clear_console_document_cache(RmlPythonConsolePane& pane) {
         pane.document = nullptr;
+        pane.shader_assets_rml.clear();
+        pane.shader_parameters_rml.clear();
+        pane.shader_name_identity.clear();
+        pane.shader_generation = 0;
         pane.editor_view = nullptr;
         pane.output_view = nullptr;
         pane.repl_view = nullptr;
@@ -459,8 +476,7 @@ namespace {
 
     void new_script(lfs::vis::gui::panels::PythonConsoleState& state) {
         if (auto* editor = state.getEditor()) {
-            editor->clear();
-            editor->clearActiveSessionLocator();
+            editor->newDocument("", editor->document().kind);
         }
         state.setScriptPath({});
         state.setModified(false);
@@ -602,6 +618,7 @@ namespace {
 
         if (!pane.listeners_attached) {
             pane.document->AddEventListener(Rml::EventId::Click, &pane.listener);
+            pane.document->AddEventListener(Rml::EventId::Change, &pane.listener);
             attach_action_listeners(pane, pane.document);
             if (pane.packages_search_input) {
                 pane.packages_search_input->AddEventListener("input", &pane.listener);
@@ -611,6 +628,231 @@ namespace {
         }
 
         return pane.editor_view && pane.output_view && pane.repl_view;
+    }
+
+    lfs::vis::shaders::ShaderService* shader_service() {
+        auto* viewer = dynamic_cast<lfs::vis::VisualizerImpl*>(lfs::python::get_visualizer());
+        return viewer ? viewer->getShaderService() : nullptr;
+    }
+
+    std::string shader_status_text(const lfs::vis::shaders::ShaderStatus& status) {
+        using lfs::vis::shaders::ShaderState;
+        std::string text = status.state == ShaderState::Unbound ? LOC("shader.unbound") : LOC("shader.bound");
+        if (status.compiling)
+            text += std::string(" · ") + LOC("shader.compiling");
+        else if (!status.pending.empty())
+            text += std::string(" · ") + LOC("shader.queued");
+        else if (status.state == ShaderState::Applied)
+            text += std::string(" · ") + LOC("shader.applied");
+        else if (status.state == ShaderState::Failed || status.state == ShaderState::Blocked)
+            text += std::string(" · ") + LOC("shader.failed");
+        if (status.displayed_revision && status.displayed_revision != status.revision)
+            text += std::string(" · ") + LOCF("shader.last_good", status.displayed_revision);
+        return text;
+    }
+
+    void handle_shader_action(RmlPythonConsolePane& pane,
+                              lfs::vis::gui::panels::PythonConsoleState& state,
+                              const PendingConsoleAction& pending) {
+        using namespace lfs::vis;
+        auto* service = shader_service();
+        auto* editor = state.getEditor();
+        if (!service || !editor) {
+            state.addError(LOC("shader.unavailable"));
+            return;
+        }
+        const auto report = [&](const auto& result) {
+            if (!result)
+                state.addError(LOCF("shader.operation_failed", std::string(result.error().user_message())));
+        };
+        const auto doc = editor->document();
+        const auto& action = pending.action;
+        if (action == "shader-global") {
+            editor->setShaderTarget({});
+        } else if (action == "shader-reveal") {
+            report(editor->setDocumentTarget(editor->document().id, {shaders::ShaderSlot::Kind::Reveal, {}}, *service));
+        } else if (action == "shader-node") {
+            auto* viewer = dynamic_cast<VisualizerImpl*>(lfs::python::get_visualizer());
+            auto* scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+            const auto ids = scene_manager ? scene_manager->getSelectedNodeIds() : std::vector<lfs::core::NodeId>{};
+            const auto* node = ids.size() == 1 ? scene_manager->getScene().getNodeById(ids.front()) : nullptr;
+            if (!node || node->type != lfs::core::NodeType::SPLAT) {
+                state.addError(LOC("shader.select_splat"));
+                return;
+            }
+            editor->setShaderTarget({shaders::ShaderSlot::Kind::Node, node->uuid});
+        } else if (action == "shader-open") {
+            auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(pane.document->GetElementById("shader-assets"));
+            const auto id = select ? lfs::core::Uuid::from_string(select->GetValue()) : std::nullopt;
+            if (id) {
+                for (const auto& asset : service->assets())
+                    if (asset.id == *id)
+                        editor->openShaderAsset(asset);
+            }
+        } else if (doc.shader_asset) {
+            if (action == "shader-rename") {
+                auto* name = dynamic_cast<Rml::ElementFormControlInput*>(pane.document->GetElementById("shader-name"));
+                if (name)
+                    report(service->command(shaders::RenameShader{*doc.shader_asset, name->GetValue()}));
+            } else if (action == "shader-bind") {
+                report(service->command(shaders::BindShader{doc.target, *doc.shader_asset}));
+            } else if (action == "shader-unbind") {
+                if (service->boundAsset(doc.target) == doc.shader_asset)
+                    report(service->command(shaders::UnbindShader{doc.target, doc.shader_asset}));
+            } else if (action == "shader-remove") {
+                report(editor->removeShaderAsset(*service));
+            } else if (action == "shader-param") {
+                const auto status = service->status(*doc.shader_asset);
+                if (!status || pending.data_index < 0 ||
+                    static_cast<std::size_t>(pending.data_index) >= status->parameters.size())
+                    return;
+                const auto& param = status->parameters[pending.data_index];
+                std::array<float, 4> values{};
+                for (std::uint32_t component = 0; component < param.components; ++component) {
+                    auto* input = dynamic_cast<Rml::ElementFormControlInput*>(pane.document->GetElementById(
+                        std::format("shader-param-{}-{}", pending.data_index, component)));
+                    if (!input)
+                        return;
+                    const auto value = input->GetValue();
+                    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), values[component]);
+                    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+                        state.addError(LOC("shader.invalid_value"));
+                        return;
+                    }
+                }
+                report(service->command(
+                    shaders::SetShaderParameter{*doc.shader_asset,
+                                                param.name,
+                                                std::vector<float>(values.begin(), values.begin() + param.components),
+                                                {}}));
+            }
+        }
+        mark_dirty(pane);
+    }
+
+    void sync_shader_dom(RmlPythonConsolePane& pane, lfs::vis::gui::panels::PythonConsoleState& state) {
+        using namespace lfs::vis;
+        auto* editor = state.getEditor();
+        if (!editor || !pane.document)
+            return;
+        const auto doc = editor->document();
+        const bool shader = doc.kind == editor::DocumentKind::Shader;
+        set_text(pane, pane.document->GetElementById("kind-button"), shader ? LOC("editor.shader") : LOC("editor.python"));
+        const auto label = [&](const char* id, const char* text) { set_text(pane, pane.document->GetElementById(id), text); };
+        label("run-button", shader ? LOC("shader.compile_apply") : LOC(lichtfeld::Strings::PythonConsole::RUN));
+        set_display(pane, pane.document->GetElementById("shader-controls"), shader);
+        set_display(pane, pane.document->GetElementById("stop-python-button"), shader && can_stop_python_work(state));
+        for (const auto* id : {"format-button", "outline-button", "breadcrumb-button", "fold-button"}) {
+            auto* control = pane.document->GetElementById(id);
+            set_disabled(pane, control, shader);
+            if (control)
+                control->SetAttribute("title", shader ? LOC("editor.python_only") : "");
+        }
+        auto* service = shader_service();
+        const auto generation = service ? service->generation() : 0;
+        const auto locale = lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+        const bool shader_changed = pane.shader_generation != generation || pane.shader_document != doc.id || pane.shader_locale != locale;
+        if (pane.binding_generation != generation || pane.binding_document != doc.id) {
+            pane.can_stop_shader = service && editor->hasShaderBinding(*service);
+            pane.binding_generation = generation;
+            pane.binding_document = doc.id;
+        }
+        const bool can_stop_shader = pane.can_stop_shader;
+        set_disabled(pane, pane.stop_button_el, !(can_stop_shader || (!shader && can_stop_python_work(state))));
+        if (auto* viewer = dynamic_cast<VisualizerImpl*>(lfs::python::get_visualizer()); viewer && viewer->getInputController()) {
+            const auto& bindings = viewer->getInputController()->getBindings();
+            for (const auto& [id, action] : {std::pair{"kind-button", input::Action::EDITOR_TOGGLE_KIND},
+                                             {"run-button", input::Action::EDITOR_RUN},
+                                             {"stop-button", input::Action::EDITOR_STOP}}) {
+                if (auto* element = pane.document->GetElementById(id))
+                    element->SetAttribute("title", bindings.getLocalizedTriggerDescription(action, input::ToolMode::EDITOR));
+            }
+        }
+        if (service) {
+            for (const auto& update : editor->pollShaders(*service)) {
+                state.addInfo(shader_status_text(update.status));
+                if (update.diagnostics_changed) {
+                    if (!update.status.diagnostics.raw.empty())
+                        state.addInfo(update.status.diagnostics.raw);
+                    const auto errors = std::ranges::count(update.status.diagnostics.entries, shaders::DiagnosticSeverity::Error,
+                                                           &shaders::Diagnostic::severity);
+                    state.addInfo(LOCF("shader.error_count", errors));
+                }
+            }
+        }
+        if (!shader)
+            return;
+        std::string target = doc.target.kind == shaders::ShaderSlot::Kind::Reveal
+                                 ? LOC("sequencer.reveal_effect_custom")
+                                 : LOC("shader.global");
+        if (doc.target.kind == shaders::ShaderSlot::Kind::Node) {
+            target = doc.target.node.to_string();
+            if (auto* viewer = dynamic_cast<VisualizerImpl*>(lfs::python::get_visualizer()); viewer && viewer->getSceneManager())
+                if (const auto* node = viewer->getSceneManager()->getScene().getNodeByUuid(doc.target.node))
+                    target = node->name;
+        }
+        set_text(pane, pane.document->GetElementById("shader-target"), target);
+        if (!service) {
+            label("run-status", LOC("shader.unavailable"));
+            return;
+        }
+        auto* parameters_element = pane.document->GetElementById("shader-parameters");
+        for (auto* focus = pane.host->getContext()->GetFocusElement(); focus; focus = focus->GetParentNode())
+            if (focus == parameters_element)
+                return;
+        if (!shader_changed)
+            return;
+        pane.shader_generation = generation;
+        pane.shader_locale = locale;
+        pane.shader_document = doc.id;
+        std::string options;
+        for (const auto& asset : service->assets(false)) {
+            options += std::format("<option value=\"{}\">{}</option>", asset.id.to_string(), Rml::StringUtilities::EncodeRml(asset.name));
+            if (doc.shader_asset == asset.id) {
+                auto* name = dynamic_cast<Rml::ElementFormControlInput*>(pane.document->GetElementById("shader-name"));
+                const auto identity = asset.id.to_string() + asset.name;
+                if (name && pane.shader_name_identity != identity) {
+                    name->SetValue(asset.name);
+                    pane.shader_name_identity = identity;
+                }
+            }
+        }
+        auto* assets = dynamic_cast<Rml::ElementFormControlSelect*>(pane.document->GetElementById("shader-assets"));
+        if (assets && pane.shader_assets_rml != options) {
+            const auto selected = assets->GetValue();
+            pane.shader_assets_rml = options;
+            assets->SetInnerRML(options);
+            assets->SetValue(selected);
+        }
+        const auto status = doc.shader_asset ? service->status(*doc.shader_asset) : lfs::Result<shaders::ShaderStatus>{shaders::ShaderStatus{}};
+        const bool exists = doc.shader_asset && status.has_value();
+        for (const auto* id : {"shader-rename", "shader-bind"})
+            set_disabled(pane, pane.document->GetElementById(id), !exists);
+        set_disabled(pane, pane.document->GetElementById("shader-unbind"), !exists || service->boundAsset(doc.target) != doc.shader_asset);
+        set_disabled(pane, pane.document->GetElementById("shader-remove"), !exists || status->state != shaders::ShaderState::Unbound);
+        set_text(pane, pane.run_status_el, exists ? shader_status_text(*status) : LOC("shader.no_asset"));
+        std::string parameters;
+        if (exists) {
+            for (std::size_t index = 0; index < status->parameters.size(); ++index) {
+                const auto& parameter = status->parameters[index];
+                parameters += std::format("<div class=\"shader-parameter\"><span>{} [{}, {}]</span>",
+                                          Rml::StringUtilities::EncodeRml(parameter.name), parameter.minimum, parameter.maximum);
+                for (std::uint32_t component = 0; component < parameter.components; ++component)
+                    parameters += std::format("<input id=\"shader-param-{}-{}\" type=\"text\" data-action=\"shader-param\" data-index=\"{}\" value=\"{}\"/>",
+                                              index, component, index, status->values[index][component]);
+                parameters += "</div>";
+            }
+        }
+        auto* container = pane.document->GetElementById("shader-parameters");
+        auto* focused = pane.host->getContext()->GetFocusElement();
+        bool editing = false;
+        for (auto* element = focused; element; element = element->GetParentNode())
+            editing |= element == container;
+        if (container && !editing && pane.shader_parameters_rml != parameters) {
+            pane.shader_parameters_rml = parameters;
+            container->SetInnerRML(parameters);
+            mark_dirty(pane);
+        }
     }
 
     void handle_console_action(RmlPythonConsolePane& pane,
@@ -626,7 +868,9 @@ namespace {
             mark_dirty(pane);
         };
 
-        if (action == "new") {
+        if (action.starts_with("shader-")) {
+            handle_shader_action(pane, state, pending);
+        } else if (action == "new") {
             new_script(state);
         } else if (action == "load") {
             open_script_dialog(state);
@@ -638,18 +882,21 @@ namespace {
         } else if (action == "save-as") {
             save_script_dialog(state);
         } else if (action == "format") {
-            format_editor_script(state);
+            state.formatDocument();
         } else if (action == "clean") {
-            clean_editor_script(state);
+            state.formatDocument(true);
         } else if (action == "toggle-vim") {
             if (editor) {
                 editor->setVimModeEnabled(!editor->isVimModeEnabled());
                 editor->focus();
             }
+        } else if (action == "toggle-kind") {
+            state.documentCommand(lfs::vis::input::Action::EDITOR_TOGGLE_KIND);
         } else if (action == "run") {
-            if (editor)
-                execute_python_code(editor->getTextStripped(), state);
+            state.documentCommand(lfs::vis::input::Action::EDITOR_RUN);
         } else if (action == "stop") {
+            state.documentCommand(lfs::vis::input::Action::EDITOR_STOP);
+        } else if (action == "stop-python") {
             stop_python_work(state);
         } else if (action == "reset") {
             reset_python_state(state);
@@ -746,11 +993,20 @@ namespace {
             return;
         }
 
+        if (type == "change") {
+            if (auto* element = find_action_target(event.GetTargetElement()); element &&
+                                                                              element->GetAttribute<Rml::String>("data-action", "") == "shader-param") {
+                pane.pending_actions.push_back({"shader-param", data_index(element)});
+                event.StopPropagation();
+            }
+            return;
+        }
         if (type != "click")
             return;
 
         if (auto* action_el = find_action_target(event.GetTargetElement())) {
-            if (!action_el->HasAttribute("disabled")) {
+            if (!action_el->HasAttribute("disabled") &&
+                action_el->GetAttribute<Rml::String>("data-action", "") != "shader-param") {
                 pane.pending_actions.push_back({
                     .action = action_el->GetAttribute<Rml::String>("data-action", ""),
                     .data_index = data_index(action_el),
@@ -1049,7 +1305,6 @@ namespace {
             set_label("save-as-button", lichtfeld::Strings::PythonConsole::SAVE_AS);
             set_label("format-button", lichtfeld::Strings::PythonConsole::FORMAT);
             set_label("vim-button", lichtfeld::Strings::PythonConsole::VIM);
-            set_label("run-button", lichtfeld::Strings::PythonConsole::RUN);
             set_label("stop-button", lichtfeld::Strings::PythonConsole::STOP);
             set_label("reset-button", lichtfeld::Strings::Common::RESET);
             set_label("clear-button", lichtfeld::Strings::Training::Button::CLEAR);
@@ -1075,13 +1330,14 @@ namespace {
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
 
         set_disabled(pane, pane.reload_button_el, !has_script);
-        set_disabled(pane, pane.stop_button_el, !can_stop);
         set_disabled(pane, pane.clear_button_el, active_tab == 2);
-        set_text(pane, pane.run_status_el,
-                 can_stop ? LOC(lichtfeld::Strings::PythonConsole::RUNNING)
-                          : LOC(lichtfeld::Strings::PythonConsole::PYTHON));
+        if (!editor || editor->document().kind == lfs::vis::editor::DocumentKind::Python)
+            set_text(pane, pane.run_status_el,
+                     can_stop ? LOC(lichtfeld::Strings::PythonConsole::RUNNING)
+                              : LOC(lichtfeld::Strings::PythonConsole::PYTHON));
         set_class(pane, pane.run_status_el, "running", can_stop);
 
+        sync_shader_dom(pane, state);
         const bool vim_enabled = editor && editor->isVimModeEnabled();
         set_class(pane, pane.vim_button_el, "active", vim_enabled);
 
@@ -1160,7 +1416,9 @@ namespace {
     }
 
     bool process_console_shortcut(lfs::vis::gui::panels::PythonConsoleState& state,
-                                  const lfs::vis::FrameInputEvent& event) {
+                                  const lfs::vis::FrameInputEvent& event,
+                                  const lfs::vis::input::InputBindings& bindings,
+                                  lfs::vis::shaders::ShaderService* service) {
         if (event.kind != lfs::vis::FrameInputEventKind::KeyDown || event.repeat)
             return false;
         const bool ctrl = event.modifiers & SDL_KMOD_CTRL;
@@ -1171,9 +1429,14 @@ namespace {
             (state.getOutputTerminal() && state.getOutputTerminal()->isFocused());
         auto* editor = state.getEditor();
 
-        if (!terminal_focused && (event.scancode == SDL_SCANCODE_F5) && editor) {
-            execute_python_code(editor->getTextStripped(), state);
-            return true;
+        if (!terminal_focused && editor) {
+            using namespace lfs::vis::input;
+            const auto action = bindings.getActionForShortcut(
+                ToolMode::EDITOR, sdlScancodeToAppKey(event.scancode),
+                sdlShortcutKeyToAppKey(event.scancode, event.keycode),
+                sdlModsToAppMods(event.modifiers), sdlPrintedPunctuationToAppKey(event.keycode));
+            if (state.documentCommand(action, service, true))
+                return true;
         }
 
         if (!ctrl || terminal_focused)
@@ -1205,8 +1468,6 @@ namespace {
         } else if ((event.scancode == SDL_SCANCODE_0) ||
                    (event.scancode == SDL_SCANCODE_KP_0)) {
             state.resetFontScale();
-        } else if ((event.scancode == SDL_SCANCODE_C) && can_stop_python_work(state)) {
-            stop_python_work(state);
         } else {
             return false;
         }
@@ -1275,6 +1536,7 @@ namespace {
                 } else {
                     output->write(filtered);
                 }
+                state.notifyShaderObservers();
                 if (state.outputVisible())
                     lfs::python::request_redraw();
             });
@@ -1306,7 +1568,7 @@ namespace {
 
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
         std::ifstream file;
-        if (!lfs::core::open_file_for_read(path, file)) {
+        if (!lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, file)) {
             state.addError(LOCF(lichtfeld::Strings::PythonConsole::OPEN_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
@@ -1315,9 +1577,14 @@ namespace {
                             std::istreambuf_iterator<char>());
 
         if (auto* editor = state.getEditor()) {
-            editor->setText(content);
-            editor->setActiveSessionLocator(
-                lfs::core::path_to_utf8(path));
+            if (editor->activeSessionLocator() == lfs::core::path_to_utf8(path)) {
+                editor->setText(content);
+            } else {
+                auto suffix = lfs::core::path_to_utf8(path.extension());
+                std::ranges::transform(suffix, suffix.begin(), [](unsigned char ch) { return std::tolower(ch); });
+                editor->newDocument(content, suffix == ".slang" ? lfs::vis::editor::DocumentKind::Shader : lfs::vis::editor::DocumentKind::Python,
+                                    lfs::core::path_to_utf8(path));
+            }
             if (auto* const viewer = lfs::python::get_visualizer()) {
                 viewer->projectMarkSessionChapterCommitted("EDTR");
             }
@@ -1325,7 +1592,7 @@ namespace {
 
         state.setScriptPath(path);
         state.setModified(false);
-        state.addInfo("Loaded: " + lfs::core::path_to_utf8(path.filename()));
+        state.addInfo(LOCF("editor.loaded", lfs::core::path_to_utf8(path.filename())));
         return true;
     }
 
@@ -1336,13 +1603,20 @@ namespace {
         }
 
         std::ofstream file;
-        if (!lfs::core::open_file_for_write(path, file)) {
+        if (!lfs::core::open_file_for_write(path, std::ios::out | std::ios::binary, file)) {
             state.addError(LOCF(lichtfeld::Strings::PythonConsole::SAVE_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
 
-        file << editor->getTextStripped();
+        const auto source = editor->document().kind == lfs::vis::editor::DocumentKind::Shader
+                                ? editor->getText()
+                                : editor->getTextStripped();
+        file.write(source.data(), static_cast<std::streamsize>(source.size()));
         file.close();
+        if (!file) {
+            state.addError(LOCF(lichtfeld::Strings::PythonConsole::SAVE_FAILED, lfs::core::path_to_utf8(path)));
+            return false;
+        }
 
         state.setScriptPath(path);
         editor->setActiveSessionLocator(
@@ -1351,14 +1625,14 @@ namespace {
             viewer->projectMarkSessionChapterCommitted("EDTR");
         }
         state.setModified(false);
-        state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
+        state.addInfo(LOCF("editor.saved", lfs::core::path_to_utf8(path.filename())));
         return true;
     }
 
     void open_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state) {
         const auto& current = state.getScriptPath();
         const auto start_dir = current.empty() ? std::filesystem::path{} : current.parent_path();
-        const auto path = lfs::vis::gui::OpenPythonFileDialog(start_dir);
+        const auto path = lfs::vis::gui::OpenPythonFileDialog(start_dir, state.getEditor()->document().kind);
         if (!path.empty()) {
             load_script(path, state);
         }
@@ -1367,7 +1641,7 @@ namespace {
     void save_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state) {
         const auto& current = state.getScriptPath();
         const std::string default_name = current.empty() ? "script" : lfs::core::path_to_utf8(current.stem());
-        const auto path = lfs::vis::gui::SavePythonFileDialog(default_name);
+        const auto path = lfs::vis::gui::SavePythonFileDialog(default_name, current.parent_path(), state.getEditor()->document().kind);
         if (!path.empty()) {
             save_script(path, state);
         }
@@ -1413,6 +1687,12 @@ namespace lfs::vis::gui::panels {
         return g_python_console_state;
     }
 
+    void PythonConsoleState::setShaderChanges(std::shared_ptr<shaders::ShaderChanges> changes) {
+        shader_changes_ = std::move(changes);
+        if (editor_)
+            editor_->setShaderChanges(shader_changes_);
+    }
+
     void PythonConsoleState::addError(const std::string& text) {
         std::lock_guard lock(mutex_);
         if (output_terminal_) {
@@ -1420,6 +1700,7 @@ namespace lfs::vis::gui::panels {
             output_terminal_->write(text);
             output_terminal_->write("\033[0m\n"); // Reset + newline
         }
+        notifyShaderObservers();
     }
 
     void PythonConsoleState::addInfo(const std::string& text) {
@@ -1429,11 +1710,108 @@ namespace lfs::vis::gui::panels {
             output_terminal_->write(text);
             output_terminal_->write("\033[0m\n"); // Reset + newline
         }
+        notifyShaderObservers();
     }
 
-    bool PythonConsoleState::handleShortcut(const FrameInputEvent& event) {
-        return process_console_shortcut(*this, event);
+    bool PythonConsoleState::handleShortcut(const FrameInputEvent& event, const input::InputBindings* bindings,
+                                            shaders::ShaderService* service) {
+        if (event.dispatch && event.dispatch->consumed)
+            return false;
+        if (!bindings) {
+            if (auto* viewer = dynamic_cast<VisualizerImpl*>(python::get_visualizer()); viewer && viewer->getInputController())
+                bindings = &viewer->getInputController()->getBindings();
+        }
+        if (!bindings) {
+            static const input::InputBindings defaults;
+            bindings = &defaults;
+        }
+        const bool handled = process_console_shortcut(*this, event, *bindings, service);
+        if (handled && event.dispatch)
+            event.dispatch->consumed = true;
+        return handled;
     }
+
+    bool PythonConsoleState::documentCommand(const input::Action action, shaders::ShaderService* service, const bool in_flight_only) {
+        if (!editor_)
+            return false;
+        if (action == input::Action::EDITOR_TOGGLE_KIND) {
+            editor_->setDocumentKind(editor_->document().kind == editor::DocumentKind::Python
+                                         ? editor::DocumentKind::Shader
+                                         : editor::DocumentKind::Python);
+            return true;
+        }
+        if (action != input::Action::EDITOR_RUN && action != input::Action::EDITOR_STOP)
+            return false;
+        if (action == input::Action::EDITOR_STOP) {
+            if (!service) {
+                if (auto* viewer = dynamic_cast<VisualizerImpl*>(python::get_visualizer()))
+                    service = viewer->getShaderService();
+            }
+            const bool has_shader = service && editor_->hasShaderBinding(*service);
+            if (in_flight_only) {
+                if (editor_->document().kind == editor::DocumentKind::Python) {
+                    if (!isScriptRunning())
+                        return false;
+                } else {
+                    if (!has_shader)
+                        return false;
+                    const auto status = service->status(*editor_->document().shader_asset);
+                    if (!status || (!status->compiling && status->pending.empty() && status->state != shaders::ShaderState::Pending))
+                        return false;
+                }
+            }
+            if (has_shader)
+                editor_->stopShader(*service);
+            if (editor_->document().kind == editor::DocumentKind::Python && can_stop_python_work(*this)) {
+                stop_python_work(*this);
+                return true;
+            }
+            return has_shader;
+        }
+        if (editor_->document().kind == editor::DocumentKind::Python) {
+            execute_python_code(editor_->getTextStripped(), *this);
+            return true;
+        }
+        if (!service) {
+            if (auto* viewer = dynamic_cast<VisualizerImpl*>(python::get_visualizer()))
+                service = viewer->getShaderService();
+        }
+        if (!service) {
+            addError(LOC("shader.unavailable"));
+            return true;
+        }
+        if (auto result = editor_->runShader(*service); !result)
+            addError(LOCF("shader.operation_failed", std::string(result.error().user_message())));
+        else
+            addInfo(LOC("shader.queued"));
+        return true;
+    }
+
+    bool PythonConsoleState::formatDocument(const bool cleanup) {
+        if (!editor_ || editor_->document().kind != editor::DocumentKind::Python)
+            return false;
+        if (cleanup)
+            clean_editor_script(*this);
+        else
+            format_editor_script(*this);
+        return true;
+    }
+
+    bool PythonConsoleState::loadDocument(const std::filesystem::path& path) { return load_script(path, *this); }
+    bool PythonConsoleState::saveDocument(const std::filesystem::path& path) { return save_script(path, *this); }
+    void PythonConsoleState::setScriptPath(const std::filesystem::path& path) {
+        if (editor_)
+            editor_->setActiveSessionLocator(core::path_to_utf8(path));
+    }
+    std::filesystem::path PythonConsoleState::getScriptPath() const {
+        const auto locator = editor_ ? editor_->activeSessionLocator() : std::string{};
+        return locator.contains("://") ? std::filesystem::path{} : core::utf8_to_path(locator);
+    }
+    void PythonConsoleState::setModified(const bool modified) {
+        if (editor_)
+            editor_->setModified(modified);
+    }
+    bool PythonConsoleState::isModified() const { return editor_ && editor_->isModified(); }
 
     void PythonConsoleState::clear() {
         std::lock_guard lock(mutex_);
@@ -1442,6 +1820,7 @@ namespace lfs::vis::gui::panels {
         } else if (active_tab_ == 1 && terminal_) {
             terminal_->clear();
         }
+        notifyShaderObservers();
     }
 
     void PythonConsoleState::interruptScript() {
@@ -1452,7 +1831,16 @@ namespace lfs::vis::gui::panels {
         }
     }
 
-    void PythonConsoleState::runScriptAsync(const std::string& code) {
+    void PythonConsoleState::runScriptAsync(const std::string& code, const std::optional<core::Uuid> document) {
+        if (!editor_) {
+            addError(LOC("editor.python_only"));
+            return;
+        }
+        const auto state = editor_->inspectDocument(document.value_or(editor_->document().id));
+        if (!state || state->document.kind != editor::DocumentKind::Python) {
+            addError(LOC("editor.python_only"));
+            return;
+        }
         if (script_running_.load()) {
             addError(LOC("python_console.already_running"));
             return;
@@ -1468,10 +1856,14 @@ namespace lfs::vis::gui::panels {
         setActiveTab(0);
         clear();
 
-        const auto script_path = script_path_;
+        const auto script_path =
+            state->locator.contains("://") ? std::filesystem::path{} : core::utf8_to_path(state->locator);
+        ++script_run_;
+        script_document_ = state->document.id;
         const auto code_chars = code.size();
 
         script_running_ = true;
+        notifyShaderObservers();
         script_thread_id_ = 0;
         core::events::state::EditorScriptStarted{
             .path = script_path,
@@ -1516,6 +1908,7 @@ namespace lfs::vis::gui::panels {
                 script_thread_id_ = 0;
             }
             script_running_ = false;
+            notifyShaderObservers();
 
             core::events::state::EditorScriptCompleted{
                 .path = script_path,
@@ -1705,6 +2098,8 @@ namespace lfs::vis::gui::panels {
             }
             if (output->isFocused())
                 return true;
+            if (focused != pane.editor_view)
+                return false;
             return state.handleShortcut(event);
         });
 
@@ -1721,8 +2116,6 @@ namespace lfs::vis::gui::panels {
         process_pending_console_actions(pane, state);
 
         if (auto* editor = state.getEditor()) {
-            if (editor->consumeExecuteRequested())
-                execute_python_code(editor->getTextStripped(), state);
             if (editor->consumeTextChanged()) {
                 state.setModified(true);
                 if (auto* const viewer = lfs::python::get_visualizer()) {

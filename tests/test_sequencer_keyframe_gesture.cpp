@@ -171,6 +171,14 @@ namespace lfs::vis {
 namespace {
     class SequencerKeyframeLayoutTest : public testing::TestWithParam<float> {
     protected:
+        // RmlUi's default Windows logger opens a modal dialog for assertions.
+        class SystemInterface final : public Rml::SystemInterface {
+            bool LogMessage(Rml::Log::Type type, const Rml::String& message) override {
+                if (type == Rml::Log::LT_ASSERT)
+                    ADD_FAILURE() << message;
+                return true;
+            }
+        } system_interface_;
         class Renderer final : public Rml::RenderInterface {
             Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex>, Rml::Span<const int>) override { return 1; }
             void RenderGeometry(Rml::CompiledGeometryHandle, Rml::Vector2f, Rml::TextureHandle) override {}
@@ -182,6 +190,7 @@ namespace {
             void SetScissorRegion(Rml::Rectanglei) override {}
         } renderer_;
         void SetUp() override {
+            Rml::SetSystemInterface(&system_interface_);
             ASSERT_TRUE(Rml::Initialise());
             context_ = Rml::CreateContext("keyframe-layout", {800, 200}, &renderer_);
             ASSERT_NE(context_, nullptr);
@@ -190,12 +199,15 @@ namespace {
         void TearDown() override {
             Rml::RemoveContext("keyframe-layout");
             Rml::Shutdown();
+            Rml::SetSystemInterface(nullptr);
         }
         Rml::Context* context_ = nullptr;
     };
 
     TEST_P(SequencerKeyframeLayoutTest, SelectionKeepsTheDiamondSizeAndCenter) {
-        const auto source = std::string(PROJECT_ROOT_PATH) + "/src/visualizer/gui/rmlui/resources/keyframe_layout_test.rml";
+        // The default RmlUi system interface uses '|' for drive colons in source URLs.
+        const auto source = Rml::StringUtilities::Replace(
+            std::string(PROJECT_ROOT_PATH) + "/src/visualizer/gui/rmlui/resources/keyframe_layout_test.rml", ':', '|');
         auto* doc = context_->LoadDocumentFromMemory(
             "<rml><head><link type='text/rcss' href='sequencer.rcss'/></head><body>"
             "<div style='position:relative;width:600px;height:100px;'>"

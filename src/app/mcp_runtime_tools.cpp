@@ -4,6 +4,7 @@
 #include "app/mcp_runtime_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 #include "app/mcp_event_handlers.hpp"
+#include "shaders/shader_api.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -77,9 +78,10 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 9> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 10> kRuntimeJobIds = {
             "collision.main",
             "editor.python",
+            "shader.compile",
             "training.main",
             "export.scene",
             "import.dataset",
@@ -215,6 +217,8 @@ namespace lfs::app {
             }
 
             return json{
+                {"shader_catalog_uri", "lichtfeld://shaders/catalog"},
+                {"shader_state_uri", "lichtfeld://shaders/state"},
                 {"catalog_uri", "lichtfeld://runtime/catalog"},
                 {"state_uri", "lichtfeld://runtime/state"},
                 {"jobs_uri", "lichtfeld://runtime/jobs"},
@@ -746,6 +750,14 @@ namespace lfs::app {
             }
 
             auto* const gui = viewer_impl->getGuiManager();
+            if (job_id == "shader.compile") {
+                auto* service = viewer_impl->getShaderService();
+                if (!service)
+                    return unavailable_job_json(job_id, "Shaders", "shader", "Shader service is unavailable");
+                auto payload = vis::shaders::shaderJob(service->work());
+                add_runtime_job_links(payload);
+                return payload;
+            }
 
             if (job_id == "apriltag.scan") {
                 return gui ? std::expected<json, std::string>(apriltag_job_json(*gui))
@@ -1338,8 +1350,11 @@ namespace lfs::app {
                     return json{{"error", baseline.error()}};
                 }
 
+                auto* shader_service = as_visualizer_impl(viewer)->getShaderService();
+                auto changes = job_id == "shader.compile" && shader_service ? shader_service->changes() : nullptr;
                 const auto start = std::chrono::steady_clock::now();
                 while (true) {
+                    const auto generation = changes ? changes->generation.load(std::memory_order_acquire) : 0;
                     auto current = describe();
                     if (!current) {
                         return json{{"error", current.error()}};
@@ -1356,7 +1371,7 @@ namespace lfs::app {
 
                     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - start);
-                    if (elapsed.count() >= timeout_ms) {
+                    if (elapsed.count() >= timeout_ms || (changes && changes->cancelled(generation))) {
                         (*current)["success"] = true;
                         (*current)["until"] = until;
                         (*current)["timed_out"] = true;
@@ -1364,7 +1379,10 @@ namespace lfs::app {
                         return *current;
                     }
 
-                    std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+                    if (changes)
+                        changes->wait(generation, start + std::chrono::milliseconds(timeout_ms));
+                    else
+                        std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
                 }
             });
 

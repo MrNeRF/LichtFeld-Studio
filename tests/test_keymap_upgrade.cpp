@@ -143,6 +143,37 @@ namespace lfs::vis::input {
             fs::remove(path);
         }
 
+        TEST_F(KeymapTest, EditorCommandsUpgradeFromHistoricalDefaultsAndKeepOverrides) {
+            const auto path = fs::temp_directory_path() / "lfs_keymap_editor_upgrade.json";
+            auto old = test::historicalSavedProfile("v39");
+            test::writeProfile(path, old);
+            InputBindings upgraded;
+            ASSERT_TRUE(upgraded.loadProfileFromFile(path));
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::EDITOR, KEY_F5, 0), Action::EDITOR_RUN);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::EDITOR, KEY_ENTER, MODIFIER_CTRL), Action::EDITOR_RUN);
+            EXPECT_EQ(upgraded.getActionForKey(ToolMode::EDITOR, KEY_C, MODIFIER_CTRL), Action::EDITOR_STOP);
+            EXPECT_FALSE(upgraded.getTriggerForAction(Action::EDITOR_TOGGLE_KIND, ToolMode::EDITOR));
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings current;
+            ASSERT_TRUE(current.loadProfileFromFile(path));
+            EXPECT_EQ(current.getActionForKey(ToolMode::EDITOR, KEY_F5, 0), Action::EDITOR_RUN);
+            EXPECT_EQ(current.getActionForKey(ToolMode::EDITOR, KEY_ENTER, MODIFIER_CTRL), Action::EDITOR_RUN);
+            EXPECT_EQ(current.getActionForKey(ToolMode::EDITOR, KEY_KP_ENTER, MODIFIER_CTRL), Action::EDITOR_RUN);
+            EXPECT_EQ(current.getActionForKey(ToolMode::EDITOR, KEY_C, MODIFIER_CTRL), Action::EDITOR_STOP);
+            upgraded.setBinding(ToolMode::EDITOR, Action::EDITOR_RUN, KeyTrigger{KEY_F9});
+            upgraded.setBinding(ToolMode::EDITOR, Action::EDITOR_TOGGLE_KIND, KeyTrigger{KEY_F8});
+            upgraded.clearBinding(ToolMode::EDITOR, Action::EDITOR_STOP);
+            ASSERT_TRUE(upgraded.saveProfileToFile(path));
+            InputBindings reloaded;
+            ASSERT_TRUE(reloaded.loadProfileFromFile(path));
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::EDITOR, KEY_F9, 0), Action::EDITOR_RUN);
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::EDITOR, KEY_F8, 0), Action::EDITOR_TOGGLE_KIND);
+            EXPECT_NE(reloaded.getActionForKey(ToolMode::EDITOR, KEY_ENTER, MODIFIER_CTRL), Action::EDITOR_RUN);
+            EXPECT_FALSE(reloaded.getTriggerForAction(Action::EDITOR_STOP, ToolMode::EDITOR));
+            EXPECT_EQ(reloaded.getActionForKey(ToolMode::GLOBAL, KEY_F5, 0), Action::ASSET_REFRESH);
+            fs::remove(path);
+        }
+
         TEST_F(KeymapTest, ScaleDistanceUpgradeAndPreserveRebindingAndRemoval) {
             const auto path = fs::temp_directory_path() / "lfs_keymap_scale_distance_upgrade.json";
             auto old = test::historicalSavedProfile("v37");

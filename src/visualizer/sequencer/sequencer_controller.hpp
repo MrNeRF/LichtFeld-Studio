@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline.hpp"
+#include "shaders/shader_service.hpp"
 #include <algorithm>
 #include <expected>
 #include <filesystem>
@@ -124,7 +125,12 @@ namespace lfs::vis {
         }
         void clearKeyframes();
         void clear();
-        void setRevealClip(std::optional<sequencer::RevealClip> clip);
+        ~SequencerController();
+        void setShaderService(shaders::ShaderService* service);
+        [[nodiscard]] shaders::ShaderService* shaderService() const { return shader_service_; }
+        Status setRevealClip(std::optional<sequencer::RevealClip> clip, bool replace_binding = false,
+                             bool record_history = true);
+        Result<core::Uuid> revealCommand(const shaders::ShaderCommand& command);
         using RevealCommitCallback = std::function<void(std::optional<sequencer::RevealClip>, std::optional<sequencer::RevealClip>, float, float)>;
         void setRevealCommitCallback(RevealCommitCallback callback) { reveal_commit_callback_ = std::move(callback); }
         void beginRevealEdit();
@@ -184,6 +190,7 @@ namespace lfs::vis {
     private:
         [[nodiscard]] bool isFirstRealKeyframe(sequencer::KeyframeId id) const;
         [[nodiscard]] float playbackStartTime() const;
+        bool adoptTimeline(sequencer::Timeline loaded);
         void rebuildLoopKeyframe();
         void removeLoopKeyframe();
         void markTimelineChanged();
@@ -215,6 +222,7 @@ namespace lfs::vis {
 
         ClipDurationCommitCallback clip_duration_commit_callback_;
         RevealCommitCallback reveal_commit_callback_;
+        shaders::ShaderService* shader_service_ = nullptr;
         struct PendingRevealEdit {
             std::optional<sequencer::RevealClip> clip;
             float duration;

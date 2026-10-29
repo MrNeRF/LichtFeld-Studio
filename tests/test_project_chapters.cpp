@@ -448,6 +448,22 @@ namespace {
                   lfs::ErrorCode::DataLoss);
     }
 
+    TEST(ProjectChapterTest, CheckpointRetentionUsesPendingPreferenceWithLegacyFallback) {
+        ParametersChapter chapter;
+        EXPECT_TRUE(require_result(chapter.checkpoint_retention("mcmc", true)));
+        EXPECT_FALSE(require_result(chapter.checkpoint_retention("mcmc")));
+        auto snapshot = parameter_snapshot();
+        snapshot.mcmc_current.keep_all_checkpoints = true;
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        auto parsed = require_result(ParametersChapter::from_bytes(chapter.to_bytes()));
+        EXPECT_TRUE(require_result(parsed.checkpoint_retention("mcmc", false)));
+        EXPECT_FALSE(require_result(parsed.checkpoint_retention("mrnf", true)));
+        ASSERT_TRUE(parsed.dom().set("presets.mcmc.current.keep_all_checkpoints", false));
+        EXPECT_FALSE(require_result(parsed.checkpoint_retention("mcmc", true)));
+        ASSERT_TRUE(parsed.dom().set("presets.mcmc.current.keep_all_checkpoints", std::string{"invalid"}));
+        EXPECT_FALSE(parsed.checkpoint_retention("mcmc"));
+    }
+
     TEST(ProjectChapterTest, ParametersMutationRetainsUnknownNestedObjects) {
         ParametersChapter chapter;
         auto snapshot = parameter_snapshot();

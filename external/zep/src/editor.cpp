@@ -699,10 +699,14 @@ namespace Zep {
         }
     }
 
-    void ZepEditor::SetBufferSyntax(ZepBuffer& buffer) const {
+    void ZepEditor::SetBufferSyntax(ZepBuffer& buffer, std::string_view identity) const {
         std::string ext;
         std::string fileName;
-        if (buffer.GetFilePath().has_filename() && buffer.GetFilePath().filename().has_extension()) {
+        if (!identity.empty()) {
+            const fs::path path{std::string(identity)};
+            ext = string_tolower(path.extension().string());
+            fileName = string_tolower(path.filename().string());
+        } else if (buffer.GetFilePath().has_filename() && buffer.GetFilePath().filename().has_extension()) {
             ext = string_tolower(buffer.GetFilePath().filename().extension().string());
             fileName = string_tolower(buffer.GetFilePath().filename().string());
         } else {

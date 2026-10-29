@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "sequencer_controller.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "core/logger.hpp"
+#include "operation/undo_history.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -55,10 +58,6 @@ namespace lfs::vis {
             return timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip();
         }
 
-        [[nodiscard]] bool sameReveal(const std::optional<sequencer::RevealClip>& a, const std::optional<sequencer::RevealClip>& b) {
-            return (!a && !b) || (a && b && a->start == b->start && a->end == b->end &&
-                                  a->softness == b->softness && a->effect == b->effect);
-        }
     } // namespace
 
     bool SequencerController::hasPlayableContent() const {
@@ -69,15 +68,94 @@ namespace lfs::vis {
         return (hasPlySequence() || timeline_.hasAnimationClip() || timeline_.revealClip()) ? 0.0f : timeline_.startTime();
     }
 
-    void SequencerController::setRevealClip(std::optional<sequencer::RevealClip> clip) {
+    SequencerController::~SequencerController() { setShaderService(nullptr); }
+
+    void SequencerController::setShaderService(shaders::ShaderService* service) {
+        if (shader_service_)
+            shader_service_->setRevealController(nullptr);
+        shader_service_ = service;
+        if (service)
+            service->setRevealController(this);
+    }
+
+    Status SequencerController::setRevealClip(std::optional<sequencer::RevealClip> clip, const bool replace_binding,
+                                              const bool record_history) {
+        if (clip) {
+            if (auto valid = clip->validate(); !valid)
+                return valid;
+        }
         const auto before = timeline_.revealClip();
+        const auto asset = clip ? clip->shader_id : std::nullopt;
+        const shaders::ShaderSlot slot{shaders::ShaderSlot::Kind::Reveal, {}};
+        if (asset && !shader_service_)
+            return Status::failure(make_error(ErrorInit{.code = ErrorCode::Unavailable,
+                                                        .domain = ErrorDomain::App,
+                                                        .user_message = "Custom reveal requires a shader service.",
+                                                        .detection = LFS_SOURCE_SITE_CURRENT()}));
+        if (shader_service_) {
+            if (asset) {
+                if (auto valid = shader_service_->validateBinding(slot, *asset); !valid)
+                    return valid;
+                if (replace_binding || shader_service_->boundAsset(slot) != asset) {
+                    if (auto bound = shader_service_->setRevealBinding(asset); !bound)
+                        return bound;
+                }
+            } else if (shader_service_->boundAsset(slot)) {
+                if (auto unbound = shader_service_->setRevealBinding(std::nullopt); !unbound)
+                    return unbound;
+            }
+        }
         const float duration_before = clipDuration();
         timeline_.setRevealClip(clip);
-        if (sameReveal(before, clip))
-            return;
-        markTimelineChanged();
-        if (!pending_reveal_edit_ && reveal_commit_callback_)
-            reveal_commit_callback_(before, clip, duration_before, clipDuration());
+        if (before != clip || replace_binding) {
+            markTimelineChanged();
+            if (record_history && !pending_reveal_edit_ && reveal_commit_callback_)
+                reveal_commit_callback_(before, clip, duration_before, clipDuration());
+        }
+        return {};
+    }
+
+    Result<core::Uuid> SequencerController::revealCommand(const shaders::ShaderCommand& command) {
+        if (auto valid = shader_service_->validateRevealTarget(); !valid)
+            return valid.error();
+        auto clip = *timeline_.revealClip();
+        const shaders::ShaderSlot slot{shaders::ShaderSlot::Kind::Reveal, {}};
+        if (const auto* unbind = std::get_if<shaders::UnbindShader>(&command)) {
+            const auto bound = shader_service_->boundAsset(slot);
+            if (!bound || (unbind->asset && unbind->asset != bound))
+                return make_error(ErrorInit{.code = ErrorCode::FailedPrecondition,
+                                            .domain = ErrorDomain::App,
+                                            .user_message = "Shader binding does not match.",
+                                            .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (auto removed = setRevealClip(std::nullopt); !removed)
+                return removed.error();
+            return *bound;
+        }
+        const auto* run = std::get_if<shaders::RunShader>(&command);
+        const auto id = run ? run->asset.value_or(core::Uuid{}) : std::get<shaders::BindShader>(command).asset;
+        if (run && run->source.size() > shaders::kMaxShaderSourceBytes)
+            return make_error(ErrorInit{.code = ErrorCode::InvalidArgument,
+                                        .domain = ErrorDomain::App,
+                                        .user_message = "Shader source exceeds 1 MiB.",
+                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+        if (auto valid = shader_service_->validateBinding(slot, id); !valid)
+            return valid.error();
+        endRevealEdit();
+        op::TransactionGuard history(LOC("sequencer.change_reveal"));
+        core::Uuid asset = id;
+        if (run) {
+            auto updated =
+                shader_service_->command(shaders::SetShaderSource{run->asset, run->source, {}, {}}, slot);
+            if (!updated)
+                return updated.error();
+            asset = *updated;
+        }
+        clip.effect = sequencer::RevealEffect::Custom;
+        clip.shader_id = asset;
+        if (auto bound = setRevealClip(clip, true); !bound)
+            return bound.error();
+        history.commit();
+        return asset;
     }
 
     void SequencerController::beginRevealEdit() {
@@ -90,7 +168,7 @@ namespace lfs::vis {
             return;
         const auto before = *pending_reveal_edit_;
         pending_reveal_edit_.reset();
-        if (reveal_commit_callback_ && (!sameReveal(before.clip, timeline_.revealClip()) || before.duration != clipDuration()))
+        if (reveal_commit_callback_ && (before.clip != timeline_.revealClip() || before.duration != clipDuration()))
             reveal_commit_callback_(before.clip, timeline_.revealClip(), before.duration, clipDuration());
     }
 
@@ -537,6 +615,8 @@ namespace lfs::vis {
     }
 
     void SequencerController::clearKeyframes() {
+        if (auto cleared = setRevealClip(std::nullopt, false, false); !cleared)
+            return;
         stop();
         deselectKeyframe();
         timeline_.clear();
@@ -546,6 +626,8 @@ namespace lfs::vis {
     }
 
     void SequencerController::clear() {
+        if (auto cleared = setRevealClip(std::nullopt, false, false); !cleared)
+            return;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
         pending_reveal_edit_.reset();
@@ -565,25 +647,23 @@ namespace lfs::vis {
     }
 
     bool SequencerController::loadFromJson(const std::string& path) {
-        stop();
-        deselectKeyframe();
-        const bool loaded = timeline_.loadFromJson(path);
-        if (!loaded)
-            return false;
-        ++timeline_generation_;
-        pending_keyframe_time_edit_.reset();
-        pending_reveal_edit_.reset();
-        rebuildLoopKeyframe();
-        markTimelineChanged();
-        return true;
+        sequencer::Timeline loaded;
+        return loaded.loadFromJson(path) && adoptTimeline(std::move(loaded));
     }
 
-    bool SequencerController::loadFromJson(
-        const nlohmann::json& json) {
+    bool SequencerController::loadFromJson(const nlohmann::json& json) {
+        sequencer::Timeline loaded;
+        return loaded.loadFromJson(json) && adoptTimeline(std::move(loaded));
+    }
+
+    bool SequencerController::adoptTimeline(sequencer::Timeline loaded) {
+        if (auto reveal = setRevealClip(loaded.revealClip(), true, false); !reveal) {
+            LOG_ERROR("Timeline reveal rejected: {}", reveal.error().user_message());
+            return false;
+        }
+        timeline_ = std::move(loaded);
         stop();
         deselectKeyframe();
-        if (!timeline_.loadFromJson(json))
-            return false;
         ++timeline_generation_;
         pending_keyframe_time_edit_.reset();
         pending_reveal_edit_.reset();

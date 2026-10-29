@@ -75,6 +75,7 @@ namespace lfs::io::project {
         Editor,
         View,
         Sequencer,
+        Shaders,
     };
 
     [[nodiscard]] LFS_IO_API JsonChapterDom
@@ -100,9 +101,15 @@ namespace lfs::io::project {
         JsonChapterDom& destination,
         const JsonChapterDom::Json& known_state);
 
+    inline constexpr std::size_t kMaxShaderAssets = 256, kMaxShaderSourceBytes = 1024 * 1024,
+                                 kMaxShaderTotalSourceBytes = 16 * 1024 * 1024, kMaxShaderChapterBytes = 32 * 1024 * 1024,
+                                 kMaxShaderBindings = 65536, kMaxShaderNames = 256;
+    [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::string>> recover_shader_chapter(JsonChapterDom& dom);
+
     template <SessionJsonChapterKind Kind>
     class BasicSessionJsonChapter {
     public:
+        std::vector<std::string> warnings;
         BasicSessionJsonChapter()
             : dom_(default_session_chapter_dom(Kind)) {}
 
@@ -112,33 +119,28 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<
             BasicSessionJsonChapter>
         parse(const std::string_view bytes) {
-            auto dom = JsonChapterDom::parse(bytes);
-            if (!dom) {
-                return std::move(dom).error();
-            }
-            if (auto sanitized =
-                    sanitize_session_chapter_for_load(
-                        Kind, *dom);
-                !sanitized) {
-                return std::move(sanitized).error();
-            }
-            if (auto valid =
-                    validate_session_chapter_dom(
-                        Kind, *dom);
-                !valid) {
-                return std::move(valid).error();
-            }
-            return BasicSessionJsonChapter(
-                std::move(*dom));
+            return from_bytes(std::as_bytes(std::span(bytes.data(), bytes.size())));
         }
 
         [[nodiscard]] static lfs::Result<
             BasicSessionJsonChapter>
         from_bytes(
             const std::span<const std::byte> bytes) {
+            if constexpr (Kind == SessionJsonChapterKind::Shaders) {
+                if (bytes.size() > kMaxShaderChapterBytes)
+                    return make_error(ErrorInit{.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .user_message = "Shader chapter exceeds the size limit.", .detection = LFS_SOURCE_SITE_CURRENT()});
+            }
             auto dom = JsonChapterDom::from_bytes(bytes);
             if (!dom) {
                 return std::move(dom).error();
+            }
+            if constexpr (Kind == SessionJsonChapterKind::Shaders) {
+                auto recovered = recover_shader_chapter(*dom);
+                if (!recovered)
+                    return std::move(recovered).error();
+                BasicSessionJsonChapter result(std::move(*dom));
+                result.warnings = std::move(*recovered);
+                return result;
             }
             if (auto sanitized =
                     sanitize_session_chapter_for_load(
@@ -212,6 +214,8 @@ namespace lfs::io::project {
         BasicSessionJsonChapter<
             SessionJsonChapterKind::Sequencer>;
 
+    using ShaderLibraryChapter = BasicSessionJsonChapter<SessionJsonChapterKind::Shaders>;
+
     struct MetricHistorySample {
         std::int32_t iteration = 0;
         float value = 0.0f;
@@ -273,6 +277,8 @@ namespace lfs::io::project {
         ViewSessionChapter view;
         SequencerSessionChapter sequencer;
         MetricsChapter metrics;
+        ShaderLibraryChapter shaders;
+        std::array<std::uint64_t, 2> shader_token{};
     };
 
 } // namespace lfs::io::project

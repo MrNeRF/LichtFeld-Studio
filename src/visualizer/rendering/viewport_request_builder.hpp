@@ -77,6 +77,11 @@ namespace lfs::vis {
         const core::SceneNode& node,
         int visible_index);
 
+    // Keeps the object record of one slot, for a draw of that slot's model
+    // alone; drops the effect when no binding applies to it.
+    void scopeCustomEffectToSlot(std::optional<lfs::rendering::GaussianCustomEffectState>& effect,
+                                 int visible_index);
+
     struct PlyComparisonDepthSample {
         const core::SceneNode* node = nullptr;
         const core::SplatData* model = nullptr;

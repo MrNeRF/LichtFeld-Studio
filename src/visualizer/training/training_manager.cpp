@@ -2870,11 +2870,13 @@ namespace lfs::vis {
         if (trainer_->isInitialized() && trainer_->getParams().resume_checkpoint.has_value()) {
             if (auto* const param_mgr = services().paramsOrNull()) {
                 auto params = trainer_->getParams();
-                params.optimization.save_steps = param_mgr->copyActiveParams().save_steps;
+                const auto active = param_mgr->copyActiveParams();
+                params.optimization.save_steps = active.save_steps;
+                params.optimization.keep_all_checkpoints = active.keep_all_checkpoints;
                 trainer_->setParams(params);
                 param_mgr->importTrainingParams(params);
             }
-            LOG_DEBUG("Ignoring parameter updates for checkpoint-backed trainer (save steps kept)");
+            LOG_DEBUG("Applied save preferences for checkpoint-backed trainer");
             return;
         }
 

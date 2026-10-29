@@ -68,7 +68,7 @@ namespace {
                     return {};
                 },
                 .start_training = []() -> std::expected<void, std::string> { return {}; },
-                .render_capture = [this](std::optional<int>, int, int) -> std::expected<std::string, std::string> {
+                .render_capture = [this](std::optional<int>, int, int) -> lfs::Result<std::string> {
                     ++capture_calls;
                     return std::string{};
                 },
@@ -78,6 +78,23 @@ namespace {
     };
 
 } // namespace
+
+TEST(McpSharedSceneToolsTest, CapturePreservesTypedExportFailure) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend stub;
+    auto backend = stub.backend();
+    backend.render_capture = [](std::optional<int>, int, int) -> lfs::Result<std::string> {
+        return lfs::make_error(lfs::ErrorInit{.code = lfs::ErrorCode::Cancelled,
+                                              .domain = lfs::ErrorDomain::Rendering,
+                                              .user_message = "Export stopped",
+                                              .detection = LFS_SOURCE_SITE_CURRENT()});
+    };
+    lfs::mcp::register_shared_scene_tools(backend);
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool("render.capture", json{{"camera_index", 0}});
+    EXPECT_EQ(result["error"]["code"], "Cancelled");
+    EXPECT_EQ(result["error"]["domain"], "Rendering");
+    EXPECT_EQ(result["error_message"], "Export stopped");
+}
 
 TEST(McpSharedSceneToolsTest, CaptureRejectsInvalidDimensionsBeforeCallingBackend) {
     ScopedSharedSceneToolRegistration cleanup;

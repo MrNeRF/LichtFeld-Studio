@@ -935,6 +935,7 @@ namespace lfs::training {
             live_project_path_;
         // Used only to seed a fresh headless destination; never a GUI context.
         std::optional<std::filesystem::path> headless_project_source_path_;
+        std::shared_ptr<lfs::io::project::ProjectReader> retained_project_source_;
         TrainerProjectSavePolicy trainer_project_save_policy_{};
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../../../../kernels/kernel_stream.hpp"
 #include "buffer_utils.h"
+#include "forward.h"
+#include "gaussian_evaluation.cuh"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
@@ -26,10 +28,10 @@ namespace fast_lfs::rasterization {
         __global__ void __launch_bounds__(kPopBlock) pop_scores_cu(
             const uint2* __restrict__ tile_instance_ranges,
             const uint* __restrict__ instance_primitive_indices,
+            const unsigned char* __restrict__ contributor_masks,
+            const uint* __restrict__ contributor_positions,
             const uint* __restrict__ primitive_work_indices,
-            const PackedMeanBBox* __restrict__ primitive_mean2d,
-            const float4* __restrict__ primitive_conic_opacity,
-            const float4* __restrict__ primitive_color,
+            const ProjectedRecord* __restrict__ projected,
             const uint* __restrict__ tile_n_contributions,
             const float* __restrict__ tile_final_transmittance,
             const float* __restrict__ background,
@@ -51,18 +53,20 @@ namespace fast_lfs::rasterization {
 
             const uint lane_id = thread_rank & 31u;
             const uint warp_id = thread_rank >> 5;
-            const uint local_x = lane_id & 7u;
-            const uint local_y = lane_id >> 3;
+            // Warp w owns the 8x4 regions w and w + 4; each thread one pixel of each.
             const uint st0 = warp_id;
-            const uint st1 = warp_id + 4;
+            const uint st1 = warp_id + 4u;
             const uint st0_ox = (st0 & 1u) * config::warp_subtile_width;
             const uint st0_oy = (st0 >> 1) * config::warp_subtile_height;
             const uint st1_ox = (st1 & 1u) * config::warp_subtile_width;
             const uint st1_oy = (st1 >> 1) * config::warp_subtile_height;
             const uint tile_x0 = (tile_idx % grid_width) * config::tile_width;
             const uint tile_y0 = (tile_idx / grid_width) * config::tile_height;
-            const uint2 pix0 = {tile_x0 + st0_ox + local_x, tile_y0 + st0_oy + local_y};
-            const uint2 pix1 = {tile_x0 + st1_ox + local_x, tile_y0 + st1_oy + local_y};
+            const uint local_x = st0_ox + (lane_id & 7u);
+            const uint row0 = st0_oy + (lane_id >> 3);
+            const uint row1 = st1_oy + (lane_id >> 3);
+            const uint2 pix0 = {tile_x0 + local_x, tile_y0 + row0};
+            const uint2 pix1 = {tile_x0 + local_x, tile_y0 + row1};
             const bool inside0 = pix0.x < width && pix0.y < height;
             const bool inside1 = pix1.x < width && pix1.y < height;
             const uint n_pixels = width * height;
@@ -70,8 +74,8 @@ namespace fast_lfs::rasterization {
             const uint pixel_idx1 = inside1 ? width * pix1.y + pix1.x : 0u;
             const float2 pixel0 = make_float2(static_cast<float>(pix0.x) + 0.5f, static_cast<float>(pix0.y) + 0.5f);
             const float2 pixel1 = make_float2(static_cast<float>(pix1.x) + 0.5f, static_cast<float>(pix1.y) + 0.5f);
-            const uint rank0 = (st0_oy + local_y) * config::tile_width + st0_ox + local_x;
-            const uint rank1 = (st1_oy + local_y) * config::tile_width + st1_ox + local_x;
+            const uint rank0 = row0 * config::tile_width + local_x;
+            const uint rank1 = row1 * config::tile_width + local_x;
 
             const float sub_w = static_cast<float>(config::warp_subtile_width);
             const float sub_h = static_cast<float>(config::warp_subtile_height);
@@ -115,9 +119,12 @@ namespace fast_lfs::rasterization {
                 return;
 
             __shared__ uint s_prim_idx[kPopBlock];
+            __shared__ uint s_original_position[kPopBlock];
+            __shared__ unsigned char s_coverage[kPopBlock];
             __shared__ float2 s_mean2d[kPopBlock];
             __shared__ ushort4 s_bbox[kPopBlock];
             __shared__ float4 s_conic_opacity[kPopBlock];
+            __shared__ float3 s_conic_base2[kPopBlock];
             __shared__ float3 s_color[kPopBlock];
             __shared__ unsigned char s_valid[kPopBlock];
 
@@ -126,17 +133,21 @@ namespace fast_lfs::rasterization {
                 const int n_batch = min(kPopBlock, count - batch_base);
                 if (static_cast<int>(thread_rank) < n_batch) {
                     const int tile_primitive_idx = count - 1 - (batch_base + static_cast<int>(thread_rank));
-                    const uint primitive_idx = instance_primitive_indices[range.x + static_cast<uint>(tile_primitive_idx)];
+                    const uint instance_idx = range.x + static_cast<uint>(tile_primitive_idx);
+                    const uint primitive_idx = instance_primitive_indices[instance_idx];
+                    s_original_position[thread_rank] = contributor_positions ? contributor_positions[instance_idx] : tile_primitive_idx;
+                    s_coverage[thread_rank] = contributor_masks ? contributor_masks[instance_idx] : 0;
                     const uint work_idx = primitive_idx < n_primitives ? primitive_work_indices[primitive_idx] : n_visible;
                     const bool valid = work_idx < n_visible;
                     s_valid[thread_rank] = valid ? 1u : 0u;
                     s_prim_idx[thread_rank] = valid ? primitive_idx : 0u;
                     if (valid) {
-                        const PackedMeanBBox geom = primitive_mean2d[work_idx];
+                        const PackedMeanBBox geom = projected[work_idx].geometry;
                         s_mean2d[thread_rank] = geom.mean2d;
                         s_bbox[thread_rank] = geom.pixel_bbox;
-                        s_conic_opacity[thread_rank] = primitive_conic_opacity[work_idx];
-                        s_color[thread_rank] = fminf(fmaxf(make_float3(primitive_color[work_idx]), 0.0f), config::max_blend_color);
+                        s_conic_opacity[thread_rank] = projected[work_idx].conic_opacity;
+                        s_conic_base2[thread_rank] = kernels::base2_conic(make_float3(projected[work_idx].conic_opacity));
+                        s_color[thread_rank] = fminf(fmaxf(make_float3(projected[work_idx].color), 0.0f), config::max_blend_color);
                     }
                 }
                 block.sync();
@@ -144,7 +155,10 @@ namespace fast_lfs::rasterization {
                 for (int j_base = 0; j_base < n_batch; j_base += 32) {
                     const int j_test = j_base + static_cast<int>(lane_id);
                     bool hit0 = false, hit1 = false;
-                    if (j_test < n_batch && s_valid[j_test]) {
+                    if (j_test < n_batch && s_valid[j_test] && contributor_masks != nullptr) {
+                        hit0 = (s_coverage[j_test] & (1u << warp_id)) != 0;
+                        hit1 = (s_coverage[j_test] & (1u << (warp_id + 4))) != 0;
+                    } else if (j_test < n_batch && s_valid[j_test]) {
                         const ushort4 bb = s_bbox[j_test];
                         const float4 co = s_conic_opacity[j_test];
                         const float3 conic = make_float3(co);
@@ -162,24 +176,22 @@ namespace fast_lfs::rasterization {
                         const int k = __ffs(live) - 1;
                         live &= live - 1u;
                         const int j = j_base + k;
-                        const int tile_primitive_idx = count - 1 - (batch_base + j);
+                        const uint tile_primitive_idx = s_original_position[j];
                         const float2 mean2d = s_mean2d[j];
-                        const float4 co = s_conic_opacity[j];
+                        const float3 conic_base2 = s_conic_base2[j];
                         const float3 color = s_color[j];
+                        const auto column = kernels::AlphaColumn::at(conic_base2, s_conic_opacity[j].w, mean2d.x - pixel0.x);
                         bool contributed = false;
                         const auto score_pixel = [&](const bool use, const bool inside, const uint last,
                                                      const float2 pixel, float& T, float3& behind) -> float {
                             if (!use || !inside || static_cast<uint>(tile_primitive_idx) >= last)
                                 return 0.0f;
-                            const float2 d = mean2d - pixel;
-                            const float sigma_over_2 = 0.5f * (co.x * d.x * d.x + co.z * d.y * d.y) + co.y * d.x * d.y;
-                            if (!(sigma_over_2 >= 0.0f))
+                            const float unclamped = column.alpha(conic_base2.z, mean2d.y - pixel.y);
+                            if (!kernels::alpha_accepted(unclamped))
                                 return 0.0f;
-                            const float alpha = fminf(co.w * __expf(-sigma_over_2), config::max_fragment_alpha);
-                            if (!(alpha >= config::min_alpha_threshold))
-                                return 0.0f;
+                            const float alpha = kernels::clamped_alpha(unclamped);
                             contributed = true;
-                            T /= 1.0f - alpha;
+                            T *= kernels::rcp_approx(1.0f - alpha);
                             const float3 delta = (T * alpha) * (color - behind);
                             behind = alpha * color + (1.0f - alpha) * behind;
                             return dot(delta, delta);
@@ -214,8 +226,8 @@ namespace fast_lfs::rasterization {
         const uint grid_height = (height + config::tile_height - 1) / config::tile_height;
         const auto tile = PerTileBuffers::from_blob(tile_blob, static_cast<int>(grid_width * grid_height));
         pop_scores_cu<<<grid_width * grid_height, kPopBlock, 0, stream>>>(
-            tile.instance_ranges, static_cast<const uint*>(ctx.sorted_primitive_indices), ctx.primitive_work_indices,
-            primitive.mean2d, primitive.conic_opacity, primitive.color, tile.n_contributions, tile.final_transmittance,
+            tile.instance_ranges, static_cast<const uint*>(ctx.sorted_primitive_indices), ctx.contributor_masks, ctx.contributor_positions, ctx.primitive_work_indices,
+            primitive.projected, tile.n_contributions, tile.final_transmittance,
             background, background_image, scores, static_cast<uint>(ctx.n_instances), static_cast<uint>(n_primitives),
             static_cast<uint>(ctx.n_visible), static_cast<uint>(width), static_cast<uint>(height), grid_width);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.pop_scores");

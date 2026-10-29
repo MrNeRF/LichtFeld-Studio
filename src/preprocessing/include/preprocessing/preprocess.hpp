@@ -16,6 +16,8 @@ namespace lfs::preprocessing {
 
     [[nodiscard]] lfs::Result<std::filesystem::path> ensure_lpips_weights(bool allow_download);
 
+    [[nodiscard]] lfs::Result<std::filesystem::path> ensure_sam2_weights(bool allow_download);
+
     using PreprocessProgressCallback = std::function<void(
         std::size_t done, std::size_t total, std::string_view filename)>;
 

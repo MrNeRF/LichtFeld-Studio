@@ -5,6 +5,7 @@
 add_library(lfs_vulkan_rasterizer STATIC
         src/barrier_planner.cpp
         src/buffer.cpp
+        src/compute_program_sets.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
         src/stochastic.cpp
@@ -124,6 +125,8 @@ file(GLOB _VULKAN_SLANG_ALL
         ${_VULKAN_SHADER_SRC}/slang/*.slang
         ${_VULKAN_SHADER_SRC}/slang/*.inc
 )
+# The user-effect API and its hosts only build to IR; no SPIR-V recipe imports them.
+list(FILTER _VULKAN_SLANG_ALL EXCLUDE REGEX "/lfs(_[a-z_]+)?\\.slang$")
 set(_VULKAN_RADIX_DEPS
         ${_VULKAN_SHADER_SRC}/radix_sort/config.glsl
 )
@@ -146,91 +149,154 @@ endif()
 
 set(VULKAN_RASTERIZER_SHADER_OUTPUTS "")
 
-function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
-        set(_defs "")
-        foreach(D ${ARGN})
-                list(APPEND _defs "-D${D}")
-        endforeach()
+# User-effect package for the runtime compiler in src/visualizer/shaders: the
+# API, the custom effect hosts and their imports as Slang IR plus manifest.json,
+# staged and installed with the SPIR-V. Reflection stays in the build tree.
+set(_lfs_user_shader_src ${_VULKAN_SHADER_SRC}/slang)
+set(_lfs_user_shader_dir ${LFS_VULKAN_RASTERIZER_SPV_DIR}/user)
+set(_lfs_user_shader_reflection ${CMAKE_CURRENT_BINARY_DIR}/user_shader_reflection)
+set(_lfs_user_shader_ir_sources
+        ${_lfs_user_shader_src}/reveal_noise.inc
+        ${_lfs_user_shader_src}/lfs_helpers.slang
+        ${_lfs_user_shader_src}/lfs.slang
+        ${_lfs_user_shader_src}/lfs_reveal.slang
+)
+set(_lfs_user_shader_package lfs_user_shader_ir)
+
+# One rule for host, API, import and test IR. Keep a durable copy of the
+# compiler's dependency closure for manifests: generators may consume the .d.
+function(lfs_add_shader_ir)
+        cmake_parse_arguments(PARSE_ARGV 0 IR "REFLECT" "NAME;SOURCE" "DEFINES")
+        list(TRANSFORM IR_DEFINES PREPEND "-D" OUTPUT_VARIABLE _defs)
+        set(_compile ${SLANGC} ${_lfs_user_shader_src}/${IR_SOURCE} ${_defs}
+                -matrix-layout-column-major -I${_lfs_user_shader_src})
+        set(_module ${_lfs_user_shader_dir}/${IR_NAME}.slang-module)
+        set(_depfile ${_lfs_user_shader_reflection}/${IR_NAME}.d)
+        set(_outputs ${_module} ${_lfs_user_shader_reflection}/${IR_NAME}.deps)
+        set(_reflect)
+        if(IR_REFLECT)
+                set(_reflection ${_lfs_user_shader_reflection}/${IR_NAME}.json)
+                list(APPEND _outputs ${_reflection})
+                set(_reflect COMMAND ${_compile} -target spirv -stage compute -entry main -skip-codegen
+                        -reflection-json ${_reflection})
+        endif()
+        add_custom_command(
+                OUTPUT ${_outputs}
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${_lfs_user_shader_dir} ${_lfs_user_shader_reflection}
+                COMMAND ${_compile} -o ${_module} -depfile ${_depfile}
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_depfile} ${_lfs_user_shader_reflection}/${IR_NAME}.deps
+                ${_reflect}
+                DEPENDS ${_lfs_user_shader_src}/${IR_SOURCE} ${SLANGC} ${CMAKE_CURRENT_FUNCTION_LIST_FILE}
+                DEPFILE ${_depfile}
+                COMMENT "slangc ${IR_NAME}.slang-module" VERBATIM)
+        set_property(GLOBAL APPEND PROPERTY ${_lfs_user_shader_package}_OUTPUTS ${_outputs})
+endfunction()
+
+function(_lfs_add_custom_host HOST SRC_FILE)
+        set(_defines ${ARGN} LFS_REVEAL=1 LFS_CUSTOM_EFFECT=1)
+        lfs_add_shader_ir(NAME ${HOST} SOURCE ${SRC_FILE} DEFINES ${_defines} REFLECT)
+        list(JOIN _defines "," _joined)
+        set_property(GLOBAL APPEND PROPERTY LFS_USER_SHADER_HOSTS "${HOST}:${_joined}")
+endfunction()
+
+# Compiles one SPIR-V variant of a recipe into the shader outputs. DEPENDS
+# lists inputs beyond the shared sources.
+function(_vulkan_add_slang_variant OUT_NAME SRC_FILE)
+        cmake_parse_arguments(PARSE_ARGV 2 _variant "" "" "DEPENDS")
+        list(TRANSFORM _variant_UNPARSED_ARGUMENTS PREPEND "-D" OUTPUT_VARIABLE _defs)
         set(_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}.spv)
-        set(_spirv_validation)
-        set(_spirv_validation_dependency)
+        set(_validation)
         if(_VULKAN_SPIRV_VAL)
-                set(_spirv_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_out})
-                set(_spirv_validation_dependency ${_VULKAN_SPIRV_VAL})
+                set(_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_out})
         endif()
         add_custom_command(
                 OUTPUT ${_out}
-                COMMAND ${SLANGC}
-                        ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
-                        ${_VULKAN_SLANG_FLAGS}
-                        ${_defs}
-                        -I${_VULKAN_SHADER_SRC}/slang
-                        -o ${_out}
-                ${_spirv_validation}
-                DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
-                COMMENT "slangc ${OUT_NAME}.spv"
-                VERBATIM
-        )
-        set(_outputs ${_out})
+                COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_FLAGS} ${_defs}
+                        -I${_VULKAN_SHADER_SRC}/slang -o ${_out}
+                ${_validation}
+                DEPENDS ${_VULKAN_SLANG_ALL} ${_VULKAN_SPIRV_VAL} ${_variant_DEPENDS}
+                COMMENT "slangc ${OUT_NAME}.spv" VERBATIM)
+        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_out} PARENT_SCOPE)
+endfunction()
+
+# Lists a legacy recipe in slang_recipes.json, which
+# tests/python/test_reveal_shader_default_runtime.py compiles from a base tree.
+function(_vulkan_record_slang_recipe OUT_NAME SRC_FILE)
+        list(TRANSFORM ARGN PREPEND "\"" OUTPUT_VARIABLE _defines)
+        list(TRANSFORM _defines APPEND "\"")
+        list(JOIN _defines ", " _defines)
+        set_property(GLOBAL APPEND PROPERTY LFS_VULKAN_SLANG_RECIPES
+                "{\"name\": \"${OUT_NAME}\", \"source\": \"${SRC_FILE}\", \"defines\": [${_defines}]}")
+endfunction()
+
+function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
+        set(_banded "")
+        set(_reveal "")
+        set(_custom_name "")
+        set(_custom_banded "")
+        set(_custom_kind None)
+        set(_chain None)
+        _vulkan_record_slang_recipe(${OUT_NAME} ${SRC_FILE} ${ARGN})
+        _vulkan_add_slang_variant(${OUT_NAME} ${SRC_FILE} ${ARGN})
         # Keep band-origin arithmetic out of interactive shaders. These variants
         # are loaded lazily when the viewer first exports a banded image.
         if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward|macro_raster|macro_compose)"
            OR OUT_NAME STREQUAL "generate_keys_wave")
-                set(_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_banded.spv)
-                set(_banded_validation)
-                if(_VULKAN_SPIRV_VAL)
-                        set(_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_banded_out})
-                endif()
-                add_custom_command(
-                        OUTPUT ${_banded_out}
-                        COMMAND ${SLANGC}
-                                ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
-                                ${_VULKAN_SLANG_FLAGS} ${_defs}
-                                -DLFS_BANDED_EXPORT_RENDER=1
-                                -I${_VULKAN_SHADER_SRC}/slang
-                                -o ${_banded_out}
-                        ${_banded_validation}
-                        DEPENDS ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE} ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
-                        COMMENT "slangc ${OUT_NAME}_banded.spv"
-                        VERBATIM
-                )
-                list(APPEND _outputs ${_banded_out})
+                _vulkan_record_slang_recipe(${OUT_NAME}_banded ${SRC_FILE} ${ARGN} LFS_BANDED_EXPORT_RENDER=1)
+                _vulkan_add_slang_variant(${OUT_NAME}_banded ${SRC_FILE} ${ARGN} LFS_BANDED_EXPORT_RENDER=1)
+                set(_banded "${OUT_NAME}_banded")
         endif()
         # Reveal shaders are selected only while a sequencer reveal is active.
         if(OUT_NAME MATCHES "^projection_forward" OR OUT_NAME STREQUAL "cull_splats"
            OR OUT_NAME MATCHES "^rasterize_forward_3dgut" OR OUT_NAME MATCHES "^rasterize_outline_gut")
-                set(_reveal_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal.spv)
-                set(_reveal_validation)
-                if(_VULKAN_SPIRV_VAL)
-                        set(_reveal_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_out})
-                endif()
-                add_custom_command(
-                        OUTPUT ${_reveal_out}
-                        COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
-                                ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1
-                                -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_out}
-                        ${_reveal_validation}
-                        DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
-                        COMMENT "slangc ${OUT_NAME}_reveal.spv" VERBATIM)
-                list(APPEND _outputs ${_reveal_out})
+                _vulkan_record_slang_recipe(${OUT_NAME}_reveal ${SRC_FILE} ${ARGN} LFS_REVEAL=1)
+                _vulkan_add_slang_variant(${OUT_NAME}_reveal ${SRC_FILE} ${ARGN} LFS_REVEAL=1)
+                set(_reveal "${OUT_NAME}_reveal")
                 if(OUT_NAME MATCHES "^(projection_forward|rasterize_forward)")
-                        set(_reveal_banded_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}_reveal_banded.spv)
-                        set(_reveal_banded_validation)
-                        if(_VULKAN_SPIRV_VAL)
-                                set(_reveal_banded_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_reveal_banded_out})
+                        set(_reveal_banded ${ARGN} LFS_REVEAL=1 LFS_BANDED_EXPORT_RENDER=1)
+                        _vulkan_record_slang_recipe(${OUT_NAME}_reveal_banded ${SRC_FILE} ${_reveal_banded})
+                        _vulkan_add_slang_variant(${OUT_NAME}_reveal_banded ${SRC_FILE} ${_reveal_banded})
+                        set_property(GLOBAL APPEND PROPERTY LFS_SHADER_VARIANTS
+                                "{\"${OUT_NAME}_reveal\", \"${OUT_NAME}_reveal_banded\", \"\", \"\", \"\", CustomKind::None, CustomChain::None},")
+                endif()
+                # Projection calls the effect and ships as a host; the viewport
+                # bands only survivor and 3DGUT chains. Cull and the 3DGUT rasters
+                # only read what it wrote, so their custom variants are SPIR-V
+                # built for every effect and stay out of slang_recipes.json.
+                if(OUT_NAME MATCHES "^projection_forward")
+                        set(_custom_kind Host)
+                        _lfs_add_custom_host(${OUT_NAME}_custom ${SRC_FILE} ${ARGN})
+                        if(OUT_NAME MATCHES "_(survivors|3dgut)$")
+                                _lfs_add_custom_host(${OUT_NAME}_custom_banded ${SRC_FILE} ${ARGN} LFS_BANDED_EXPORT_RENDER=1)
                         endif()
-                        add_custom_command(
-                                OUTPUT ${_reveal_banded_out}
-                                COMMAND ${SLANGC} ${_VULKAN_SHADER_SRC}/slang/${SRC_FILE}
-                                        ${_VULKAN_SLANG_FLAGS} ${_defs} -DLFS_REVEAL=1 -DLFS_BANDED_EXPORT_RENDER=1
-                                        -I${_VULKAN_SHADER_SRC}/slang -o ${_reveal_banded_out}
-                                ${_reveal_banded_validation}
-                                DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
-                                COMMENT "slangc ${OUT_NAME}_reveal_banded.spv" VERBATIM)
-                        list(APPEND _outputs ${_reveal_banded_out})
+                else()
+                        set(_custom_kind Spirv)
+                        set(_custom ${ARGN} LFS_REVEAL=1 LFS_CUSTOM_EFFECT=1)
+                        _vulkan_add_slang_variant(${OUT_NAME}_custom ${SRC_FILE} ${_custom}
+                                DEPENDS ${_lfs_user_shader_ir_sources})
+                        if(OUT_NAME MATCHES "^rasterize_forward")
+                                _vulkan_add_slang_variant(${OUT_NAME}_custom_banded ${SRC_FILE} ${_custom}
+                                        LFS_BANDED_EXPORT_RENDER=1 DEPENDS ${_lfs_user_shader_ir_sources})
+                        endif()
+                endif()
+                set(_custom_name "${OUT_NAME}_custom")
+        endif()
+        if(_custom_name)
+                if("LFS_PROJECTION_SURVIVORS=1" IN_LIST ARGN OR OUT_NAME STREQUAL "cull_splats")
+                        set(_chain Survivors)
+                elseif("LFS_3DGUT_PROJECTION=1" IN_LIST ARGN OR "LFS_3DGUT_RASTERIZE=1" IN_LIST ARGN)
+                        set(_chain Gut)
+                endif()
+                # A banded draw requests this label even when its host is not built.
+                if(_banded)
+                        set(_custom_banded "${OUT_NAME}_custom_banded")
                 endif()
         endif()
-        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} ${_outputs} PARENT_SCOPE)
+        if(_banded OR _reveal OR _custom_name)
+                set_property(GLOBAL APPEND PROPERTY LFS_SHADER_VARIANTS
+                        "{\"${OUT_NAME}\", \"${_banded}\", \"${_reveal}\", \"${_custom_name}\", \"${_custom_banded}\", CustomKind::${_custom_kind}, CustomChain::${_chain}},")
+        endif()
+        set(VULKAN_RASTERIZER_SHADER_OUTPUTS ${VULKAN_RASTERIZER_SHADER_OUTPUTS} PARENT_SCOPE)
 endfunction()
 
 function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
@@ -379,3 +445,64 @@ _vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp)
 
 add_custom_target(lfs_vulkan_rasterizer_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
 add_dependencies(lfs_vulkan_rasterizer lfs_vulkan_rasterizer_shaders)
+
+get_property(_shader_variants GLOBAL PROPERTY LFS_SHADER_VARIANTS)
+list(JOIN _shader_variants "\n" _shader_variants)
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/shader_variants.inc CONTENT "${_shader_variants}\n")
+
+get_property(_slang_recipes GLOBAL PROPERTY LFS_VULKAN_SLANG_RECIPES)
+list(JOIN _slang_recipes ",\n    " _slang_recipes)
+list(JOIN _VULKAN_SLANG_FLAGS "\", \"" _slang_flags)
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/slang_recipes.json
+        CONTENT "{\n  \"flags\": [\"${_slang_flags}\"],\n  \"recipes\": [\n    ${_slang_recipes}\n  ]\n}\n")
+set_target_properties(lfs_vulkan_rasterizer PROPERTIES
+        LFS_SLANG_RECIPES "${CMAKE_CURRENT_BINARY_DIR}/slang_recipes.json")
+
+# Both packages assemble only finished IR/reflection outputs. Direct ABI inputs
+# also cover clean builds before the compiler has written any depfiles.
+get_property(_lfs_custom_hosts GLOBAL PROPERTY LFS_USER_SHADER_HOSTS)
+list(JOIN _lfs_custom_hosts "|" _lfs_custom_host_list)
+set(_lfs_user_shader_abi ${CMAKE_BINARY_DIR}/generated/user_shaders/lfs_shader_abi.hpp)
+set(_lfs_user_shader_test_dir ${CMAKE_CURRENT_BINARY_DIR}/user_shader_test_package)
+foreach(_lfs_user_shader_package lfs_user_shader_ir lfs_user_shader_test_package)
+        set(_manifest_args -DHOSTS=${_lfs_custom_host_list} -DABI_HEADER=${_lfs_user_shader_abi})
+        set(_byproducts ${_lfs_user_shader_abi})
+        if(_lfs_user_shader_package STREQUAL "lfs_user_shader_test_package")
+                set(_lfs_user_shader_dir ${_lfs_user_shader_test_dir})
+                set(_lfs_user_shader_reflection ${CMAKE_CURRENT_BINARY_DIR}/user_shader_test_reflection)
+                set(_manifest_args -DTEST_HOST=lfs_test_host)
+                set(_byproducts)
+                lfs_add_shader_ir(NAME lfs_test_host SOURCE lfs_test_host.slang REFLECT)
+        else()
+                foreach(_name lfs_reveal spherical_harmonics)
+                        lfs_add_shader_ir(NAME ${_name} SOURCE ${_name}.slang)
+                endforeach()
+                lfs_add_shader_ir(NAME utils SOURCE utils.slang DEFINES LFS_CUSTOM_EFFECT=1)
+                lfs_add_shader_ir(NAME utils_banded SOURCE utils.slang DEFINES LFS_CUSTOM_EFFECT=1 LFS_BANDED_EXPORT_RENDER=1)
+        endif()
+        foreach(_name lfs_helpers lfs)
+                lfs_add_shader_ir(NAME ${_name} SOURCE ${_name}.slang)
+        endforeach()
+        get_property(_ir_files GLOBAL PROPERTY ${_lfs_user_shader_package}_OUTPUTS)
+        add_custom_command(
+                OUTPUT ${_lfs_user_shader_dir}/manifest.json
+                BYPRODUCTS ${_byproducts}
+                COMMAND ${CMAKE_COMMAND} -DSLANGC=${SLANGC}
+                        -DSOURCE_DIR=${_lfs_user_shader_src} -DOUTPUT_DIR=${_lfs_user_shader_dir}
+                        -DREFLECTION_DIR=${_lfs_user_shader_reflection} ${_manifest_args}
+                        -P ${CMAKE_SOURCE_DIR}/cmake/GenerateUserShaderIR.cmake
+                DEPENDS ${_ir_files} ${SLANGC} ${CMAKE_SOURCE_DIR}/cmake/GenerateUserShaderIR.cmake
+                        ${_lfs_user_shader_src}/config.slang ${_lfs_user_shader_src}/reveal_noise.inc
+                        ${_lfs_user_shader_src}/lfs_helpers.slang ${_lfs_user_shader_src}/lfs.slang
+                COMMENT "Assembling ${_lfs_user_shader_package} manifest" VERBATIM)
+        add_custom_target(${_lfs_user_shader_package} DEPENDS ${_lfs_user_shader_dir}/manifest.json)
+endforeach()
+set(_lfs_user_shader_dir ${LFS_VULKAN_RASTERIZER_SPV_DIR}/user)
+add_dependencies(lfs_vulkan_rasterizer_shaders lfs_user_shader_ir)
+add_dependencies(lfs_shader_headers lfs_user_shader_ir) # lfs_shader_abi.hpp
+
+set_target_properties(lfs_user_shader_ir PROPERTIES
+        LFS_USER_SHADER_PACKAGE_DIR "${_lfs_user_shader_dir}"
+        LFS_USER_SHADER_TEST_PACKAGE_DIR "${_lfs_user_shader_test_dir}"
+        LFS_SPIRV_VAL "${_VULKAN_SPIRV_VAL}"
+)
