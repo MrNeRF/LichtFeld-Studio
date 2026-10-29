@@ -192,11 +192,13 @@ namespace lfs::training {
             return;
         }
 #if defined(__APPLE__)
+        // macOS fails a single pwrite of more than INT_MAX bytes with EINVAL.
+        constexpr std::size_t MAX_SPOOL_WRITE_BYTES = std::size_t{1} << 30;
         std::size_t completed = 0;
         while (completed < source.size()) {
             const auto written = ::pwrite(
                 ::fileno(impl_->file), source.data() + completed,
-                source.size() - completed,
+                std::min(source.size() - completed, MAX_SPOOL_WRITE_BYTES),
                 static_cast<off_t>(offset + completed));
             if (written < 0 && errno == EINTR) {
                 continue;
