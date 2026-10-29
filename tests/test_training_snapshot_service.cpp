@@ -240,6 +240,20 @@ namespace {
         std::optional<std::string> previous_;
     };
 
+    // Pins both host-memory readings of the snapshot gate. Its autosave reserve
+    // is a fifth of the total, so pinning only the available memory left these
+    // captures depending on the host's RAM: 64 GiB available fails above 320 GiB.
+    class PinnedHostMemory {
+    public:
+        explicit PinnedHostMemory(const std::uint64_t bytes)
+            : total_("LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES", std::to_string(bytes)),
+              available_("LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES", std::to_string(bytes)) {}
+
+    private:
+        ScopedEnvironmentVariable total_;
+        ScopedEnvironmentVariable available_;
+    };
+
     TEST(TrainingSnapshotSerializationTest, WritesDeterministicHeaderAndReadsLegacyPadding) {
         using namespace lfs::core;
         const auto tensor = Tensor::from_vector({1.f, 2.f, 3.f}, {3}, Device::CPU);
@@ -456,9 +470,7 @@ namespace {
 
     TEST_F(TrainingSnapshotServiceTest,
            CapturesByteExactLfkpAndOwnsPostResumeBytes) {
-        const ScopedEnvironmentVariable pinned_host_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
+        const PinnedHostMemory host_memory(64ull * 1024 * 1024 * 1024);
 
         constexpr std::size_t GAUSSIAN_COUNT = 8192;
         constexpr int SAVED_ITERATION = 137;
@@ -702,9 +714,7 @@ namespace {
 
     TEST_F(TrainingSnapshotServiceTest,
            RecyclesRetiredMetalStagingWithoutRevivingWeakOwners) {
-        const ScopedEnvironmentVariable available_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * MIB));
+        const PinnedHostMemory host_memory(64ull * 1024 * MIB);
         auto params = make_snapshot_test_params(129);
         auto model = make_snapshot_test_splat(129);
         lfs::training::MCMC strategy(*model);
@@ -800,9 +810,7 @@ namespace {
                 lfs::training::sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
             }
         } quant_guard;
-        const ScopedEnvironmentVariable available_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * MIB));
+        const PinnedHostMemory host_memory(64ull * 1024 * MIB);
         constexpr std::size_t count = 4099;
         auto params = make_snapshot_test_params(count, 3);
         auto model = make_snapshot_test_splat(count, 3);
@@ -985,9 +993,7 @@ namespace {
 
     TEST_F(TrainingSnapshotServiceTest,
            CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
-        const ScopedEnvironmentVariable pinned_host_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
+        const PinnedHostMemory host_memory(64ull * 1024 * 1024 * 1024);
 
         constexpr std::size_t GAUSSIAN_COUNT = 4096;
         constexpr int SAVED_ITERATION = 6;
@@ -1201,9 +1207,7 @@ namespace {
 
     TEST_F(TrainingSnapshotServiceTest,
            CapturesRepresentativeSceneValuesInSafePoint) {
-        const ScopedEnvironmentVariable pinned_host_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
+        const PinnedHostMemory host_memory(64ull * 1024 * 1024 * 1024);
 
         constexpr std::size_t GAUSSIAN_COUNT =
             1'300'000;
@@ -1353,9 +1357,7 @@ namespace {
     }
 
     TEST_F(TrainingSnapshotServiceTest, POPSpaControllerAndDedicatedAdamUseSnapshotStaging) {
-        const ScopedEnvironmentVariable host_memory(
-            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
-            std::to_string(64ull * 1024 * 1024 * 1024));
+        const PinnedHostMemory host_memory(64ull * 1024 * 1024 * 1024);
         auto model = make_snapshot_test_splat(4);
         auto params = make_snapshot_test_params(4);
         auto& p = params.optimization;
