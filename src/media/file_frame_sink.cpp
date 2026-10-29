@@ -11,6 +11,7 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace lfs::media {
@@ -132,9 +133,13 @@ namespace lfs::media {
                 return SinkResult::failure(packet.error());
             // TIFFSetField requires one contiguous packet and makes its own copy.
             // Keep this bounded assembly local to the synchronous write.
-            packet->reserve(packet->size() + embedded_metadata_->source_properties.size() + detail::imageXmpSuffix().size());
-            *packet += embedded_metadata_->source_properties;
-            *packet += detail::imageXmpSuffix();
+            try {
+                packet->reserve(packet->size() + embedded_metadata_->source_properties.size() + detail::imageXmpSuffix().size());
+                *packet += embedded_metadata_->source_properties;
+                *packet += detail::imageXmpSuffix();
+            } catch (const std::bad_alloc&) {
+                return sinkError(ErrorCode::ResourceExhausted, "TIFF XMP packet allocation failed");
+            }
             return ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
         }
         if (options_.format == FrameFileFormat::JXL)

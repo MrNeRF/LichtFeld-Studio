@@ -118,7 +118,11 @@ namespace {
         TemporaryTiff temporary;
         const auto source = samples(19, 17, 4, 16);
         const auto original = source;
-        const std::string packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><value>escaped &amp; retained</value></x:xmpmeta>";
+        const std::string packet =
+            "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+            "<rdf:Description rdf:about=\"\" xmlns:t=\"urn:lfs:test\"><t:value>escaped &amp; retained</t:value>"
+            "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
         lfs::core::AtomicFileOptions options{.overwrite = true, .durable = false, .create_directories = false};
         ASSERT_TRUE(codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, packet));
         const auto encoded = read_bytes(temporary.path);
