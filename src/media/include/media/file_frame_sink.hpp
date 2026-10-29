@@ -41,7 +41,7 @@ namespace lfs::media {
         // Extraction retains its source-frame numbering. Rendered output uses
         // the zero-based delivery ordinal without inventing a source frame.
         FrameFileNumbering numbering = FrameFileNumbering::SourceFrame;
-        // Required static source XMP for JPEG/PNG; JPEG also writes EXIF output geometry.
+        // Required static source XMP for JPEG/PNG/TIFF16; JPEG also writes EXIF output geometry.
         bool embed_source_metadata = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {

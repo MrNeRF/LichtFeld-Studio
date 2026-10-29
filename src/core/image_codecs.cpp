@@ -3646,7 +3646,7 @@ namespace lfs::core::image_codecs {
                                     int width, int height, int channels, int bits, std::size_t row_stride,
                                     const std::optional<std::string>& description, const TiffColorTags* color,
                                     const AtomicFileOptions* policy, bool* was_cancelled, std::string& error,
-                                    bool* allocation_failed = nullptr) {
+                                    bool* allocation_failed = nullptr, std::string_view xmp = {}) {
         const auto missing_tag_storage = [&]() {
             if (allocation_failed)
                 *allocation_failed = true;
@@ -3673,6 +3673,17 @@ namespace lfs::core::image_codecs {
             char* stored = nullptr;
             if (!TIFFGetField(tiff, TIFFTAG_IMAGEDESCRIPTION, &stored) || !stored ||
                 std::strcmp(stored, description->c_str()) != 0)
+                return missing_tag_storage();
+        }
+        if (!xmp.empty()) {
+            if (!TIFFSetField(tiff, TIFFTAG_XMLPACKET, static_cast<uint32_t>(xmp.size()), xmp.data())) {
+                error = "TIFF XMP write failed";
+                return false;
+            }
+            uint32_t count = 0;
+            void* stored = nullptr;
+            if (!TIFFGetField(tiff, TIFFTAG_XMLPACKET, &count, &stored) || !stored ||
+                count != xmp.size() || std::memcmp(stored, xmp.data(), xmp.size()) != 0)
                 return missing_tag_storage();
         }
         if (color && color->chromaticities) {
@@ -3757,7 +3768,7 @@ namespace lfs::core::image_codecs {
                                   const int bits = 8, std::size_t row_stride = 0,
                                   const std::optional<std::string>& description = std::nullopt,
                                   const AtomicFileOptions* policy = nullptr, bool* was_cancelled = nullptr,
-                                  const TiffColorTags* color = nullptr) {
+                                  const TiffColorTags* color = nullptr, std::string_view xmp = {}) {
         if (!data || width <= 0 || height <= 0 || channels < 1 || channels > 4 || (bits != 8 && bits != 16) ||
             static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / (bits / 8)) {
             error = "Unsupported TIFF layout";
@@ -3778,7 +3789,7 @@ namespace lfs::core::image_codecs {
         }
         const std::unique_ptr<TIFF, decltype(&close_tiff_writer)> owner(tiff, close_tiff_writer);
         return encode_tiff_samples(tiff, data, width, height, channels, bits, row_stride,
-                                   description, color, policy, was_cancelled, error);
+                                   description, color, policy, was_cancelled, error, nullptr, xmp);
     }
 
     bool write_tiff(const std::filesystem::path& path, const std::uint8_t* data,
@@ -3942,13 +3953,15 @@ namespace lfs::core::image_codecs {
     Status write_tiff_u16(const std::filesystem::path& path, std::span<const std::uint8_t> data,
                           int width, int height, int channels, std::size_t row_stride,
                           const std::optional<std::string>& description, const AtomicFileOptions& options,
-                          const TiffColorTags& color) {
+                          const TiffColorTags& color, std::string_view xmp) {
         const auto invalid = [](std::string message) -> Status {
             return Status::failure(make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()}));
         };
         if (width <= 0 || height <= 0 || channels < 1 || channels > 4 ||
             static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / 2)
             return invalid("Unsupported TIFF16 layout");
+        if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+            return invalid("Invalid TIFF16 XMP packet");
         const auto row_bytes = static_cast<std::size_t>(width) * channels * 2;
         if (row_stride < row_bytes || row_stride > std::numeric_limits<std::size_t>::max() / height ||
             data.size() < row_stride * (height - 1) + row_bytes)
@@ -3967,10 +3980,17 @@ namespace lfs::core::image_codecs {
             std::string error;
             bool cancelled = false;
             if (!write_tiff_stream(path, data.data(), width, height, channels, error, stream,
-                                   16, row_stride, description, &options, &cancelled, &color))
+                                   16, row_stride, description, &options, &cancelled, &color, xmp))
                 return Status::failure(make_error({.code = cancelled ? ErrorCode::Cancelled : ErrorCode::Unavailable,
                                                     .domain = ErrorDomain::IO, .detail = std::move(error), .detection = LFS_SOURCE_SITE_CURRENT()}));
             return {}; }, options);
+    }
+
+    Status write_tiff_u16(const std::filesystem::path& path, std::span<const std::uint8_t> data,
+                          int width, int height, int channels, std::size_t row_stride,
+                          const std::optional<std::string>& description, const AtomicFileOptions& options,
+                          const TiffColorTags& color) {
+        return write_tiff_u16(path, data, width, height, channels, row_stride, description, options, color, {});
     }
 
     static bool encode_image_u8(const std::filesystem::path& path, const std::uint8_t* data,

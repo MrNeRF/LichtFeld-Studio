@@ -1028,8 +1028,8 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (params.embed_source_metadata && (!params.preserve_source_metadata || (params.format != ImageFormat::JPG && params.format != ImageFormat::PNG))) {
-                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG or PNG file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
+            if (params.embed_source_metadata && (!params.preserve_source_metadata || (params.format != ImageFormat::JPG && params.format != ImageFormat::PNG && params.format != ImageFormat::TIFF16))) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG, PNG or TIFF16 file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
             }
@@ -2617,7 +2617,8 @@ namespace lfs::io {
                         nlohmann::json root;
                         root["schema_version"] = 2;
                         if (params.embed_source_metadata)
-                            root["embedded_metadata_policy"] = media::detail::embeddedMetadataPolicy(params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG);
+                            root["embedded_metadata_policy"] = media::detail::embeddedMetadataPolicy(params.format == ImageFormat::TIFF16 ? media::FrameFileFormat::TIFF16 : params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG
+                                                                                                                                                                                                               : media::FrameFileFormat::JPEG);
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);

@@ -234,12 +234,17 @@ namespace lfs::media {
         return {};
     }
     SinkResult ImageOutput::writeTiff16(const std::filesystem::path& target, const FrameView& frame, const Tiff16OutputOptions& options) {
+        return writeTiff16(target, frame, options, {});
+    }
+    SinkResult ImageOutput::writeTiff16(const std::filesystem::path& target, const FrameView& frame, const Tiff16OutputOptions& options, std::string_view xmp) {
         return outputBoundary([&]() -> SinkResult {
             const auto fail = [](ErrorCode code, std::string message) -> SinkResult {
                 return SinkResult::failure(outputError(code, std::move(message), 0, "TIFF", "ImageOutput.writeTiff16"));
             };
             if (auto valid = validateTiff16OutputOptions(options); !valid)
                 return valid;
+            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                return fail(ErrorCode::InvalidArgument, "Invalid TIFF16 XMP packet");
             const auto required = frame.requiredBytes();
             if (!required)
                 return SinkResult::failure(required.error());
@@ -279,7 +284,7 @@ namespace lfs::media {
             return core::image_codecs::write_tiff_u16(target, {reinterpret_cast<const uint8_t*>(pixels.data()), pixels.size() * 2},
                                                       layout.width, layout.height, int(channels), static_cast<size_t>(layout.width) * channels * 2,
                                                       description.dump(-1, ' ', true),
-                                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled}, tags);
+                                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled}, tags, xmp);
         },
                               "ImageOutput.writeTiff16");
     }

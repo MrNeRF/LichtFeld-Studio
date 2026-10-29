@@ -114,6 +114,75 @@ namespace {
                 }
     }
 
+    TEST(TiffMemory, ExplicitXmpPreservesSamplesAndRejectsInvalidPacketsBeforePublication) {
+        TemporaryTiff temporary;
+        const auto source = samples(19, 17, 4, 16);
+        const auto original = source;
+        const std::string packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><value>escaped &amp; retained</value></x:xmpmeta>";
+        lfs::core::AtomicFileOptions options{.overwrite = true, .durable = false, .create_directories = false};
+        ASSERT_TRUE(codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, packet));
+        const auto encoded = read_bytes(temporary.path);
+        {
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> file(TIFFOpen(temporary.path.string().c_str(), "r"), TIFFClose);
+            ASSERT_TRUE(file);
+            uint32_t count = 0;
+            void* stored = nullptr;
+            ASSERT_TRUE(TIFFGetField(file.get(), TIFFTAG_XMLPACKET, &count, &stored));
+            ASSERT_NE(stored, nullptr);
+            EXPECT_EQ(std::string_view(static_cast<const char*>(stored), count), packet);
+            uint16_t bits = 0, compression = 0, orientation = 0;
+            ASSERT_TRUE(TIFFGetField(file.get(), TIFFTAG_BITSPERSAMPLE, &bits));
+            ASSERT_TRUE(TIFFGetField(file.get(), TIFFTAG_COMPRESSION, &compression));
+            ASSERT_TRUE(TIFFGetField(file.get(), TIFFTAG_ORIENTATION, &orientation));
+            EXPECT_EQ(bits, 16);
+            EXPECT_EQ(compression, COMPRESSION_LZW);
+            EXPECT_EQ(orientation, ORIENTATION_TOPLEFT);
+        }
+        codec::Image decoded;
+        std::string error;
+        ASSERT_TRUE(codec::decode_memory(encoded.data(), encoded.size(), decoded, error)) << error;
+        EXPECT_EQ(decoded.data, source);
+        EXPECT_EQ(source, original);
+        for (const auto& invalid : {std::string("bad\0packet", 10), std::string(32 * 1024 * 1024 + 1, 'a')}) {
+            const auto refused = codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, invalid);
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(read_bytes(temporary.path), encoded);
+        }
+        options.overwrite = false;
+        const auto collision = codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, packet);
+        ASSERT_FALSE(collision);
+        EXPECT_EQ(collision.error().code(), lfs::ErrorCode::AlreadyExists);
+        EXPECT_EQ(read_bytes(temporary.path), encoded);
+        options.overwrite = true;
+        options.cancelled = [calls = 0]() mutable { return ++calls > 1; };
+        const auto cancelled = codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, packet);
+        ASSERT_FALSE(cancelled);
+        EXPECT_EQ(cancelled.error().code(), lfs::ErrorCode::Cancelled);
+        EXPECT_EQ(read_bytes(temporary.path), encoded);
+        options.cancelled = {};
+        // The inclusive packet boundary must work, not just reject limit + 1.
+        auto boundary_packet = packet;
+        boundary_packet.insert(boundary_packet.find("escaped"), 32 * 1024 * 1024 - packet.size(), 'a');
+        ASSERT_TRUE(codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, boundary_packet));
+        {
+            std::unique_ptr<TIFF, decltype(&TIFFClose)> file(TIFFOpen(temporary.path.string().c_str(), "r"), TIFFClose);
+            ASSERT_TRUE(file);
+            uint32_t count = 0;
+            void* stored = nullptr;
+            ASSERT_TRUE(TIFFGetField(file.get(), TIFFTAG_XMLPACKET, &count, &stored));
+            ASSERT_NE(stored, nullptr);
+            ASSERT_EQ(count, boundary_packet.size());
+            EXPECT_EQ(std::memcmp(stored, boundary_packet.data(), count), 0);
+        }
+        ASSERT_TRUE(codec::decode(temporary.path, decoded, error)) << error;
+        EXPECT_EQ(decoded.data, source);
+        ASSERT_TRUE(codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options));
+        const auto plain = read_bytes(temporary.path);
+        ASSERT_TRUE(codec::write_tiff_u16(temporary.path, source, 19, 17, 4, 19 * 8, {}, options, {}, {}));
+        EXPECT_EQ(read_bytes(temporary.path), plain);
+    }
+
     TEST(TiffMemory, LimitsSeekRewritesAliasingAndRecoveryPreservePreviousOutput) {
         for (int bits : {8, 16}) {
             const auto source = samples(31, 29, 4, bits);

@@ -161,6 +161,13 @@ namespace lfs::core::image_codecs {
                                                std::size_t row_stride, const std::optional<std::string>& description,
                                                const AtomicFileOptions& options, const TiffColorTags& color = {});
 
+    // Explicit UTF-8 XMP packet, consumed synchronously and copied by libtiff.
+    // Empty packet preserves the existing writer. Maximum 32 MiB; no NUL bytes.
+    LFS_IMAGE_CODECS_API Status write_tiff_u16(const std::filesystem::path& path,
+                                               std::span<const std::uint8_t> data, int width, int height, int channels,
+                                               std::size_t row_stride, const std::optional<std::string>& description,
+                                               const AtomicFileOptions& options, const TiffColorTags& color, std::string_view xmp);
+
     // Packed display bytes: preserve samples, PNG/TIFF/JXL/AVIF alpha and legacy codec
     // defaults. JPEG drops RGBA alpha; gray-alpha JPEG is unsupported. This is
     // shared atomic file service; legacy callers keep overwrite enabled and do

@@ -511,7 +511,7 @@ identified source/consumer rather than an invented camera declaration.
 
 ### Embedded image extraction metadata
 
-JPEG and PNG video extraction accept `FileFrameSinkOptions.embed_source_metadata` in C++ and
+JPEG, PNG and TIFF16 video extraction accept `FileFrameSinkOptions.embed_source_metadata` in C++ and
 Python, or `--embed-source-metadata` in the CLI. The default is false. Enabling it
 also preserves the static source catalog in `extraction_metadata.json`, using the
 same observation collected from the open demuxer. Other output formats reject
@@ -610,7 +610,7 @@ The core packed-byte writer has an explicit PNG-XMP overload. It borrows packet
 fragments for the synchronous call and accepts a caller-supplied UTF-8 XML packet;
 NUL-containing packets, oversized chunk payloads and non-PNG destinations reject
 before publication. Existing overloads remain available. The extraction facade
-constructs its ASCII-safe XML through the shared JPEG/PNG metadata writer.
+constructs its ASCII-safe XML through the shared image metadata writer.
 Atomic publication observes the combined request/file cancellation callback.
 Verified resume uses the same prepared packet, PNG-specific policy and source
 identity, plus per-frame clock/origin checks. Unsupported embedding formats fail
@@ -618,3 +618,34 @@ before output creation. Image and manifest publication retain their existing
 separate recovery boundaries.
 
 Carrier reference: [PNG specification, textual information](https://www.w3.org/TR/png/#11textinfo).
+
+
+### TIFF16 embedded source provenance
+
+The existing `embed_source_metadata` opt-in also accepts TIFF16 file extraction.
+The producer still supplies relative linear float samples to the existing SDR
+quantizer. The TIFF retains its UINT16 samples, LZW/strip policy, orientation,
+chromaticities, transfer tables and `lfsEncoding` description used by image loaders.
+Source provenance is stored separately in standard TIFF tag 700 (`XMLPacket`),
+using BYTE values and the `tiff16-static-source-xmp-v1` policy.
+
+The packet contains the same owned static source catalog and frame/output facts
+as PNG. It does not turn static video GPS into per-frame measurements or overwrite
+output geometry with source camera geometry. Raw fields, completeness flags and
+private source information follow the existing opt-in retention policy.
+
+The source properties are prepared once per session. libtiff requires contiguous
+XMP and copies the tag value: TIFF therefore assembles one bounded packet per
+write and libtiff retains its own copy until that writer closes. This is separate
+from quantized pixels, scanline storage and encoder working memory; the 32 MiB
+packet budget is not a global RAM ceiling. PNG continues to stream borrowed
+fragments, and JPEG retains its existing Standard/Extended packet rules.
+
+The core and `ImageOutput::writeTiff16` explicit-XMP overloads consume a UTF-8
+packet synchronously. They reject embedded NUL and packets above 32 MiB; XML
+well-formedness is the caller's responsibility. Existing overloads pass no XMP.
+The extraction consumer supplies escaped, read-only XMP. Failed/cancelled writes
+preserve the previous destination through the existing atomic file service.
+Resume binds the policy, source packet digest and frame timestamp origin before
+adopting existing images. Source metadata remains static and is observed once
+from the open source context.

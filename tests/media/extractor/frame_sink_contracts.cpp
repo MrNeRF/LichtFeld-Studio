@@ -95,9 +95,17 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
-    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG}) {
+    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG, FrameFileFormat::TIFF16}) {
+        const bool tiff = format == FrameFileFormat::TIFF16;
+        const std::string name = tiff ? "tiff-metadata" : format == FrameFileFormat::JPEG ? "jpeg-metadata"
+                                                                                          : "png-metadata";
+        const std::array<float, 6> linear{0.f, .1f, .2f, .3f, .4f, 1.f};
+        const FrameView float_view{{1, 2, 3 * sizeof(float), FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None, ColorUnits::Relative}},
+                                   file_view.info,
+                                   {reinterpret_cast<const uint8_t*>(linear.data()), sizeof(linear)}};
+        const auto& metadata_view = tiff ? float_view : file_view;
         FileFrameSinkOptions options;
-        options.output_directory = directory / (format == FrameFileFormat::JPEG ? "jpeg-metadata" : "png-metadata");
+        options.output_directory = directory / name;
         options.format = format;
         options.embed_source_metadata = true;
         FileFrameSink missing(options);
@@ -113,9 +121,10 @@ int runFrameSinkUnitContracts() {
         FileFrameSink writer(options);
         require(writer.begin(session).has_value(), "embedded image session begins");
         session = {};
-        require(writer.write(file_view).has_value(), "embedded image owns source snapshot after begin");
+        require(writer.write(metadata_view).has_value(), "embedded image owns source snapshot after begin");
         require(writer.complete({SinkOutcome::Completed, 1, {}}).has_value(), "embedded image session completes");
-        const auto path = options.output_directory / (format == FrameFileFormat::JPEG ? "frame_1.jpg" : "frame_1.png");
+        const auto path = options.output_directory / (tiff ? "frame_1.tif" : format == FrameFileFormat::JPEG ? "frame_1.jpg"
+                                                                                                             : "frame_1.png");
         require(lfs::core::image_codecs::decode(path, decoded, error) && decoded.width == 1 && decoded.height == 2,
                 "embedded metadata leaves the image independently decodable");
         const auto original_size = std::filesystem::file_size(path);
@@ -127,14 +136,16 @@ int runFrameSinkUnitContracts() {
         auto next_catalog = catalogContainerMetadata(std::move(next));
         require(next_catalog.has_value(), "construct second static source observation");
         session.source_metadata = std::make_shared<const SourceMetadataCatalog>(*next_catalog);
-        require(no_replace.begin(session).has_value() && !no_replace.write(file_view),
+        require(no_replace.begin(session).has_value() && !no_replace.write(metadata_view),
                 "embedded image honors atomic no-replace");
         no_replace.abort({SinkOutcome::Failed, 0, {}});
         require(std::filesystem::file_size(path) == original_size, "failed embedded write preserves destination");
         options.image_output.overwrite = true;
+        options.tiff16.overwrite = true;
         options.image_output.cancelled = [] { return true; };
+        options.tiff16.cancelled = options.image_output.cancelled;
         FileFrameSink cancelled(options);
-        require(cancelled.begin(session).has_value() && !cancelled.write(file_view),
+        require(cancelled.begin(session).has_value() && !cancelled.write(metadata_view),
                 "embedded image observes cancellation at atomic publication");
         cancelled.abort({SinkOutcome::Cancelled, 0, {}});
         require(std::filesystem::file_size(path) == original_size, "cancelled embedded write preserves destination");
@@ -146,12 +157,13 @@ int runFrameSinkUnitContracts() {
         auto oversized_catalog = catalogContainerMetadata(std::move(oversized));
         require(oversized_catalog.has_value(), "construct bounded but XML-expanding source observation");
         session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*oversized_catalog));
-        options.output_directory = directory / (format == FrameFileFormat::JPEG ? "jpeg-metadata-over-budget" : "png-metadata-over-budget");
+        options.output_directory = directory / (name + "-over-budget");
         options.image_output.cancelled = {};
+        options.tiff16.cancelled = {};
         FileFrameSink bounded(options);
         require(bounded.begin(session).has_value(),
                 "CPU metadata preparation waits for a CPU frame");
-        const auto refused = bounded.write(file_view);
+        const auto refused = bounded.write(metadata_view);
         require(!refused && refused.error().code() == lfs::ErrorCode::ResourceExhausted &&
                     std::filesystem::is_empty(options.output_directory),
                 "XML-expanded provenance is bounded before output publication");
@@ -159,7 +171,7 @@ int runFrameSinkUnitContracts() {
         session.source_metadata =
             std::make_shared<const SourceMetadataCatalog>(*next_catalog);
         require(bounded.begin(session).has_value() &&
-                    bounded.write(file_view).has_value() &&
+                    bounded.write(metadata_view).has_value() &&
                     bounded.complete({SinkOutcome::Completed, 1, {}}).has_value(),
                 "aborted lazy preparation does not retain the previous catalog");
     }

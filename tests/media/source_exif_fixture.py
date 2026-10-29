@@ -499,3 +499,47 @@ def write_heif_metadata(path, items=(), *, carrier="avif"):
     header = metadata(len(ftyp) + len(header) + 8)
     path.write_bytes(ftyp + header + box(b"mdat", b"".join(payload for _, payload in entries)))
     return ids
+
+
+def read_export_tiff(data):
+    """Independent classic-TIFF export oracle: raw tags/strips and optional XMP."""
+    if data[:4] not in (b"II\x2a\0", b"MM\0\x2a"):
+        raise AssertionError("not classic TIFF")
+    order = "<" if data[:2] == b"II" else ">"
+    def unpack(fmt, at):
+        size = struct.calcsize(order + fmt)
+        if at < 0 or at + size > len(data):
+            raise AssertionError("truncated TIFF field")
+        return struct.unpack_from(order + fmt, data, at)
+    offset, = unpack("I", 4)
+    count, = unpack("H", offset)
+    tags = {}
+    for i in range(count):
+        at = offset + 2 + 12 * i
+        tag, kind, size = unpack("HHI", at)
+        if tag in tags or kind not in (1, 2, 3, 4, 5, 7, 11, 12):
+            raise AssertionError("duplicate or unsupported export TIFF tag")
+        length = size * {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 11: 4, 12: 8}[kind]
+        start = at + 8 if length <= 4 else unpack("I", at + 8)[0]
+        if start + length > len(data):
+            raise AssertionError("truncated TIFF value")
+        tags[tag] = (kind, size, data[start:start + length])
+    if unpack("I", offset + 2 + 12 * count)[0]:
+        raise AssertionError("unexpected export TIFF page")
+    def numbers(tag):
+        kind, count, payload = tags[tag]
+        if kind not in (3, 4):
+            raise AssertionError("invalid numeric TIFF tag")
+        return struct.unpack(order + ("H" if kind == 3 else "I") * count, payload)
+    offsets, sizes = numbers(273), numbers(279)
+    if len(offsets) != len(sizes) or not sizes or any(n == 0 or p + n > len(data) for p, n in zip(offsets, sizes)):
+        raise AssertionError("invalid TIFF strips")
+    strips = tuple(data[p:p + n] for p, n in zip(offsets, sizes))
+    packet = None
+    if 700 in tags:
+        if tags[700][0] != 1:
+            raise AssertionError("XMP must use TIFF BYTE type")
+        packet = tags[700][2]
+    # Strip offsets can change when a metadata tag is added; values and compressed
+    # strip bytes, rather than absolute offsets, define the unchanged image.
+    return {tag: value for tag, value in tags.items() if tag not in (273, 700)}, strips, packet

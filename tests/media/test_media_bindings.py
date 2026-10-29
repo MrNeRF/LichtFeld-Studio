@@ -1178,8 +1178,66 @@ class MediaBindings(unittest.TestCase):
     def test_png_embedded_metadata_resume_policy_and_replay(self):
         self._check_embedded_metadata_resume(media.FrameFileFormat.PNG, ".png")
 
+    def test_tiff_embedded_metadata_preserves_color_strips_and_pixels(self):
+        import xml.etree.ElementTree as ET
+        request = self.metadata_request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        request.end_seconds = 0.01
+        request.geometry.clockwise_rotation = 90
+        plain = media.FileExtraction()
+        plain.files.format = media.FrameFileFormat.TIFF16
+        plain.files.output_directory = self.root / "plain-tiff-metadata"
+        self.assertGreater(media.MediaIngest.extract_files(request, plain).frames_accepted, 0)
+        output = media.FileExtraction()
+        output.files.format = media.FrameFileFormat.TIFF16
+        output.files.embed_source_metadata = True
+        output.files.output_directory = self.root / "embedded TIFF é 日本語"
+        self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+        manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "tiff16-static-source-xmp-v1")
+        paths = list(output.files.output_directory.glob("*.tif"))
+        self.assertTrue(paths)
+        for image in paths:
+            tags, strips, packet = source_exif_fixture.read_export_tiff(image.read_bytes())
+            plain_path = plain.files.output_directory / image.name
+            plain_tags, plain_strips, absent = source_exif_fixture.read_export_tiff(plain_path.read_bytes())
+            self.assertIsNone(absent)
+            self.assertEqual(tags, plain_tags)
+            self.assertEqual(strips, plain_strips)
+            self.assertTrue(packet.endswith(b'<?xpacket end="r"?>'))
+            self.assertNotIn(b"\0", packet)
+            tree = ET.fromstring(packet)
+            facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in tree.iter()
+                     if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+            self.assertEqual(facts["MetadataPolicy"], "tiff16-static-source-xmp-v1")
+            self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), ("32", "64"))
+            self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+            self.assertEqual(facts["TimestampOrigin"], "best_effort")
+            self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+            observed = json.loads(media.MediaIngest.source_metadata_json(image))
+            self.assertTrue(observed["success"])
+            blocks = observed["metadata"]["image_xmp"]["blocks"]
+            self.assertEqual([bytes.fromhex(block["bytes"]) for block in blocks], [packet])
+            pixels = []
+            for path in (plain_path, image):
+                pixels.append(subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                              "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb48le", "-"], timeout=30))
+            self.assertEqual(len(pixels[0]), 32 * 64 * 6)
+            self.assertEqual(pixels[0], pixels[1])
+            with self.assertRaises(AssertionError):
+                source_exif_fixture.read_export_tiff(image.read_bytes()[:12])
+
+    def test_tiff_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.TIFF16, ".tif")
+
     def _check_embedded_metadata_resume(self, file_format, extension):
         request = self.metadata_request()
+        if file_format == media.FrameFileFormat.TIFF16:
+            request.output_format = media.FramePixelFormat.RGBFloat32
+            request.input_color.transfer = media.ColorTransfer.Linear
+            request.input_color.primaries = media.ColorPrimaries.Bt709
         for enabled in (False, True):
             output = self.resume_files(self.root / f"metadata-resume-{extension[1:]}-{enabled}")
             output.files.format = file_format
@@ -1269,8 +1327,8 @@ class MediaBindings(unittest.TestCase):
     def test_embedding_rejects_other_formats_before_output(self):
         output = media.FileExtraction()
         output.files.embed_source_metadata = True
-        output.files.format = media.FrameFileFormat.TIFF16
-        output.files.output_directory = self.root / "invalid-embedded-tiff"
+        output.files.format = media.FrameFileFormat.EXR
+        output.files.output_directory = self.root / "invalid-embedded-exr"
         with self.assertRaises(MEDIA_ERROR):
             media.MediaIngest.extract_files(self.request(), output)
         self.assertFalse(output.files.output_directory.exists())
