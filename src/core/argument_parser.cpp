@@ -104,6 +104,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--keep-all-checkpoints", "keep_all_checkpoints", Bool},
+            OptimizationCliBinding{"--no-keep-all-checkpoints", "keep_all_checkpoints", Bool, true},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-flip", "eval_flip", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
@@ -958,6 +960,8 @@ namespace {
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
+            ::args::Flag keep_all_checkpoints(output_group, "enabled", lfs::core::args::optimization_cli_help("--keep-all-checkpoints"), {"keep-all-checkpoints"});
+            ::args::Flag no_keep_all_checkpoints(output_group, "disabled", "Replace the checkpoint superseded by each new training save, preserving existing history. Overrides the saved project setting.", {"no-keep-all-checkpoints"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
             ::args::ValueFlag<uint32_t> save_project_at_iteration(
@@ -1072,6 +1076,10 @@ namespace {
                 }
                 return false;
             };
+
+            if (keep_all_checkpoints && no_keep_all_checkpoints) {
+                return std::unexpected("--keep-all-checkpoints and --no-keep-all-checkpoints are mutually exclusive");
+            }
 
             if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
                 return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
@@ -1679,6 +1687,8 @@ namespace {
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
                                         mcp_port_val = per_launch_mcp_port,
                                         no_save_eval_images_flag = bool(no_save_eval_images),
+                                        keep_all_checkpoints_flag = bool(keep_all_checkpoints),
+                                        no_keep_all_checkpoints_flag = bool(no_keep_all_checkpoints),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
                                         bg_image_path_val = cli_option_present({"--bg-image-path"}) ? std::optional<std::string>(::args::get(bg_image_path)) : std::optional<std::string>(),
@@ -1869,6 +1879,10 @@ namespace {
                 setVal(debug_python_port_val, opt.debug_python_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
+                if (keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = true;
+                if (no_keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = false;
                 if (bg_mode_val) {
                     opt.bg_mode = *bg_mode_val;
                     opt.bg_modulation = *bg_mode_val == lfs::core::param::BackgroundMode::Modulation;
@@ -1990,6 +2004,7 @@ namespace {
                 note_opt("debug_python", debug_python_flag);
                 note_opt("debug_python_port", debug_python_port_val.has_value());
                 note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("keep_all_checkpoints", keep_all_checkpoints_flag || no_keep_all_checkpoints_flag);
                 note_opt("bg_mode", bg_mode_val.has_value());
                 note_opt("bg_modulation", bg_mode_val.has_value());
                 note_opt("bg_color", bg_color_val.has_value());

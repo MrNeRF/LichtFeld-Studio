@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "거리는 0보다 커야 합니다.",
     "status_no_surface": "커서 아래에 표면이 없습니다.",
     "status_no_target": "크기를 조절할 변환 가능한 대상이 없습니다."
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

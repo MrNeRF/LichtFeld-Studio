@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "距離はゼロより大きい必要があります。",
     "status_no_surface": "カーソル下にサーフェスがありません。",
     "status_no_target": "スケールできる対象がありません。"
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

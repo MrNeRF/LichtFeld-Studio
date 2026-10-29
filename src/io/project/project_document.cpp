@@ -2841,50 +2841,8 @@ namespace lfs::io::project {
                 "must share one non-null identity; payload must be non-empty",
                 "CKPT.instance_uuid");
         }
-        const auto bound = bound_checkpoint_uuid();
-        if (!bound) {
-            return lfs::Result<void>::failure(
-                std::move(bound).error());
-        }
-        const auto bound_uuid =
-            *bound ? **bound : lfs::core::Uuid{};
-        impl_->checkpoints.insert_or_assign(
-            instance_uuid, std::move(payload));
+        impl_->checkpoints.insert_or_assign(instance_uuid, std::move(payload));
         impl_->mark(FOURCC_CKPT, instance_uuid);
-
-        std::vector<std::pair<lfs::core::Uuid, int>> historical;
-        historical.reserve(impl_->checkpoints.size());
-        for (const auto& [uuid, checkpoint] : impl_->checkpoints) {
-            if (!bound_uuid.is_nil() && uuid == bound_uuid) {
-                continue;
-            }
-            int iteration = std::numeric_limits<int>::max();
-            std::array<std::byte, sizeof(lfs::core::CheckpointHeader)> prefix{};
-            if (auto peeked = checkpoint.peek_prefix(prefix); peeked) {
-                SpanStreambuf buffer(std::span<const std::byte>(
-                    prefix.data(), prefix.size()));
-                std::istream stream(&buffer);
-                if (auto header = lfs::core::load_checkpoint_header(
-                        stream, checkpoint.size());
-                    header && header->iteration >= 0) {
-                    iteration = header->iteration;
-                }
-            }
-            historical.emplace_back(uuid, iteration);
-        }
-        std::ranges::sort(historical, [](const auto& lhs, const auto& rhs) {
-            if (lhs.second != rhs.second) {
-                return lhs.second < rhs.second;
-            }
-            return lhs.first.to_string() < rhs.first.to_string();
-        });
-        while (historical.size() > CHECKPOINT_HISTORY_LIMIT) {
-            const auto evicted = historical.front().first;
-            historical.erase(historical.begin());
-            if (impl_->checkpoints.erase(evicted) != 0) {
-                impl_->mark(FOURCC_CKPT, evicted);
-            }
-        }
         return {};
     }
 
@@ -3786,11 +3744,10 @@ namespace lfs::io::project {
     ProjectDocument::save(const std::filesystem::path& path,
                           const ProjectDocumentSaveOptions& options) {
         auto saved = save_impl(path, options, nullptr);
-        if (!saved && saved.error().code() == lfs::ErrorCode::NotFound &&
-            impl_->source_path && impl_->source_reader) {
+        if (!saved && impl_->source_path && impl_->source_reader) {
             std::error_code error;
             if (!detail::project_fs::exists(*impl_->source_path, error) && !error) {
-                return save_as(path, options);
+                return save_impl(path, options, nullptr);
             }
         }
         return saved;
@@ -4502,6 +4459,138 @@ namespace lfs::io::project {
                 ChunkKey{.fourcc = FOURCC_SFMO, .instance_uuid = uuid});
         }
 
+        std::optional<ChunkKey> superseded;
+        bool keep_all = options.keep_all_checkpoints.value_or(false);
+        if (!options.keep_all_checkpoints) {
+            const auto strategy = impl_->parameters.dom().get<std::string>("active_strategy");
+            if (strategy) {
+                auto preference = impl_->parameters.checkpoint_retention(*strategy);
+                if (!preference)
+                    return std::move(preference).error();
+                keep_all = *preference;
+            }
+        }
+        // Only a newly captured checkpoint replaces the durable training binding.
+        // A rebind, a metadata save, or a different model preserves all history.
+        if (!is_autosave && !keep_all && impl_->source_reader && *bound_checkpoint &&
+            !impl_->source_reader->find(FOURCC_CKPT, **bound_checkpoint)) {
+            const auto* old_scene = impl_->source_reader->find(scene_key);
+            if (old_scene) {
+                auto bytes = impl_->source_reader->read_chunk(*old_scene);
+                if (!bytes)
+                    return std::move(bytes).error();
+                auto scene = SceneGraphChapter::from_bytes(*bytes);
+                if (!scene)
+                    return std::move(scene).error();
+                auto old_model = scene->training_model_uuid();
+                auto new_model = impl_->scene_graph.training_model_uuid();
+                auto old_nodes = scene->nodes();
+                auto new_nodes = impl_->scene_graph.nodes();
+                if (!old_model)
+                    return std::move(old_model).error();
+                if (!new_model)
+                    return std::move(new_model).error();
+                if (!old_nodes)
+                    return std::move(old_nodes).error();
+                if (!new_nodes)
+                    return std::move(new_nodes).error();
+                if (*old_model && *old_model == *new_model) {
+                    for (const auto& node : *old_nodes) {
+                        if (node.uuid != **old_model || !node.payload || node.payload->fourcc != "CKPT")
+                            continue;
+                        const ChunkKey old_key{FOURCC_CKPT, node.payload->instance_uuid};
+                        const bool still_bound = std::ranges::any_of(*new_nodes, [&](const auto& current) {
+                            return current.payload && current.payload->fourcc == "CKPT" &&
+                                   current.payload->instance_uuid == old_key.instance_uuid;
+                        });
+                        if (!still_bound && impl_->source_reader->find(old_key)) {
+                            superseded = old_key;
+                            desired.erase(old_key);
+                        }
+                    }
+                }
+            }
+        }
+        std::error_code source_error;
+        const bool missing_source = !is_autosave && impl_->source_path &&
+                                    !detail::project_fs::exists(*normalized, source_error);
+        if (source_error)
+            return fail<ProjectDocumentSaveReport>(lfs::ErrorCode::Unavailable,
+                                                   "The project destination could not be inspected.", source_error.message(), "project.path");
+        bool rewrite = missing_source;
+        std::uint64_t resulting_live = 0;
+        std::uint64_t superseded_bytes = 0;
+        std::map<ChunkKey, PreparedChunk, ChunkKeyLess> prepared;
+        if (!is_autosave && !keep_all && impl_->source_reader) {
+            // Prepare once, then publish these exact compressed bytes in either
+            // mode. Counting logical tensor bytes would choose the wrong mode.
+            for (const auto& [key, chunk] : encoded) {
+                auto value = ProjectWriter::prepare_chunk(chunk.bytes, chunk.options);
+                if (!value)
+                    return std::move(value).error();
+                prepared.emplace(key, std::move(*value));
+            }
+            const auto prepare_lazy = [&](Fourcc fourcc, const auto& payloads) -> lfs::Result<void> {
+                for (const auto& [uuid, payload] : payloads) {
+                    const ChunkKey key{fourcc, uuid};
+                    if (!desired.contains(key) || !payload.impl_->owned)
+                        continue;
+                    auto value = ProjectWriter::prepare_chunk(*payload.impl_->owned,
+                                                              lazy_binary_options(fourcc, payload.size()));
+                    if (!value)
+                        return lfs::Result<void>::failure(std::move(value).error());
+                    prepared.emplace(key, std::move(*value));
+                }
+                return {};
+            };
+            if (auto r = prepare_lazy(FOURCC_CKPT, impl_->checkpoints); !r)
+                return std::move(r).error();
+            if (auto r = prepare_lazy(FOURCC_PPIS, impl_->ppisp_payloads); !r)
+                return std::move(r).error();
+            if (auto r = prepare_lazy(FOURCC_DSRC, impl_->dataset_sources); !r)
+                return std::move(r).error();
+            if (auto r = prepare_lazy(FOURCC_SFMO, impl_->sfm_observations); !r)
+                return std::move(r).error();
+            auto stats = project_storage_stats(*impl_->source_reader);
+            if (!stats)
+                return std::move(stats).error();
+            resulting_live = APPEND_REGION_OFFSET + COMMIT_RECORD_BYTES + INDEX_HEADER_BYTES;
+            const auto count = [&](std::uint64_t bytes) -> lfs::Result<void> {
+                auto sum = checked_add(resulting_live, bytes, "save.resulting_live_bytes");
+                if (!sum)
+                    return lfs::Result<void>::failure(std::move(sum).error());
+                resulting_live = *sum;
+                return {};
+            };
+            const auto occupied = [](const ChunkInfo& row) {
+                const auto trailing = (row.flags & TENSOR_PAYLOAD) != 0
+                                          ? (TENSOR_PAYLOAD_ALIGNMENT - (row.payload_offset + row.stored_bytes) % TENSOR_PAYLOAD_ALIGNMENT) % TENSOR_PAYLOAD_ALIGNMENT
+                                          : 0;
+                return row.payload_offset - row.header_offset + row.stored_bytes + trailing +
+                       (row.block_crc_table ? BLOCK_CRC_HEADER_BYTES + row.block_crc_table->entries.size() * sizeof(std::uint32_t) : 0);
+            };
+            if (superseded)
+                superseded_bytes = occupied(*impl_->source_reader->find(*superseded));
+            for (const auto& row : impl_->source_reader->chunks()) {
+                if (!row.is_live() || prepared.contains(row.key) ||
+                    ((is_project_managed_fourcc(row.key.fourcc) || is_lazy_binary_fourcc(row.key.fourcc)) && !desired.contains(row.key)) ||
+                    (row.key.fourcc == FOURCC_THMB && (options.remove_preview || !preview_png.empty())))
+                    continue;
+                if (auto r = count(occupied(row) + INDEX_ROW_BYTES); !r)
+                    return std::move(r).error();
+            }
+            for (const auto& [key, value] : prepared) {
+                (void)key;
+                if (auto r = count(value.occupied_bytes() + INDEX_ROW_BYTES); !r)
+                    return std::move(r).error();
+            }
+            if (!preview_png.empty()) {
+                if (auto r = count(preview_png.size() + CHUNK_HEADER_BYTES + INDEX_ROW_BYTES); !r)
+                    return std::move(r).error();
+            }
+            rewrite = rewrite || checkpoint_rewrite_required(stats->dead_bytes, superseded_bytes, resulting_live);
+        }
+
         auto planned_bytes = preflight_bytes(encoded);
         if (!planned_bytes) {
             return std::move(planned_bytes).error();
@@ -4598,7 +4687,7 @@ namespace lfs::io::project {
                 return std::move(result).error();
             }
             writer.emplace(std::move(*result));
-        } else if (impl_->source_path) {
+        } else if (impl_->source_path && !rewrite) {
             auto result = ProjectWriter::append(
                 *normalized,
                 AppendOptions{
@@ -4606,12 +4695,13 @@ namespace lfs::io::project {
                         impl_->source_reader->reader_options(),
                     .index_compression = options.index_compression,
                     .disk_reserve_bytes = options.disk_reserve_bytes,
-                    .boundary_observer = {},
+                    .boundary_observer = options.boundary_observer,
                     .writer_lock_lease =
                         options.writer_lock_lease,
                     .writer_lock_wait =
                         options.writer_lock_wait,
                     .expected_project_uuid = impl_->project_uuid,
+                    .expected_commit_uuid = impl_->source_reader->commit().commit_uuid,
                 });
             if (!result) {
                 return std::move(result).error();
@@ -4634,16 +4724,27 @@ namespace lfs::io::project {
                     .creation_time_unix_ns = *created,
                     .index_compression = options.index_compression,
                     .disk_reserve_bytes = options.disk_reserve_bytes,
-                    .boundary_observer = {},
+                    .boundary_observer = options.boundary_observer,
                     .writer_lock_anchor =
                         std::nullopt,
                     .writer_lock_lease =
                         options.writer_lock_lease,
+                    .expected_project_uuid = impl_->source_reader || !options.allow_existing_destination_replacement ? impl_->project_uuid : lfs::core::Uuid{},
+                    .expected_commit_uuid = impl_->source_reader ? impl_->source_reader->commit().commit_uuid : lfs::core::Uuid{},
+                    .writer_lock_wait = options.writer_lock_wait,
+                    .compatibility = impl_->source_reader ? impl_->source_reader->reader_options() : ReaderOptions{},
                 });
             if (!result) {
                 return std::move(result).error();
             }
             writer.emplace(std::move(*result));
+        }
+        if (rewrite && impl_->source_reader) {
+            const auto& source_commit = impl_->source_reader->commit();
+            commit.min_reader_version = std::max(commit.min_reader_version, source_commit.min_reader_version);
+            commit.min_safe_writer_version = std::max(commit.min_safe_writer_version, source_commit.min_safe_writer_version);
+            commit.extra_reader_capabilities |= source_commit.required_reader_capabilities;
+            commit.extra_writer_capabilities |= source_commit.required_writer_capabilities;
         }
         if (auto result = writer->plan_commit(commit); !result) {
             return std::move(result).error();
@@ -4724,12 +4825,27 @@ namespace lfs::io::project {
                 return std::move(counted).error();
             }
         }
+        if (rewrite && impl_->source_reader) {
+            // Count all retained compressed ranges, including embedded assets.
+            for (const auto& row : impl_->source_reader->chunks()) {
+                if (!row.is_live() || encoded.contains(row.key) || prepared.contains(row.key) ||
+                    ((is_project_managed_fourcc(row.key.fourcc) || is_lazy_binary_fourcc(row.key.fourcc)) && !desired.contains(row.key)))
+                    continue;
+                auto sum = checked_add(*planned_bytes, row.stored_bytes, "save.rewrite_bytes");
+                if (!sum)
+                    return std::move(sum).error();
+                *planned_bytes = *sum;
+            }
+        }
         if (auto result = writer->preflight(*planned_bytes); !result) {
             return std::move(result).error();
         }
         writer_setup_finished = std::chrono::steady_clock::now();
 
         ProjectDocumentSaveReport report;
+        report.rewrote_container = rewrite;
+        report.resulting_live_bytes = resulting_live;
+        report.superseded_checkpoint_bytes = superseded_bytes;
         std::optional<ChunkKey> rewritten_preview_key;
         if (!preview_png.empty()) {
             // A restored save can retain thumbnail chunks without a published
@@ -4791,6 +4907,8 @@ namespace lfs::io::project {
                 continue;
             }
             if (options.remove_preview && key.fourcc == FOURCC_THMB) {
+                if (rewrite)
+                    continue;
                 if (auto removed = writer->erase(key); !removed) {
                     return std::move(removed).error();
                 }
@@ -4811,6 +4929,8 @@ namespace lfs::io::project {
                 } else if (is_autosave) {
                     result = add_autosave_base_reference(
                         source.info);
+                } else if (rewrite) {
+                    result = writer->copy_chunk_verbatim(*impl_->source_reader, source.info);
                 } else {
                     result = source.opaque
                                  ? source.carry_opaque(*writer)
@@ -4821,6 +4941,8 @@ namespace lfs::io::project {
                 }
                 if (source.opaque && !is_autosave) {
                     ++report.opaque_chunks_carried;
+                } else if (rewrite) {
+                    ++report.rewritten_chunks;
                 } else {
                     ++report.reused_chunks;
                 }
@@ -4846,6 +4968,10 @@ namespace lfs::io::project {
                 }
                 ++report.erased_chunks;
             } else if (is_project_managed_fourcc(key.fourcc)) {
+                if (rewrite) {
+                    ++report.erased_chunks;
+                    continue;
+                }
                 if (auto result = writer->erase(key); !result) {
                     return std::move(result).error();
                 }
@@ -4859,7 +4985,7 @@ namespace lfs::io::project {
                 }
                 ++report.opaque_chunks_carried;
             } else {
-                if (auto result = source.carry_opaque(*writer);
+                if (auto result = rewrite ? writer->copy_chunk_verbatim(*impl_->source_reader, source.info) : source.carry_opaque(*writer);
                     !result) {
                     return std::move(result).error();
                 }
@@ -4868,6 +4994,10 @@ namespace lfs::io::project {
         }
         for (const auto& key : impl_->lazy_source_keys) {
             if (desired.contains(key)) {
+                continue;
+            }
+            if (rewrite) {
+                ++report.erased_chunks;
                 continue;
             }
             if (is_autosave) {
@@ -4928,26 +5058,29 @@ namespace lfs::io::project {
             [&](const Fourcc fourcc,
                 const auto& payloads) -> lfs::Result<void> {
             for (const auto& [uuid, payload] : payloads) {
+                const ChunkKey key{fourcc, uuid};
+                if (!desired.contains(key))
+                    continue;
                 if (payload.is_clean_reference()) {
                     assert(payload.impl_->proof);
                     auto result =
                         is_autosave
                             ? add_autosave_base_reference(
                                   *payload.impl_->source)
-                            : writer->reuse_if_clean(
-                                  *payload.impl_->proof,
-                                  payload.impl_->proof
-                                      ->mutation_epoch());
+                        : rewrite ? writer->copy_chunk_verbatim(*payload.impl_->reader, *payload.impl_->source)
+                                  : writer->reuse_if_clean(
+                                        *payload.impl_->proof,
+                                        payload.impl_->proof
+                                            ->mutation_epoch());
                     if (!result) {
                         return result;
                     }
-                    ++report.reused_chunks;
+                    if (rewrite)
+                        ++report.rewritten_chunks;
+                    else
+                        ++report.reused_chunks;
                     continue;
                 }
-                const ChunkKey key{
-                    .fourcc = fourcc,
-                    .instance_uuid = uuid,
-                };
                 // Owned staged bytes go through write_chunk (container zstd;
                 // begin_chunk is Stored-streaming only). File-backed sources
                 // without a clean proof are copied stored-byte-verbatim so a
@@ -4959,8 +5092,9 @@ namespace lfs::io::project {
                 if (payload.impl_->owned) {
                     const auto options =
                         lazy_binary_options(fourcc, payload.size());
-                    if (auto written = writer->write_chunk(
-                            key, *payload.impl_->owned, options);
+                    if (auto written = prepared.contains(key)
+                                           ? writer->write_prepared_chunk(key, prepared.at(key))
+                                           : writer->write_chunk(key, *payload.impl_->owned, options);
                         !written) {
                         return written;
                     }
@@ -5019,7 +5153,8 @@ namespace lfs::io::project {
         }
         for (const auto& [key, chunk] : encoded) {
             if (auto result =
-                    writer->write_chunk(key, chunk.bytes, chunk.options);
+                    prepared.contains(key) ? writer->write_prepared_chunk(key, prepared.at(key))
+                                           : writer->write_chunk(key, chunk.bytes, chunk.options);
                 !result) {
                 return std::move(result).error();
             }

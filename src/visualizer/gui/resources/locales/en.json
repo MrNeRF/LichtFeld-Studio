@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "Distance must be greater than zero.",
     "status_no_surface": "No surface under the cursor.",
     "status_no_target": "No transformable target to scale."
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

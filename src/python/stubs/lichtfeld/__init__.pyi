@@ -2726,6 +2726,15 @@ class OptimizationParams:
     def save_steps(self) -> list[int]:
         """List of iterations at which to save the project (project.licht)"""
 
+    @property
+    def keep_all_checkpoints(self) -> bool:
+        """
+        Keep every training checkpoint; otherwise replace the superseded checkpoint and preserve existing history
+        """
+
+    @keep_all_checkpoints.setter
+    def keep_all_checkpoints(self, arg: bool, /) -> None: ...
+
     def add_save_step(self, step: int) -> None:
         """Add a save step (ignored if duplicate)"""
 

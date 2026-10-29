@@ -555,6 +555,10 @@ namespace lfs::io::project {
         std::optional<std::filesystem::path> writer_lock_anchor = std::nullopt;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        lfs::core::Uuid expected_project_uuid = {};
+        lfs::core::Uuid expected_commit_uuid = {};
+        std::chrono::milliseconds writer_lock_wait{0};
+        ReaderOptions compatibility = {};
     };
 
     struct AppendOptions {
@@ -577,6 +581,31 @@ namespace lfs::io::project {
         bool tensor_payload = false;
         bool block_crcs = false;
         std::optional<std::uint64_t> expected_stream_bytes = std::nullopt;
+    };
+
+    // Compress once before choosing a publication strategy. The immutable stored
+    // representation is written without another compression or payload copy; a
+    // STORED payload is referenced, so it must outlive the prepared chunk.
+    class LFS_IO_API PreparedChunk {
+    public:
+        PreparedChunk(PreparedChunk&&) noexcept = default;
+        PreparedChunk& operator=(PreparedChunk&&) noexcept = default;
+        [[nodiscard]] std::uint64_t stored_bytes() const noexcept { return stored_.size(); }
+        // Conservative layout estimate, including tensor alignment and CRC tables.
+        [[nodiscard]] std::uint64_t occupied_bytes() const noexcept {
+            const bool blocks = options_.block_crcs || stored_bytes() >= BLOCK_CRC_REQUIRED_AT;
+            return stored_bytes() + CHUNK_HEADER_BYTES +
+                   (options_.tensor_payload ? 2 * (TENSOR_PAYLOAD_ALIGNMENT - 1) : CHUNK_ALIGNMENT - 1) +
+                   (blocks ? BLOCK_CRC_HEADER_BYTES + ((stored_bytes() + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES) * sizeof(std::uint32_t) : 0);
+        }
+
+    private:
+        friend class ProjectWriter;
+        PreparedChunk() = default;
+        std::unique_ptr<std::byte[]> bytes_;
+        std::span<const std::byte> stored_;
+        std::uint64_t logical_bytes_ = 0;
+        ChunkWriteOptions options_;
     };
 
     struct CommitOptions {
@@ -659,6 +688,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         write_chunk(const ChunkKey& key, std::span<const std::byte> payload,
                     const ChunkWriteOptions& options = {});
+        [[nodiscard]] static lfs::Result<PreparedChunk>
+        prepare_chunk(std::span<const std::byte> payload,
+                      const ChunkWriteOptions& options = {});
+        [[nodiscard]] lfs::Result<void>
+        write_prepared_chunk(const ChunkKey& key, const PreparedChunk& payload);
         [[nodiscard]] lfs::Result<void>
         set_preview(std::span<const std::byte> png_bytes);
         [[nodiscard]] lfs::Result<std::ostream*>

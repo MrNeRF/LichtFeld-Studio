@@ -585,6 +585,8 @@ namespace lfs::io::project {
         [[nodiscard]] std::vector<std::byte> to_bytes() const { return dom_.to_bytes(); }
 
         [[nodiscard]] lfs::Result<ParameterManagerSnapshot> snapshot() const;
+        [[nodiscard]] lfs::Result<bool> checkpoint_retention(
+            std::string_view strategy, bool fallback = false) const;
         [[nodiscard]] lfs::Result<void>
         set_snapshot(const ParameterManagerSnapshot& value);
         [[nodiscard]] lfs::Result<std::optional<EmbeddedDatasetManifest>>

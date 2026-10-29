@@ -1475,6 +1475,11 @@ namespace lfs::python {
                     return self.params().save_steps;
                 },
                 "List of iterations at which to save the project (project.licht)")
+            .def_prop_rw(
+                "keep_all_checkpoints",
+                [](PyOptimizationParams& self) { return self.params().keep_all_checkpoints; },
+                [](PyOptimizationParams&, bool value) { modify_params([value](auto& p) { p.keep_all_checkpoints = value; }); },
+                "Keep every training checkpoint; otherwise replace the superseded checkpoint and preserve existing history")
             .def(
                 "add_save_step",
                 [](PyOptimizationParams&, size_t step) {

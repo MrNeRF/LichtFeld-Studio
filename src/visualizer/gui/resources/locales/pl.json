@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "Odległość musi być większa od zera.",
     "status_no_surface": "Brak powierzchni pod kursorem.",
     "status_no_target": "Brak obiektu do przeskalowania."
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

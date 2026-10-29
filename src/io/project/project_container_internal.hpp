@@ -189,13 +189,10 @@ namespace lfs::io::project::detail {
     [[nodiscard]] lfs::Result<void>
     sync_parent_directory(const std::filesystem::path& path);
 #ifndef _WIN32
-    // For filesystems without hard links (exFAT, FAT): moves the prior project to `backup` before
-    // publishing, as ReplaceFileW does. A crash between the two renames leaves the prior project at
-    // `backup`, which recovery quarantines instead of deleting.
+    // A single replacing rename preserves the destination across process termination.
     [[nodiscard]] lfs::Result<AtomicReplaceState>
-    replace_with_rename_backup(const std::filesystem::path& replacement,
-                               const std::filesystem::path& destination,
-                               const std::filesystem::path& backup);
+    replace_without_backup(const std::filesystem::path& replacement,
+                           const std::filesystem::path& destination);
 #endif
     [[nodiscard]] lfs::Result<AtomicReplaceState>
     atomic_replace(const std::filesystem::path& replacement,

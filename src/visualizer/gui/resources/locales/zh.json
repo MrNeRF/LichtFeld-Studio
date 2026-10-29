@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "距离必须大于零。",
     "status_no_surface": "光标下没有表面。",
     "status_no_target": "没有可缩放的可变换目标。"
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

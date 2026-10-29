@@ -3699,5 +3699,7 @@
     "status_invalid_distance": "Afstand moet groter zijn dan nul.",
     "status_no_surface": "Geen oppervlak onder de cursor.",
     "status_no_target": "Geen transformeerbaar doel om te schalen."
-  }
+  },
+  "training.save.keep_all_checkpoints": "Keep all checkpoints",
+  "training.tooltip.keep_all_checkpoints": "Keep every saved training checkpoint. When off, a new checkpoint replaces the one it supersedes. Existing checkpoint history is preserved. Keeping all checkpoints increases project size."
 }

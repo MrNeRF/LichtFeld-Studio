@@ -1630,6 +1630,17 @@ namespace lfs::training {
                 restored ? restored->error()
                          : "CKPT visitor did not run"));
         }
+        // A metadata save can change PRMS after the last CKPT was captured.
+        // Explicit command-line overrides still take precedence on resume.
+        auto resumed_params = trainer->getParams();
+        if (!params.overrides.has_optimization_key("keep_all_checkpoints")) {
+            auto retention = document.parameters().checkpoint_retention(
+                resumed_params.optimization.strategy, resumed_params.optimization.keep_all_checkpoints);
+            if (!retention)
+                return std::unexpected(lfs::format_for_developer(retention.error()));
+            resumed_params.optimization.keep_all_checkpoints = *retention;
+            trainer->setParams(resumed_params);
+        }
         const int restored_iteration = **restored;
         if (restored_iteration != expected_iteration ||
             trainer->get_current_iteration() !=

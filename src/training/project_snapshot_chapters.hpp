@@ -40,6 +40,7 @@ namespace lfs::training {
         lfs::core::Uuid save_as_project_uuid = {};
         std::optional<std::filesystem::path>
             source_path;
+        std::shared_ptr<lfs::io::project::ProjectReader> retained_source;
         lfs::io::project::ProjectChapter project;
         lfs::io::project::ReferencesChapter references;
         lfs::io::project::GuiLayoutChapter gui_layout;

@@ -34,9 +34,13 @@ namespace lfs::io {
 
 namespace lfs::io::project {
 
-    // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
-    // retained history. This cap counts only unbound historical chapters.
-    inline constexpr std::size_t CHECKPOINT_HISTORY_LIMIT = 16;
+    // Compare without overflowing when a project contains very large payloads.
+    [[nodiscard]] constexpr bool checkpoint_rewrite_required(
+        std::uint64_t dead_bytes, std::uint64_t superseded_bytes,
+        std::uint64_t resulting_live_bytes) noexcept {
+        const auto threshold = resulting_live_bytes / 2 + resulting_live_bytes % 2;
+        return dead_bytes >= threshold || superseded_bytes >= threshold - dead_bytes;
+    }
 
     // A binary chapter whose clean source range is also its lazy hydration
     // handle. Reading a clean value never marks it dirty; saving that same
@@ -140,6 +144,10 @@ namespace lfs::io::project {
         // Untitled crash-protection writes a complete master without binding
         // the live document to that app-private path.
         bool leave_unbound = false;
+        // A captured checkpoint carries the preference at its training safe point.
+        // Other callers use the active PRMS preference.
+        std::optional<bool> keep_all_checkpoints = std::nullopt;
+        CommitBoundaryObserver boundary_observer = {};
     };
 
     // Inspect a first-save destination without creating, truncating, or
@@ -202,6 +210,9 @@ namespace lfs::io::project {
         std::uint64_t reused_chunks = 0;
         std::uint64_t opaque_chunks_carried = 0;
         std::uint64_t erased_chunks = 0;
+        bool rewrote_container = false;
+        std::uint64_t resulting_live_bytes = 0;
+        std::uint64_t superseded_checkpoint_bytes = 0;
     };
 
     struct LFS_IO_API DatasetEmbedSource {

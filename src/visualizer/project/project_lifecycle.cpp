@@ -1757,6 +1757,9 @@ namespace lfs::vis::project {
                         document.project_uuid(),
                     .source_path =
                         document.source_path(),
+                    .retained_source = document.source_reader()
+                                           ? std::make_shared<lfs::io::project::ProjectReader>(document.source_reader()->share())
+                                           : nullptr,
                     .project = std::move(project),
                     .references =
                         std::move(references),

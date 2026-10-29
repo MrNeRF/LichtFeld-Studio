@@ -290,8 +290,9 @@ namespace lfs::core {
             float init_scaling = 0.1f;
             int max_cap = 1000000;
 
-            std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
-            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
+            std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
+            std::vector<size_t> save_steps = {7'000, 30'000}; // Steps at which to save the project (project.licht)
+            bool keep_all_checkpoints = false;
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them

@@ -799,6 +799,12 @@ namespace lfs::core::param {
             .locale("training_params.enable_eval")
             .tooltip("training.tooltip.enable_eval")
             .all_strategies()
+            .bool_prop(&OptimizationParameters::keep_all_checkpoints,
+                       "keep_all_checkpoints", "Keep all checkpoints", d.keep_all_checkpoints,
+                       "Keep every training checkpoint in the .licht project. By default, each new checkpoint replaces the one it supersedes; existing history is preserved.")
+            .locale("training.save.keep_all_checkpoints")
+            .tooltip("training.tooltip.keep_all_checkpoints")
+            .all_strategies()
             .bool_prop(&OptimizationParameters::eval_all,
                        "eval_all", "Eval All", d.eval_all,
                        "Train on every image and evaluate all of them; no image is held out")
