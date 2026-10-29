@@ -859,6 +859,8 @@ set(TEST_FILES
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
     test_scene_bounds_cache.cpp
+    test_scene_partitioner.cpp
+    test_ply_stream_merge.cpp
     test_training_scene_init_concurrency.cpp
     test_training_init_centering.cpp
     test_scene_consolidation.cpp

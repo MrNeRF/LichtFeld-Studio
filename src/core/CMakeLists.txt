@@ -98,6 +98,7 @@ set(CORE_SOURCES
         provenance.cpp
         reactive_store.cpp
         scene.cpp
+        scene_partitioner.cpp
         session_breadcrumb.cpp
         uuid.cpp
         splat_simplify.cpp

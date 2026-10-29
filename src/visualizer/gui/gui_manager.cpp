@@ -3300,10 +3300,14 @@ namespace lfs::vis::gui {
 
             const core::NodeId selected_cropbox_id = scene_manager->getSelectedNodeCropBoxId();
             for (const auto& cb : scene_state->cropboxes) {
-                if (!cb.data || !cb.effectively_visible || cb.node_id != selected_cropbox_id) {
+                const auto* parent = scene_manager->getScene().getNodeById(cb.parent_splat_id);
+                const bool auto_tile_preview = parent && parent->type == core::NodeType::GROUP &&
+                                               parent->name.starts_with("AutoTiles");
+                if (!cb.data || !cb.effectively_visible ||
+                    (cb.node_id != selected_cropbox_id && !auto_tile_preview)) {
                     continue;
                 }
-                const bool use_pending = gizmo.cropbox_active;
+                const bool use_pending = cb.node_id == selected_cropbox_id && gizmo.cropbox_active;
                 const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
                 const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
                 const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
