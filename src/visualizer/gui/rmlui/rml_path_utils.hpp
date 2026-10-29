@@ -165,7 +165,13 @@ namespace lfs::vis::gui::rml_paths {
         }
 
         if (isAbsoluteFilePath(reference)) {
+#ifdef _WIN32
             return lfs::core::utf8_to_path(std::string(reference));
+#else
+            // pathToRmlImageSource percent-encodes POSIX paths, so
+            // "/Volumes/LichtFeld%20Studio/logo.png" names "/Volumes/LichtFeld Studio/logo.png".
+            return lfs::core::utf8_to_path(percentDecode(reference));
+#endif
         }
 
         // Decorator/style references reach RmlUI percent-encoded (e.g. an absolute
