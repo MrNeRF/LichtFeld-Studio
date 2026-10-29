@@ -6,7 +6,12 @@ set(_icd "${_contents}/share/vulkan/icd.d/MoltenVK_icd.json")
 set(_moltenvk "${_contents}/lib/libMoltenVK.dylib")
 # These are the bundle's executable/driver contracts. Data resources are
 # verified as complete inventories below, rather than by representative files.
-foreach(_required IN ITEMS "${_exe}" "${_icd}" "${_moltenvk}" "${_contents}/Info.plist")
+# Only Vulkan builds bundle MoltenVK; the Metal app has no Vulkan driver.
+set(_contracts "${_exe}" "${_contents}/Info.plist")
+if("@LFS_USE_VULKAN@")
+    list(APPEND _contracts "${_icd}" "${_moltenvk}")
+endif()
+foreach(_required IN LISTS _contracts)
     if(NOT EXISTS "${_required}")
         message(FATAL_ERROR "Incomplete portable macOS app: ${_required} is missing")
     endif()
@@ -54,8 +59,11 @@ lfs_verify_installed_tree("@_lfs_portable_python_stdlib@"
     "(^|/)(__pycache__|test|tests|idle_test|tkinter|turtledemo|idlelib|lib2to3|ensurepip|unittest|lib-dynload)(/|$)|[.]pyc$")
 lfs_verify_installed_tree("@_lfs_portable_python_stdlib@/lib-dynload"
     "${_contents}/lib/python3.12/lib-dynload" "*" "")
-lfs_verify_installed_tree("@_LFS_VULKAN_RASTERIZER_SPV_DIR@"
-    "${_resources}/shaders/vulkan_rasterizer" "*.spv" "")
+# The Vulkan rasterizer shaders are installed only when the build has them.
+set(_spv_dir "@_LFS_VULKAN_RASTERIZER_SPV_DIR@")
+if(_spv_dir)
+    lfs_verify_installed_tree("${_spv_dir}" "${_resources}/shaders/vulkan_rasterizer" "*.spv" "")
+endif()
 file(GLOB _python_modules "${_contents}/lib/python/lichtfeld*.so")
 if(NOT _python_modules)
     message(FATAL_ERROR "Missing bundled lichtfeld Python extension")
