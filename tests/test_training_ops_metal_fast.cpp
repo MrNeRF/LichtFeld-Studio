@@ -716,6 +716,45 @@ namespace {
             check_forward(fc);
     }
 
+    TEST_P(PortableFastRaster, DepthTiesAndVisibilityChangesPreserveOrder) {
+        // Cross depth-sort blocks with equal keys and interspersed culled primitives.
+        Scene s = make_scene(65537, 0, 65, 37, 91u, -4.5f, -3.0f);
+        s.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 4, 0, 0, 0, 1};
+        s.camera = {0, 0, -4};
+        for (int i = 0; i < s.count; ++i) {
+            s.means[3 * i + 2] = 0;
+            if (i % 3 == 0)
+                s.opacities[i] = -100;
+        }
+        Gpu g = upload_scene(s, ops::ShStorage::Float32);
+        const Rendered expected = render(s, Params(s), make_view(s, false), nullptr);
+        Frame frame;
+        for (const bool visible : {true, false, true}) {
+            g.opacities = upload(visible ? s.opacities : std::vector<float>(s.count, -100),
+                                 {static_cast<size_t>(s.count), 1});
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            if (visible) {
+                expect_close(download(frame.image), expected.image, 2e-4, "depth ties image");
+                expect_close(download(frame.alpha), expected.alpha, 2e-4, "depth ties alpha");
+            } else {
+                EXPECT_EQ(download(frame.alpha), std::vector<float>(s.width * s.height, 0));
+            }
+        }
+        const auto& table = fast_ops();
+        if (table.set_instance_capacity_for_testing && table.set_deferred_count && table.resolve_deferred_count) {
+            table.set_instance_capacity_for_testing(frame.saved, 1);
+            table.set_deferred_count(frame.saved, true);
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success);
+            EXPECT_EQ(table.resolve_deferred_count(frame.saved, true).code, ops::RasterResult::Code::CapacityOverflow);
+            table.set_instance_capacity_for_testing(frame.saved, 0);
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success);
+            expect_close(download(frame.image), expected.image, 2e-4, "replayed depth ties image");
+        }
+    }
+
     TEST_P(PortableFastRaster, GrowingSortCapacityPreservesRender) {
         const auto& table = fast_ops();
         if (table.set_instance_capacity_for_testing == nullptr)

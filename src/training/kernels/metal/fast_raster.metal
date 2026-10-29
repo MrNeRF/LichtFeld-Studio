@@ -271,6 +271,7 @@ struct FastPreprocessParams {
     device uint* n_touched;
     device float4* normals;
     device atomic_uint* max_screen_share;
+    device uint* visible;
     uint n, grid_w, grid_h, depth_bits;
     uint mip_filter;
     float dilation_scale;
@@ -286,6 +287,8 @@ kernel void fast_preprocess(constant FastPreprocessParams& p [[buffer(0)]], cons
     if (idx >= p.n)
         return;
     p.n_touched[idx] = 0u;
+    if (p.visible != nullptr)
+        p.visible[idx] = 0u;
 
     const float3 mean3d = float3(p.means[idx]);
     const float4 w1 = p.view[0], w2 = p.view[1], w3 = p.view[2];
@@ -369,6 +372,8 @@ kernel void fast_preprocess(constant FastPreprocessParams& p [[buffer(0)]], cons
         atomic_max_float(p.max_screen_share + idx, gaussian_screen_share(mean3d, camera, raw_scale, raw_opacity));
 
     p.n_touched[idx] = touched;
+    if (p.visible != nullptr)
+        p.visible[idx] = 1u;
     p.tile_info[idx] = FastTileInfo{ushort4(bounds), fast_depth_key(depth, p.depth_bits), 0u};
     const float extent_x_full = factor * sqrt(cov2d.x);
     const float extent_y_full = factor * sqrt(cov2d.z);
@@ -504,14 +509,60 @@ kernel void fast_scan_down(constant FastScanParams& p [[buffer(0)]],
     }
 }
 
+struct FastDepthOrderParams {
+    device const uint* n_touched;
+    device const FastTileInfo* tile_info;
+    device const uint* offsets;
+    device uint* keys;
+    device uint* order;
+    device const uint* counts;
+    device uint* ordered_counts;
+    uint n;
+};
+
+// The visibility prefix preserves primitive index order, including depth ties.
+kernel void fast_compact_visible(constant FastDepthOrderParams& p [[buffer(0)]],
+                                  const uint idx [[thread_position_in_grid]]) {
+    if (idx < p.n && p.n_touched[idx] != 0u) {
+        const uint destination = p.offsets[idx];
+        p.keys[destination] = p.tile_info[idx].depth_key;
+        p.order[destination] = idx;
+    }
+}
+
+kernel void fast_gather_depth_counts(constant FastDepthOrderParams& p [[buffer(0)]],
+                                     const uint idx [[thread_position_in_grid]]) {
+    if (idx < p.n)
+        p.ordered_counts[idx] = idx < p.counts[0] ? p.n_touched[p.order[idx]] : 0u;
+}
+
+template <typename Key>
+static Key fast_instance_key(const uint tile, const uint depth) {
+    if constexpr (sizeof(Key) == sizeof(ulong))
+        return (ulong(tile) << 32) | ulong(depth);
+    else
+        return Key(tile);
+}
+
+template <typename Key>
+static uint fast_instance_tile(const Key key) {
+    if constexpr (sizeof(Key) == sizeof(ulong))
+        return uint(key >> 32);
+    else
+        return uint(key);
+}
+
+template <typename Key>
 struct FastInstanceParams {
     device const FastMeanBox* mean_box;
     device const float4* conic_opacity;
     device const FastTileInfo* tile_info;
     device const uint* n_touched;
     device const uint* offsets;
-    device ulong* keys;
+    device Key* keys;
     device uint* values;
+    device const uint* order;
+    device const uint* visible_count;
     uint n, grid_w, depth_bits, capacity;
 };
 
@@ -521,30 +572,37 @@ static uint fast_instance_count(device const uint* counts, const uint capacity) 
     return counts[1] != 0u || counts[0] > capacity ? 0u : counts[0];
 }
 
-// Port of create_instances_cu: one (tile << depth_bits | depth) key per
+// Port of create_instances_cu: one tile or packed tile/depth key per
 // touched tile, walked exactly as the preprocess count. A walk that falls
 // short of its count pads with invalid values, which the blends skip.
-kernel void fast_create_instances(constant FastInstanceParams& p [[buffer(0)]], const uint idx [[thread_position_in_grid]]) {
-    if (idx >= p.n)
+template <typename Key>
+kernel void fast_create_instances(constant FastInstanceParams<Key>& p [[buffer(0)]], const uint index [[thread_position_in_grid]]) {
+    uint idx = index;
+    if constexpr (sizeof(Key) != sizeof(ulong)) {
+        if (index >= p.visible_count[0])
+            return;
+        idx = p.order[index];
+    } else if (index >= p.n) {
         return;
+    }
     const uint count = p.n_touched[idx];
     if (count == 0u)
         return;
     const FastTileInfo info = p.tile_info[idx];
     const float4 co = p.conic_opacity[idx];
     const FastTileWalk walk = fast_tile_walk(p.mean_box[idx].mean, co.xyz, co.w, uint4(info.bounds));
-    const uint begin = p.offsets[idx];
+    const uint begin = p.offsets[index];
     const uint end = begin + count;
     // A speculative frame sized below the true count writes nothing past it.
     if (end < begin || end > p.capacity)
         return;
     uint write_at = begin;
-    ulong key = (ulong(uint(info.bounds.z) * p.grid_w + uint(info.bounds.x)) << 32) | ulong(info.depth_key);
+    Key key = fast_instance_key<Key>(uint(info.bounds.z) * p.grid_w + uint(info.bounds.x), info.depth_key);
     for (uint scan = walk.scan0; scan < walk.scan1 && write_at < end; ++scan) {
         const uint2 span = fast_walk_span(walk, scan);
         for (uint t = span.x; t < span.y && write_at < end; ++t) {
             const uint tile = walk.along_x ? scan * p.grid_w + t : t * p.grid_w + scan;
-            key = (ulong(tile) << 32) | ulong(info.depth_key);
+            key = fast_instance_key<Key>(tile, info.depth_key);
             p.keys[write_at] = key;
             p.values[write_at] = idx;
             ++write_at;
@@ -562,17 +620,19 @@ kernel void fast_create_instances(constant FastInstanceParams& p [[buffer(0)]], 
 constant constexpr uint kFastSortThreads = 256u;
 constant constexpr uint kFastSortBlock = 2048u;
 
+template <typename Key>
 struct FastSortParams {
-    device const ulong* keys_in;
+    device const Key* keys_in;
     device const uint* values_in;
-    device ulong* keys_out;
+    device Key* keys_out;
     device uint* values_out;
     device uint* histogram;
     device const uint* counts;
     uint n, n_blocks, shift, unused;
 };
 
-kernel void fast_sort_histogram(constant FastSortParams& p [[buffer(0)]],
+template <typename Key>
+kernel void fast_sort_histogram(constant FastSortParams<Key>& p [[buffer(0)]],
                                 const uint group [[threadgroup_position_in_grid]],
                                 const uint lane [[thread_index_in_threadgroup]],
                                 const uint simd_group [[simdgroup_index_in_threadgroup]]) {
@@ -596,7 +656,8 @@ kernel void fast_sort_histogram(constant FastSortParams& p [[buffer(0)]],
     p.histogram[lane * p.n_blocks + group] = total;
 }
 
-kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
+template <typename Key>
+kernel void fast_sort_scatter(constant FastSortParams<Key>& p [[buffer(0)]],
                               const uint group [[threadgroup_position_in_grid]],
                               const uint lane [[thread_index_in_threadgroup]],
                               const uint simd_lane [[thread_index_in_simdgroup]],
@@ -614,8 +675,8 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const uint i = chunk + lane;
         const bool valid = i < n;
-        const ulong key = valid ? p.keys_in[i] : 0ul;
-        const uint digit = uint((key >> p.shift) & 255ul);
+        const Key key = valid ? p.keys_in[i] : Key(0);
+        const uint digit = uint((key >> p.shift) & 255u);
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
         for (uint b = 0; b < 8u; ++b) {
             const bool bit = ((digit >> b) & 1u) != 0u;
@@ -643,8 +704,9 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
     }
 }
 
+template <typename Key>
 struct FastRangeParams {
-    device const ulong* keys;
+    device const Key* keys;
     device uint* ranges;
     device const uint* counts;
     uint capacity, n_tiles, depth_bits, unused;
@@ -652,17 +714,18 @@ struct FastRangeParams {
 
 // Port of extract_instance_ranges_cu. Range ends are written as separate
 // words: a uint2 component store may rewrite its neighbour.
-kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const uint idx [[thread_position_in_grid]]) {
+template <typename Key>
+kernel void fast_tile_ranges(constant FastRangeParams<Key>& p [[buffer(0)]], const uint idx [[thread_position_in_grid]]) {
     const uint n_instances = fast_instance_count(p.counts, p.capacity);
     if (idx >= n_instances)
         return;
-    const uint tile = uint(p.keys[idx] >> 32);
+    const uint tile = fast_instance_tile(p.keys[idx]);
     if (tile >= p.n_tiles)
         return;
     if (idx == 0u) {
         p.ranges[2u * tile] = 0u;
     } else {
-        const uint previous = uint(p.keys[idx - 1u] >> 32);
+        const uint previous = fast_instance_tile(p.keys[idx - 1u]);
         if (previous >= p.n_tiles)
             return;
         if (tile != previous) {
@@ -673,6 +736,21 @@ kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const ui
     if (idx == n_instances - 1u)
         p.ranges[2u * tile + 1u] = n_instances;
 }
+
+template [[host_name("fast_create_instances_u16")]] kernel void fast_create_instances<ushort>(constant FastInstanceParams<ushort>&, uint);
+template [[host_name("fast_sort_histogram_u16")]] kernel void fast_sort_histogram<ushort>(constant FastSortParams<ushort>&, uint, uint, uint);
+template [[host_name("fast_sort_scatter_u16")]] kernel void fast_sort_scatter<ushort>(constant FastSortParams<ushort>&, uint, uint, uint, uint);
+template [[host_name("fast_tile_ranges_u16")]] kernel void fast_tile_ranges<ushort>(constant FastRangeParams<ushort>&, uint);
+
+template [[host_name("fast_create_instances_u32")]] kernel void fast_create_instances<uint>(constant FastInstanceParams<uint>&, uint);
+template [[host_name("fast_sort_histogram_u32")]] kernel void fast_sort_histogram<uint>(constant FastSortParams<uint>&, uint, uint, uint);
+template [[host_name("fast_sort_scatter_u32")]] kernel void fast_sort_scatter<uint>(constant FastSortParams<uint>&, uint, uint, uint, uint);
+template [[host_name("fast_tile_ranges_u32")]] kernel void fast_tile_ranges<uint>(constant FastRangeParams<uint>&, uint);
+
+template [[host_name("fast_create_instances_u64")]] kernel void fast_create_instances<ulong>(constant FastInstanceParams<ulong>&, uint);
+template [[host_name("fast_sort_histogram_u64")]] kernel void fast_sort_histogram<ulong>(constant FastSortParams<ulong>&, uint, uint, uint);
+template [[host_name("fast_sort_scatter_u64")]] kernel void fast_sort_scatter<ulong>(constant FastSortParams<ulong>&, uint, uint, uint, uint);
+template [[host_name("fast_tile_ranges_u64")]] kernel void fast_tile_ranges<ulong>(constant FastRangeParams<ulong>&, uint);
 
 struct FastFillParams {
     device uint* data;
