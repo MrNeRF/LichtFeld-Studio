@@ -6,8 +6,10 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/output_image_pool.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "viewport_pass_graph.hpp"
 #include "vulkan_environment_pass.hpp"
@@ -325,7 +327,11 @@ namespace lfs::vis {
                 reset();
                 return false;
             }
-            if (!mesh_pass.init(ctx, color_format, depth_stencil_format)) {
+            if (!mesh_pass.init(ctx, color_format, depth_stencil_format,
+                                [rendering = services().renderingOrNull()] {
+                                    if (rendering)
+                                        rendering->markDirty(DirtyFlag::OVERLAY, FrameReason::AsyncCompletion, "collision_upload");
+                                })) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;
@@ -2978,14 +2984,6 @@ namespace lfs::vis {
     };
 
     VulkanViewportPass::VulkanViewportPass() = default;
-
-    std::optional<std::chrono::steady_clock::time_point> VulkanViewportPass::collisionPreviewDeadline() const {
-        return impl_ ? impl_->mesh_pass.collisionPreviewDeadline() : std::nullopt;
-    }
-
-    bool VulkanViewportPass::maintainCollisionPreview() {
-        return impl_ && impl_->mesh_pass.maintainCollisionPreview();
-    }
 
     VulkanViewportPass::~VulkanViewportPass() {
         shutdown();

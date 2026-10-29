@@ -15,45 +15,34 @@ layout(push_constant) uniform Projection {
     vec4 panorama;
 } projection;
 
-// Cache the terminal region and brick masks in registers. A dynamically
-// indexed ancestor stack spills per-fragment state to memory on some GPUs.
-// Leaving the region retraces the immutable tree from its root; the returned
-// occupied cell and empty-region bounds remain exactly the same.
-ivec3 cached_lo;
-int cached_edge;
-uint cached_word;
-uvec2 cached_mask;
+uint traversal_path[22];
+int traversal_level;
 
+// Retain ancestors across ray steps; only descend from the changed coordinate bit.
 bool occupied(ivec3 cell, out ivec3 lo, out ivec3 hi) {
-    if (cached_edge == 0 || any(lessThan(cell, cached_lo)) ||
-        any(greaterThanEqual(cell, cached_lo + cached_edge))) {
-        int edge = volume.dimensions_edge.w;
-        lo = ivec3(0);
-        uint word = volume.words[0];
-        while (word > 1u && (word & 0x80000000u) == 0u) {
-            edge /= 2;
-            ivec3 child = ivec3(greaterThanEqual(cell, lo + edge));
-            word = volume.words[word - 2u + uint(child.x + 2 * child.y + 4 * child.z)];
-            lo += child * edge;
-        }
-        cached_lo = lo;
-        cached_edge = edge;
-        cached_word = word;
+    uint index = traversal_path[traversal_level];
+    int edge = 1 << traversal_level;
+    lo = cell & ~(edge - 1);
+    while (true) {
+        uint word = volume.words[index];
+        hi = min(lo + edge, volume.dimensions_edge.xyz);
+        if (word <= 1u)
+            return word == 1u;
         if ((word & 0x80000000u) != 0u) {
-            uint base = word & 0x7fffffffu;
-            cached_mask = uvec2(volume.words[base], volume.words[base + 1u]);
+            ivec3 p = cell - lo;
+            uint bit = uint(p.x + 4 * p.y + 16 * p.z);
+            uint mask = volume.words[(word & 0x7fffffffu) + bit / 32u];
+            lo = cell;
+            hi = cell + 1;
+            return (mask & (1u << (bit % 32u))) != 0u;
         }
+        edge /= 2;
+        --traversal_level;
+        ivec3 child = ivec3(greaterThanEqual(cell, lo + edge));
+        index = word - 2u + uint(child.x + 2 * child.y + 4 * child.z);
+        traversal_path[traversal_level] = index;
+        lo += child * edge;
     }
-    lo = cached_lo;
-    hi = min(lo + cached_edge, volume.dimensions_edge.xyz);
-    if (cached_word <= 1u)
-        return cached_word == 1u;
-    ivec3 p = cell - lo;
-    uint bit = uint(p.x + 4 * p.y + 16 * p.z);
-    uint mask = bit < 32u ? cached_mask.x : cached_mask.y;
-    lo = cell;
-    hi = cell + 1;
-    return (mask & (1u << (bit % 32u))) != 0u;
 }
 
 void main() {
@@ -90,7 +79,8 @@ void main() {
     }
     if (enter >= leave)
         discard;
-    cached_edge = 0;
+    traversal_level = findMSB(volume.dimensions_edge.w);
+    traversal_path[traversal_level] = 0u;
     ivec3 cell = clamp(ivec3(floor(origin + direction * enter)), ivec3(0), volume.dimensions_edge.xyz - 1);
     while (enter < leave && all(greaterThanEqual(cell, ivec3(0))) &&
            all(lessThan(cell, volume.dimensions_edge.xyz))) {
@@ -117,6 +107,7 @@ void main() {
                 exit_time[axis] = (float(direction[axis] > 0.0 ? hi[axis] : lo[axis]) - origin[axis]) / direction[axis];
         }
         enter = min(exit_time.x, min(exit_time.y, exit_time.z));
+        ivec3 previous = cell;
         cell = ivec3(floor(origin + direction * enter));
         for (int axis = 0; axis < 3; ++axis) {
             if (exit_time[axis] == enter) {
@@ -126,6 +117,8 @@ void main() {
                 cell[axis] = clamp(cell[axis], lo[axis], hi[axis] - 1);
             }
         }
+        uvec3 changed = uvec3(previous ^ cell);
+        traversal_level = max(traversal_level, findMSB(changed.x | changed.y | changed.z) + 1);
     }
     discard;
 }

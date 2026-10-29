@@ -216,8 +216,6 @@ namespace lfs::vis {
                     const VulkanViewportPassParams& params);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
         void discardImportMesh(uint64_t mesh_id);
-        [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> collisionPreviewDeadline() const;
-        [[nodiscard]] bool maintainCollisionPreview();
         void shutdown();
 
     private:

@@ -2703,10 +2703,6 @@ namespace lfs::vis {
                                  "frame_ledger");
             }
         }
-        if (gui_manager_) {
-            if (const auto deadline = gui_manager_->collisionPreviewDeadline())
-                consider_timeout(secondsUntilFrameDeadline(*deadline, FrameClock::now()), "collision_preview");
-        }
         if (rendering_manager_ && rendering_manager_->hasPendingViewportResizeSettle()) {
             const double settle_wait = rendering_manager_->secondsUntilViewportResizeSettleReady();
             consider_timeout(std::max(kResizeSettleMinWaitSeconds, settle_wait), "resize_settle");
@@ -3068,8 +3064,6 @@ namespace lfs::vis {
             !frame_demand.viewport_export_locked && !frame_demand.viewport_resize_deferring) {
             rendering_manager_->markDirty(DirtyFlag::ALL, FrameReason::SceneChange, "view_inputs_changed");
         }
-        if (gui_manager_ && gui_manager_->maintainCollisionPreview())
-            rendering_manager_->markDirty(DirtyFlag::OVERLAY, FrameReason::AsyncCompletion, "collision_preview_retry");
         rendering_manager_->refreshIdleFps(FrameClock::now());
         auto ledger_plan = rendering_manager_->frameDemandLedger().plan(
             std::chrono::steady_clock::now());

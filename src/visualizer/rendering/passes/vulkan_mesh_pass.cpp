@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
-#include "collision_preview_cache.hpp"
 #include "collision_preview_upload.hpp"
 #include <algorithm>
 
@@ -18,10 +17,8 @@
 #include "window/vulkan_result.hpp"
 
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstring>
-#include <cstdlib>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
@@ -198,16 +195,15 @@ namespace lfs::vis {
             ~CollisionFrame() { release(); }
         };
         std::vector<std::vector<std::shared_ptr<CollisionFrame>>> collision_frames;
-        using CollisionCache = detail::CollisionPreviewCache<core::CollisionVolume, CollisionFrame>;
-        CollisionCache collision_cache;
+        std::unordered_map<const core::CollisionVolume*, std::weak_ptr<CollisionFrame>> collision_cache;
+        // Weak source identities distinguish a regenerated volume even when
+        // its allocation reuses an old address. Redraws never retry failures.
+        std::unordered_map<const core::CollisionVolume*, std::weak_ptr<const core::CollisionVolume>> collision_failed;
         detail::CollisionPreviewUploadJob<CollisionFrame> collision_upload;
-        // Delivery ownership bridges worker completion and the next draw's
-        // frame ownership, including resources larger than the cache budget.
+        // Bridge completion to the retired frame slot's shared ownership.
         std::shared_ptr<CollisionFrame> collision_completed;
-        std::optional<std::chrono::steady_clock::time_point> collision_frames_release_at;
-        uint64_t collision_upload_attempts = 0;
-        uint64_t collision_upload_successes = 0;
-        uint64_t collision_upload_bytes = 0;
+        std::shared_ptr<CollisionFrame> collision_pending;
+        std::function<void()> collision_wake;
 
         VkSampler sampler = VK_NULL_HANDLE;
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
@@ -536,6 +532,8 @@ namespace lfs::vis {
             collision_completed.reset();
             collision_frames.clear();
             collision_cache.clear();
+            collision_failed.clear();
+            collision_pending.reset();
             for (auto& [_, gpu] : mesh_cache) {
                 destroyMesh(gpu);
             }
@@ -2603,98 +2601,76 @@ namespace lfs::vis {
             return !frame.pending_upload || vkGetFenceStatus(frame.device, frame.pending_upload) == VK_SUCCESS;
         }
 
-        bool pollCollisionUpload(bool cancel_hidden) {
-            if (!collision_upload.active())
-                return false;
-            if (cancel_hidden &&
-                !collision_cache.requestedInFrame(collision_upload.resource()->owner.get(), frame_counter))
-                collision_upload.cancel();
-            const auto completed = collision_upload.poll();
-            if (!completed)
-                return false;
-            collision_pipeline_ready = collision_pipeline != VK_NULL_HANDLE;
-            const auto source = completed->resource->owner.get();
-            collision_cache.completeUpload(source, completed->status, std::chrono::steady_clock::now());
-            const bool visible = collision_cache.requestedInFrame(source, frame_counter);
-            if (completed->status == detail::CollisionUploadStatus::Ready && visible)
-                collision_completed = completed->resource;
-            return visible;
-        }
-
         void prepareCollision(const VulkanMeshPassParams& params) {
-            const auto now = std::chrono::steady_clock::now();
-            // Do not cancel against last frame's visibility before this frame
-            // has requested its volumes.
-            pollCollisionUpload(false);
+            using UploadStatus = detail::CollisionUploadStatus;
+            if (auto completed = collision_upload.poll()) {
+                collision_pipeline_ready = collision_pipeline != VK_NULL_HANDLE;
+                const auto& resource = completed->resource;
+                if (completed->status == UploadStatus::Ready) {
+                    collision_cache[resource->owner.get()] = resource;
+                    collision_completed = resource;
+                } else if (completed->status != UploadStatus::Canceled) {
+                    LOG_ERROR("Collision preview upload failed; regenerate the volume to try again");
+                    collision_failed[resource->owner.get()] = resource->owner;
+                    if (!collisionUploadRetired(*resource))
+                        collision_pending = resource;
+                }
+            }
+            if (collision_pending && collisionUploadRetired(*collision_pending))
+                collision_pending.reset();
+            std::erase_if(collision_cache, [](const auto& entry) { return entry.second.expired(); });
+            std::erase_if(collision_failed, [](const auto& entry) { return entry.second.expired(); });
             if (collision_frames.size() <= params.frame_slot)
                 collision_frames.resize(params.frame_slot + 1);
             std::vector<std::shared_ptr<CollisionFrame>> resources;
             const auto groups = params.draw_group_count >= 32 ? ~0u : (1u << params.draw_group_count) - 1u;
+            bool upload_visible = false;
             for (const auto& item : params.items) {
-                if (!CollisionCache::needsPreview(
-                        bool(item.collision), item.collision_opacity, params.depth_view, item.panel_mask & groups))
+                if (!item.collision || !(item.collision_opacity > 0) || params.depth_view || !(item.panel_mask & groups))
                     continue;
-                const auto upload = [&](std::shared_ptr<CollisionFrame>& uploaded) {
-                    using Status = detail::CollisionUploadStatus;
-                    if (collision_upload.active())
-                        return Status::Deferred;
-                    uploaded = std::make_shared<CollisionFrame>();
-                    uploaded->owner = item.collision;
-                    try {
-                        collision_upload.start(uploaded, [this, color_format = color_format_cached,
-                                                         depth_format = depth_format_cached](CollisionFrame& frame, std::stop_token stop) {
-                            auto status = Status::RetryableFailure;
-                            try {
-                                status = uploadCollision(frame, stop, color_format, depth_format);
-                            } catch (const std::exception& error) {
-                                LOG_ERROR("Collision preview upload failed: {}", error.what());
-                                if (!collisionUploadRetired(frame))
-                                    status = Status::PendingFailure;
-                            } catch (...) {
-                                LOG_ERROR("Collision preview upload failed with an unknown exception");
-                                if (!collisionUploadRetired(frame))
-                                    status = Status::PendingFailure;
-                            }
-                            if (status != Status::Ready && status != Status::PendingFailure)
-                                frame.release();
-                            return status;
-                        });
-                        LOG_DEBUG("Collision preview upload scheduled: bytes={}",
-                                  (item.collision->words.size() + 4) * sizeof(uint32_t));
-                        return Status::Uploading;
-                    } catch (const std::exception& error) {
-                        LOG_ERROR("Could not start collision preview upload: {}", error.what());
-                        return Status::RetryableFailure;
+                if (collision_upload.active() && collision_upload.resource()->owner == item.collision)
+                    upload_visible = true;
+                if (auto found = collision_cache.find(item.collision.get()); found != collision_cache.end()) {
+                    if (auto resource = found->second.lock()) {
+                        resources.push_back(std::move(resource));
+                        continue;
                     }
-                };
-                auto resource = collision_cache.request(item.collision, (item.collision->words.size() + 4) * sizeof(uint32_t),
-                                                        frame_counter, now, upload, collisionUploadRetired);
-                if (resource)
-                    resources.push_back(std::move(resource));
-            }
-            collision_cache.maintain(now, collisionUploadRetired, frame_counter);
-            // Keep this retired slot's existing owners through the hidden grace
-            // period too. The cache's byte budget can exclude an oversized
-            // resource, but hiding it for a few UI frames must not force another
-            // synchronous upload when it is immediately shown again.
-            for (const auto& previous : collision_frames[params.frame_slot]) {
-                if (collision_cache.retainFrameOwner(previous->owner.get(), frame_counter, now) &&
-                    std::ranges::find(resources, previous) == resources.end())
-                    resources.push_back(previous);
+                }
+                if (collision_upload.active() || collision_pending || collision_failed.contains(item.collision.get()))
+                    continue;
+                auto resource = std::make_shared<CollisionFrame>();
+                resource->owner = item.collision;
+                try {
+                    auto upload = [this, color_format = color_format_cached,
+                                   depth_format = depth_format_cached](CollisionFrame& frame, std::stop_token stop) {
+                        auto status = UploadStatus::Failed;
+                        try {
+                            status = uploadCollision(frame, stop, color_format, depth_format);
+                        } catch (const std::exception& error) {
+                            LOG_ERROR("Collision preview upload failed: {}", error.what());
+                            if (!collisionUploadRetired(frame))
+                                status = UploadStatus::PendingFailure;
+                        } catch (...) {
+                            LOG_ERROR("Collision preview upload failed with an unknown exception");
+                            if (!collisionUploadRetired(frame))
+                                status = UploadStatus::PendingFailure;
+                        }
+                        if (status != UploadStatus::Ready && status != UploadStatus::PendingFailure)
+                            frame.release();
+                        return status;
+                    };
+                    collision_upload.start(resource, std::move(upload), collision_wake);
+                    upload_visible = true;
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Could not start collision preview upload: {}", error.what());
+                    collision_failed[item.collision.get()] = item.collision;
+                }
             }
             // Replace only the retired slot; other in-flight frames retain their buffers.
             collision_frames[params.frame_slot] = std::move(resources);
             collision_completed.reset();
-            if (collision_upload.active() &&
-                !collision_cache.requestedInFrame(collision_upload.resource()->owner.get(), frame_counter))
+            if (collision_upload.active() && !upload_visible)
                 collision_upload.cancel();
-            if (std::ranges::any_of(collision_frames, [](const auto& owners) { return !owners.empty(); }))
-                collision_frames_release_at = now + std::chrono::seconds(5);
-            if (collision_cache.stats().attempts && frame_counter % 120 == 0) {
-                const auto& stats = collision_cache.stats();
-                LOG_DEBUG("Collision preview cache: attempts={}, hits={}, failures={}, evictions={}, resident_bytes={}, pending_bytes={}",
-                          stats.attempts, stats.hits, stats.failures, stats.evictions, stats.resident_bytes, stats.pending_bytes);
-            }
         }
 
         bool submitCollisionCopy(CollisionFrame& frame, VkDeviceSize offset, VkDeviceSize bytes) {
@@ -2751,46 +2727,25 @@ namespace lfs::vis {
         detail::CollisionUploadStatus uploadCollision(CollisionFrame& frame, std::stop_token stop,
                                                        VkFormat color_format, VkFormat depth_format) {
             using UploadStatus = detail::CollisionUploadStatus;
-            auto status = UploadStatus::RetryableFailure;
-            const auto started = std::chrono::steady_clock::now();
-            ++collision_upload_attempts;
-            struct UploadMeasurement {
-                Impl& pass;
-                CollisionFrame& frame;
-                std::chrono::steady_clock::time_point started;
-                const UploadStatus& status;
-                std::stop_token stop;
-                ~UploadMeasurement() {
-                    const auto bytes = (frame.owner->words.size() + 4) * sizeof(uint32_t);
-                    if (status == UploadStatus::Ready) {
-                        ++pass.collision_upload_successes;
-                        pass.collision_upload_bytes += bytes;
-                    }
-                    LOG_DEBUG("Collision preview upload: ready={}, bytes={}, cpu_ms={:.3f}, attempts={}, successes={}, uploaded_bytes={}, cancelled={}",
-                              status == UploadStatus::Ready, bytes,
-                              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
-                              pass.collision_upload_attempts, pass.collision_upload_successes,
-                              pass.collision_upload_bytes, stop.stop_requested());
-                }
-            } measurement{*this, frame, started, status, stop};
+            auto status = UploadStatus::Failed;
             frame.device = device;
             frame.allocator = allocator;
             if (stop.stop_requested())
-                return status = UploadStatus::Deferred;
+                return status = UploadStatus::Canceled;
             if (!collision_pipeline_attempted &&
                 !createOverlayPipeline(color_format, depth_format, true))
                 LOG_ERROR("Collision preview pipeline failed; other rendering is unaffected");
             if (!collision_pipeline)
-                return status = UploadStatus::PermanentFailure;
+                return status = UploadStatus::Failed;
             if (stop.stop_requested())
-                return status = UploadStatus::Deferred;
+                return status = UploadStatus::Canceled;
             const auto& volume = *frame.owner;
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
             const VkDeviceSize bytes = (volume.words.size() + 4) * sizeof(uint32_t);
             if (bytes > properties.limits.maxStorageBufferRange) {
                 LOG_ERROR("Collision preview requires {} storage bytes; device limit is {}", bytes, properties.limits.maxStorageBufferRange);
-                return status = UploadStatus::PermanentFailure;
+                return status = UploadStatus::Failed;
             }
             VkBufferCreateInfo buffer_info{};
             buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -2798,9 +2753,7 @@ namespace lfs::vis {
             buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             constexpr VkDeviceSize upload_chunk = 8 * 1024 * 1024;
-            const auto force_staging = std::getenv("LFS_COLLISION_PREVIEW_FORCE_STAGING");
-            const bool stream_upload = bytes > upload_chunk ||
-                                       (force_staging && std::string_view(force_staging) == "1");
+            const bool stream_upload = bytes > upload_chunk;
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             if (!stream_upload)
@@ -2815,8 +2768,6 @@ namespace lfs::vis {
             vmaGetAllocationMemoryProperties(allocator, frame.allocation, &memory_properties);
             const bool direct_upload = !stream_upload &&
                                        (memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
-            LOG_DEBUG("Collision preview memory: bytes={}, flags={:#x}, direct={}, staging_bytes={}",
-                      bytes, memory_properties, direct_upload, direct_upload ? 0 : std::min(bytes, upload_chunk));
             VmaAllocation upload_allocation = frame.allocation;
             if (!direct_upload) {
                 buffer_info.size = std::min(bytes, upload_chunk);
@@ -2834,7 +2785,7 @@ namespace lfs::vis {
                                                  uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
             for (VkDeviceSize offset = 0; offset < bytes; offset += upload_chunk) {
                 if (stop.stop_requested())
-                    return status = UploadStatus::Deferred;
+                    return status = UploadStatus::Canceled;
                 const auto count = std::min(upload_chunk, bytes - offset);
                 void* mapped = nullptr;
                 if (!vk_try_bool(vmaMapMemory(allocator, upload_allocation, &mapped),
@@ -2860,7 +2811,7 @@ namespace lfs::vis {
                 if (direct_upload)
                     continue;
                 if (!submitCollisionCopy(frame, offset, count))
-                    return status = frame.pending_upload ? UploadStatus::PendingFailure : UploadStatus::RetryableFailure;
+                    return status = frame.pending_upload ? UploadStatus::PendingFailure : UploadStatus::Failed;
                 // Wait only on the worker. Once this bounded copy retires, the
                 // ring buffer and private command pool can be reused safely.
                 lfs::rendering::WaitContext wait_context;
@@ -2883,7 +2834,7 @@ namespace lfs::vis {
                 frame.staging_allocation = VK_NULL_HANDLE;
             }
             if (stop.stop_requested())
-                return status = UploadStatus::Deferred;
+                return status = UploadStatus::Canceled;
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             const VkDescriptorPoolCreateInfo pool{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, 1, 1, &size};
@@ -3275,7 +3226,8 @@ namespace lfs::vis {
             }
             if (collision_pipeline_ready && !params.depth_view) {
                 for (const auto& item : params.items) {
-                    const auto resource = collision_cache.ready(item.collision.get());
+                    const auto found = collision_cache.find(item.collision.get());
+                    const auto resource = found == collision_cache.end() ? nullptr : found->second.lock();
                     if (!resource || item.collision_opacity <= 0 || !resource->descriptor ||
                         params.draw_group >= 32 || !((item.panel_mask >> params.draw_group) & 1u))
                         continue;
@@ -3314,10 +3266,11 @@ namespace lfs::vis {
     VulkanMeshPass::VulkanMeshPass(VulkanMeshPass&&) noexcept = default;
     VulkanMeshPass& VulkanMeshPass::operator=(VulkanMeshPass&&) noexcept = default;
 
-    bool VulkanMeshPass::init(VulkanContext& context, VkFormat color_format, VkFormat depth_stencil_format) {
+    bool VulkanMeshPass::init(VulkanContext& context, VkFormat color_format, VkFormat depth_stencil_format, std::function<void()> collision_wake) {
         if (!impl_) {
             impl_ = std::make_unique<Impl>();
         }
+        impl_->collision_wake = std::move(collision_wake);
         return impl_->init(context, color_format, depth_stencil_format);
     }
 
@@ -3337,48 +3290,6 @@ namespace lfs::vis {
             throw std::runtime_error("Could not retire failed mesh import");
         impl_->destroyMesh(it->second);
         impl_->mesh_cache.erase(it);
-    }
-
-    std::optional<std::chrono::steady_clock::time_point> VulkanMeshPass::collisionPreviewDeadline() const {
-        if (!impl_)
-            return {};
-        auto due = impl_->collision_cache.nextDeadline(impl_->frame_counter, std::chrono::steady_clock::now());
-        if (impl_->collision_frames_release_at && (!due || *impl_->collision_frames_release_at < *due))
-            due = impl_->collision_frames_release_at;
-        return due;
-    }
-
-    bool VulkanMeshPass::maintainCollisionPreview() {
-        if (!impl_)
-            return false;
-        const auto now = std::chrono::steady_clock::now();
-        const bool upload_changed = !impl_->context->hasActiveFrame() && impl_->pollCollisionUpload(true);
-        const auto before = impl_->collision_cache.stats();
-        impl_->collision_cache.maintain(now, Impl::collisionUploadRetired, impl_->frame_counter);
-        const auto& after = impl_->collision_cache.stats();
-        if (before.resident_bytes != after.resident_bytes || before.pending_bytes != after.pending_bytes ||
-            before.evictions != after.evictions)
-            LOG_DEBUG("Collision preview idle maintenance: resident_bytes={}, pending_bytes={}, evictions={}",
-                      after.resident_bytes, after.pending_bytes, after.evictions);
-        if (impl_->collision_frames_release_at && now >= *impl_->collision_frames_release_at) {
-            // Idle maintenance does not acquire a frame slot or wait on a fence.
-            // Conservatively keep all frame owners until every submitted draw
-            // has retired and no frame is being recorded.
-            if (!impl_->context->hasActiveFrame() &&
-                impl_->context->retiredFrameSubmitSerial() >= impl_->context->lastSuccessfulFrameSubmitSerial()) {
-                size_t removed = 0;
-                for (auto& owners : impl_->collision_frames)
-                    removed += std::erase_if(owners, [&](const auto& resource) {
-                        return !impl_->collision_cache.requestedInFrame(resource->owner.get(), impl_->frame_counter);
-                    });
-                if (removed)
-                    LOG_DEBUG("Collision preview retired {} hidden frame references", removed);
-                impl_->collision_frames_release_at.reset();
-            } else {
-                impl_->collision_frames_release_at = now + std::chrono::milliseconds(250);
-            }
-        }
-        return upload_changed || impl_->collision_cache.retryDue(impl_->frame_counter, now);
     }
 
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,

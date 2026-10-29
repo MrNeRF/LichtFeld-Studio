@@ -2,12 +2,19 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-#include "collision_preview_cache.hpp"
+#include <functional>
 #include <future>
+#include <memory>
+#include <optional>
 #include <stop_token>
+#include <thread>
 #include <utility>
 
 namespace lfs::vis::detail {
+    enum class CollisionUploadStatus { Ready,
+                                       Canceled,
+                                       Failed,
+                                       PendingFailure };
     // One upload at a time bounds outstanding allocations across all volumes.
     // poll/cancel never wait. finish is exclusively for device-owner teardown.
     template <typename Resource>
@@ -20,14 +27,27 @@ namespace lfs::vis::detail {
         };
 
         template <typename Work>
-        bool start(std::shared_ptr<Resource> resource, Work&& work) {
+        bool start(std::shared_ptr<Resource> resource, Work&& work, std::function<void()> wake = {}) {
             if (active())
                 return false;
             stop_ = std::stop_source{};
-            auto future = std::async(std::launch::async,
-                                     [resource, token = stop_.get_token(), work = std::forward<Work>(work)]() mutable {
-                                         return work(*resource, token);
-                                     });
+            std::promise<CollisionUploadStatus> result;
+            auto future = result.get_future();
+            worker_ = std::jthread(
+                [resource, token = stop_.get_token(), work = std::forward<Work>(work),
+                 result = std::move(result), wake = std::move(wake)]() mutable {
+                    try {
+                        result.set_value(work(*resource, token));
+                    } catch (...) {
+                        // LFS-CENSUS-OK(empty-catch): forward the exception through
+                        // the result future; take() preserves pending GPU ownership.
+                        result.set_exception(std::current_exception());
+                    }
+                    // Publish before waking: an idle viewer must never consume
+                    // the only wake while poll() still sees an unfinished job.
+                    if (wake)
+                        wake();
+                });
             resource_ = std::move(resource);
             future_ = std::move(future);
             return true;
@@ -44,10 +64,11 @@ namespace lfs::vis::detail {
         }
 
         std::optional<Completion> finish() {
-            if (!active())
-                return {};
             cancel();
-            return take();
+            auto result = active() ? take() : std::optional<Completion>{};
+            if (worker_.joinable())
+                worker_.join();
+            return result;
         }
 
     private:
@@ -67,5 +88,6 @@ namespace lfs::vis::detail {
         std::shared_ptr<Resource> resource_;
         std::stop_source stop_;
         std::future<CollisionUploadStatus> future_;
+        std::jthread worker_;
     };
 } // namespace lfs::vis::detail

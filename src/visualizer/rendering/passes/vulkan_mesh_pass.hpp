@@ -6,9 +6,9 @@
 
 #include "core/export.hpp"
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -97,7 +97,8 @@ namespace lfs::vis {
         // must match the render-pass attachments the caller will record into.
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
-                                VkFormat depth_stencil_format);
+                                VkFormat depth_stencil_format,
+                                std::function<void()> collision_wake = {});
 
         // Upload any new / changed mesh GPU buffers. Idempotent — caches by
         // (MeshData*, generation).
@@ -111,9 +112,6 @@ namespace lfs::vis {
                     const VulkanMeshPassParams& params);
 
         void discardImport(uint64_t mesh_id);
-        [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> collisionPreviewDeadline() const;
-        // Non-blocking idle maintenance; true requests a fresh view for a due retry.
-        [[nodiscard]] bool maintainCollisionPreview();
         void shutdown();
 
     private:
