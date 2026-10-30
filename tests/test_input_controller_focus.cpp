@@ -750,6 +750,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, GUsesNodeCompareForViewerAndKeepsVBindings) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -1063,6 +1065,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, FocusFramesOnlyVisibleModels) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         Viewport viewport(200, 200);
         TestViewTargets controller_views{viewport};
         InputController controller(nullptr, controller_views);
@@ -1090,6 +1094,8 @@ namespace lfs::vis {
 
     // Fails if one far floater makes F park the camera beyond the zoom-out limit.
     TEST_F(InputControllerFocusTest, FocusFramesThroughFarFloatersAndCanZoomOut) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         using lfs::core::Device;
         using lfs::core::Tensor;
         Viewport viewport(200, 200);
@@ -1125,6 +1131,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, FrameAndHomeKeysWorkWhileAPanelHasKeyboardFocus) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         Viewport viewport(200, 200);
         TestViewTargets controller_views{viewport};
         InputController controller(nullptr, controller_views);
@@ -3437,6 +3445,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, DatasetCameraJumpPreservesComparison) {
+        if (!core::gpu_backend_available(core::default_gpu_backend()))
+            GTEST_SKIP() << "GPU device unavailable";
         Viewport viewport(200, 200);
         TestViewTargets controller_views{viewport};
         InputController controller{nullptr, controller_views};
