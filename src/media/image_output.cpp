@@ -173,9 +173,6 @@ namespace lfs::media {
                                                                format == FramePixelFormat::RGB8 ? core::image_codecs::SampleType::UInt8 : options.precision == JxlPrecision::UInt16 ? core::image_codecs::SampleType::UInt16
                                                                                                                                                                                     : core::image_codecs::SampleType::Float32);
     }
-    SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options) {
-        return writeJxl(path, frame, options, {});
-    }
     SinkResult ImageOutput::writeJxl(const std::filesystem::path& path, const FrameView& frame, const JxlOutputOptions& options, std::string_view xmp) {
         return outputBoundary([&]() -> SinkResult {
             if (auto valid = validateJxlOutputOptions(options, frame.layout.format); !valid)

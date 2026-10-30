@@ -34,23 +34,16 @@ namespace lfs::core::image_codecs {
     // copying. Lossy mode explicitly applies perceptual compression.
     // Memory output is replaced only on success, including aliased input/output.
     // File encoding drains bounded chunks to the existing atomic file service.
-    [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_jxl_memory(
-        std::span<const uint8_t>, int width, int height, int channels, SampleType,
-        size_t row_stride, std::vector<uint8_t>&, const JxlEncodeOptions& = {});
-    [[nodiscard]] LFS_IMAGE_CODECS_API Status write_jxl(
-        const std::filesystem::path&, std::span<const uint8_t>, int width, int height,
-        int channels, SampleType, size_t row_stride, const JxlEncodeOptions& = {},
-        const AtomicFileOptions& = {});
     // Explicit UTF-8 XML packet, borrowed for this synchronous call; libjxl
     // copies it into an uncompressed standard xml box. Maximum 32 MiB, no NUL.
     // Empty packets preserve the original codestream/container selection.
     [[nodiscard]] LFS_IMAGE_CODECS_API Status encode_jxl_memory(
         std::span<const uint8_t>, int width, int height, int channels, SampleType,
-        size_t row_stride, std::vector<uint8_t>&, const JxlEncodeOptions&, std::string_view xmp);
+        size_t row_stride, std::vector<uint8_t>&, const JxlEncodeOptions& = {}, std::string_view xmp = {});
     [[nodiscard]] LFS_IMAGE_CODECS_API Status write_jxl(
         const std::filesystem::path&, std::span<const uint8_t>, int width, int height,
-        int channels, SampleType, size_t row_stride, const JxlEncodeOptions&,
-        const AtomicFileOptions&, std::string_view xmp);
+        int channels, SampleType, size_t row_stride, const JxlEncodeOptions& = {},
+        const AtomicFileOptions& = {}, std::string_view xmp = {});
     enum class JxlColorPolicy { SRGB,
                                 Native };
     // Per-call limits, not an aggregate process RAM budget. The decoder's

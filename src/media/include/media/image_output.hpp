@@ -58,9 +58,8 @@ namespace lfs::media {
         // Default preserves Float32. Explicit UInt16 clamps and rounds relative
         // linear float to linear/sRGB codes; lossless then applies to those codes.
         // Straight alpha in output, no implicit tone mapping.
-        [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions& = {});
-        // Explicit synchronous XMP packet; empty keeps the previous behavior.
-        [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions&, std::string_view xmp);
+        // Optional synchronous XMP packet; empty keeps the previous behavior.
+        [[nodiscard]] static SinkResult writeJxl(const std::filesystem::path&, const FrameView&, const JxlOutputOptions& = {}, std::string_view xmp = {});
         // Relative linear float is clamped, sRGB-transferred and rounded to the
         // selected 8/10/12-bit codes. Lossless applies to those integer codes.
         // RGB8 requires declared sRGB BT709 and bit_depth=8. Straight alpha.
