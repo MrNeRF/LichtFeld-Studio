@@ -53,7 +53,7 @@ namespace lfs::media {
         source_metadata_.reset();
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata) {
-            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF)
+            if (detail::embeddedMetadataPolicy(options_.format).empty())
                 return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
             if (!session.source_metadata)
                 return sinkError(ErrorCode::InvalidArgument, "Image metadata requires an explicit source observation");

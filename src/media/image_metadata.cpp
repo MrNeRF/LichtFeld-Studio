@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "image_metadata.hpp"
+#include "core/image_codecs.hpp"
 #include "media_json.hpp"
 #include "xmp_metadata.hpp"
 #include <algorithm>
@@ -10,7 +11,7 @@ namespace lfs::media::detail {
     namespace {
         constexpr char standard_signature[] = "http://ns.adobe.com/xap/1.0/";
         constexpr char extended_signature[] = "http://ns.adobe.com/xmp/extension/";
-        constexpr std::size_t max_packet_bytes = 32 * 1024 * 1024;
+        constexpr std::size_t max_packet_bytes = core::image_codecs::max_xmp_packet_bytes;
         constexpr std::size_t max_payload_bytes = 65533;
         constexpr std::string_view tree_start =
             "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF "
@@ -121,7 +122,7 @@ namespace lfs::media::detail {
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16 && metadata.format != FrameFileFormat::EXR && metadata.format != FrameFileFormat::JXL && metadata.format != FrameFileFormat::AVIF) || width <= 0 || height <= 0)
+        if ((metadata.format == FrameFileFormat::JPEG || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);

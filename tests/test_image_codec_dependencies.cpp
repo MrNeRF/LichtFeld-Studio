@@ -24,6 +24,21 @@
 namespace {
     namespace codec = lfs::core::image_codecs;
 
+    TEST(ProductionCodecs, XmpPacketBudgetAndNulValidation) {
+        EXPECT_TRUE(codec::valid_xmp_packet({}));
+        EXPECT_TRUE(codec::valid_xmp_packet("<x/>"));
+        std::string packet(codec::max_xmp_packet_bytes, 'a');
+        EXPECT_TRUE(codec::valid_xmp_packet(packet));
+        packet.push_back('a');
+        EXPECT_FALSE(codec::valid_xmp_packet(packet));
+        packet.resize(codec::max_xmp_packet_bytes);
+        packet.front() = '\0';
+        EXPECT_FALSE(codec::valid_xmp_packet(packet));
+        packet.front() = 'a';
+        packet.back() = '\0';
+        EXPECT_FALSE(codec::valid_xmp_packet(packet));
+    }
+
     TEST(ProductionTiff, TransferTablesAreSharedAndMatchIndependentReference) {
         EXPECT_TRUE(codec::tiff_transfer_function("unknown").empty());
         for (const auto name : {"linear", "srgb", "bt709"}) {

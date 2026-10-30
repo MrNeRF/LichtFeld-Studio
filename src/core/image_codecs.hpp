@@ -17,6 +17,12 @@
 
 namespace lfs::core::image_codecs {
 
+    inline constexpr std::size_t max_xmp_packet_bytes = 32u * 1024 * 1024;
+    // Packet framing only; native callers remain responsible for valid UTF-8 XML.
+    [[nodiscard]] constexpr bool valid_xmp_packet(std::string_view packet) {
+        return packet.size() <= max_xmp_packet_bytes && packet.find('\0') == std::string_view::npos;
+    }
+
     enum class SampleType { UInt8,
                             UInt16,
                             Float32 };

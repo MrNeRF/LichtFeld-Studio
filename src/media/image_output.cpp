@@ -115,7 +115,7 @@ namespace lfs::media {
             const auto fail = [](ErrorCode code, std::string message) { return SinkResult::failure(outputError(code, std::move(message), 0, "AVIF", "ImageOutput.writeAvif")); };
             if (auto valid = validateAvifOutputOptions(options); !valid)
                 return valid;
-            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+            if (!core::image_codecs::valid_xmp_packet(xmp))
                 return fail(ErrorCode::InvalidArgument, "Invalid AVIF XMP packet");
             if (auto required = frame.requiredBytes(); !required)
                 return SinkResult::failure(required.error());
@@ -245,7 +245,7 @@ namespace lfs::media {
             };
             if (auto valid = validateTiff16OutputOptions(options); !valid)
                 return valid;
-            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+            if (!core::image_codecs::valid_xmp_packet(xmp))
                 return fail(ErrorCode::InvalidArgument, "Invalid TIFF16 XMP packet");
             const auto required = frame.requiredBytes();
             if (!required)
@@ -297,7 +297,7 @@ namespace lfs::media {
         return outputBoundary([&]() -> SinkResult {
             if (auto valid = validateExrOutputOptions(options); !valid)
                 return valid;
-            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string::npos)
+            if (!core::image_codecs::valid_xmp_packet(xmp))
                 return SinkResult::failure(outputError(ErrorCode::InvalidArgument, "Invalid EXR XMP packet"));
             auto required = frame.requiredBytes();
             if (!required)
