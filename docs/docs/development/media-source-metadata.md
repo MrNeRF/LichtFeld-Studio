@@ -796,33 +796,30 @@ bytes. It also enables source preservation in the manifest. Embedded metadata
 can be requested independently or together with the sidecar; without embedding,
 the image writer receives no additional metadata.
 
-Sidecar extraction uses the existing verified checkpoint even when `resume` is
-false. It retains `.media-ingest-checkpoint` to support recovery, rejects stale
-frame removal, and never adopts untracked output. Before either file is published,
-the checkpoint records the selected pixels, image digest, sidecar digest, timing
-and names. Image and sidecar publication each use the existing atomic no-replace
-operation. The pair is not a single atomic transaction: an interruption can leave
-one published member. On the next identical request, replay verifies each
-retained member and regenerates only a missing member. A retained image is not
-re-encoded when only its sidecar is missing. Modified members are refused; only
-tracked zero-length reservations use the existing reservation recovery policy.
-Sidecar verification stops at the packet byte budget. Existing checkpoint/output paths are checked before reading the checkpoint or
-hashing the source. Checkpoint records must be JSON objects, and version/encoder
-types and supported values are validated before provider selection.
-Identity includes the
-sidecar policy, naming, source properties and existing source/selection/encoder
-identity. A different source locator, timing origin or metadata mode cannot
-silently adopt the checkpoint.
+Without `resume`, the normal file sink writes the image and then its XMP with
+existing atomic writers, following the image format's overwrite and cancellation
+options. It does not hash the input video, stage checkpoint records or create a
+checkpoint directory. Existing checkpoint contents do not constrain a plain run.
+Each file is atomic, but the pair is not: cancellation or an XMP write failure
+can leave a published image without its sidecar. A later plain run follows the
+usual overwrite policy rather than verifying or adopting previous output.
 
-Use the same sidecar option and output directory to recover an interrupted run.
-Choose a fresh output directory when intentionally changing its identity.
-A normal MediaIngest extraction that omits both sidecars and resume refuses an
-existing sidecar checkpoint before writing output, so its images cannot be
-replaced while their old XMP companions remain. An invalid checkpoint identity
-or a checkpoint symlink also refuses this bypass. Empty tracked reservations are
-removed only after both members have passed validation and regeneration checks.
-Publication is not a power-loss durability guarantee. Concurrent or external
-modification is not repaired by overwriting an unexpected file.
+With `resume`, the existing verified checkpoint records selected pixels, image
+and sidecar digests, timing and names before publishing either member. It hashes
+the input video and retains `.media-ingest-checkpoint` for recovery. Replay
+verifies retained members and regenerates only missing ones. A retained image is
+not re-encoded solely to repair its XMP. Modified or untracked members are
+refused; tracked zero-length reservations use the existing recovery policy only
+after companion validation and regeneration checks succeed. Verification of
+retained XMP stops at the packet byte budget.
+
+Resume checks checkpoint/output entry types before reading identity or hashing
+the source. Records must be JSON objects with supported version and encoder
+values. Identity includes sidecar policy, naming, source properties and the
+existing source, selection and encoder identity. Use the same resume request to
+recover an interrupted run, or a fresh directory when changing that identity.
+Resume retains its existing restriction against stale-frame removal. Separate
+file publication does not establish power-loss durability.
 
 This consumer is file extraction through MediaIngest (C++, Python and CLI).
 External XMP collection and automatic sidecar discovery remain separate readers;

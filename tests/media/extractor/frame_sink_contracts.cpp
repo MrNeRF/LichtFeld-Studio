@@ -248,6 +248,29 @@ int runFrameSinkUnitContracts() {
     require(successful_replacement.complete({SinkOutcome::Completed, 1, {}}).has_value(), "replacement complete cleans stale frames");
     require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_77.exr"), "obsolete generated PNG and EXR removed");
     require(std::filesystem::exists(directory / "frame_1.png") && std::filesystem::exists(directory / "photo.png") && std::filesystem::exists(directory / "other_9.exr"), "PNG replacement preserves unrelated images");
+    {
+        MediaDescription observed;
+        observed.source_metadata.emplace();
+        auto catalog = catalogContainerMetadata(std::move(observed));
+        require(catalog.has_value(), "sidecar cleanup source catalog");
+        SinkSession session;
+        session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*catalog));
+        replacement.write_source_metadata_sidecars = true;
+        seed("frame_5.png");
+        seed("frame_5.png.xmp");
+        seed("photo.png.xmp");
+        FileFrameSink cancelled_pair(replacement);
+        require(cancelled_pair.begin(session).has_value(), "sidecar cleanup snapshot begins");
+        cancelled_pair.abort({SinkOutcome::Cancelled, 0, {}});
+        require(std::filesystem::exists(directory / "frame_5.png.xmp"), "abort retains stale companion");
+        FileFrameSink replaced_pair(replacement);
+        require(replaced_pair.begin(session).has_value() && replaced_pair.write(file_view).has_value(), "plain sidecar replacement writes");
+        require(std::filesystem::exists(directory / "frame_5.png.xmp"), "stale companion survives before complete");
+        require(replaced_pair.complete({SinkOutcome::Completed, 1, {}}).has_value(), "sidecar cleanup completes");
+        require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_5.png.xmp"), "stale pair removed");
+        require(std::filesystem::exists(directory / "frame_1.png.xmp") && std::filesystem::exists(directory / "photo.png.xmp"), "current and unrelated companions retained");
+        replacement.write_source_metadata_sidecars = false;
+    }
     seed("img_1.png");
     seed("img_31.jpg");
     std::ofstream(directory / "extraction_metadata.json") << R"({"frames":[{"file":"img_1.png"},{"file":"img_31.jpg"}]})";

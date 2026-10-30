@@ -1996,15 +1996,36 @@ class IngestCLI(unittest.TestCase):
             ET.fromstring(sidecar.read_bytes())
             before[image.name] = image.read_bytes(), image.stat().st_mtime_ns
             before[sidecar.name] = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        self.assertFalse((directory / ".media-ingest-checkpoint").exists())
         result, _ = self.invoke("extract", self.source(), "--output", directory,
                                 "--format", "png", "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
         self.assertTrue(result["success"])
-        self.assertEqual(before, {name: ((directory / name).read_bytes(), (directory / name).stat().st_mtime_ns) for name in before})
+        self.assertEqual({name: value[0] for name, value in before.items()},
+                         {name: (directory / name).read_bytes() for name in before})
+        self.assertFalse((directory / ".media-ingest-checkpoint").exists())
+
+    def test_plain_metadata_extraction_ignores_uncommitted_checkpoint(self):
+        for identity in (None, b"", b"true"):
+            for sidecars in (False, True):
+                with self.subTest(identity=identity, sidecars=sidecars):
+                    directory = self.root / ("uncommitted-" + str(identity) + str(sidecars))
+                    checkpoint = directory / ".media-ingest-checkpoint"
+                    checkpoint.mkdir(parents=True)
+                    path = checkpoint / "identity.json"
+                    if identity is not None:
+                        path.write_bytes(identity)
+                    flags = ("--source-metadata-sidecars",) if sidecars else ()
+                    result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                            "--format", "png", "--interval", "1", "--end", "0.01", *flags)
+                    self.assertTrue(result["success"])
+                    self.assertTrue((directory / "frame_1.png").is_file())
+                    self.assertEqual((directory / "frame_1.png.xmp").exists(), sidecars)
+                    self.assertEqual(path.read_bytes() if path.exists() else None, identity)
 
     def test_source_metadata_sidecars_cli_recovers_and_refuses_corruption(self):
         directory = self.root / "sidecar-cli-recovery"
         args = ("extract", self.source(), "--output", directory, "--format", "png",
-                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
         self.invoke(*args)
         manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["frames"])
@@ -2021,10 +2042,6 @@ class IngestCLI(unittest.TestCase):
         self.invoke(*args)
         self.assertEqual(image.read_bytes(), image_snapshot[0])
         self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
-        # Without either checkpoint option a rerun must leave the pair intact.
-        result, _ = self.invoke(*args[:-1], code=4)
-        self.assertEqual(result["error"]["code"], "FailedPrecondition")
-        self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
         sidecar.write_bytes(packet + b" ")
         image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
         result, _ = self.invoke(*args, code=4)
@@ -2035,7 +2052,7 @@ class IngestCLI(unittest.TestCase):
     def test_source_metadata_sidecars_checkpoint_schema_refusal(self):
         directory = self.root / "sidecar-identity-schema"
         args = ("extract", self.source(), "--output", directory, "--format", "png",
-                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
         self.invoke(*args)
         identity_path = directory / ".media-ingest-checkpoint/identity.json"
         identity_bytes = identity_path.read_bytes()
@@ -2054,7 +2071,7 @@ class IngestCLI(unittest.TestCase):
     def test_source_metadata_sidecars_checkpoint_symlink_is_refused(self):
         directory = self.root / "sidecar-symlink"
         args = ("extract", self.source(), "--output", directory, "--format", "png",
-                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
         self.invoke(*args)
         checkpoint = directory / ".media-ingest-checkpoint"
         moved = self.root / "outside-checkpoint"

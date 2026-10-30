@@ -131,9 +131,9 @@ namespace lfs::media {
                     p.generate_metadata = files->write_metadata || p.preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
                     // Resume regenerates the derived manifest only after the sink
                     // verifies the checkpoint identity and every recorded frame.
-                    p.overwrite_metadata = files->resume || files->write_source_metadata_sidecars || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
-                                                                                                                                                                               : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
-                                                                                                                                                                                                                                : files->files.exr.overwrite);
+                    p.overwrite_metadata = files->resume || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
+                                                                                                                                      : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
+                                                                                                                                                                                       : files->files.exr.overwrite);
                     p.tiff16_transfer = files->files.tiff16.transfer;
                     p.jxl_lossless = files->files.jxl.lossless;
                     p.jxl_distance = files->files.jxl.distance;
@@ -179,8 +179,6 @@ namespace lfs::media {
                         files->files.filename_pattern.find('\0') != std::string::npos ||
                         (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::TIFF16 && files->files.format != FrameFileFormat::JXL && files->files.format != FrameFileFormat::AVIF))
                         return failure(ErrorCode::InvalidArgument, "File extraction requires a nonempty output directory, supported format and NUL-free paths/names", 0);
-                    if (auto valid = detail::validateSidecarCheckpointMode(*files); !valid)
-                        return std::move(valid).error();
                 }
                 // Request-only validation reuses the same rules as the compatibility
                 // adapter; the decoder validates actual source layout/timebase later.
@@ -203,6 +201,7 @@ namespace lfs::media {
                 io::VideoFrameExtractor engine;
                 auto file_options = files ? files->files : FileFrameSinkOptions{};
                 file_options.preserve_metadata = p.generate_metadata;
+                file_options.write_source_metadata_sidecars = files && files->write_source_metadata_sidecars;
                 if (files && (files->files.embed_source_metadata || files->write_source_metadata_sidecars)) {
                     const auto sink_cancel = files->files.image_output.cancelled;
                     file_options.image_output.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
@@ -231,7 +230,7 @@ namespace lfs::media {
                 }
                 FileFrameSink file_sink(std::move(file_options));
                 std::unique_ptr<detail::ResumableFileSink> resume_sink;
-                if (files && (files->resume || files->write_source_metadata_sidecars))
+                if (files && files->resume)
                     resume_sink = std::make_unique<detail::ResumableFileSink>(request, *files);
                 TrackingSink tracked(sink ? *sink : resume_sink ? static_cast<FrameSink&>(*resume_sink)
                                                                 : static_cast<FrameSink&>(file_sink));

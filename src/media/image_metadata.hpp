@@ -37,5 +37,5 @@ namespace lfs::media::detail {
     // Encoded bytes are produced by our JPEG encoders. Inserts metadata without
     // recompression into the atomic writer's borrowed stream; never closes it.
     [[nodiscard]] SinkResult writeJpegMetadata(FILE*, std::span<const std::uint8_t>,
-                                               const EmbeddedImageMetadata&, int width, int height, const FrameInfo&, bool sidecar = false);
+                                               const EmbeddedImageMetadata&, int width, int height, const FrameInfo&);
 } // namespace lfs::media::detail

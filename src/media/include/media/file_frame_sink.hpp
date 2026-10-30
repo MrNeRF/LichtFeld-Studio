@@ -43,6 +43,8 @@ namespace lfs::media {
         FrameFileNumbering numbering = FrameFileNumbering::SourceFrame;
         // Required static source XMP for JPEG/PNG/TIFF16/EXR/JXL/AVIF; JPEG also writes EXIF output geometry.
         bool embed_source_metadata = false;
+        // Publish a separate XMP after each image, using the image overwrite policy.
+        bool write_source_metadata_sidecars = false;
     };
     class LFS_MEDIA_API FileFrameSink final : public FrameSink {
     public:
@@ -58,6 +60,7 @@ namespace lfs::media {
         FileFrameSinkOptions options_;
         bool active_ = false;
         std::shared_ptr<const detail::EmbeddedImageMetadata> embedded_metadata_;
+        std::shared_ptr<const detail::EmbeddedImageMetadata> sidecar_metadata_;
         std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
         int applied_rotation_ = 0;
         std::unordered_set<std::filesystem::path> filenames_;

@@ -51,8 +51,9 @@ namespace lfs::media {
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
         source_metadata_.reset();
+        sidecar_metadata_.reset();
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
-        if (options_.embed_source_metadata) {
+        if (options_.embed_source_metadata || options_.write_source_metadata_sidecars) {
             if (detail::embeddedMetadataPolicy(options_.format).empty())
                 return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
             if (!session.source_metadata)
@@ -78,6 +79,12 @@ namespace lfs::media {
                 if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
                     continue;
                 existing_frames_.push_back({path, lfs::core::native_fs::last_write_time(path), lfs::core::native_fs::file_size(path)});
+                if (options_.write_source_metadata_sidecars && path.filename() != "extraction_metadata.json") {
+                    auto sidecar = path;
+                    sidecar += detail::sidecar_metadata_suffix;
+                    if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(sidecar)))
+                        existing_frames_.push_back({sidecar, lfs::core::native_fs::last_write_time(sidecar), lfs::core::native_fs::file_size(sidecar)});
+                }
             }
         }
         active_ = true;
@@ -115,77 +122,124 @@ namespace lfs::media {
             return sinkError(ErrorCode::AlreadyExists, "Duplicate file sink filename");
         if (source_metadata_) {
             auto prepared =
-                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format);
+                detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, !options_.embed_source_metadata);
             if (!prepared)
                 return SinkResult::failure(prepared.error());
-            embedded_metadata_ =
-                std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared));
+            auto metadata = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared));
+            if (options_.embed_source_metadata)
+                embedded_metadata_ = metadata;
+            if (options_.write_source_metadata_sidecars) {
+                if (metadata->extended_markers.empty()) {
+                    sidecar_metadata_ = std::move(metadata);
+                } else {
+                    auto sidecar = detail::prepareImageMetadata(*source_metadata_, applied_rotation_, options_.format, true);
+                    if (!sidecar)
+                        return SinkResult::failure(sidecar.error());
+                    sidecar_metadata_ = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*sidecar));
+                }
+            }
             source_metadata_.reset();
         }
-        if (options_.format == FrameFileFormat::EXR || options_.format == FrameFileFormat::TIFF16) {
-            const bool exr = options_.format == FrameFileFormat::EXR;
-            if (!options_.embed_source_metadata)
-                return exr ? ImageOutput::writeExr(filename, frame, options_.exr)
-                           : ImageOutput::writeTiff16(filename, frame, options_.tiff16);
-            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+        std::string sidecar_packet;
+        core::AtomicFileOptions sidecar_options;
+        if (sidecar_metadata_) {
+            sidecar_options = options_.image_output;
+            auto packet = detail::imageXmpPacket(*sidecar_metadata_, frame.layout.width, frame.layout.height, frame.info, true);
             if (!packet)
                 return SinkResult::failure(packet.error());
-            return exr ? ImageOutput::writeExr(filename, frame, options_.exr, *packet)
-                       : ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
+            sidecar_packet = std::move(*packet);
+            if (options_.format == FrameFileFormat::EXR) {
+                sidecar_options.overwrite = options_.exr.overwrite;
+                sidecar_options.cancelled = options_.exr.cancelled;
+            } else if (options_.format == FrameFileFormat::TIFF16) {
+                sidecar_options.overwrite = options_.tiff16.overwrite;
+                sidecar_options.cancelled = options_.tiff16.cancelled;
+            } else if (options_.format == FrameFileFormat::JXL) {
+                sidecar_options.overwrite = options_.jxl.overwrite;
+                sidecar_options.cancelled = options_.jxl.cancelled;
+            } else if (options_.format == FrameFileFormat::AVIF) {
+                sidecar_options.overwrite = options_.avif.overwrite;
+                sidecar_options.cancelled = options_.avif.cancelled;
+            }
         }
-        if (options_.format == FrameFileFormat::JXL) {
-            if (!options_.embed_source_metadata)
-                return ImageOutput::writeJxl(filename, frame, options_.jxl);
-            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
-            if (!packet)
-                return SinkResult::failure(packet.error());
-            return ImageOutput::writeJxl(filename, frame, options_.jxl, *packet);
+        const auto write_image = [&]() -> SinkResult {
+            if (options_.format == FrameFileFormat::EXR || options_.format == FrameFileFormat::TIFF16) {
+                const bool exr = options_.format == FrameFileFormat::EXR;
+                if (!options_.embed_source_metadata)
+                    return exr ? ImageOutput::writeExr(filename, frame, options_.exr)
+                               : ImageOutput::writeTiff16(filename, frame, options_.tiff16);
+                auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                if (!packet)
+                    return SinkResult::failure(packet.error());
+                return exr ? ImageOutput::writeExr(filename, frame, options_.exr, *packet)
+                           : ImageOutput::writeTiff16(filename, frame, options_.tiff16, *packet);
+            }
+            if (options_.format == FrameFileFormat::JXL) {
+                if (!options_.embed_source_metadata)
+                    return ImageOutput::writeJxl(filename, frame, options_.jxl);
+                auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                if (!packet)
+                    return SinkResult::failure(packet.error());
+                return ImageOutput::writeJxl(filename, frame, options_.jxl, *packet);
+            }
+            if (options_.format == FrameFileFormat::AVIF) {
+                if (!options_.embed_source_metadata)
+                    return ImageOutput::writeAvif(filename, frame, options_.avif);
+                auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                if (!packet)
+                    return SinkResult::failure(packet.error());
+                return ImageOutput::writeAvif(filename, frame, options_.avif, *packet);
+            }
+            // Legacy extraction is already packed: no additional pixel copy.
+            std::vector<std::uint8_t> packed;
+            const auto* pixels = frame.pixels.data();
+            if (frame.layout.row_stride != row_bytes) {
+                packed.resize(row_bytes * height);
+                for (std::size_t row = 0; row < height; ++row)
+                    std::memcpy(packed.data() + row * row_bytes,
+                                pixels + row * frame.layout.row_stride, row_bytes);
+                pixels = packed.data();
+            }
+            if (embedded_metadata_ && options_.format == FrameFileFormat::PNG) {
+                auto packet = detail::imageXmpPrefix(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                if (!packet)
+                    return SinkResult::failure(packet.error());
+                const std::array parts{std::string_view(*packet), std::string_view(embedded_metadata_->source_properties), detail::imageXmpSuffix()};
+                return core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
+                                                          options_.jpeg_quality, std::nullopt, options_.image_output, false, parts);
+            }
+            if (embedded_metadata_) {
+                std::vector<std::uint8_t> encoded;
+                auto result = core::image_codecs::encode_jpeg_memory(
+                    {pixels, row_bytes * height}, frame.layout.width, frame.layout.height, 3, row_bytes, encoded,
+                    {.quality = options_.jpeg_quality, .full_chroma = options_.jpeg_quality > 90});
+                if (!result)
+                    return result;
+                return core::writeFileAtomically(filename, [&](FILE* stream) { return detail::writeJpegMetadata(stream, encoded, *embedded_metadata_, frame.layout.width, frame.layout.height, frame.info); }, options_.image_output);
+            }
+            auto result = core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
+                                                             options_.jpeg_quality, std::nullopt, options_.image_output,
+                                                             options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
+            return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
+        };
+        if (auto written = write_image(); !written)
+            return written;
+        if (sidecar_metadata_) {
+            auto sidecar = filename;
+            sidecar += detail::sidecar_metadata_suffix;
+            if (auto written = core::writeTextFileAtomically(sidecar, sidecar_packet, sidecar_options); !written)
+                return written;
+            filenames_.insert(std::move(sidecar));
         }
-        if (options_.format == FrameFileFormat::AVIF) {
-            if (!options_.embed_source_metadata)
-                return ImageOutput::writeAvif(filename, frame, options_.avif);
-            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
-            if (!packet)
-                return SinkResult::failure(packet.error());
-            return ImageOutput::writeAvif(filename, frame, options_.avif, *packet);
-        }
-        // Legacy extraction is already packed: no additional pixel copy.
-        std::vector<std::uint8_t> packed;
-        const auto* pixels = frame.pixels.data();
-        if (frame.layout.row_stride != row_bytes) {
-            packed.resize(row_bytes * height);
-            for (std::size_t row = 0; row < height; ++row)
-                std::memcpy(packed.data() + row * row_bytes,
-                            pixels + row * frame.layout.row_stride, row_bytes);
-            pixels = packed.data();
-        }
-        if (embedded_metadata_ && options_.format == FrameFileFormat::PNG) {
-            auto packet = detail::imageXmpPrefix(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
-            if (!packet)
-                return SinkResult::failure(packet.error());
-            const std::array parts{std::string_view(*packet), std::string_view(embedded_metadata_->source_properties), detail::imageXmpSuffix()};
-            return core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
-                                                      options_.jpeg_quality, std::nullopt, options_.image_output, false, parts);
-        }
-        if (embedded_metadata_) {
-            std::vector<std::uint8_t> encoded;
-            auto result = core::image_codecs::encode_jpeg_memory(
-                {pixels, row_bytes * height}, frame.layout.width, frame.layout.height, 3, row_bytes, encoded,
-                {.quality = options_.jpeg_quality, .full_chroma = options_.jpeg_quality > 90});
-            if (!result)
-                return result;
-            return core::writeFileAtomically(filename, [&](FILE* stream) { return detail::writeJpegMetadata(stream, encoded, *embedded_metadata_, frame.layout.width, frame.layout.height, frame.info); }, options_.image_output);
-        }
-        auto result = core::image_codecs::write_image_u8(filename, pixels, frame.layout.width, frame.layout.height, 3,
-                                                         options_.jpeg_quality, std::nullopt, options_.image_output,
-                                                         options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
-        return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
+        return {};
     }
+
     SinkResult FileFrameSink::complete(const SinkSummary&) {
         if (!active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink is not active");
         active_ = false;
         embedded_metadata_.reset();
+        sidecar_metadata_.reset();
         source_metadata_.reset();
         for (const auto& old : existing_frames_) {
             if (filenames_.contains(old.path))
@@ -211,6 +265,7 @@ namespace lfs::media {
     void FileFrameSink::abort(const SinkSummary&) noexcept {
         active_ = false;
         embedded_metadata_.reset();
+        sidecar_metadata_.reset();
         source_metadata_.reset();
     }
 } // namespace lfs::media

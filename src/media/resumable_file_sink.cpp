@@ -133,26 +133,6 @@ namespace lfs::media::detail {
         }
     } // namespace
 
-    SinkResult validateSidecarCheckpointMode(const FileExtraction& output) {
-        if (output.resume || output.write_source_metadata_sidecars)
-            return {};
-        const auto checkpoint = output.files.output_directory / ".media-ingest-checkpoint";
-        const auto status = lfs::core::native_fs::symlink_status(checkpoint);
-        if (status.type() == std::filesystem::file_type::not_found)
-            return {};
-        if (!lfs::core::native_fs::is_directory(status))
-            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
-        const auto path = checkpoint / "identity.json";
-        const auto identity = readRecord(path);
-        if (!identity)
-            return SinkResult::failure(identity.error());
-        if (auto provider = checkpointImageEncoder(*identity); !provider)
-            return SinkResult::failure(provider.error());
-        if (identity->contains("sidecar_metadata_policy"))
-            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Existing source metadata sidecars require their checkpoint mode or a fresh output directory"));
-        return {};
-    }
-
     ResumableFileSink::ResumableFileSink(const IngestRequest& request, const FileExtraction& output)
         : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::AVIF ? output.files.avif.cancelled : output.files.format == FrameFileFormat::JXL  ? output.files.jxl.cancelled
                                                                                                                                                                                    : output.files.format == FrameFileFormat::EXR    ? output.files.exr.cancelled

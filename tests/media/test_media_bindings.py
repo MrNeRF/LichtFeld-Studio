@@ -1470,15 +1470,60 @@ class MediaBindings(unittest.TestCase):
                         decoded = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
                                    "-v", "error", "-i", str(image), "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-"], timeout=30)
                         self.assertEqual(len(decoded), 32 * 64 * 12)
-                before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.suffix in (extension, ".xmp")}
+                self.assertFalse((root / ".media-ingest-checkpoint").exists())
+                before = {p.name: p.read_bytes() for p in root.iterdir() if p.suffix in (extension, ".xmp")}
+                output.files.exr.overwrite = True
+                output.files.tiff16.overwrite = True
+                output.files.jxl.overwrite = True
+                output.files.avif.overwrite = True
                 media.MediaIngest.extract_files(request, output)
-                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.suffix in (extension, ".xmp")})
+                self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir() if p.suffix in (extension, ".xmp")})
+                self.assertFalse((root / ".media-ingest-checkpoint").exists())
+
+    def test_plain_sidecars_cancellation_and_overwrite_policy(self):
+        request = self.metadata_request()
+        request.end_seconds = .01
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "plain-sidecar-cancel"
+        output.files.format = media.FrameFileFormat.EXR
+        output.write_source_metadata_sidecars = True
+        root = output.files.output_directory
+        image, sidecar = root / "frame_1.exr", root / "frame_1.exr.xmp"
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output, cancelled=lambda: image.exists() and not sidecar.exists())
+        self.assertTrue(image.is_file())
+        self.assertFalse(sidecar.exists())
+        self.assertFalse((root / ".media-ingest-checkpoint").exists())
+        # No implicit replay: overwrite repairs the pair through normal writers.
+        output.files.exr.overwrite = True
+        media.MediaIngest.extract_files(request, output)
+        self.assertTrue(sidecar.is_file())
+        packet = sidecar.read_bytes()
+        image.unlink()
+        sidecar.write_bytes(b"existing companion")
+        output.files.exr.overwrite = False
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(sidecar.read_bytes(), b"existing companion")
+        self.assertTrue(image.is_file())
+        # A plain run may replace both files when overwrite is explicit.
+        output.files.exr.overwrite = True
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual(sidecar.read_bytes(), packet)
+        output.write_source_metadata_sidecars = False
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual(sidecar.read_bytes(), packet)
+        self.assertFalse((root / ".media-ingest-checkpoint").exists())
 
     def test_source_metadata_sidecars_recover_partial_pairs_and_refuse_tampering(self):
         request = self.metadata_request()
         request.end_seconds = .01
         output = media.FileExtraction()
         output.files.output_directory = self.root / "partial pair é"
+        output.resume = True
         output.write_source_metadata_sidecars = True
         root = output.files.output_directory
         image = root / "frame_1.png"
@@ -1544,23 +1589,6 @@ class MediaBindings(unittest.TestCase):
             self.assertEqual(sidecar.read_bytes(), original_sidecar[0])
             record_path.write_bytes(original_record)
         media.MediaIngest.extract_files(request, output)
-        # A plain rerun must not replace an image while leaving its old XMP.
-        output.write_source_metadata_sidecars = False
-        self.assertFalse(output.resume)
-        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()}
-        with self.assertRaises(MEDIA_ERROR):
-            media.MediaIngest.extract_files(request, output)
-        self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()})
-        identity_path = root / ".media-ingest-checkpoint/identity.json"
-        identity = identity_path.read_bytes()
-        for bad_identity in (b"", b"true", b"{" + b" " * 16384):
-            identity_path.write_bytes(bad_identity)
-            with self.assertRaises(MEDIA_ERROR):
-                media.MediaIngest.extract_files(request, output)
-            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()})
-            self.assertEqual(identity_path.read_bytes(), bad_identity)
-        identity_path.write_bytes(identity)
-        output.write_source_metadata_sidecars = True
         # Destination changes and source locator aliases must not adopt a pair.
         output.resume = True
         output.write_source_metadata_sidecars = False
@@ -1581,6 +1609,7 @@ class MediaBindings(unittest.TestCase):
         request.end_seconds = .01
         output = media.FileExtraction()
         output.files.output_directory = self.root / "foreign-sidecar"
+        output.resume = True
         output.write_source_metadata_sidecars = True
         root = output.files.output_directory
         root.mkdir()

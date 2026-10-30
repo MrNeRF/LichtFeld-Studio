@@ -213,7 +213,7 @@ namespace lfs::media::detail {
         }
     }
     SinkResult writeJpegMetadata(FILE* stream, std::span<const std::uint8_t> jpeg,
-                                 const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info, bool sidecar) {
+                                 const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
         if (!stream || width <= 0 || height <= 0 || metadata.format != FrameFileFormat::JPEG)
             return SinkResult::failure(metadataError(ErrorCode::InvalidArgument, "Invalid encoded JPEG metadata input"));
         if (jpeg.size() < 4 || jpeg[0] != 0xff || jpeg[1] != 0xd8)

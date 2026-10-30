@@ -8,7 +8,6 @@
 
 namespace lfs::media::detail {
     // Do not detach existing image/XMP pairs by bypassing their checkpoint.
-    [[nodiscard]] SinkResult validateSidecarCheckpointMode(const FileExtraction&);
     // Extraction checkpoint policy, separate from manifest publication. Codecs,
     // selection and atomic publication remain owned by their existing services.
     class ResumableFileSink final : public FrameSink {
