@@ -499,7 +499,8 @@ namespace {
             GTEST_SKIP() << "Float prepared-cache policy belongs to the portable loader";
         const GpuBackendScope scope(GetParam());
         const auto file = path("float.jxl");
-        std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / "rgb32.jxl", file);
+        std::filesystem::copy_file(std::filesystem::path(LFS_JXL_FIXTURES) / "rgb32.jxl", file,
+                                   std::filesystem::copy_options::overwrite_existing);
         PipelinedLoaderConfig config;
         config.min_spill_free_bytes = 0; // spill regardless of free space in the temp dir
         config.backend = GetParam();
