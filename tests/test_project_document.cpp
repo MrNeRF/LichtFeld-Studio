@@ -3325,9 +3325,8 @@ namespace {
         ASSERT_TRUE(document->source_path());
         EXPECT_EQ(
             *document->source_path(),
-            std::filesystem::absolute(
-                destination)
-                .lexically_normal());
+            std::filesystem::weakly_canonical(
+                std::filesystem::absolute(destination)));
 
         auto reader =
             ProjectReader::open(destination);
