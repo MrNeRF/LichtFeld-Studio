@@ -8,12 +8,12 @@ namespace lfs::core::internal {
     namespace {
         class HipWorkQueue final : public BackendWorkQueue {
             HipBackendOps& ops_;
-            BackendQueueLease lease_;
+            std::shared_ptr<void> lease_;
             QueueConsumerTimeline consumer_;
 
         public:
             explicit HipWorkQueue(const BackendQueueCreateInfo& info)
-                : ops_(static_cast<HipBackendOps&>(backend_ops(GpuBackend::HIP))), lease_(ops_.execution_lease({})), consumer_(info.consumer_device, info.consumer) {
+                : ops_(static_cast<HipBackendOps&>(backend_ops(GpuBackend::HIP))), lease_(ops_.execution_lease()), consumer_(info.consumer_device, info.consumer) {
             }
             void* native_handle() const override { return nullptr; }
             BackendTargetBinding bind(bool) override {

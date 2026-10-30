@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include "core/device/portability.cuh"
 #include <cstdint>
 
-#if defined(__CUDACC__)
+#if LFS_DEVICE_COMPILER
 #define LFS_MORTON_HD __host__ __device__
 #else
 #define LFS_MORTON_HD

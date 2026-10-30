@@ -34,12 +34,10 @@ namespace lfs::core {
 
         // Device domains map explicitly; host and unknown domains have none.
         std::optional<GpuBackend> domain_backend(const MemoryDomain domain) {
-            if (domain == MemoryDomain::CudaDevice || domain == MemoryDomain::CudaVmm)
-                return GpuBackend::CUDA;
-            if (domain == MemoryDomain::VulkanDevice)
-                return GpuBackend::Vulkan;
-            if (domain == MemoryDomain::MetalDevice)
-                return GpuBackend::Metal;
+            const auto canonical = domain == MemoryDomain::CudaVmm ? MemoryDomain::CudaDevice : domain;
+            for (const auto backend : kGpuBackends)
+                if (device_memory_domain(backend) == canonical)
+                    return backend;
             return std::nullopt;
         }
 

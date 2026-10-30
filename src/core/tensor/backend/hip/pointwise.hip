@@ -13,8 +13,12 @@ int lfs_hip_pointwise_f32(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         require(context && op < LFS_HIP_OP_COUNT, "Unknown HIP pointwise operation");
         DeviceScope device(context->device);
         using namespace lfs::core;
+        using namespace lfs::core::internal;
         switch (op) {
-#include "hip_pointwise_f32.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) \
+    case LFS_HIP_OP_##Id: dispatch_pointwise<LFS_HIP_OP_##Id, Functor, float>(context, lhs, rhs, output, count, scalar); break;
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
         default: throw std::invalid_argument("Unknown HIP pointwise operation");
         }
     });
@@ -25,8 +29,12 @@ int lfs_hip_pointwise_f16(LfsHipContext* context, uint32_t op, LfsHipView lhs, L
         require(context && op < LFS_HIP_OP_COUNT, "Unknown HIP pointwise operation");
         DeviceScope device(context->device);
         using namespace lfs::core;
+        using namespace lfs::core::internal;
         switch (op) {
-#include "hip_pointwise_f16.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) \
+    case LFS_HIP_OP_##Id: dispatch_pointwise<LFS_HIP_OP_##Id, Functor, __half>(context, lhs, rhs, output, count, scalar); break;
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
         default: throw std::invalid_argument("Unknown HIP pointwise operation");
         }
     });

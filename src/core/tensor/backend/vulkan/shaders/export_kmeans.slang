@@ -1,8 +1,11 @@
+#include "native_entry.slangh"
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 80;
 
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant]
 const uint kPhase = 0;
+#endif
 
 #include "export_kmeans_common.slangh"
 
@@ -10,8 +13,8 @@ groupshared float tile[32 * 48];
 groupshared float tileNorm[32];
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> sh = (Ptr<float, Access.Read>)p.sh;
     Ptr<float, Access.ReadWrite> centroids = (Ptr<float, Access.ReadWrite>)p.centroids;
     Ptr<int, Access.Read> indices = (Ptr<int, Access.Read>)p.indices;

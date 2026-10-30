@@ -5,20 +5,17 @@
 #include "../native_allocation.hpp"
 #include "../prepared_readback.hpp"
 
-#include "architecture_runtime.hpp"
-#include "expression_api.h"
-#include "hip_backend_ops.hpp"
-#include "runtime_api.h"
-#include "runtime_context.hpp"
-#ifdef LFS_HIP_EXPRESSION_JIT
-#include "hip_expression_emitter.hpp"
-#endif
 #include "../../internal/expression_runtime.hpp"
 #include "../../internal/tensor_impl.hpp"
 #include "../export_pipeline.hpp"
 #include "../readback_buffer.hpp"
+#include "../tensor_completion.hpp"
+#include "architecture_runtime.hpp"
 #include "bias_api.h"
+#include "expression_api.h"
+#include "expression_hip.hpp"
 #include "gemm_api.h"
+#include "hip_backend_ops.hpp"
 #include "inference_api.h"
 #include "integer_reduce_api.h"
 #include "inverse_warp_api.h"
@@ -26,6 +23,8 @@
 #include "point_filter_api.h"
 #include "point_tree_api.h"
 #include "predicate_api.h"
+#include "runtime_api.h"
+#include "runtime_context.hpp"
 #include "sh_codec_api.h"
 #include "timing_api.h"
 #include "where_api.h"
@@ -48,15 +47,6 @@
 #include <source_location>
 #include <stdexcept>
 #include <unordered_map>
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 namespace lfs::core::internal {
     int select_hip_device(const std::filesystem::path& module, int requested) {
         const auto count = hip_device_count(module);
@@ -236,7 +226,6 @@ namespace lfs::core::internal {
         std::vector<Allocation> cached;
         size_t cached_bytes = 0, cache_limit = 0, reserved_peak = 0;
         std::mutex mutex;
-#ifdef LFS_HIP_EXPRESSION_JIT
         std::string expression_identity;
         ExpressionCache expressions;
         struct ExpressionKernel final : CompiledExpression {
@@ -250,7 +239,6 @@ namespace lfs::core::internal {
                 }
             }
         };
-#endif
         size_t live = 0, peak = 0;
         size_t workspace_bytes = 0;
         size_t algorithm_workspace_bytes = 0;
@@ -266,9 +254,7 @@ namespace lfs::core::internal {
             active.store(true, std::memory_order_release);
         }
         ~Impl() {
-#ifdef LFS_HIP_EXPRESSION_JIT
             expressions.clear();
-#endif
             // The owned runtime retains the loaded module on cleanup failure
             // and retries through the same retirement mechanism as host tests.
             runtime.reset();
@@ -593,7 +579,7 @@ namespace lfs::core::internal {
                 allocation.metadata->gpu_descriptor.base_address = address;
                 allocation.metadata->gpu_descriptor.native_context = impl_->identity;
                 allocation.metadata->gpu_descriptor.byte_size = bytes;
-                allocation.metadata->gpu_descriptor.accounting_kind = StorageAccountingKind::HipOwned;
+                allocation.metadata->gpu_descriptor.accounting_kind = StorageAccountingKind::BackendOwned;
             }
             require(address && address % alignment == 0, "HIP allocation does not meet alignment");
             auto* pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
@@ -609,7 +595,7 @@ namespace lfs::core::internal {
         impl_->reserved_peak = std::max(impl_->reserved_peak, impl_->live + impl_->cached_bytes + impl_->workspace_bytes);
         auto* pointer = reinterpret_cast<void*>(static_cast<uintptr_t>(address));
         return {GpuBackend::HIP, pointer, 0, DataType::Float32, impl_->allocations.at(pointer).metadata.get(),
-                allocation_flags(StorageAccountingKind::HipOwned, !cacheable, true, false, !cacheable ? AllocationLabel::HipDirect : AllocationLabel::None)};
+                allocation_flags(StorageAccountingKind::BackendOwned, !cacheable, true, false, !cacheable ? AllocationLabel::HipDirect : AllocationLabel::None)};
     }
     void HipBackendOps::deallocate(StorageRef storage, ExecContext execution) noexcept {
         try {
@@ -1320,6 +1306,20 @@ namespace lfs::core::internal {
             void* host_ = nullptr;
             size_t capacity_ = 0;
             bool pending_ = false;
+            class Completion final : public BackendFence {
+                Slot& slot_;
+
+            public:
+                BackendFence* marker = nullptr;
+                explicit Completion(Slot& slot) : slot_(slot) {}
+                void record(ExecContext execution) override { marker->record(execution); }
+                void wait_on(ExecContext execution) const override { marker->wait_on(execution); }
+                bool ready() const override { return marker->ready() && slot_.ready(); }
+                void wait() const override {
+                    marker->wait();
+                    slot_.wait();
+                }
+            } completion_{*this};
 
             bool ready_locked() {
                 if (!pending_)
@@ -1352,7 +1352,11 @@ namespace lfs::core::internal {
                 std::lock_guard lock(owner_->mutex);
                 owner_->runtime->release_readback(staging_, std::move(retirement_));
             }
-            void* data() const override { return host_; }
+            void* data() const override {
+                std::lock_guard lock(owner_->mutex);
+                require(const_cast<Slot*>(this)->ready_locked(), "HIP packed readback is not ready");
+                return host_;
+            }
             bool begin_append(const Tensor&, size_t, size_t, size_t, ExecContext execution) override {
                 queue(execution);
                 return false;
@@ -1366,15 +1370,15 @@ namespace lfs::core::internal {
                 pending_ = true;
                 check(owner_->api.readback_append(owner_->context, staging_, input.buffer, input.offset, bytes, destination_offset, &error), error);
             }
-            void release() override {
-                std::lock_guard lock(owner_->mutex);
-                require(ready_locked(), "Cannot release incomplete HIP packed readback slot");
+            BackendFence& completion(BackendFence& marker) override {
+                completion_.marker = &marker;
+                return completion_;
             }
-            bool ready() override {
+            bool ready() {
                 std::lock_guard lock(owner_->mutex);
                 return ready_locked();
             }
-            void wait() override {
+            void wait() {
                 std::lock_guard lock(owner_->mutex);
                 if (!pending_)
                     return;
@@ -1528,14 +1532,9 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.host_callback(impl_->context, callback, user, &error), error);
     }
-    BackendQueueLease HipBackendOps::execution_lease(ExecContext execution) {
+    std::shared_ptr<void> HipBackendOps::execution_lease() {
         ensure_initialized();
-        queue(execution);
-        std::lock_guard lock(impl_->mutex);
-        BackendQueueLease lease{impl_};
-        LfsHipError error{};
-        check(impl_->api.context_queue(impl_->context, &lease.native_queue, &lease.device, &error), error);
-        return lease;
+        return impl_;
     }
     std::unique_ptr<BackendTimestamps> HipBackendOps::create_timestamps(size_t count) {
         ensure_initialized();
@@ -1704,12 +1703,8 @@ namespace lfs::core::internal {
         return true;
     }
     ExpressionCacheStats HipBackendOps::expression_cache_stats() {
-#ifdef LFS_HIP_EXPRESSION_JIT
         std::lock_guard lock(impl_->mutex);
         return impl_->expressions.stats();
-#else
-        return {};
-#endif
     }
     void HipBackendOps::synchronize_device() { synchronize_stream({}); }
     void HipBackendOps::device_barrier() { synchronize_stream({}); }
@@ -1790,9 +1785,7 @@ namespace lfs::core::internal {
         require(impl_.use_count() == 1, "Cannot shut down HIP Tensor context with live queues, transfers or fences");
         if (!impl_->context)
             return;
-#ifdef LFS_HIP_EXPRESSION_JIT
         impl_->expressions.clear();
-#endif
         // Release cached handles individually before native close can partially
         // destroy its buffer registry and then fail on a later resource.
         impl_->trim_cache();
@@ -2360,9 +2353,6 @@ namespace lfs::core::internal {
     }
     void HipBackendOps::pop_range() {}
     bool HipBackendOps::nn_kernels() const { return true; }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::launch_radius(StorageRef points, StorageRef references, StorageRef heads, StorageRef next,
                                       StorageRef output, size_t count, size_t buckets, float radius, unsigned mode,
                                       int32_t maximum, bool exclude_self, std::optional<StorageRef> queries,
@@ -2411,9 +2401,6 @@ namespace lfs::core::internal {
                                             StorageRef o, size_t count, size_t buckets, float radius, std::optional<StorageRef> radii, ExecContext c) {
         launch_radius(p, r, h, n, o, count, buckets, radius, v.dtype == DataType::Int32 ? 3 : 4, 0, false, {}, v, radii, c);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::nearest_point_indices(StorageRef q, StorageRef t, StorageRef h, StorageRef n, StorageRef o,
                                               size_t nq, size_t nt, size_t buckets, float width, ExecContext execution) {
         queue(execution);
@@ -2444,10 +2431,6 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.proximity(impl_->context, inputs, impl_->view(o), count, cameras, 1, maximum, 1, &error), error);
     }
-} // namespace lfs::core::internal
-
-#ifdef LFS_HIP_EXPRESSION_JIT
-namespace lfs::core::internal {
     void HipBackendOps::compiled_expression(const ExpressionLaunch& launch, ExecContext execution) {
         queue(execution);
         require(launch.program && launch.words && launch.words <= ExpressionLayout::max_words &&
@@ -2465,7 +2448,7 @@ namespace lfs::core::internal {
             check(impl_->api.expression_identity_for_device(impl_->ordinal, identity, sizeof(identity), &error), error);
             impl_->expression_identity = identity;
         }
-        const auto key = impl_->expression_identity + "\n" + hip_expression_emitter_id + "\n" + expression_key(*launch.program, launch.signature);
+        const auto key = impl_->expression_identity + "\n" + LFS_HIP_EXPRESSION_EMITTER_ID + "\n" + expression_key(*launch.program, launch.signature);
         const auto kernel = impl_->expressions.get(key, [&] {
         const auto source=expression_hip(*launch.program,launch.signature);
         std::vector<char> binary(16*1024*1024);
@@ -2484,10 +2467,6 @@ namespace lfs::core::internal {
                                            launch.arguments.data(), launch.words, work, &error),
               error);
     }
-} // namespace lfs::core::internal
-#endif
-
-namespace lfs::core::internal {
     void HipBackendOps::launch_point_tree(StorageRef p, StorageRef sorted, StorageRef boxes, StorageRef visit,
                                           std::optional<StorageRef> radii, std::optional<StorageRef> queries, StorageRef output, const PointTreeProgram& program,
                                           bool spacing, ExecContext execution) {
@@ -2527,17 +2506,11 @@ namespace lfs::core::internal {
         launch_point_tree(p, sorted, boxes, visit, {}, {}, output, program, true, execution);
         return true;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     bool HipBackendOps::radius_connected_components(StorageRef p, StorageRef r, StorageRef h, StorageRef n, StorageRef labels,
                                                     size_t count, size_t buckets, float radius, ExecContext execution) {
         launch_radius(p, r, h, n, labels, count, buckets, radius, 5, 0, false, {}, {}, {}, execution);
         return true;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     bool HipBackendOps::point_tree_components(StorageRef p, StorageRef sorted, StorageRef boxes, StorageRef box_radii,
                                               StorageRef visit, StorageRef sorted_radii, StorageRef radii, StorageRef labels, const PointTreeProgram& program, ExecContext execution) {
         queue(execution);
@@ -2559,9 +2532,6 @@ namespace lfs::core::internal {
         check(impl_->api.point_tree_components(impl_->context, inputs, view(labels), &native, &error), error);
         return true;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::ppisp_apply(StorageRef input, StorageRef output, int width, int height, const PpispParams& params, ExecContext execution) {
         queue(execution);
         require(input.dtype == DataType::Float32 && output.dtype == DataType::Float32, "HIP PPISP requires Float32");
@@ -2573,9 +2543,6 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.ppisp(impl_->context, impl_->view(input), impl_->view(output), width, height, &native, &error), error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::affine_splat_geometry(StorageRef scales, StorageRef rotations, StorageRef out_scales, StorageRef out_rotations,
                                               const splat_transform::LinearTransform& matrix, size_t count, std::optional<StorageRef> matrices, ExecContext execution) {
         queue(execution);
@@ -2590,9 +2557,6 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.affine(impl_->context, inputs, outputs, matrix.rows, count, &error), error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     Tensor HipBackendOps::morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext execution) {
         queue(execution);
         const GpuBackendScope scope(GpuBackend::HIP);
@@ -2615,9 +2579,6 @@ namespace lfs::core::internal {
             *sorted_keys = std::move(keys);
         return indices;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::multinomial(StorageRef weights, StorageRef output, const RandomProgram& program, ExecContext execution) {
         queue(execution);
         // rocPRIM dispatch uses signed counts. Reject before storage validation
@@ -2639,9 +2600,6 @@ namespace lfs::core::internal {
         impl_->refresh_algorithm_workspace();
         check(status, error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     class HipExportKernels final : public ExportKernels {
         HipBackendOps& owner_;
 
@@ -2694,9 +2652,6 @@ namespace lfs::core::internal {
         HipExportKernels kernels(*this);
         export_assign_sh3(kernels, sh, centroids, norms, labels, fast, have_labels);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::decimate_candidates(const Tensor& position, const Tensor& rotation, const Tensor& scale, const Tensor& opacity,
                                             const Tensor& dc, const Tensor& sh, int rest, std::vector<uint32_t>& idx, std::vector<float>& cost, ExecContext execution) {
         queue(execution);
@@ -2710,9 +2665,6 @@ namespace lfs::core::internal {
         HipExportKernels kernels(*this);
         return export_decimate_merge(kernels, position, rotation, scale, opacity, dc, sh, rest, member_group, minimum, members, offsets, removed);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::rasterize_points(const PointRasterProgram& p, ExecContext execution) {
         queue(execution);
         const size_t pixels = size_t(p.width) * p.height;
@@ -2768,9 +2720,6 @@ namespace lfs::core::internal {
                 launch_export("point_raster", phase, std::as_bytes(std::span(&push, 1)), reads, writes, work);
         }
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::nn_norm(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const NormProgram& p, ExecContext execution) {
         queue(execution);
         require((input.dtype == DataType::Float32 || input.dtype == DataType::Float16) && weight.dtype == input.dtype && output.dtype == input.dtype &&
@@ -2782,9 +2731,6 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.nn_norm(impl_->context, view(input), view(weight), bias ? view(*bias) : LfsHipView{}, view(output), &native, &error), error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::nn_linear(StorageRef a, StorageRef w, std::optional<StorageRef> bias, std::optional<StorageRef> scale,
                                   std::optional<StorageRef> residual, StorageRef output, const LinearProgram& p, ExecContext execution) {
         queue(execution);
@@ -2799,9 +2745,6 @@ namespace lfs::core::internal {
         LfsHipError error{};
         check(impl_->api.nn_linear(impl_->context, inputs, view(output), &native, &error), error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::nn_attention(StorageRef q, StorageRef k, StorageRef v, std::optional<StorageRef> mask, StorageRef output, const AttentionProgram& p, ExecContext execution) {
         queue(execution);
         require((q.dtype == DataType::Float32 || q.dtype == DataType::Float16) && k.dtype == q.dtype && v.dtype == q.dtype && output.dtype == q.dtype &&
@@ -2824,9 +2767,6 @@ namespace lfs::core::internal {
         impl_->refresh_algorithm_workspace();
         check(status, error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::nn_conv2d(StorageRef input, StorageRef weight, std::optional<StorageRef> bias, StorageRef output, const ConvProgram& p, ExecContext execution) {
         queue(execution);
         require((input.dtype == DataType::Float32 || input.dtype == DataType::Float16) && weight.dtype == input.dtype && output.dtype == input.dtype &&
@@ -2863,9 +2803,6 @@ namespace lfs::core::internal {
         impl_->refresh_algorithm_workspace();
         check(status, error);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     bool HipBackendOps::triangle_tree_parity(StorageRef points, StorageRef visit, StorageRef triangles, StorageRef boxes, StorageRef output, const PointTreeProgram& p, ExecContext execution) {
         queue(execution);
         require(points.dtype == DataType::Float32 && triangles.dtype == DataType::Float32 && boxes.dtype == DataType::Float32 &&
@@ -2884,9 +2821,6 @@ namespace lfs::core::internal {
         check(impl_->api.point_tree_query(impl_->context, inputs, view(output), &native, 2, &error), error);
         return true;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     bool HipBackendOps::simplify_merge(const std::array<StorageRef, 5>& rows, StorageRef offsets, StorageRef members, const std::array<StorageRef, 5>& outputs, const SimplifyMergeProgram& p, ExecContext execution) {
         queue(execution);
         for (size_t i = 0; i < 5; ++i)
@@ -2907,9 +2841,6 @@ namespace lfs::core::internal {
         check(status, error);
         return true;
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     std::unique_ptr<BackendCompletion> HipBackendOps::create_completion(BackendCompletionTarget target) {
         if (target.external_device || target.external_point.semaphore)
             return {};
@@ -2937,48 +2868,27 @@ namespace lfs::core::internal {
                 return true;
             }
             void wait() override {
-                std::exception_ptr failure;
+                CompletionDrain drain;
                 for (auto& [marker, complete] : markers_) {
-                    if (complete)
-                        continue;
-                    try {
-                        marker->wait();
-                        complete = marker->poll(nullptr);
-                    } catch (...) {
-                        // LFS-CENSUS-OK(empty-catch): Settle every zero-byte error snapshot before propagating its first failure.
-                        if (!failure)
-                            failure = std::current_exception();
-                    }
+                    if (!complete)
+                        drain.settle([&] {
+                            marker->wait();
+                            complete = marker->poll(nullptr);
+                        });
                 }
                 markers_.clear();
-                if (failure)
-                    std::rethrow_exception(failure);
+                drain.rethrow();
             }
         };
         return std::make_unique<Completion>(*this);
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::name_queue(ExecContext, const char*) {}
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     std::unique_ptr<PreparedReadback> HipBackendOps::prepare_readback(const Tensor& source, const Tensor& destination) {
         return std::make_unique<BufferedPreparedReadback>(source, destination,
                                                           source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor&, TensorWorkQueue&) {});
     }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     void HipBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     NativeTensorAllocation HipBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
-} // namespace lfs::core::internal
-
-namespace lfs::core::internal {
     uint64_t HipBackendOps::expression_device_address(StorageRef storage) const { return descriptor_expression_address(storage); }
     void HipBackendOps::optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) {}
 } // namespace lfs::core::internal

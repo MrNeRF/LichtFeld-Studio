@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_point_filter.hpp"
+#include "point_filter_kernels.hpp"
 #include "point_tree_api.h"
 namespace {
     __global__ void ppisp_native(const float* input, float* output, int width, int height, hip_ppisp::PpispParams params) {

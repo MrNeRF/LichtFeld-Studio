@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include "core/device/portability.cuh"
 #include <cmath>
 
-#if defined(__CUDACC__)
+#if LFS_DEVICE_COMPILER
 #define LFS_ENV_HD __host__ __device__ __forceinline__
 #else
 #define LFS_ENV_HD inline

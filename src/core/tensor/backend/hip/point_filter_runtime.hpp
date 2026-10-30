@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_point_filter.hpp"
 #include "point_filter_api.h"
+#include "point_filter_kernels.hpp"
 namespace {
     template <bool NodeOnly>
     __global__ void filter_points_native(lfs::core::internal::PointFilterArgs p) {
@@ -249,8 +249,8 @@ extern "C" int lfs_hip_project_points(LfsHipContext* context, LfsHipView points,
             separate_point_ranges(p->visibility, p->visibility_count, output, size_t(p->count) * 2 * sizeof(float));
         }
         lfs::core::internal::PointProjection projection{};
-        std::copy_n(p->frame, 9, projection.rotation);
-        std::copy_n(p->frame + 9, 3, projection.translation);
+        std::copy_n(p->frame, 9, projection.rotation.data());
+        std::copy_n(p->frame + 9, 3, projection.translation.data());
         projection.focal_x = p->frame[12];
         projection.focal_y = p->frame[13];
         projection.center_x = p->frame[14];

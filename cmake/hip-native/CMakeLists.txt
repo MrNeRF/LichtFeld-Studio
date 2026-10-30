@@ -18,9 +18,9 @@ add_test(NAME HipNative.Configuration
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_runtime_configuration.py")
 set_tests_properties(HipNative.Configuration PROPERTIES
     ENVIRONMENT "CMAKE_COMMAND=${CMAKE_COMMAND}" LABELS "cpu;hip" TIMEOUT 60)
-add_test(NAME HipNative.PointwiseGenerator
-    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_pointwise_generation.py")
-set_tests_properties(HipNative.PointwiseGenerator PROPERTIES LABELS "cpu;hip" TIMEOUT 60)
+add_test(NAME HipNative.PointwiseCatalog
+    COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/python/test_hip_pointwise_catalog.py")
+set_tests_properties(HipNative.PointwiseCatalog PROPERTIES LABELS "cpu;hip" TIMEOUT 60)
 add_test(NAME HipNative.ModuleBoundary
     COMMAND "${Python3_EXECUTABLE}" "${_root}/tests/hip/test_native_runtime.py"
         "${LFS_HIP_RUNTIME_LIBRARY}" --runtime-dir "${LFS_HIP_ROOT}/bin" --abi-only)

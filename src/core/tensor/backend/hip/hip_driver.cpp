@@ -4,48 +4,29 @@
 #include "../backend_driver.hpp"
 #include "../backend_work_queue.hpp"
 #include "../native_allocation.hpp"
-#include "../native_export.hpp"
 #include "../tensor_vulkan_interop.hpp"
-#include "core/assert.hpp"
 #include "core/gpu_device_selection.hpp"
 #include "hip_backend_ops.hpp"
-#include <atomic>
 #include <charconv>
-#include <cstring>
-#include <format>
 #include <mutex>
 
 namespace lfs::core::internal {
+    std::unique_ptr<BackendWorkQueue> make_hip_work_queue(const BackendQueueCreateInfo&);
     namespace {
         class HipDriver final : public BackendDriver {
             std::mutex mutex_;
             int requested_ = -1, selected_ = -1;
 
         public:
-            BackendActivationScope activation_scope() const noexcept override { return BackendActivationScope::Process; }
-            void* canonical_home_target(void*) const noexcept override { return nullptr; }
-            std::optional<std::array<uintptr_t, 2>> bind_tensor_target(const Tensor&, bool) override { return std::nullopt; }
-            void synchronize_tensor_target(const Tensor&, void*) override {}
-            void shutdown_compatibility_pool() override {}
-            void set_pool_iteration(int) override {}
-            std::optional<StorageAccountingKind> supplementary_accounting() const noexcept override { return StorageAccountingKind::HipOwned; }
-
             NativeTensorAllocation empty_tensor_allocation(TensorAllocationKind kind) override {
                 const bool direct = kind == TensorAllocationKind::Direct;
-                const StorageRef storage{.backend = GpuBackend::HIP, .flags = allocation_flags(StorageAccountingKind::HipOwned, direct, false, false, direct ? AllocationLabel::HipDirect : AllocationLabel::None)};
+                const StorageRef storage{.backend = GpuBackend::HIP, .flags = allocation_flags(StorageAccountingKind::BackendOwned, direct, false, false, direct ? AllocationLabel::HipDirect : AllocationLabel::None)};
                 return {.storage = storage, .target = nullptr, .external_kind = allocation_label(storage)};
             }
 
-            void complete_checked_index(void* target, SourceSite) override { activate().synchronize_stream(ExecContext{static_cast<cudaStream_t>(target)}); }
-            MemoryInfo pressure_memory_info(bool) override { return backend_pressure_memory_info(*this); }
-            bool pressure_recovery_blocked() const noexcept override { return false; }
-            void register_pressure_clients(MemoryPressureCoordinator&) override {}
-
-            void* current_target() const noexcept override { return nullptr; }
             BackendRendererAccess renderer_access() const noexcept override { return {false, true, false}; }
 
-            std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_hip_vulkan_interop(device); }
-            SplatPublication publication() const override { return SplatPublication::Copied; }
+            std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_interop(VulkanInteropDevice device) override { return make_host_vulkan_interop(device, GpuBackend::HIP); }
             std::unique_ptr<BackendWorkQueue> make_work_queue(const BackendQueueCreateInfo& info) override { return make_hip_work_queue(info); }
             std::array<uintptr_t, 2> bind_target(void* target) override {
                 if (target)
@@ -65,9 +46,6 @@ namespace lfs::core::internal {
                 }
             }
             bool live() noexcept override { return hip_backend_is_live(); }
-            [[noreturn]] void throw_unavailable() override {
-                throw TensorError(std::format("GPU backend '{}' is unavailable", name()));
-            }
             int device_count() override { return hip_device_count(LFS_HIP_RUNTIME_DEFAULT_MODULE); }
             int selected_device() override {
                 std::lock_guard lock(mutex_);
@@ -75,8 +53,6 @@ namespace lfs::core::internal {
                     selected_ = select_hip_device(LFS_HIP_RUNTIME_DEFAULT_MODULE, requested_);
                 return selected_;
             }
-            bool needs_thread_binding() const noexcept override { return false; }
-            void bind_thread() override {}
             std::optional<std::string> validate_options(const TensorBackendOptions& options, int& ordinal) override {
                 ordinal = -1;
                 if (options.hip_device.empty())
@@ -116,11 +92,7 @@ namespace lfs::core::internal {
                 }
                 return result;
             }
-            MemoryInfo memory_info(bool) override { return activate().stats(); }
             size_t allocation_bytes(size_t bytes) override { return bytes; }
-            TensorExportDevice dlpack_device(const Tensor&) override { reject_dlpack_export(name()); }
-            Tensor prepare_dlpack_export(const Tensor&, std::optional<int64_t>) override { reject_dlpack_export(name()); }
-            BackendExportCapabilities export_capabilities() const noexcept override { return {}; }
             lfs::Status shutdown() override {
                 if (!live())
                     return {};

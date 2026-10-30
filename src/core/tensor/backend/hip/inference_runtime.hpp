@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_inference.hpp"
 #include "inference_api.h"
+#include "inference_kernels.hpp"
 int lfs_hip_inference_typed(LfsHipContext* context, LfsHipView input, LfsHipView output, const LfsHipInference* call, uint32_t dtype, LfsHipError* error) {
     return boundary(error, [&] {
         require((dtype == LFS_HIP_F32 || dtype == LFS_HIP_F16) && context && call && call->struct_bytes == sizeof(*call) && call->operation <= 5 && call->operation != 3, "Invalid HIP inference descriptor");
@@ -70,26 +70,31 @@ int lfs_hip_inference_typed(LfsHipContext* context, LfsHipView input, LfsHipView
         p.output = reinterpret_cast<uintptr_t>(static_cast<char*>(output.buffer->data) + output.offset);
         const unsigned groups = std::min<unsigned>((p.total + 255) / 256, 65535);
         p.step = groups * 256;
-        hip_inference::Parameters_0 native{};
-        static_assert(sizeof(native) == sizeof(p));
-        static_assert(offsetof(hip_inference::Parameters_0, u0_0) == offsetof(LfsHipInferencePush, u0));
-        std::memcpy(&native, &p, sizeof(p));
-        const auto launch = [&]<class Storage>() {
-#define LFS_INFERENCE_CASE(N) \
-    case N: hipLaunchKernelGGL((hip_inference::inference_kernel<N, Storage>), dim3(groups), dim3(256), 0, context->stream, native); break
-            switch (op) {
-                LFS_INFERENCE_CASE(0);
-                LFS_INFERENCE_CASE(1);
-                LFS_INFERENCE_CASE(2);
-                LFS_INFERENCE_CASE(4);
-                LFS_INFERENCE_CASE(5);
-            }
+#define LFS_INFERENCE_LAUNCH(N, Type)                                                                            \
+    {                                                                                                            \
+        namespace kernel = hip_inference_##N##_##Type;                                                           \
+        kernel::Parameters_0 native{};                                                                           \
+        static_assert(sizeof(native) == sizeof(p));                                                              \
+        static_assert(offsetof(kernel::Parameters_0, u0_0) == offsetof(LfsHipInferencePush, u0));                \
+        std::memcpy(&native, &p, sizeof(p));                                                                     \
+        hipLaunchKernelGGL(kernel::inference_##N##_##Type, dim3(groups), dim3(256), 0, context->stream, native); \
+    }
+#define LFS_INFERENCE_CASE(N)            \
+    case N:                              \
+        if (dtype == LFS_HIP_F32)        \
+            LFS_INFERENCE_LAUNCH(N, f32) \
+        else                             \
+            LFS_INFERENCE_LAUNCH(N, f16) \
+        break
+        switch (op) {
+            LFS_INFERENCE_CASE(0);
+            LFS_INFERENCE_CASE(1);
+            LFS_INFERENCE_CASE(2);
+            LFS_INFERENCE_CASE(4);
+            LFS_INFERENCE_CASE(5);
+        }
 #undef LFS_INFERENCE_CASE
-        };
-        if (dtype == LFS_HIP_F32)
-            launch.template operator()<float>();
-        else
-            launch.template operator()<__half>();
+#undef LFS_INFERENCE_LAUNCH
         check(hipGetLastError());
     });
 }

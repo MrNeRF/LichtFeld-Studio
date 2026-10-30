@@ -94,8 +94,13 @@ namespace lfs::core {
         try {
             wait();
         } catch (const std::exception& error) {
-            LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", error.what());
-            (void)impl_.release();
+            if (impl_->upload && impl_->upload->abandon_after_failure()) {
+                LOG_ERROR("Tensor upload failed; native retirement owns its staging: {}", error.what());
+                impl_.reset();
+            } else {
+                LOG_ERROR("Tensor upload storage retained after incomplete transfer: {}", error.what());
+                (void)impl_.release();
+            }
         }
     }
     TensorUpload::TensorUpload(TensorUpload&&) noexcept = default;
@@ -240,6 +245,7 @@ namespace lfs::core {
         struct Slot {
             std::unique_ptr<internal::BackendReadbackSlot> native;
             std::unique_ptr<TensorFence> fence;
+            internal::BackendFence* completion = nullptr;
             std::vector<Tensor> sources;
             bool sealed = false;
         };
@@ -279,6 +285,7 @@ namespace lfs::core {
             if (!slot.native)
                 throw std::runtime_error("Tensor backend does not support packed readback");
             slot.fence = std::make_unique<TensorFence>(backend);
+            slot.completion = &slot.native->completion(*slot.fence->impl_->fence);
         }
     }
     TensorReadbackRing::~TensorReadbackRing() = default;
@@ -334,17 +341,17 @@ namespace lfs::core {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before polling");
-        return slot.fence->ready();
+        return slot.completion->ready();
     }
     void TensorReadbackRing::wait(size_t index) const {
         const auto& slot = impl_->slots.at(index);
         if (!slot.sealed)
             throw std::logic_error("Readback slot must be sealed before waiting");
-        slot.fence->wait();
+        slot.completion->wait();
     }
     void TensorReadbackRing::release(size_t index) {
         auto& slot = impl_->slots.at(index);
-        if ((slot.sealed && !slot.fence->ready()) ||
+        if ((slot.sealed && !slot.completion->ready()) ||
             (!slot.sealed && !slot.sources.empty() && !impl_->queue->ready()))
             throw std::logic_error("Cannot release a pending readback slot");
         slot.sources.clear();

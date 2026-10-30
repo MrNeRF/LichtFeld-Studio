@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_shared_image.hpp"
+#include "shared_image_kernels.hpp"
 namespace hip_shared_image {
     __global__ void exact_mask(const uint8_t* input, float* output, size_t count) {
         const size_t i = size_t(blockIdx.x) * blockDim.x + threadIdx.x;

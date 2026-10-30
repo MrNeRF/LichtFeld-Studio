@@ -20,7 +20,7 @@ FILES = {
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",
     "tests/python/test_hip_runtime_configuration.py",
-    "tests/python/test_hip_pointwise_generation.py",
+    "tests/python/test_hip_pointwise_catalog.py",
     "tests/python/test_hip_host_contracts.py",
     "src/core/include/core/detail/pointwise_ops.def",
     "src/core/include/core/detail/pointwise_lowering.hpp",

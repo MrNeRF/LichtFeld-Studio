@@ -56,6 +56,7 @@ namespace lfs::core::internal {
         virtual bool begin_append(const Tensor&, size_t source_offset, size_t bytes, size_t destination_offset, ExecContext) = 0;
         virtual void append(StorageRef, size_t bytes, size_t destination_offset, ExecContext) = 0;
         virtual bool prefers_recycled_host_staging() const noexcept = 0;
+        virtual BackendFence& completion(BackendFence& marker) { return marker; }
     };
     class BackendUploadBuffer {
     public:
@@ -65,6 +66,8 @@ namespace lfs::core::internal {
         virtual void wait() = 0;
         virtual bool poll() = 0;
         virtual void settle_enqueue_failure() = 0;
+        // True only when native retirement owns every resource still in flight.
+        virtual bool abandon_after_failure() noexcept { return false; }
     };
     class BackendTimestamps {
     public:

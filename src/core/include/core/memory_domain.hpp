@@ -20,6 +20,7 @@ namespace lfs::core {
         MetalDevice,
         PinnedHost,
         PageableHost,
+        HipDevice,
     };
 
     LFS_ERROR_API const char* to_string(MemoryDomain domain) noexcept;

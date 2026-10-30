@@ -1,8 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_point_filter.hpp"
-#include "hip_spatial_components.hpp"
+#include "point_filter_kernels.hpp"
 namespace {
     namespace hs = lfs::core::internal;
     __global__ void radius_build_native(const float* points, const uint8_t* references,

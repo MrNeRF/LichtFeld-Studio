@@ -1,6 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "hip_lens.hpp"
+#include "lens_kernels.hpp"
 #include "pointwise_runtime.hpp"
 #include "tensor_ops_runtime.hpp"
 #include <core/environment_math.hpp>

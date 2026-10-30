@@ -212,10 +212,22 @@ endif()
 
 # The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
 # refinement uses the same independent double rounding as decimation.
-if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL)
+if(LFS_TENSOR_VULKAN OR LFS_TENSOR_METAL OR LFS_TENSOR_HIP)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
+endif()
+
+if(LFS_TENSOR_HIP)
+    list(APPEND TENSOR_SOURCES
+        tensor/backend/hip/hip_backend_ops.cpp
+        tensor/backend/hip/hip_driver.cpp
+        tensor/backend/hip/hip_image_ops.cpp
+        tensor/backend/hip/hip_shared_image_ops.cpp
+        tensor/backend/hip/hip_movement_ops.cpp
+        tensor/backend/hip/hip_work_queue.cpp
+        tensor/backend/hip/runtime_context.cpp
+        tensor/backend/hip/runtime_module.cpp)
 endif()
 
 # Metal tensor backend: the kernel sources are embedded and compiled at
@@ -360,7 +372,7 @@ endif()
 if(LFS_HAS_CUDA)
     list(APPEND TENSOR_SOURCES tensor/backend/cuda/cuda_pinned_stats.cpp tensor/backend/cuda/cuda_memory_pressure.cpp tensor/backend/cuda/cuda_random_state.cpp tensor/backend/cuda/cuda_target_lifetime.cpp tensor/backend/cuda/cuda_reduction_tuning.cpp)
 endif()
-add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.cpp)
+add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 include(${CMAKE_SOURCE_DIR}/cmake/GpuPrograms.cmake)
 target_sources(lfs_core PRIVATE tensor/tensor_vignette.cpp tensor/tensor_color.cpp)
 lfs_add_gpu_program(lfs_core rgb_to_yuv_program SOURCE tensor/programs/rgb_to_yuv.slang COMPUTE rgbToYuv420p DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tensor/programs/rgb_to_yuv_math.h")
@@ -387,6 +399,13 @@ if(LFS_TENSOR_METAL)
     target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_METAL=1)
     target_compile_options(lfs_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(lfs_core PRIVATE "-framework Metal" "-framework Foundation")
+endif()
+
+if(LFS_TENSOR_HIP)
+    add_subdirectory(tensor/backend/hip)
+    add_dependencies(lfs_core lfs_hip_runtime_build)
+    target_compile_definitions(lfs_core PUBLIC LFS_TENSOR_HIP=1)
+    target_compile_definitions(lfs_core PRIVATE "LFS_HIP_RUNTIME_DEFAULT_MODULE=\"${LFS_HIP_RUNTIME_LIBRARY}\"")
 endif()
 
 add_dependencies(lfs_core lfs_core_abi_stamp)

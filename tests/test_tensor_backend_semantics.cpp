@@ -439,7 +439,7 @@ namespace {
         }
         EXPECT_STREQ(gpu_backend_name(GpuBackend::HIP), "HIP");
         if constexpr (!gpu_backend_compiled(GpuBackend::HIP)) {
-            EXPECT_THROW((void)selected_hip_device(), std::runtime_error);
+            EXPECT_THROW((void)internal::backend_driver(GpuBackend::HIP).selected_device(), std::runtime_error);
             EXPECT_FALSE(gpu_backend_live(GpuBackend::HIP));
         }
         if constexpr (!gpu_backend_compiled(GpuBackend::CUDA))

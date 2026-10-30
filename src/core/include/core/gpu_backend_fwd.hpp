@@ -16,11 +16,12 @@ namespace lfs::core {
         CUDA = 0,
         Vulkan = 1,
         Metal = 2,
+        HIP = 3,
     };
 
     // Dense enum-index table used by fixed per-backend state. Keep its shape
     // stable even when a backend is not compiled.
-    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
+    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal, GpuBackend::HIP};
     inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
 
 } // namespace lfs::core

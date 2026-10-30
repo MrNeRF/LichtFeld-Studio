@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_export.hpp"
+#include "export_kernels.hpp"
 #include "point_tree_api.h"
 int lfs_hip_export_dispatch(LfsHipContext* context, uint32_t module, uint32_t phase, const void* parameters, size_t bytes, size_t work, LfsHipError* error) {
     return boundary(error, [&] {
@@ -13,7 +13,7 @@ int lfs_hip_export_dispatch(LfsHipContext* context, uint32_t module, uint32_t ph
         hip_##NAME::Parameters_0 p{};                                             \
         require(bytes == sizeof(p), "Invalid HIP export parameters size");        \
         std::memcpy(&p, parameters, sizeof(p));                                   \
-        hip_##NAME::export_kernel<<<groups, 256, 0, context->stream>>>(p, phase); \
+        hip_##NAME::NAME##_kernel<<<groups, 256, 0, context->stream>>>(p, phase); \
         check(hipGetLastError());                                                 \
         break;                                                                    \
     }

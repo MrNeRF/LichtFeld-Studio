@@ -3,8 +3,18 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 112;
 
+#ifdef LFS_INFERENCE_OPERATION
+static const uint kOperation = LFS_INFERENCE_OPERATION;
+#else
 [SpecializationConstant]
-const uint kOperation = 0; // im2col, col2im, resize, pool, activation, grid
+const uint kOperation = 0;
+#endif
+#ifndef LFS_INFERENCE_STORAGE
+#define LFS_INFERENCE_STORAGE float
+#endif
+#ifndef LFS_KERNEL_ENTRY
+#define LFS_KERNEL_ENTRY main
+#endif // im2col, col2im, resize, pool, activation, grid
 
 struct Parameters
 {
@@ -36,7 +46,7 @@ struct Parameters
     float v1;
 };
 
-float sample(float* input, int plane, int y, int x, Parameters p)
+float sample(LFS_INFERENCE_STORAGE* input, int plane, int y, int x, Parameters p)
 {
     return input[(plane * p.height + clamp(y, 0, p.height - 1)) * p.width + clamp(x, 0, p.width - 1)];
 }
@@ -68,10 +78,10 @@ float erfApprox(float x)
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
-void main(uint3 id : SV_DispatchThreadID, uniform Parameters p)
+void LFS_KERNEL_ENTRY(uint3 id : SV_DispatchThreadID, uniform Parameters p)
 {
-    float* input = (float*)p.inputAddress;
-    float* output = (float*)p.outputAddress;
+    LFS_INFERENCE_STORAGE* input = (LFS_INFERENCE_STORAGE*)p.inputAddress;
+    LFS_INFERENCE_STORAGE* output = (LFS_INFERENCE_STORAGE*)p.outputAddress;
     for (uint index = id.x; index < p.total; index += p.step)
     {
         float value = 0.0;
@@ -161,6 +171,6 @@ void main(uint3 id : SV_DispatchThreadID, uniform Parameters p)
             else
                 value = p.height == 1 ? p.v0 : p.v0 + (p.v1 - p.v0) * (pixel / p.width) / (p.height - 1);
         }
-        output[index] = value;
+        output[index] = LFS_INFERENCE_STORAGE(value);
     }
 }

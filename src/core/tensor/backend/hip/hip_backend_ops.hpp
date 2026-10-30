@@ -44,7 +44,7 @@ namespace lfs::core::internal {
         std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
         std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
         std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
-        LFS_CORE_API BackendQueueLease execution_lease(ExecContext);
+        LFS_CORE_API std::shared_ptr<void> execution_lease();
         bool drain_queue_for_destruction() noexcept;
         ExpressionCacheStats expression_cache_stats() override;
         LFS_CORE_API uint64_t storage_address(StorageRef, size_t required_bytes);

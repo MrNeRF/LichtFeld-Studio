@@ -379,8 +379,12 @@ namespace {
         check(hipGetLastError());
     }
 
+    using namespace lfs::core;
+    using namespace lfs::core::internal;
     constexpr unsigned pointwise_flags[] = {
-#include "hip_pointwise_flags.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) (hip_pointwise::Lowering<Functor>::mode | (hip_pointwise::Lowering<Functor>::predicate ? 4 : 0)),
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
     };
     static_assert(sizeof(pointwise_flags) / sizeof(pointwise_flags[0]) == LFS_HIP_OP_COUNT);
     struct ChainOp {
@@ -392,10 +396,27 @@ namespace {
         uint32_t count;
         ChainOp ops[16];
     };
+    template <class F>
+    __device__ float evaluate_pointwise(float x, float y, float scalar) {
+        using L = hip_pointwise::Lowering<F>;
+        const auto op = L::make(scalar);
+        if constexpr (L::predicate)
+            return NAN;
+        else if constexpr (L::mode == 2)
+            return op(x, y);
+        else if constexpr (L::mode == 1)
+            return op(x, scalar);
+        else
+            return op(x);
+    }
     __device__ float evaluate_op(uint32_t op, float x, float y, float scalar) {
         using namespace lfs::core;
+        using namespace lfs::core::internal;
         switch (op) {
-#include "hip_pointwise_eval.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) \
+    case LFS_HIP_OP_##Id: return evaluate_pointwise<Functor>(x, y, scalar);
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
         default: return NAN;
         }
     }
@@ -875,6 +896,17 @@ namespace {
         }
     }
 
+    template <class F, class Storage>
+    void dispatch_broadcast(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
+                            LfsHipLayout a, LfsHipLayout b, LfsHipLayout out) {
+        using L = hip_pointwise::Lowering<F>;
+        using Out = std::conditional_t<L::predicate, uint8_t, Storage>;
+        if constexpr (L::mode == 2)
+            launch_broadcast<Out, Storage>(context, lhs, rhs, output, a, b, out, F{});
+        else
+            throw std::invalid_argument("Unsupported HIP broadcast operation");
+    }
+
     void launch_integral_broadcast(LfsHipContext*, uint32_t, LfsHipView, LfsHipView, LfsHipView, LfsHipLayout, LfsHipLayout, LfsHipLayout, uint32_t);
 
 } // namespace
@@ -899,9 +931,19 @@ int lfs_hip_scalar_left_typed(LfsHipContext* context, uint32_t op, LfsHipView lh
                 "Invalid HIP scalar-left descriptor");
         DeviceScope device(context->device);
         using namespace lfs::core;
+        using namespace lfs::core::internal;
         const auto dispatch = [&]<class Storage>() {
             switch (op) {
-#include "hip_pointwise_scalar_left.inc"
+#define LFS_SCALAR_LEFT(Id, Functor)                                                             \
+    case LFS_HIP_OP_##Id:                                                                        \
+        launch_pointwise<0, Storage, Storage>(context, lhs, {}, output, count, scalar,           \
+                                              ops::scalar_left_op<ops::Functor, float>{scalar}); \
+        break;
+                LFS_SCALAR_LEFT(AddScalar, add_op)
+                LFS_SCALAR_LEFT(SubScalar, sub_op)
+                LFS_SCALAR_LEFT(MulScalar, mul_op)
+                LFS_SCALAR_LEFT(DivScalar, div_op)
+#undef LFS_SCALAR_LEFT
             default: throw std::invalid_argument("Unsupported HIP scalar-left operation");
             }
         };
@@ -937,16 +979,23 @@ int lfs_hip_broadcast_typed(LfsHipContext* context, uint32_t op, LfsHipView lhs,
         require_disjoint(rhs, b_bytes, output, out_bytes, "HIP broadcast output must not overlap an input");
         DeviceScope device(context->device);
         using namespace lfs::core;
+        using namespace lfs::core::internal;
         if (input_dtype != LFS_HIP_F32 && input_dtype != LFS_HIP_F16) {
             launch_integral_broadcast(context, op, lhs, rhs, output, a, b, out, input_dtype);
         } else if (input_dtype == LFS_HIP_F16) {
             switch (op) {
-#include "hip_pointwise_half_broadcast.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) \
+    case LFS_HIP_OP_##Id: dispatch_broadcast<Functor, __half>(context, lhs, rhs, output, a, b, out); break;
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
             default: throw std::invalid_argument("Unsupported HIP half broadcast operation");
             }
         } else {
             switch (op) {
-#include "hip_pointwise_broadcast.inc"
+#define LFS_POINTWISE_OP(Id, Functor, Name) \
+    case LFS_HIP_OP_##Id: dispatch_broadcast<Functor, float>(context, lhs, rhs, output, a, b, out); break;
+#include "pointwise_ops.def"
+#undef LFS_POINTWISE_OP
             default: throw std::invalid_argument("Unsupported HIP broadcast operation");
             }
         }

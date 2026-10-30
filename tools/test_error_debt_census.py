@@ -299,6 +299,20 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("unchecked-kernel-launch", [])
 
+    def test_native_hip_launch_checks_are_recognized(self) -> None:
+        self.write(
+            "core/tensor/backend/hip/launch.hpp",
+            "void launch() {\n"
+            "  checked<<<grid, block>>>(input);\n"
+            "  check(hipGetLastError());\n"
+            "  unchecked<<<grid, block>>>(output);\n"
+            "}\n",
+        )
+        self.assert_rule_hits(
+            "unchecked-kernel-launch",
+            [("src/core/tensor/backend/hip/launch.hpp", 4, "core")],
+        )
+
     def test_unchecked_kernel_launch_counts_after_digit_separator(self) -> None:
         """C++14 digit separators must not blank the rest of the TU via mask_source."""
         self.write(

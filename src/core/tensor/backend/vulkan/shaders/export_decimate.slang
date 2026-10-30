@@ -1,10 +1,13 @@
+#include "native_entry.slangh"
 #include "df64.slangh"
 
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant]
 const uint kPhase = 0;
+#endif
 
 struct Parameters {
     uint64_t pos;
@@ -122,8 +125,8 @@ void consider(inout NeighbourHeap heap, Ptr<float, Access.Read> pos, uint i, uin
 }
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)p.pos;
     Ptr<uint, Access.Read> order = (Ptr<uint, Access.Read>)p.order;
     Ptr<float, Access.ReadWrite> boxes = (Ptr<float, Access.ReadWrite>)p.boxes;

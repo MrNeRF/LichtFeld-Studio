@@ -449,6 +449,8 @@ KERNEL_CHECK_MARKERS = (
     "LFS_ENSURE_CUDA_SUCCESS",
     "cudaGetLastError",
     "cudaPeekAtLastError",
+    "hipGetLastError",
+    "hipPeekAtLastError",
 )
 
 

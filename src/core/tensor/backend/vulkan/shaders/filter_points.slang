@@ -14,8 +14,7 @@ struct Parameters
 };
 
 #include "../../../../include/core/rounded_math.slangh"
-#define LFS_POINT_FILTER_FLAGS_ONLY
-#include "../../../internal/point_filter.hpp"
+#include "../../../../include/core/device/point_filter_flags.hpp"
 
 #include "byte_read.slangh"
 float3 loadPoint(uint64_t a, uint i)

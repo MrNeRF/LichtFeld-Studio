@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_shared_resize.hpp"
+#include "shared_resize_kernels.hpp"
 int lfs_hip_shared_resize(LfsHipContext* context, const LfsHipSharedResize* p, LfsHipView source,
                           LfsHipView destination, LfsHipView coefficients_x, LfsHipView coefficients_y, LfsHipError* error) {
     return boundary(error, [&] {

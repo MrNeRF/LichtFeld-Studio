@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_point_filter.hpp"
+#include "point_filter_kernels.hpp"
 #include "point_tree_api.h"
 int lfs_hip_affine(LfsHipContext* context, const LfsHipView* inputs, const LfsHipView* outputs,
                    const float* matrix, size_t count, LfsHipError* error) {

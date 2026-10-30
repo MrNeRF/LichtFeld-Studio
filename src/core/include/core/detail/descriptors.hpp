@@ -15,6 +15,8 @@
 #include <optional>
 #include <type_traits>
 
+#include "core/device/point_tree_types.hpp"
+
 namespace lfs::core {
     class Tensor;
     enum class ReduceOp : uint8_t;
@@ -163,7 +165,8 @@ namespace lfs::core {
         inline constexpr uint32_t STORAGE_REF_ACCOUNTED = 1U << 2;
         inline constexpr uint32_t STORAGE_REF_RELEASE_AFTER_TEARDOWN = 1U << 3;
         enum class AllocationLabel : uint32_t { None,
-                                                CudaDirect };
+                                                CudaDirect,
+                                                HipDirect };
         constexpr uint32_t allocation_flags(StorageAccountingKind kind, bool direct,
                                             bool accounted, bool release_after_teardown,
                                             AllocationLabel label = AllocationLabel::None) {
@@ -184,6 +187,7 @@ namespace lfs::core {
         constexpr const char* allocation_label(StorageRef storage) {
             switch (static_cast<AllocationLabel>(storage.flags >> 16)) {
             case AllocationLabel::CudaDirect: return "cuda.direct";
+            case AllocationLabel::HipDirect: return "hip.direct";
             default: return "";
             }
         }
@@ -237,19 +241,6 @@ namespace lfs::core {
         // A radius query over a point tree: the reference points in Morton order, boxes over runs of
         // kPointTreeFanout of them (level 0) and over runs of kPointTreeFanout boxes of the level below,
         // stored level after level. visit lists the sorted references' indices, then every other point.
-        inline constexpr uint32_t kPointTreeFanoutBits = 5;
-        inline constexpr uint32_t kPointTreeFanout = 1u << kPointTreeFanoutBits;
-        inline constexpr uint32_t kPointTreeMaxLevels = 8;
-        struct PointTreeProgram {
-            uint32_t points = 0;
-            uint32_t references = 0;
-            uint32_t levels = 0;
-            uint32_t level_offset[kPointTreeMaxLevels] = {};
-            uint32_t level_count[kPointTreeMaxLevels] = {};
-            // Used when no per-point radii are given.
-            float radius = 0;
-            int32_t max_count = 0;
-        };
 
         // Splat simplification merges groups of rows (means, activated scales, unit rotations, opacities as
         // alpha, appearance of app_dim floats) into one row each.

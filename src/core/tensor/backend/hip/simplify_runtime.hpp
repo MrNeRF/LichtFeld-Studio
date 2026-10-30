@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_point_filter.hpp"
+#include "point_filter_kernels.hpp"
 namespace {
     __global__ void simplify_validate(const int32_t* offsets, const int32_t* members, size_t groups, size_t capacity, size_t rows, uint32_t* invalid) {
         for (size_t g = size_t(blockIdx.x) * 256 + threadIdx.x; g < groups; g += size_t(gridDim.x) * 256) {

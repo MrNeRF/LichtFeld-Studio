@@ -71,6 +71,7 @@ namespace lfs::core {
         static TensorFence adopt(GpuBackend backend, void* event);
 
     private:
+        friend class TensorReadbackRing;
         TensorFence(GpuBackend backend, void* event);
         struct Impl;
         std::unique_ptr<Impl> impl_;

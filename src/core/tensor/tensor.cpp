@@ -298,7 +298,7 @@ namespace lfs::core {
         case StorageAccountingKind::VulkanExternal:
             add_counter(state.vulkan_external, bytes);
             break;
-        case StorageAccountingKind::MetalOwned:
+        case StorageAccountingKind::BackendOwned:
             break;
         }
     }
@@ -318,7 +318,7 @@ namespace lfs::core {
         case StorageAccountingKind::VulkanExternal:
             subtract_counter(state.vulkan_external, bytes);
             break;
-        case StorageAccountingKind::MetalOwned:
+        case StorageAccountingKind::BackendOwned:
             break;
         }
     }
