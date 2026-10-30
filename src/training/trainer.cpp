@@ -7915,6 +7915,10 @@ namespace lfs::training {
                     return StepDisposition::Retry;
                 }
                 if (!resolved_fast_has_work) {
+                    // With a deferred count, the loss and the backwards ran before the count showed nothing visible.
+                    // This return skips PPISP's optimizer step and its zero_grad, so its gradients are dropped here.
+                    if (ppisp_)
+                        ppisp_->zero_grad();
                     if (auto degenerate = check_invisible_iteration(iter))
                         return std::move(*degenerate);
                     LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
