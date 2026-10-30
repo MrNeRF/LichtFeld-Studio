@@ -21,13 +21,15 @@ namespace lfs::core::image_codecs {
         }
         template <class Writer>
         Status encode(std::span<const uint8_t> input, int width, int height, int channels, size_t stride,
-                      const AvifEncodeOptions& options, Writer&& write) {
+                      const AvifEncodeOptions& options, std::string_view xmp, Writer&& write) {
             try {
                 const auto cancelled = [&] { return options.cancelled && options.cancelled(); };
                 if (cancelled())
                     return failure(ErrorCode::Cancelled, "cancelled before encoding");
                 if (auto valid = validate_avif_encode_options(options); !valid)
                     return valid;
+                if (xmp.size() > 32u * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                    return failure(ErrorCode::InvalidArgument, "XMP exceeds 32 MiB or contains NUL");
                 if (width <= 0 || height <= 0 || channels < 1 || channels > 4)
                     return failure(ErrorCode::InvalidArgument, "invalid dimensions or channel count");
                 const size_t sample = options.bit_depth == 8 ? 1 : 2;
@@ -114,8 +116,17 @@ namespace lfs::core::image_codecs {
                 settings->output_nclx_profile = color.get();
                 if (cancelled())
                     return failure(ErrorCode::Cancelled, "cancelled before provider submission");
-                if (auto status = check(heif_context_encode_image(context.get(), image.get(), encoder.get(), settings.get(), nullptr)); !status)
+                heif_image_handle* raw_encoded = nullptr;
+                const auto encoded = heif_context_encode_image(context.get(), image.get(), encoder.get(), settings.get(), xmp.empty() ? nullptr : &raw_encoded);
+                std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> handle(raw_encoded, heif_image_handle_release);
+                if (auto status = check(encoded); !status)
                     return status;
+                if (!xmp.empty()) {
+                    if (!handle)
+                        return failure(ErrorCode::Internal, "provider returned no encoded image handle");
+                    if (auto status = check(heif_context_add_XMP_metadata(context.get(), handle.get(), xmp.data(), int(xmp.size()))); !status)
+                        return status;
+                }
                 if (cancelled())
                     return failure(ErrorCode::Cancelled, "cancelled after provider encoding");
                 struct Output {
@@ -178,9 +189,9 @@ namespace lfs::core::image_codecs {
         return {};
     }
     Status encode_avif_memory(std::span<const uint8_t> data, int width, int height, int channels, size_t stride,
-                              std::vector<uint8_t>& output, const AvifEncodeOptions& options) {
+                              std::vector<uint8_t>& output, const AvifEncodeOptions& options, std::string_view xmp) {
         std::vector<uint8_t> candidate;
-        auto result = encode(data, width, height, channels, stride, options, [&](std::span<const uint8_t> bytes) -> Status {
+        auto result = encode(data, width, height, channels, stride, options, xmp, [&](std::span<const uint8_t> bytes) -> Status {
             candidate.insert(candidate.end(), bytes.begin(), bytes.end());
             return {};
         });
@@ -189,11 +200,11 @@ namespace lfs::core::image_codecs {
         return result;
     }
     Status write_avif(const std::filesystem::path& path, std::span<const uint8_t> data, int width, int height,
-                      int channels, size_t stride, const AvifEncodeOptions& options, const AtomicFileOptions& publication) {
+                      int channels, size_t stride, const AvifEncodeOptions& options, const AtomicFileOptions& publication, std::string_view xmp) {
         try {
             auto encoding = options;
             encoding.cancelled = [a = options.cancelled, b = publication.cancelled] { return (a && a()) || (b && b()); };
-            return writeFileAtomically(path, [&](FILE* stream) { return encode(data, width, height, channels, stride, encoding, [&](std::span<const uint8_t> bytes) -> Status {
+            return writeFileAtomically(path, [&](FILE* stream) { return encode(data, width, height, channels, stride, encoding, xmp, [&](std::span<const uint8_t> bytes) -> Status {
                                                                      if (std::fwrite(bytes.data(), 1, bytes.size(), stream) != bytes.size()) {
                                                                          const int native = errno;
                                                                          return Status::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = "Cannot write AVIF output (errno=" + std::to_string(native) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, native, "stdio"}}));

@@ -124,8 +124,8 @@ namespace lfs::media {
                     p.preserve_source_metadata = files->preserve_source_metadata || files->files.embed_source_metadata;
                     p.embed_source_metadata = files->files.embed_source_metadata;
                     p.jpeg_metadata_output = files->files.image_output;
-                    if (p.embed_source_metadata && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::TIFF16 && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::JXL)
-                        return failure(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR or JXL output", 0);
+                    if (p.embed_source_metadata && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::TIFF16 && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::JXL && files->files.format != FrameFileFormat::AVIF)
+                        return failure(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output", 0);
                     p.generate_metadata = files->write_metadata || p.preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
                     // Resume regenerates the derived manifest only after the sink
                     // verifies the checkpoint identity and every recorded frame.

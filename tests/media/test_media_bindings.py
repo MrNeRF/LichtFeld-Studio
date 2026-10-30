@@ -1347,9 +1347,72 @@ class MediaBindings(unittest.TestCase):
     def test_jxl_embedded_metadata_resume_policy_and_replay(self):
         self._check_embedded_metadata_resume(media.FrameFileFormat.JXL, ".jxl")
 
+    def test_avif_embedded_metadata_roundtrip_and_unchanged_image_items(self):
+        import xml.etree.ElementTree as ET
+        request = self.metadata_request()
+        request.output_format = media.FramePixelFormat.RGBFloat32
+        request.input_color.transfer = media.ColorTransfer.Linear
+        request.input_color.primaries = media.ColorPrimaries.Bt709
+        request.geometry.clockwise_rotation = 90
+        request.end_seconds = 0.01
+        for depth, lossless in ((8, True), (10, True), (12, True), (8, False)):
+            with self.subTest(depth=depth, lossless=lossless):
+                plain = media.FileExtraction()
+                plain.files.format = media.FrameFileFormat.AVIF
+                plain.files.avif.bit_depth, plain.files.avif.lossless = depth, lossless
+                plain.files.output_directory = self.root / f"avif-plain-{depth}-{lossless}"
+                self.assertGreater(media.MediaIngest.extract_files(request, plain).frames_accepted, 0)
+                output = media.FileExtraction()
+                output.files.format = media.FrameFileFormat.AVIF
+                output.files.avif.bit_depth, output.files.avif.lossless = depth, lossless
+                output.files.embed_source_metadata = True
+                output.files.output_directory = self.root / f"avif é 日本語-{depth}-{lossless}"
+                self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+                manifest = json.loads((output.files.output_directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["embedded_metadata_policy"], "avif-static-source-xmp-v1")
+                paths = list(output.files.output_directory.glob("*.avif"))
+                self.assertTrue(paths)
+                for image in paths:
+                    data = image.read_bytes()
+                    properties, items, packets = source_exif_fixture.read_export_avif(data)
+                    original = plain.files.output_directory / image.name
+                    old_properties, old_items, absent = source_exif_fixture.read_export_avif(original.read_bytes())
+                    self.assertEqual(absent, [])
+                    self.assertEqual(properties, old_properties)
+                    self.assertEqual(items, old_items)
+                    self.assertEqual(len(packets), 1)
+                    facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packets[0]).iter()
+                             if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                    self.assertEqual(facts["MetadataPolicy"], "avif-static-source-xmp-v1")
+                    self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), ("32", "64"))
+                    self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+                    entry = next(item for item in manifest["frames"] if item["file"] == image.name)
+                    self.assertEqual(facts["TimestampOrigin"], entry["timestamp_origin"])
+                    self.assertEqual(int(facts["SourceFrame"]), entry["source_frame"])
+                    self.assertEqual(int(facts["SourceTimestampTicks"]), entry["source_pts"])
+                    video = next(stream for stream in manifest["source_metadata"]["metadata"]["description"]["streams"]
+                                 if stream["kind"] == "video")
+                    self.assertEqual([int(facts["SourceTimeBaseNumerator"]), int(facts["SourceTimeBaseDenominator"])], video["time_base"])
+                    self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+                    observed = json.loads(media.MediaIngest.source_metadata_json(image))
+                    self.assertTrue(observed["success"])
+                    blocks = observed["metadata"]["image_xmp"]["blocks"]
+                    self.assertEqual([block["envelope"] for block in blocks], ["heif_mime"])
+                    self.assertEqual([bytes.fromhex(block["bytes"]) for block in blocks], packets)
+                    decoded = [subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                               "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-"], timeout=30)
+                               for path in (original, image)]
+                    self.assertEqual(len(decoded[0]), 32 * 64 * 12)
+                    self.assertEqual(decoded[0], decoded[1])
+                    with self.assertRaises(AssertionError):
+                        source_exif_fixture.read_export_avif(data[:12])
+
+    def test_avif_embedded_metadata_resume_policy_and_replay(self):
+        self._check_embedded_metadata_resume(media.FrameFileFormat.AVIF, ".avif")
+
     def _check_embedded_metadata_resume(self, file_format, extension):
         request = self.metadata_request()
-        if file_format in (media.FrameFileFormat.TIFF16, media.FrameFileFormat.EXR, media.FrameFileFormat.JXL):
+        if file_format in (media.FrameFileFormat.TIFF16, media.FrameFileFormat.EXR, media.FrameFileFormat.JXL, media.FrameFileFormat.AVIF):
             request.output_format = media.FramePixelFormat.RGBFloat32
             request.input_color.transfer = media.ColorTransfer.Linear
             request.input_color.primaries = media.ColorPrimaries.Bt709

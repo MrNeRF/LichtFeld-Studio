@@ -53,8 +53,8 @@ namespace lfs::media {
         source_metadata_.reset();
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata) {
-            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::JXL)
-                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR or JXL output");
+            if (options_.format != FrameFileFormat::JPEG && options_.format != FrameFileFormat::PNG && options_.format != FrameFileFormat::TIFF16 && options_.format != FrameFileFormat::EXR && options_.format != FrameFileFormat::JXL && options_.format != FrameFileFormat::AVIF)
+                return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
             if (!session.source_metadata)
                 return sinkError(ErrorCode::InvalidArgument, "Image metadata requires an explicit source observation");
             // GPU extraction writes its encoded batch directly. Keep only the
@@ -141,8 +141,14 @@ namespace lfs::media {
                 return SinkResult::failure(packet.error());
             return ImageOutput::writeJxl(filename, frame, options_.jxl, *packet);
         }
-        if (options_.format == FrameFileFormat::AVIF)
-            return ImageOutput::writeAvif(filename, frame, options_.avif);
+        if (options_.format == FrameFileFormat::AVIF) {
+            if (!options_.embed_source_metadata)
+                return ImageOutput::writeAvif(filename, frame, options_.avif);
+            auto packet = detail::imageXmpPacket(*embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+            if (!packet)
+                return SinkResult::failure(packet.error());
+            return ImageOutput::writeAvif(filename, frame, options_.avif, *packet);
+        }
         // Legacy extraction is already packed: no additional pixel copy.
         std::vector<std::uint8_t> packed;
         const auto* pixels = frame.pixels.data();

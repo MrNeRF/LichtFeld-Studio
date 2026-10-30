@@ -113,6 +113,7 @@ namespace lfs::media::detail {
                : format == FrameFileFormat::TIFF16 ? std::string_view(tiff_metadata_policy)
                : format == FrameFileFormat::EXR    ? std::string_view(exr_metadata_policy)
                : format == FrameFileFormat::JXL    ? std::string_view(jxl_metadata_policy)
+               : format == FrameFileFormat::AVIF   ? std::string_view(avif_metadata_policy)
                                                    : std::string_view{};
     }
     std::string_view imageXmpSuffix() {
@@ -120,7 +121,7 @@ namespace lfs::media::detail {
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16 && metadata.format != FrameFileFormat::EXR && metadata.format != FrameFileFormat::JXL) || width <= 0 || height <= 0)
+        if ((metadata.format != FrameFileFormat::PNG && metadata.format != FrameFileFormat::TIFF16 && metadata.format != FrameFileFormat::EXR && metadata.format != FrameFileFormat::JXL && metadata.format != FrameFileFormat::AVIF) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
@@ -135,7 +136,7 @@ namespace lfs::media::detail {
     }
     Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format) {
         if (embeddedMetadataPolicy(format).empty())
-            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR or JXL output");
+            return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
         try {
             const auto summary = summarizeSourceMetadata(catalog);
             if (!summary)
