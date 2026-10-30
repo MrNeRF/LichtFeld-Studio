@@ -107,6 +107,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub.read_checkpoint_params = lambda _path: object()
     lf_stub.load_file = lambda *_args, **_kwargs: None
     lf_stub.load_config_file = lambda *_args, **_kwargs: None
+    lf_stub.shaders = SimpleNamespace(list=lambda: [])
+    lf_stub.io = SimpleNamespace(inspect_project_details=lambda _path, **_kwargs: SimpleNamespace(chapters=[]))
     lf_stub._test_state = state
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
