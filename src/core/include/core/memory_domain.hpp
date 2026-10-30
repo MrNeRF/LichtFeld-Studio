@@ -10,9 +10,9 @@ namespace lfs {
     class Error;
 }
 namespace lfs::core {
-    // Physical backing of an allocation. CudaDevice, CudaVmm, VulkanDevice and
-    // MetalDevice all draw from the same physical device heap and must never
-    // be summed; the two host domains are separate system RAM.
+    // Physical backing of an allocation. Device API domains on the same
+    // physical adapter share its heap and must not be summed; the two host
+    // domains are separate system RAM.
     enum class MemoryDomain : uint8_t {
         CudaDevice,
         CudaVmm,

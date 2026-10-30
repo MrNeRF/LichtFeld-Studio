@@ -7,6 +7,8 @@
 # including the visualizer-only configuration that never reaches the full suite.
 set_property(SOURCE test_main.cpp APPEND PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
 
+# Standalone policy tests may include public Core descriptors without linking Core.
+link_libraries(lfs_backend_configuration)
 if(LFS_HAS_CUDA AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Independent of the full/visualizer suites: CPU CI enables only format tests.
     # This executable supplies fake CUDART lookup functions and needs no driver.
@@ -3147,4 +3149,3 @@ if(LFS_TENSOR_VULKAN AND BUILD_TESTS)
     endif()
     add_test(NAME GpuPushConstantContracts COMMAND gpu_push_constant_contracts)
 endif()
-

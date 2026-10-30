@@ -17,6 +17,7 @@ target_include_directories(lfs_logger
 )
 
 target_link_libraries(lfs_logger
+    PUBLIC lfs_backend_configuration
     PRIVATE
         lfs_diagnostics
         spdlog::spdlog

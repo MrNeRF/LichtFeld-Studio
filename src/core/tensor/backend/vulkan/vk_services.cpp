@@ -1,5 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../native_allocation.hpp"
+#include "../prepared_readback.hpp"
 
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
@@ -35,6 +37,11 @@ namespace lfs::core::internal {
                     context_->memory().deallocate(storage_);
             }
 
+            void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget) override {
+                auto storage = storage_ref(source);
+                storage.byte_offset += offset;
+                enqueue(storage, bytes, {});
+            }
             void enqueue(StorageRef source, size_t bytes, ExecContext) override {
                 LFS_FACADE_TRACE(service_enqueue_readback);
                 LFS_ASSERT_MSG(!pending_, "Readback staging is already in use");
@@ -48,8 +55,11 @@ namespace lfs::core::internal {
                 bytes_ = bytes;
                 completion_ = {};
                 pending_ = true;
-                completion_ = TensorCompletionAccess::vulkan(
-                    context_->memory().copy_to_readback(source, storage_, bytes));
+                completion_ = TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = bytes
+                                                                                               ? context_->memory().copy_to_readback(source, storage_, bytes)
+                                                                                               : context_->recorders().flush_current(),
+                                                                                  .settle_on_release = false,
+                                                                                  .use_recorded_timeline = true});
             }
 
             void wait() override {
@@ -66,7 +76,7 @@ namespace lfs::core::internal {
                 if (!completion_.ready())
                     return false;
                 context_->check_fault_buffer();
-                if (destination)
+                if (destination && bytes_)
                     context_->memory().copy_mapped(storage_, destination, bytes_);
                 pending_ = false;
                 return true;
@@ -477,7 +487,7 @@ namespace lfs::core::internal {
                     if (tensor && tensor->is_valid() && gpu_backend_of(*tensor) == GpuBackend::Vulkan)
                         storage.push_back(storage_ref(*tensor));
                 }
-                return TensorCompletionAccess::vulkan(context->recorders().flush_storages(storage));
+                return TensorCompletionAccess::record(GpuBackend::Vulkan, {.value = context->recorders().flush_storages(storage), .settle_on_release = false, .use_recorded_timeline = true});
             }
 
             void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point) override {
@@ -591,4 +601,28 @@ namespace lfs::core::internal {
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice target) {
         return std::make_shared<VulkanTensorVulkanInterop>(target);
     }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    std::unique_ptr<PreparedReadback> VulkanBackendOps::prepare_readback(const Tensor& source, const Tensor& destination) {
+        return std::make_unique<BufferedPreparedReadback>(source, destination,
+                                                          source.bytes() ? create_readback_buffer() : nullptr, [](const Tensor& tensor, TensorWorkQueue& queue) {
+                                                              const auto storage = storage_ref(tensor);
+                                                              const auto context = acquire_vulkan_context();
+                                                              const uint64_t recorder = storage.meta ? storage.meta->pending_recorder.load(std::memory_order_acquire) : 0;
+                                                              uint64_t value = storage.meta ? storage.meta->pending_value.load(std::memory_order_acquire) : 0;
+                                                              if (recorder)
+                                                                  value = std::max(value, context->recorders().flush_queue(recorder));
+                                                              auto producer = TensorFence::adopt(GpuBackend::Vulkan, reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
+                                                              queue.wait_for(producer);
+                                                          });
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    void VulkanBackendOps::validate_checked_index_execution(ExecContext context) { (void)stream_is_capturing(context); }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    NativeTensorAllocation VulkanBackendOps::allocate_tensor(const TensorAllocationRequest& request) { return allocate_native_tensor(*this, request); }
 } // namespace lfs::core::internal

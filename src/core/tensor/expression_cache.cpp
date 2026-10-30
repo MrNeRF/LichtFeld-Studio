@@ -130,7 +130,8 @@ namespace lfs::core::internal {
         std::shared_ptr<CompiledExpression> kernel;
         if (!artifact.empty()) {
             kernel = load(artifact);
-            ++stats_.disk_hits;
+            if (kernel)
+                ++stats_.disk_hits;
         }
         if (!kernel) {
             const auto begin = std::chrono::steady_clock::now();
@@ -140,6 +141,8 @@ namespace lfs::core::internal {
                                      .count();
             ++stats_.compilations;
             kernel = load(artifact);
+            if (!kernel)
+                throw std::runtime_error("Compiled expression artifact does not match its launch contract");
             write_artifact(path, key, artifact);
         }
         ++stats_.loads;

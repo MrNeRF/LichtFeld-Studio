@@ -1608,7 +1608,9 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
         return;
     }
     if (kOp == 8) {
-        const long index = ((device const long*)input)[tid];
+        long index = ((device const long*)input)[tid];
+        if (kBoundary == 1) index = clamp(index, long(0), long(params.dim_size) - 1);
+        else if (kBoundary == 2) { index %= long(params.dim_size); if (index < 0) index += long(params.dim_size); }
         if (index < 0 || index >= long(params.dim_size)) {
             // Code 2 stores the signed index in words 1-2 and the extent in word 3.
             record_fault(fault, 2, uint(index), uint(ulong(index) >> 32), params.dim_size);

@@ -170,8 +170,7 @@ namespace lfs::core::internal {
                 if (serial <= context->completed())
                     return {};
                 const auto timeline = this->timeline(*context);
-                return TensorCompletionAccess::external(target_.device,
-                                                        {timeline->semaphore, context->signal(timeline->event), timeline});
+                return TensorCompletionAccess::record(GpuBackend::Vulkan, { .timeline = { timeline->semaphore, context->signal(timeline->event), timeline }, .external_device = target_.device, .settle_on_release = false, .record = false });
             }
 
             // Metal work waits on the GPU for the consumer's timeline, and host
@@ -279,9 +278,9 @@ namespace lfs::core::internal {
             TensorCompletion signal() override {
                 const auto context = metal::acquire_context();
                 if (!timeline_)
-                    return TensorCompletionAccess::metal(context->flush());
+                    return TensorCompletionAccess::record(GpuBackend::Metal, { .value = context->flush(), .settle_on_release = false });
                 const uint64_t serial = context->signal(timeline_->event);
-                return TensorCompletionAccess::metal(serial, {timeline_->semaphore, serial, timeline_});
+                return TensorCompletionAccess::record(GpuBackend::Metal, { .value = serial, .timeline = { timeline_->semaphore, serial, timeline_ }, .settle_on_release = false });
             }
 
         private:

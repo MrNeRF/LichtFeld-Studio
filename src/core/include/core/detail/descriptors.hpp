@@ -19,6 +19,7 @@ namespace lfs::core {
     class Tensor;
     enum class ReduceOp : uint8_t;
     struct StorageMeta;
+    enum class StorageAccountingKind : uint8_t;
 
     namespace ops {
         struct add_op;
@@ -145,6 +146,7 @@ namespace lfs::core {
         enum class AllocationClass : uint8_t {
             Pooled,
             Direct,
+            Exact,
         };
 
         struct ExecContext {
@@ -156,6 +158,35 @@ namespace lfs::core {
 
         inline constexpr uint32_t STORAGE_REF_DIRECT_ALLOCATION = 1U << 0;
         inline constexpr uint32_t STORAGE_REF_HOST_MEMORY = 1U << 1;
+        // Cold allocation ownership policy is carried by existing flags; the
+        // hot operation descriptor keeps its layout and size.
+        inline constexpr uint32_t STORAGE_REF_ACCOUNTED = 1U << 2;
+        inline constexpr uint32_t STORAGE_REF_RELEASE_AFTER_TEARDOWN = 1U << 3;
+        enum class AllocationLabel : uint32_t { None,
+                                                CudaDirect };
+        constexpr uint32_t allocation_flags(StorageAccountingKind kind, bool direct,
+                                            bool accounted, bool release_after_teardown,
+                                            AllocationLabel label = AllocationLabel::None) {
+            return (direct ? STORAGE_REF_DIRECT_ALLOCATION : 0) |
+                   (accounted ? STORAGE_REF_ACCOUNTED : 0) |
+                   (release_after_teardown ? STORAGE_REF_RELEASE_AFTER_TEARDOWN : 0) |
+                   (static_cast<uint32_t>(kind) << 8) | (static_cast<uint32_t>(label) << 16);
+        }
+        constexpr StorageAccountingKind allocation_accounting(StorageRef storage) {
+            return static_cast<StorageAccountingKind>((storage.flags >> 8) & 0xff);
+        }
+        constexpr bool allocation_accounted(StorageRef storage) {
+            return (storage.flags & STORAGE_REF_ACCOUNTED) != 0;
+        }
+        constexpr bool allocation_release_after_teardown(StorageRef storage) {
+            return (storage.flags & STORAGE_REF_RELEASE_AFTER_TEARDOWN) != 0;
+        }
+        constexpr const char* allocation_label(StorageRef storage) {
+            switch (static_cast<AllocationLabel>(storage.flags >> 16)) {
+            case AllocationLabel::CudaDirect: return "cuda.direct";
+            default: return "";
+            }
+        }
 
         struct StridedLayout {
             size_t rank = 0;

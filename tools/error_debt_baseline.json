@@ -8,8 +8,8 @@
       "src/app/main.cpp:171"
     ],
     "core": [
-      "src/core/memory_pressure.cpp:358",
       "src/core/scene.cpp:870",
+      "src/core/tensor/backend/cuda/cuda_memory_pressure.cpp:120",
       "src/core/tensor/backend/cuda/kernels/export_morton.cu:193"
     ],
     "io": [
@@ -978,7 +978,7 @@
   "fatal-invariant-site": {},
   "local-check-macro": {
     "core": [
-      "src/core/tensor/tensor_random_ops.cpp:18"
+      "src/core/tensor/backend/cuda/cuda_random_state.cpp:8"
     ],
     "rendering": [
       "src/rendering/rasterizer/vulkan/src/config.h:60",

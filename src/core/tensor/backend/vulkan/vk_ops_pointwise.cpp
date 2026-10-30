@@ -239,7 +239,7 @@ namespace lfs::core::internal {
                        output == DataType::Int64 || output == DataType::UInt8;
             case DataType::Int32:
                 return output == DataType::Float32 || output == DataType::Float16 ||
-                       output == DataType::Int64 || output == DataType::UInt8;
+                       output == DataType::Int64 || output == DataType::UInt8 || output == DataType::Bool;
             case DataType::Int64:
                 return output == DataType::Float32 || output == DataType::Float16 ||
                        output == DataType::Int32 || output == DataType::UInt8;

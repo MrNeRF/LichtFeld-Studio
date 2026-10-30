@@ -91,6 +91,7 @@ namespace lfs::core {
             Tensor bind_region(const std::shared_ptr<ExportableBlock>& block, void* const data,
                                std::size_t, TensorShape shape, const std::size_t capacity,
                                const DataType dtype, std::string external_kind) override {
+                const GpuBackendScope backend(GpuBackend::CUDA);
                 return Tensor::from_external_owner(data,
                                                    std::move(shape),
                                                    Device::GPU,

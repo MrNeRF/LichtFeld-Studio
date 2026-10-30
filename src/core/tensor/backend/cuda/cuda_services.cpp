@@ -1,12 +1,14 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/device_fault.hpp"
 
 #include "../../internal/expression_runtime.hpp"
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
+#include "../native_allocation.hpp"
 #include "../readback_buffer.hpp"
 #include "../tensor_completion.hpp"
-#include "core/device_fault.hpp"
+#include "core/nn/activation_arena.hpp"
 #include "core/vulkan_queue_sync.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -141,6 +143,12 @@ namespace lfs::core {
                         PinnedMemoryAllocator::instance().deallocate(host_);
                 }
 
+                void enqueue_tensor(const Tensor& source, size_t offset, size_t bytes, BackendQueueTarget target) override {
+                    auto storage = storage_ref(source);
+                    storage.byte_offset += offset;
+                    const auto stream = prepare_inputs_for_stream({&source}, static_cast<cudaStream_t>(target.handle));
+                    enqueue(storage, bytes, ExecContext{stream});
+                }
                 void enqueue(StorageRef source, const size_t bytes, ExecContext context) override {
                     LFS_FACADE_TRACE(service_enqueue_readback);
                     LFS_ASSERT_MSG(!pending_, "Readback staging is already in use");
@@ -159,9 +167,10 @@ namespace lfs::core {
                     // Keep the source alive and drain the stream even when CUDA reports
                     // a failure after accepting the asynchronous copy.
                     pending_ = true;
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(host_, cuda_const_address(source), bytes,
-                                                   cudaMemcpyDeviceToHost, stream_));
-                    completion_ = TensorCompletionAccess::cuda(stream_);
+                    if (bytes)
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(host_, cuda_const_address(source), bytes,
+                                                       cudaMemcpyDeviceToHost, stream_));
+                    completion_ = TensorCompletionAccess::record(GpuBackend::CUDA, {.target = {stream_}});
                 }
 
                 void wait() override {
@@ -173,7 +182,7 @@ namespace lfs::core {
                     if (!completion_.ready())
                         return false;
                     device_fault_registry_consume_or_throw(LFS_SOURCE_SITE_CURRENT(), false);
-                    if (destination)
+                    if (destination && bytes_)
                         std::memcpy(destination, host_, bytes_);
                     pending_ = false;
                     return true;
@@ -263,12 +272,13 @@ namespace lfs::core {
                 .backend = GpuBackend::CUDA,
                 .data = allocate_cuda_storage(
                     bytes, context.cuda_stream,
-                    direct ? CudaStorageMode::Direct : CudaStorageMode::Pooled,
+                    direct ? CudaStorageMode::Direct : context.allocation_class == AllocationClass::Exact ? CudaStorageMode::ExactAsync
+                                                                                                          : CudaStorageMode::Pooled,
                     context.allocation_label, context.allocation_operation),
                 .byte_offset = 0,
                 .dtype = DataType::UInt8,
                 .meta = nullptr,
-                .flags = direct ? STORAGE_REF_DIRECT_ALLOCATION : 0,
+                .flags = allocation_flags(StorageAccountingKind::CudaDirect, direct, direct, false, direct ? AllocationLabel::CudaDirect : AllocationLabel::None),
             };
         }
 
@@ -328,12 +338,13 @@ namespace lfs::core {
             return result;
         }
 
-        void CudaBackendOps::shutdown() {
+        void shutdown_cuda_tensor_pool() {
             if (CudaMemoryPool* const pool =
                     g_cuda_memory_pool_instance.exchange(nullptr, std::memory_order_acq_rel)) {
                 pool->shutdown();
             }
         }
+        void CudaBackendOps::shutdown() { shutdown_cuda_tensor_pool(); }
 
         void CudaBackendOps::set_allocation_iteration(const int iteration) {
             CudaMemoryPool::instance().set_iteration(iteration);
@@ -475,20 +486,6 @@ namespace lfs::core {
 
     } // namespace internal
 
-    std::optional<GpuDeviceInfo> gpu_backend_device_info(const GpuBackend backend, const int device_index) {
-        if (backend != GpuBackend::CUDA || device_index < 0)
-            return std::nullopt;
-        cudaDeviceProp properties{};
-        if (cudaGetDeviceProperties(&properties, device_index) != cudaSuccess)
-            return std::nullopt;
-        GpuDeviceInfo result{.name = properties.name,
-                             .total_memory_bytes = properties.totalGlobalMem};
-        static_assert(sizeof(properties.uuid.bytes) == result.uuid.size());
-        std::memcpy(result.uuid.data(), properties.uuid.bytes, result.uuid.size());
-        result.compute_capability_major = properties.major;
-        return result;
-    }
-
     namespace internal {
 
         void cuda_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source) {
@@ -519,7 +516,6 @@ namespace lfs::core {
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include <algorithm>
 #include <limits>
 #ifndef _WIN32
@@ -754,6 +750,7 @@ namespace lfs::core::internal {
             }
 
             Tensor empty(TensorShape shape, DataType dtype, size_t capacity) override {
+                const GpuBackendScope backend(GpuBackend::CUDA);
                 if (!target_.external_memory)
                     throw TensorError("Consumer device does not support CUDA external memory");
                 const size_t rows = shape.rank() == 0 ? 1 : shape[0];
@@ -852,7 +849,7 @@ namespace lfs::core::internal {
                 cudaExternalSemaphoreSignalParams signal{};
                 signal.params.fence.value = ++value_;
                 LFS_CUDA_CHECK(cudaSignalExternalSemaphoresAsync(&timeline_import_->imported, &signal, 1, stream_));
-                return TensorCompletionAccess::external(target_.device, {timeline_, value_, shared_from_this()});
+                return TensorCompletionAccess::record(GpuBackend::Vulkan, {.timeline = {timeline_, value_, shared_from_this()}, .external_device = target_.device, .settle_on_release = false, .record = false});
             }
 
             void wait(std::span<const Tensor* const> tensors, VulkanTimelinePoint point) override {
@@ -1046,3 +1043,24 @@ namespace lfs::core::internal {
     void hold_vulkan_interop_blocks(bool) {}
 } // namespace lfs::core::internal
 #endif
+
+namespace lfs::core::internal {
+    void CudaBackendOps::validate_checked_index_execution(ExecContext context) {
+        if (stream_is_capturing(context))
+            throw_device_fault_graph_capture_error(context.cuda_stream, LFS_SOURCE_SITE_CURRENT());
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    NativeTensorAllocation CudaBackendOps::allocate_tensor(const TensorAllocationRequest& request) {
+        const auto target = getCurrentCUDAStream();
+        if (request.kind == TensorAllocationKind::Pooled && request.allow_arena) {
+            if (auto* arena = nn::ActivationArena::current()) {
+                if (void* data = arena->try_alloc(request.bytes)) {
+                    return {.storage = {.backend = GpuBackend::CUDA, .data = data}, .target = target, .owner = arena->owner(), .external_kind = "nn.arena"};
+                }
+            }
+        }
+        return allocate_native_tensor(*this, request, target);
+    }
+} // namespace lfs::core::internal

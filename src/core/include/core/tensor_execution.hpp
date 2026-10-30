@@ -4,6 +4,7 @@
 
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include <array>
 #include <compare>
 
 namespace lfs::core {
@@ -33,8 +34,8 @@ namespace lfs::core {
 
         private:
             GpuBackendScope backend_scope_;
-            void* previous_target_;
-            bool rebound_vulkan_ = false;
+            void* driver_;
+            std::array<uintptr_t, 2> binding_;
         };
 
         // Native interoperability belongs to backend implementations.

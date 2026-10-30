@@ -124,7 +124,7 @@ namespace {
         EXPECT_THROW(destination.record_stream(other), std::invalid_argument);
         EXPECT_THROW(upload.enqueue(destination, source, other), std::invalid_argument);
         EXPECT_THROW(readback.enqueue(destination, other), std::invalid_argument);
-        EXPECT_THROW(timer.mark(0, other), std::invalid_argument);
+        EXPECT_THROW((void)timer.mark(0, other), std::invalid_argument);
     }
 
     TEST(TensorQueueContract, UnavailableConstructorsRejectExplicitly) {
@@ -188,7 +188,7 @@ namespace {
         std::array<float, 6> output{};
         readback.wait(std::as_writable_bytes(std::span(output)));
         EXPECT_EQ(output, (std::array<float, 6>{1, 4, 2, 5, 3, 6}));
-        EXPECT_THROW(queue.ready(), std::runtime_error);
+        EXPECT_THROW((void)queue.ready(), std::runtime_error);
         EXPECT_THROW(queue.wait(), std::runtime_error);
         EXPECT_THROW(queue.enqueue_host_callback([](void*) {}, nullptr), std::runtime_error);
         EXPECT_THROW(queue.set_consumer_timeline(nullptr, {}), std::runtime_error);
@@ -476,7 +476,7 @@ namespace {
         EXPECT_THROW(destination.set_stream(other), std::invalid_argument);
         EXPECT_THROW(upload.enqueue(destination, source, other), std::invalid_argument);
         EXPECT_THROW(readback.enqueue(destination, other), std::invalid_argument);
-        EXPECT_THROW(timer.mark(0, other), std::invalid_argument);
+        EXPECT_THROW((void)timer.mark(0, other), std::invalid_argument);
         EXPECT_THROW((void)timer.mark(0, reinterpret_cast<void*>(~uintptr_t{0})), std::invalid_argument);
     }
 

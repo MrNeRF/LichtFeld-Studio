@@ -77,7 +77,7 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::normal(
-        const StorageRef output, const StorageRef odd_count_scratch,
+        const StorageRef output,
         const RandomProgram& program, const ExecContext context) {
         LFS_FACADE_TRACE(normal);
         if (program.count % 2 == 0) {
@@ -87,6 +87,10 @@ namespace lfs::core::internal {
             return;
         }
 
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
+        const CUDAStreamGuard stream_scope(context.cuda_stream);
+        auto scratch = Tensor::empty({program.count + 1}, Device::GPU, DataType::Float32);
+        const auto odd_count_scratch = storage_ref(scratch);
         RandomGenerator::instance().generate_cuda_normal(
             cuda_pointer<float>(odd_count_scratch), program.count + 1,
             program.first, program.second, context.cuda_stream);

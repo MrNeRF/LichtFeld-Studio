@@ -1,10 +1,25 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/cuda_error.hpp"
+#include "core/gpu_device_info.hpp"
+#include "core/gpu_device_runtime.hpp"
+#include "core/gpu_elapsed.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/nn/ops.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_fused.hpp"
+#include "core/tensor_protocol_export.hpp"
+#include "core/tensor_readback.hpp"
+#include "core/tensor_upload.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include "tensor_backend_contract.hpp"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <future>
 #include <gtest/gtest-spi.h>
 #include <string>
 #include <vector>
@@ -30,6 +45,58 @@ namespace {
             }
         }
     };
+
+    static_assert(static_cast<unsigned>(GpuBackend::CUDA) == 0);
+    static_assert(static_cast<unsigned>(GpuBackend::Vulkan) == 1);
+    static_assert(static_cast<unsigned>(GpuBackend::Metal) == 2);
+    static_assert(kGpuBackendCount == 3);
+
+    TEST_P(TensorOperationContracts, ElapsedTimerUsesTheSameOptionalContractOnEveryBackend) {
+        if (!GetParam().backend) {
+            for (const auto backend : kGpuBackends) {
+                GpuElapsed empty(backend, 0);
+                EXPECT_FALSE(empty.ready());
+                EXPECT_FALSE(empty.mark(0, nullptr));
+                EXPECT_FALSE(empty.wait_event(0));
+                EXPECT_FALSE(empty.wait_queue(nullptr));
+                EXPECT_FALSE(empty.milliseconds(0, 1).has_value());
+            }
+            return;
+        }
+        const auto backend = *GetParam().backend;
+        const auto queue = TensorExecutionTarget::default_queue(backend);
+        GpuElapsed timer(backend, 2);
+        if (!timer.ready()) {
+            EXPECT_FALSE(timer.mark(0, queue));
+            EXPECT_FALSE(timer.wait_event(0));
+            EXPECT_FALSE(timer.milliseconds(0, 1).has_value());
+            return; // Explicitly unavailable optional instrumentation.
+        }
+        EXPECT_FALSE(timer.mark(2, queue));
+        ASSERT_TRUE(timer.mark(0, queue));
+        const auto result = values({1, 2, 3}, {3}).mul(2.f);
+        ASSERT_TRUE(timer.mark(1, queue));
+        ASSERT_TRUE(timer.wait_event(1));
+        ASSERT_TRUE(timer.wait_queue(queue));
+        const auto elapsed = timer.milliseconds(0, 1);
+        ASSERT_TRUE(elapsed.has_value());
+        EXPECT_GE(*elapsed, 0.f);
+        EXPECT_TRUE(std::isfinite(*elapsed));
+        expect_values(result, {3}, {2, 4, 6});
+        const auto other = backend == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA;
+        EXPECT_THROW((void)timer.mark(0, TensorExecutionTarget::default_queue(other)), std::invalid_argument);
+    }
+
+    TEST_P(TensorOperationContracts, OddNormalDrawsKeepTheirShapeAndFiniteValues) {
+        for (const size_t count : {size_t{1}, size_t{3}, size_t{257}}) {
+            auto result = values(std::vector<float>(count, 0.f), {count});
+            result.normal_(1.f, 0.25f);
+            expect_placement(result);
+            EXPECT_EQ(result.shape(), TensorShape({count}));
+            for (const auto value : result.to_vector())
+                EXPECT_TRUE(std::isfinite(value));
+        }
+    }
 
     TEST_P(TensorOperationContracts, RejectsMalformedShapeDtypeAndTruncatedResults) {
         const auto expect_rejected = [&](const Tensor& result, const TensorShape& shape,
@@ -91,6 +158,95 @@ namespace {
         ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices), {3, 2}, {5, 6, 1, 2, 5, 6}));
     }
 
+    TEST_P(TensorOperationContracts, WideIndicesNormalizeBeforeNativeNarrowing) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native GPU boundary normalization contract";
+        const auto input = values({10, 20, 30}, {3});
+        std::vector<int64_t> wide{std::numeric_limits<int64_t>::lowest(), -1, 0, 3, std::numeric_limits<int64_t>::max()};
+        const auto indices = Tensor::from_blob(wide.data(), {wide.size()}, Device::CPU, DataType::Int64).to(device());
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices, BoundaryMode::Clamp), {5}, {10, 10, 10, 30, 30}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.index_select(0, indices, BoundaryMode::Wrap), {5}, {20, 30, 10, 10, 20}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.gather(0, indices, BoundaryMode::Clamp), {5}, {10, 10, 10, 30, 30}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.gather(0, indices, BoundaryMode::Wrap), {5}, {20, 30, 10, 10, 20}));
+    }
+
+    TEST_P(TensorOperationContracts, IndexedWritesSnapshotOverlappingSources) {
+        const auto indices = Tensor::from_vector(std::vector<int>{1, 0}, {2}, device()).to(DataType::Int64);
+        auto copied = values({1, 2, 3, 4}, {2, 2});
+        copied.index_copy_(0, indices, copied);
+        ASSERT_NO_FATAL_FAILURE(expect_values(copied, {2, 2}, {3, 4, 1, 2}));
+        auto added = values({1, 2, 3, 4}, {2, 2});
+        added.index_add_(0, indices, added);
+        ASSERT_NO_FATAL_FAILURE(expect_values(added, {2, 2}, {4, 6, 4, 6}));
+    }
+
+    TEST_P(TensorOperationContracts, PressureRecoveryUsesTheFailingDomainWithoutCuda) {
+        if (GetParam().backend)
+            GTEST_SKIP() << "Device-independent coordinator policy";
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        struct Cleanup {
+            ~Cleanup() {
+                MemoryPressureCoordinator::instance().reset_for_testing();
+                if constexpr (gpu_backend_compiled(GpuBackend::CUDA))
+                    reset_cuda_diagnostics_for_testing();
+            }
+        } cleanup;
+        // SDK-free injection of cudaErrorInitializationError: recovery of other
+        // domains must not depend on a working NVIDIA runtime or device.
+        if constexpr (gpu_backend_compiled(GpuBackend::CUDA))
+            (void)latch_cuda_unavailable(static_cast<cudaError_t>(3));
+        for (const auto domain : {MemoryDomain::VulkanDevice, MemoryDomain::MetalDevice}) {
+            coordinator.reset_for_testing();
+            size_t free = 0;
+            bool wrong_domain = false;
+            coordinator.set_free_memory_probe([&](MemoryDomain queried) { wrong_domain |= queried != domain; return free; });
+            const auto target = coordinator.reserve_bytes(domain);
+            coordinator.run_episode(AllocationFailure{.domain = domain, .label = "contract", .operation = "pressure.recovery"}, PressureContext::RenderThread);
+            EXPECT_TRUE(coordinator.pressure_active());
+            free = target * 2;
+            coordinator.maybe_recover();
+            EXPECT_FALSE(coordinator.pressure_active());
+            EXPECT_FALSE(wrong_domain);
+        }
+    }
+
+    TEST_P(TensorOperationContracts, NonzeroUsesSelectedCountRatherThanCapacity) {
+        const auto check_indices = [&](const Tensor& input, const std::vector<int64_t>& expected) {
+            const auto indices = input.nonzero();
+            expect_placement(indices);
+            ASSERT_EQ(indices.shape(), TensorShape({expected.size(), 1}));
+            ASSERT_EQ(indices.dtype(), DataType::Int64);
+            EXPECT_EQ(indices.to_vector_int64(), expected);
+        };
+        const auto input = values({0, -2, 0, 3, 0, 0, 4}, {7});
+        ASSERT_NO_FATAL_FAILURE(check_indices(input, {1, 3, 6}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(input > 0.f, {3, 6}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(values({0, 0, 0}, {3}), {}));
+        ASSERT_NO_FATAL_FAILURE(check_indices(values({1, -1, 2}, {3}), {0, 1, 2}));
+    }
+
+    TEST_P(TensorOperationContracts, MaskedSelectionReadsStridedValuesAndExactCardinality) {
+        const auto input = values({1, 2, 3, 4, 5, 6}, {2, 3}).transpose(0, 1);
+        const auto mask = input > 3.f;
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.masked_select(mask), {3}, {4, 5, 6}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(input.masked_select(input > 10.f), {0}, {}));
+        auto filled = input.clone();
+        filled.masked_fill_(mask, -2.f);
+        ASSERT_NO_FATAL_FAILURE(expect_values(filled, {3, 2}, {1, -2, 2, -2, 3, -2}));
+    }
+
+    TEST_P(TensorOperationContracts, IndexedWritesPreserveOtherRowsAndAccumulateDuplicates) {
+        const auto indices = Tensor::from_vector(std::vector<int>{2, 0}, {2}, device());
+        auto output = values({1, 2, 3, 4, 5, 6}, {3, 2});
+        output.index_copy_(0, indices, values({7, 8, 9, 10}, {2, 2}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {9, 10, 3, 4, 7, 8}));
+        output.index_fill_(0, indices, -1.f);
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {-1, -1, 3, 4, -1, -1}));
+        const auto duplicates = Tensor::from_vector(std::vector<int>{1, 1}, {2}, device());
+        output.index_add_(0, duplicates, values({1, 2, 3, 4}, {2, 2}));
+        ASSERT_NO_FATAL_FAILURE(expect_values(output, {3, 2}, {-1, -1, 7, 10, -1, -1}));
+    }
+
     TEST_P(TensorOperationContracts, SortReturnsAValidPermutationForDuplicateKeys) {
         const std::vector<float> data{3, -1, 3, 0, -1, 2};
         const auto [sorted, indices] = values(data, {data.size()}).sort();
@@ -141,6 +297,205 @@ namespace {
         ASSERT_EQ(result.dtype(), DataType::Int64);
         expect_placement(result);
         EXPECT_EQ(result.to_vector_int64(), std::vector<int64_t>(17, 1));
+    }
+
+    TEST_P(TensorOperationContracts, EmptyReadbackUsesTheSameCompletionContract) {
+        TensorReadback readback;
+        auto empty = Tensor::empty({0}, device());
+        readback.enqueue(empty);
+        empty = {};
+        EXPECT_TRUE(readback.pending());
+        EXPECT_NO_THROW(readback.wait(std::span<std::byte>{}));
+        EXPECT_FALSE(readback.pending());
+    }
+
+    TEST_P(TensorOperationContracts, ReadbackRetainsStridedSourceAndCanBeReused) {
+        TensorReadback download;
+        for (const float offset : {0.f, 8.f}) {
+            auto source = values({1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}, {2, 3}).transpose(0, 1);
+            download.enqueue(source);
+            source = {};
+            std::array<float, 6> actual{};
+            download.wait(std::as_writable_bytes(std::span(actual)));
+            EXPECT_FALSE(download.pending());
+            EXPECT_EQ(actual, (std::array<float, 6>{1 + offset, 4 + offset, 2 + offset, 5 + offset, 3 + offset, 6 + offset}));
+        }
+    }
+
+    TEST_P(TensorOperationContracts, ProtocolExportReportsUnavailableWithoutActivatingOtherBackends) {
+        const auto input = values({1, 2, 3}, {3});
+        if (!GetParam().backend) {
+            const auto device = tensor_dlpack_device(input);
+            EXPECT_EQ(device.type, 1);
+            EXPECT_EQ(device.ordinal, 0);
+            EXPECT_EQ(prepare_tensor_dlpack_export(input, std::nullopt).data_ptr(), input.data_ptr());
+        } else if (!gpu_backend_export_capabilities(*GetParam().backend).dlpack) {
+            EXPECT_THROW((void)tensor_dlpack_device(input), std::runtime_error);
+            EXPECT_THROW((void)prepare_tensor_dlpack_export(input, -1), std::runtime_error);
+        }
+        for (const auto backend : kGpuBackends) {
+            const bool live = gpu_backend_live(backend);
+            (void)gpu_backend_export_capabilities(backend);
+            EXPECT_EQ(gpu_backend_live(backend), live);
+        }
+    }
+
+    TEST_P(TensorOperationContracts, PackedReadbackRetainsBorrowedStagingUntilCompletion) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Packed slots target GPU queues";
+        const auto backend = *GetParam().backend;
+        TensorWorkQueue queue(backend, TensorWorkQueue::Mode::Independent);
+        auto staging = Tensor::empty({4 * sizeof(float)}, device(), DataType::UInt8);
+        TensorReadbackRing ring(backend, 1, 4 * sizeof(float), queue, &staging);
+        auto source = values({9, 1, 2, 3, 4, 8}, {6});
+        ring.enqueue(source, sizeof(float), 4 * sizeof(float), 0, 0, true);
+        source = {};
+        staging = {};
+        ring.seal(0).wait();
+        ASSERT_TRUE(ring.poll(0));
+        std::array<float, 4> actual{};
+        const auto bytes = ring.slot_bytes(0);
+        std::memcpy(actual.data(), bytes.data(), sizeof(actual));
+        EXPECT_EQ(actual, (std::array<float, 4>{1, 2, 3, 4}));
+        ring.release(0);
+    }
+
+    TEST_P(TensorOperationContracts, ScalarSelectionPreservesExactAndOverlappingAliases) {
+        const auto condition = Tensor::from_vector(std::vector<int>{1, 0, 1, 0}, {4}, device()).to(DataType::Bool);
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            auto input = values({1, 2, 3, 4, 5}, {5}).to(dtype);
+            auto source = input.slice(0, 0, 4);
+            auto output = input.slice(0, 1, 5);
+            where_into(output, condition, 9.f, source);
+            ASSERT_NO_FATAL_FAILURE(expect_values(output.to(DataType::Float32), {4}, {9, 2, 9, 4}));
+            where_into(output, condition, 7.f, output);
+            ASSERT_NO_FATAL_FAILURE(expect_values(output.to(DataType::Float32), {4}, {7, 2, 7, 4}));
+        }
+    }
+
+    TEST_P(TensorOperationContracts, PackedReadbackReusesSlotsAndPreservesStagedRanges) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Packed pinned slots target GPU queues";
+        const auto backend = *GetParam().backend;
+        TensorWorkQueue queue(backend, static_cast<void*>(nullptr));
+        TensorReadbackRing ring(backend, 1, 6 * sizeof(float), queue);
+        for (const float offset : {0.f, 8.f}) {
+            auto source = values({1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}, {6});
+            ring.enqueue(source, 0, 3 * sizeof(float), 0, 0);
+            ring.enqueue(source, 3 * sizeof(float), 3 * sizeof(float), 0, 3 * sizeof(float), true);
+            source = {};
+            ring.seal(0).wait();
+            ASSERT_TRUE(ring.poll(0));
+            std::array<float, 6> actual{};
+            const auto bytes = ring.slot_bytes(0);
+            ASSERT_EQ(bytes.size(), sizeof(actual));
+            std::memcpy(actual.data(), bytes.data(), sizeof(actual));
+            EXPECT_EQ(actual, (std::array<float, 6>{1 + offset, 2 + offset, 3 + offset, 4 + offset, 5 + offset, 6 + offset}));
+            ring.release(0);
+        }
+    }
+
+    TEST_P(TensorOperationContracts, InvalidIndicesNeverPublishStagedReadbackBytes) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Staged GPU readback requires GPU storage";
+        const auto input = values({1, 2, 3}, {3});
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        std::array<float, 2> destination{-7, -8};
+        EXPECT_ANY_THROW({
+            const auto invalid = input.index_select(0, indices);
+            TensorReadback download;
+            download.enqueue(invalid);
+            download.wait(std::as_writable_bytes(std::span(destination)));
+        });
+        EXPECT_EQ(destination, (std::array<float, 2>{-7, -8}));
+    }
+
+    TEST_P(TensorOperationContracts, CompiledExpressionsUseHostParametersAndTerminalFolds) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Compiled expression kernels target GPU backends";
+        fused::Builder builder(2);
+        const auto input = builder.input(DataType::Float32, 2);
+        const auto gain = builder.input(DataType::Float32, 1);
+        builder.output(input.load() * gain.at({0}) + builder.iota(1).cast(DataType::Float32), DataType::Float32);
+        const fused::Kernel kernel(builder);
+        const auto host_gain = Tensor::from_vector(std::vector<float>{2.f}, {1}, Device::CPU);
+        const auto image = values({1, 2, 3, 4, 5, 6}, {2, 3});
+        const auto output = Tensor::empty({2, 3}, Device::GPU);
+        kernel.prepare({2, 3}, {image, host_gain}, {output});
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            kernel({2, 3}, {image, host_gain}, {output});
+            ASSERT_NO_FATAL_FAILURE(expect_values(output, {2, 3}, {2, 5, 8, 8, 11, 14}));
+        }
+        fused::Builder reduction(2);
+        const auto term = reduction.input(DataType::Float32, 2).load();
+        reduction.output(reduction.fold(fused::Fold::Sum, term, 1), DataType::Float32);
+        const fused::Kernel sum(reduction);
+        ASSERT_NO_FATAL_FAILURE(expect_values(sum({2, 3}, {image})[0], {2}, {6, 15}));
+    }
+
+    TEST_P(TensorOperationContracts, WorkQueueOrdersCallbacksAndRestoresItsScope) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Work queues require GPU storage";
+        const auto backend = *GetParam().backend;
+        const auto previous = TensorExecutionTarget::current();
+        for (const auto mode : {TensorWorkQueue::Mode::Independent, TensorWorkQueue::Mode::LegacyOrdered}) {
+            TensorWorkQueue queue(backend, mode);
+            const auto input = values({1, 2, 3}, {3});
+            Tensor result;
+            {
+                const TensorWorkQueue::Scope scope(queue);
+                EXPECT_EQ(TensorExecutionTarget::current().backend(), queue.backend());
+                result = input.mul(2.f);
+            }
+            EXPECT_EQ(TensorExecutionTarget::current(), previous);
+            std::atomic<bool> called{false};
+            queue.enqueue_host_callback([](void* pointer) { static_cast<std::atomic<bool>*>(pointer)->store(true); }, &called);
+            queue.wait();
+            EXPECT_TRUE(called.load());
+            ASSERT_NO_FATAL_FAILURE(expect_values(result, {3}, {2, 4, 6}));
+        }
+    }
+    TEST_P(TensorOperationContracts, FirstUseOnANewWorkerActivatesTheSelectedBackend) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "GPU worker activation requires GPU storage";
+        const auto backend = *GetParam().backend;
+        const auto result = std::async(std::launch::async, [backend] {
+                                const GpuBackendScope scope(backend);
+                                TensorWorkQueue queue(backend);
+                                Tensor output;
+                                auto completion = queue.execute([&] { output = Tensor::full({3}, 4.f, Device::GPU).mul(2.f); });
+                                completion.wait();
+                                return output.to_vector();
+                            }).get();
+        EXPECT_EQ(result, (std::vector<float>{8, 8, 8}));
+    }
+
+    TEST_P(TensorOperationContracts, BackendSelftestCanRecreateItsExecutionContext) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Backend lifecycle self-tests target GPU contexts";
+        const auto status = tensor_backend_selftest(*GetParam().backend);
+        ASSERT_TRUE(status) << "Tensor backend self-test failed across shutdown/recreation";
+        ASSERT_NO_FATAL_FAILURE(expect_values(values({1, 2, 3}, {3}).mul(2.f), {3}, {2, 4, 6}));
+    }
+
+    TEST_P(TensorOperationContracts, NeuralOperatorsMatchIndependentSmallReferences) {
+        if (!GetParam().backend)
+            GTEST_SKIP() << "Native NN operators require GPU storage";
+        const auto input = values({1, 2, 3, 4, 5, 6}, {2, 3});
+        const auto weight = values({2, 0, 1, -1, 1, 0}, {2, 3});
+        const auto bias = values({0.5f, -0.5f}, {2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::linear(input, weight, &bias), {2, 2}, {5.5f, 0.5f, 14.5f, 0.5f}));
+        const auto image = values({1, 2, 3, 4, 5, 6, 7, 8, 9}, {1, 1, 3, 3});
+        const auto filter = values({1, 2, 3, 4}, {1, 1, 2, 2});
+        const auto conv_bias = values({0.5f}, {1});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::conv2d(image, filter, &conv_bias, {}), {1, 1, 2, 2}, {37.5f, 47.5f, 67.5f, 77.5f}));
+        const auto norm_input = values({1, 3, -1, 1}, {2, 2});
+        const auto norm_weight = values({2, 3}, {2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::layer_norm(norm_input, norm_weight, bias, 0.f), {2, 2}, {-1.5f, 2.5f, -1.5f, 2.5f}, 1e-6f));
+        const auto query = values(std::vector<float>(4, 0.f), {1, 1, 2, 2});
+        const auto key = values(std::vector<float>(6, 0.f), {1, 1, 3, 2});
+        const auto value = values({1, 2, 3, 4, 5, 6}, {1, 1, 3, 2});
+        ASSERT_NO_FATAL_FAILURE(expect_values(nn::attention(query, key, value), {1, 1, 2, 2}, {3, 4, 3, 4}, 1e-6f));
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, TensorOperationContracts,

@@ -3,6 +3,7 @@
 
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
+#include "../native_index_scratch.hpp"
 
 #include "../../internal/tensor_functors.hpp"
 #include "core/assert.hpp"
@@ -70,10 +71,14 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::gather(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const StridedLayout& input_layout, const StridedLayout& index_layout,
         const IndexProgram& program, const ExecContext context) {
         LFS_FACADE_TRACE(gather);
+        const NativeIndexScratch scratch(raw_indices, program.total_elements, context, [&](StorageRef input, StorageRef output) {
+            tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output), program.total_elements, input_layout.dims[static_cast<size_t>(program.dim)], context.cuda_stream, program.boundary_mode);
+        });
+        const auto indices = scratch.storage();
         if (input.dtype == DataType::Float32) {
             tensor_ops::launch_gather(
                 cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
@@ -93,10 +98,14 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::gather_fused_unary(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const PointwiseOp unary, const IndexProgram& program,
         const ExecContext context) {
         LFS_FACADE_TRACE(gather_fused_unary);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, context, [&](StorageRef input, StorageRef output) {
+            tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output), program.index_size, program.input_size, context.cuda_stream, 0);
+        });
+        const auto indices = scratch.storage();
         switch (unary) {
         case PointwiseOp::Abs:
             tensor_ops::launch_gather_fused_unary(
@@ -122,10 +131,14 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::index_select(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
+        const StorageRef input, const StorageRef raw_indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program,
         const ExecContext context) {
         LFS_FACADE_TRACE(index_select);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, context, [&](StorageRef input, StorageRef output) {
+            tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output), program.index_size, input_layout.dims[static_cast<size_t>(program.dim)], context.cuda_stream, program.boundary_mode);
+        });
+        const auto indices = scratch.storage();
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_index_select(
                 cuda_const_pointer<T>(input), cuda_const_pointer<int>(indices),
@@ -166,10 +179,14 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::index_copy(
-        const StorageRef output, const StorageRef indices, const StorageRef source,
+        const StorageRef output, const StorageRef raw_indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program,
         const ExecContext context) {
         LFS_FACADE_TRACE(index_copy);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, context, [&](StorageRef input, StorageRef output) {
+            tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output), program.index_size, output_layout.dims[static_cast<size_t>(program.dim)], context.cuda_stream, 0);
+        });
+        const auto indices = scratch.storage();
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_index_copy(
                 cuda_pointer<T>(output), cuda_const_pointer<int>(indices),
@@ -188,10 +205,14 @@ namespace lfs::core::internal {
     }
 
     void CudaBackendOps::index_add(
-        const StorageRef output, const StorageRef indices, const StorageRef source,
+        const StorageRef output, const StorageRef raw_indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program,
         const ExecContext context) {
         LFS_FACADE_TRACE(index_add);
+        const NativeIndexScratch scratch(raw_indices, program.index_size, context, [&](StorageRef input, StorageRef output) {
+            tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output), program.index_size, output_layout.dims[static_cast<size_t>(program.dim)], context.cuda_stream, 0);
+        });
+        const auto indices = scratch.storage();
         if (output.dtype == DataType::Float32) {
             tensor_ops::launch_index_add<float>(
                 cuda_pointer<float>(output), cuda_const_pointer<int>(indices),

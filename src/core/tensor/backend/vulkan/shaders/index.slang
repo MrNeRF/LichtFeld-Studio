@@ -404,7 +404,17 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
         }
         else if (kMode == 8)
         {
-            const int64_t index = ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[tid];
+            int64_t index = ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[tid];
+            if (kBoundary == 1) index = clamp(index, int64_t(0), int64_t(parameters.dimSize) - 1);
+            else if (kBoundary == 2)
+            {
+                // SPIR-V signed remainder is not portable for negative values.
+                // Form the unsigned magnitude without overflowing INT64_MIN.
+                const bool negative = index < 0;
+                const uint64_t magnitude = negative ? uint64_t(-(index + 1)) + 1 : uint64_t(index);
+                const uint64_t remainder = magnitude % uint64_t(parameters.dimSize);
+                index = negative && remainder != 0 ? int64_t(uint64_t(parameters.dimSize) - remainder) : int64_t(remainder);
+            }
             if (index < 0 || index >= int64_t(parameters.dimSize))
             {
                 recordWideFault(parameters.faultAddress, index, parameters.dimSize);
