@@ -307,6 +307,8 @@ if(BUILD_VISUALIZER_TESTS)
     add_executable(lichtfeld_visualizer_tests
         test_main.cpp
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
+        # Exercise the internal font adapter without exporting its DLL symbols.
+        ../src/visualizer/gui/editor/zep_rml_display.cpp
     )
     # Focused RmlUi migration contracts for the retained master interface.
     add_executable(lichtfeld_rmlui_tests
