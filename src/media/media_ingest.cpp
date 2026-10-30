@@ -179,6 +179,8 @@ namespace lfs::media {
                         files->files.filename_pattern.find('\0') != std::string::npos ||
                         (files->files.format != FrameFileFormat::PNG && files->files.format != FrameFileFormat::JPEG && files->files.format != FrameFileFormat::EXR && files->files.format != FrameFileFormat::TIFF16 && files->files.format != FrameFileFormat::JXL && files->files.format != FrameFileFormat::AVIF))
                         return failure(ErrorCode::InvalidArgument, "File extraction requires a nonempty output directory, supported format and NUL-free paths/names", 0);
+                    if (auto valid = detail::validateSidecarCheckpointMode(*files); !valid)
+                        return std::move(valid).error();
                 }
                 // Request-only validation reuses the same rules as the compatibility
                 // adapter; the decoder validates actual source layout/timebase later.

@@ -2021,6 +2021,10 @@ class IngestCLI(unittest.TestCase):
         self.invoke(*args)
         self.assertEqual(image.read_bytes(), image_snapshot[0])
         self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
+        # Without either checkpoint option a rerun must leave the pair intact.
+        result, _ = self.invoke(*args[:-1], code=4)
+        self.assertEqual(result["error"]["code"], "FailedPrecondition")
+        self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
         sidecar.write_bytes(packet + b" ")
         image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
         result, _ = self.invoke(*args, code=4)

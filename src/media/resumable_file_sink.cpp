@@ -123,6 +123,26 @@ namespace lfs::media::detail {
         }
     } // namespace
 
+    SinkResult validateSidecarCheckpointMode(const FileExtraction& output) {
+        if (output.resume || output.write_source_metadata_sidecars)
+            return {};
+        const auto checkpoint = output.files.output_directory / ".media-ingest-checkpoint";
+        const auto status = lfs::core::native_fs::symlink_status(checkpoint);
+        if (status.type() == std::filesystem::file_type::not_found)
+            return {};
+        if (!lfs::core::native_fs::is_directory(status))
+            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
+        const auto path = checkpoint / "identity.json";
+        const auto identity = readRecord(path);
+        if (!identity)
+            return SinkResult::failure(identity.error());
+        if (!identity->is_object())
+            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint identity schema"));
+        if (identity->contains("sidecar_metadata_policy"))
+            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Existing source metadata sidecars require their checkpoint mode or a fresh output directory"));
+        return {};
+    }
+
     ResumableFileSink::ResumableFileSink(const IngestRequest& request, const FileExtraction& output)
         : request_(request), output_(output), cancelled_([cancelled = request.cancelled, file_cancelled = output.files.format == FrameFileFormat::AVIF ? output.files.avif.cancelled : output.files.format == FrameFileFormat::JXL  ? output.files.jxl.cancelled
                                                                                                                                                                                    : output.files.format == FrameFileFormat::EXR    ? output.files.exr.cancelled
@@ -350,9 +370,10 @@ namespace lfs::media::detail {
             if (record != expected || !old->contains("file_sha256") || !(*old)["file_sha256"].is_string())
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint frame selection or pixels changed"));
             record = *old;
-            if (auto recovered = discardReservation(destination); !recovered)
-                return recovered;
-            if (lfs::core::native_fs::exists(destination)) {
+            if (!sidecar_metadata_)
+                if (auto recovered = discardReservation(destination); !recovered)
+                    return recovered;
+            if (lfs::core::native_fs::exists(destination) && (!sidecar_metadata_ || !emptyReservation(destination))) {
                 const auto digest = fileDigest(destination, cancelled_);
                 if (!digest)
                     return SinkResult::failure(digest.error());
@@ -361,9 +382,7 @@ namespace lfs::media::detail {
                 image_retained = true;
             }
             if (sidecar_metadata_) {
-                if (auto recovered = discardReservation(sidecar_destination); !recovered)
-                    return recovered;
-                if (lfs::core::native_fs::exists(sidecar_destination)) {
+                if (lfs::core::native_fs::exists(sidecar_destination) && !emptyReservation(sidecar_destination)) {
                     const auto digest = fileDigest(sidecar_destination, cancelled_, core::image_codecs::max_xmp_packet_bytes);
                     if (!digest)
                         return SinkResult::failure(digest.error());
@@ -462,11 +481,16 @@ namespace lfs::media::detail {
         if (auto saved = publishRecord(record_path, record); !saved)
             return saved;
         if (!image_retained) {
+            if (sidecar_metadata_)
+                if (auto recovered = discardReservation(destination); !recovered)
+                    return recovered;
             const auto committed = core::publishStagedFileAtomically(staged, destination, cancelled_);
             if (!committed)
                 return committed;
         }
         if (sidecar_metadata_ && !sidecar_retained) {
+            if (auto recovered = discardReservation(sidecar_destination); !recovered)
+                return recovered;
             const auto committed = core::publishStagedFileAtomically(staged_sidecar, sidecar_destination, cancelled_);
             if (!committed)
                 return committed;

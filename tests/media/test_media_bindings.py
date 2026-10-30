@@ -1510,6 +1510,17 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
         sidecar.write_bytes(original_sidecar[0])
         media.MediaIngest.extract_files(request, output)
+        # Refusal of one member must not delete a reservation of the other.
+        image.write_bytes(b"")
+        sidecar.write_bytes(b"corrupt XMP")
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertTrue(image.exists())
+        self.assertEqual(image.read_bytes(), b"")
+        self.assertEqual(sidecar.read_bytes(), b"corrupt XMP")
+        image.write_bytes(original_image[0])
+        sidecar.write_bytes(original_sidecar[0])
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
         # Only a tracked empty reservation may be regenerated.
         sidecar.write_bytes(b"")
         media.MediaIngest.extract_files(request, output)
@@ -1533,6 +1544,23 @@ class MediaBindings(unittest.TestCase):
             self.assertEqual(sidecar.read_bytes(), original_sidecar[0])
             record_path.write_bytes(original_record)
         media.MediaIngest.extract_files(request, output)
+        # A plain rerun must not replace an image while leaving its old XMP.
+        output.write_source_metadata_sidecars = False
+        self.assertFalse(output.resume)
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()}
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()})
+        identity_path = root / ".media-ingest-checkpoint/identity.json"
+        identity = identity_path.read_bytes()
+        for bad_identity in (b"", b"true", b"{" + b" " * 16384):
+            identity_path.write_bytes(bad_identity)
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
+            self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.is_file()})
+            self.assertEqual(identity_path.read_bytes(), bad_identity)
+        identity_path.write_bytes(identity)
+        output.write_source_metadata_sidecars = True
         # Destination changes and source locator aliases must not adopt a pair.
         output.resume = True
         output.write_source_metadata_sidecars = False
@@ -1569,14 +1597,26 @@ class MediaBindings(unittest.TestCase):
         self.assertFalse((root / "frame_1.png").exists())
         foreign.unlink()
         media.MediaIngest.extract_files(request, output)
+        request = self.metadata_request(comment='A<&"' * 4000)
+        request.end_seconds = .01
         output.files.embed_source_metadata = True
-        output.files.output_directory = self.root / "both metadata destinations"
-        media.MediaIngest.extract_files(request, output)
-        root = output.files.output_directory
-        image = next(root.glob("*.png"))
-        observed = json.loads(media.MediaIngest.source_metadata_json(image))
-        self.assertEqual(observed["metadata"]["image_xmp"]["status"], "collected")
-        self.assertTrue(Path(str(image) + ".xmp").is_file())
+        for label, fmt, extension in (("png", media.FrameFileFormat.PNG, ".png"), ("jpeg", media.FrameFileFormat.JPEG, ".jpg")):
+            output.files.format = fmt
+            output.files.output_directory = self.root / ("both metadata destinations-" + label)
+            media.MediaIngest.extract_files(request, output)
+            root = output.files.output_directory
+            image = next(root.glob("*" + extension))
+            observed = json.loads(media.MediaIngest.source_metadata_json(image))
+            self.assertEqual(observed["metadata"]["image_xmp"]["status"], "collected")
+            sidecar = Path(str(image) + ".xmp")
+            self.assertTrue(sidecar.is_file())
+            if label == "jpeg":
+                import xml.etree.ElementTree as ET
+                _, _, _, _, catalog, chunks = jpeg_metadata_fixture.read(image.read_bytes())
+                self.assertGreater(chunks, 1)
+                facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(sidecar.read_bytes()).iter()
+                         if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                self.assertEqual(catalog, json.loads(facts["SourceMetadata"]))
 
     def test_avif_item_oracle_rejects_undeclared_reference_origin(self):
         def box(kind, payload):

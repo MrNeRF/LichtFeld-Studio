@@ -808,6 +808,11 @@ silently adopt the checkpoint.
 
 Use the same sidecar option and output directory to recover an interrupted run.
 Choose a fresh output directory when intentionally changing its identity.
+A normal MediaIngest extraction that omits both sidecars and resume refuses an
+existing sidecar checkpoint before writing output, so its images cannot be
+replaced while their old XMP companions remain. An invalid checkpoint identity
+or a checkpoint symlink also refuses this bypass. Empty tracked reservations are
+removed only after both members have passed validation and regeneration checks.
 Publication is not a power-loss durability guarantee. Concurrent or external
 modification is not repaired by overwriting an unexpected file.
 
