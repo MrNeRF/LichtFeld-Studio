@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "backend/gpu_backend_ops.hpp"
+#include "core/tensor_execution.hpp"
 #include "internal/tensor_impl.hpp"
 
 namespace lfs::core {
@@ -47,6 +49,38 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape.rank() == 0 || effective_capacity >= shape[0],
                        "from_external_owner capacity is smaller than the logical row count");
         const size_t allocation_bytes = storage_allocation_bytes(shape, effective_capacity, dtype);
+        internal::StorageRef imported_storage;
+        if (device == Device::GPU) {
+            const auto backend = internal::resolve_new_gpu_storage_backend();
+            const GpuBackendScope scope(backend);
+            const TensorExecutionTarget::Scope target({backend, stream});
+            auto& ops = internal::backend_ops(backend);
+            const auto storage = ops.borrow_native_range(data, allocation_bytes);
+            imported_storage = storage;
+            if (storage.meta != nullptr) {
+                if (storage.byte_offset != 0)
+                    throw std::invalid_argument("External ownership requires an allocation base");
+                Tensor result = from_blob(data, std::move(shape), Device::GPU, dtype,
+                                          TensorExecutionTarget{backend, stream});
+                auto owner_box = std::make_shared<std::shared_ptr<void>>(owner);
+                result.data_owner_ = std::shared_ptr<void>(data,
+                                                           [owner_box = std::move(owner_box)](void*) mutable {
+                                                               owner_box->reset();
+                                                           });
+                // Do not put an owning context lease in its own allocation registry:
+                // that would create context -> metadata -> context ownership cycles.
+                result.init_storage_meta();
+                result.storage_meta_->backend = backend;
+                result.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
+                result.storage_meta_->external_kind = std::move(external_kind);
+                result.storage_meta_->external_owner = std::move(owner);
+                result.ensure_state();
+                result.state_->capacity = effective_capacity;
+                result.state_->logical_size = result.shape_.rank() ? result.shape_[0] : 0;
+                result.is_view_ = false;
+                return result;
+            }
+        }
         auto external_owner = owner;
         auto owner_box = std::make_shared<std::shared_ptr<void>>(std::move(owner));
         record_storage_allocation(StorageAccountingKind::VulkanExternal, allocation_bytes);
@@ -76,10 +110,9 @@ namespace lfs::core {
         t.compute_alignment();
         t.init_storage_meta();
         if (device == Device::GPU) {
-            t.storage_meta_->backend = GpuBackend::CUDA;
+            t.storage_meta_->backend = imported_storage.backend;
             t.storage_meta_->gpu_descriptor.byte_size = allocation_bytes;
-            t.storage_meta_->gpu_descriptor.accounting_kind =
-                StorageAccountingKind::CudaExternal;
+            t.storage_meta_->gpu_descriptor.accounting_kind = internal::allocation_accounting(imported_storage);
         }
         t.storage_meta_->external_kind = std::move(external_kind);
         t.storage_meta_->external_owner = std::move(external_owner);

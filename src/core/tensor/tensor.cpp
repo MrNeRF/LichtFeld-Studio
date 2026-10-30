@@ -1,6 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "backend/backend_driver.hpp"
+#include "backend/deferred_target.hpp"
+#include "backend/native_allocation.hpp"
+#include "backend/target_lifetime.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -8,13 +12,6 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#if LFS_HAS_CUDA
-#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
-#endif
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_trace.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -22,6 +19,7 @@
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
+#include <array>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -30,6 +28,7 @@
 #include <print>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
+#include <tuple>
 #include <utility>
 
 // SIMD intrinsics for CPU optimization
@@ -341,6 +340,22 @@ namespace lfs::core {
         append("cuda_direct", state.cuda_direct);
         oss << "; ";
         append("vulkan_external", state.vulkan_external);
+        const std::array entries{
+            std::tuple{StorageAccountingKind::CudaDirect, "cuda_direct", &state.cuda_direct},
+            std::tuple{StorageAccountingKind::VulkanOwned, "vulkan_owned", &state.vulkan_owned},
+            std::tuple{StorageAccountingKind::VulkanExternal, "vulkan_external", &state.vulkan_external},
+        };
+        for (const auto backend : kCompiledGpuBackends) {
+            if (const auto kind = internal::backend_driver(backend).supplementary_accounting()) {
+                for (const auto& [entry_kind, label, counter] : entries) {
+                    if (entry_kind != *kind)
+                        continue;
+                    oss << "; ";
+                    append(label, *counter);
+                    break;
+                }
+            }
+        }
         return oss.str();
     }
 
@@ -508,10 +523,10 @@ namespace lfs::core {
             throw std::runtime_error("Recursive deferred tensor materialization detected");
         }
         const uint64_t lazy_node_id = lazy->node_id != 0 ? lazy->node_id : lazy_expr_id();
-        Tensor published;
-
+        // Production and publication use the same gate. Keep it across both
+        // phases rather than unlock/relock it for every materialized alias.
+        std::unique_lock<std::mutex> lock(lazy->gate);
         {
-            std::unique_lock<std::mutex> lock(lazy->gate);
             lazy->gate_owner.store(current_thread, std::memory_order_release);
             struct GateOwnerReset {
                 std::atomic<std::thread::id>& owner;
@@ -534,7 +549,6 @@ namespace lfs::core {
             };
 
             if (lazy->result.is_valid()) {
-                published = lazy->result;
                 unregister_published_materializer();
             } else {
                 Tensor materialized;
@@ -544,12 +558,11 @@ namespace lfs::core {
                             lazy_node_id, cached_materialized)) {
                         validate_materialized(cached_materialized);
                         lazy->result = cached_materialized;
-                        published = lazy->result;
                         unregister_published_materializer();
                     }
                 }
 
-                if (!published.is_valid()) {
+                if (!lazy->result.is_valid()) {
                     if (!lazy->materializer) {
                         throw std::runtime_error("Deferred tensor has no materializer");
                     }
@@ -559,12 +572,10 @@ namespace lfs::core {
                     try {
                         // Materializers launch on the current stream. Without one they would
                         // use the legacy stream, unordered with this tensor's declared home.
-#if LFS_HAS_CUDA
-                        std::optional<CUDAStreamGuard> home_stream;
-                        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::CUDA && stream() != nullptr && getCurrentCUDAStream() == nullptr &&
-                            !is_stream_retired(stream()))
-                            home_stream.emplace(stream());
-#endif
+                        std::optional<internal::DeferredTargetBinding> home_stream;
+                        if (device_ == Device::GPU && stream() &&
+                            internal::deferred_home_needs_binding(internal::gpu_backend_tag(*this), stream()))
+                            home_stream.emplace(internal::gpu_backend_tag(*this), *this);
                         materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
                         validate_materialized(materialized);
                         lazy->result = materialized;
@@ -577,12 +588,14 @@ namespace lfs::core {
                         }
                         throw;
                     }
-                    published = lazy->result;
                     unregister_published_materializer();
                 }
             }
         }
 
+        // The local lazy owner and the still-held gate pin this result through
+        // publication. No extra Tensor snapshot (or temporary identity) is needed.
+        const Tensor& published = lazy->result;
         const void* old_storage = data_;
         const void* new_storage = published.data_;
         const size_t storage_bytes = published.bytes();
@@ -594,7 +607,6 @@ namespace lfs::core {
 
         const size_t preserved_id = id_;
         // Sibling handles share TensorState; publish its fields under the gate their materializations share.
-        std::unique_lock<std::mutex> publish_lock(lazy->gate);
         ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
@@ -603,6 +615,8 @@ namespace lfs::core {
             state_->lazy ? std::optional<GpuBackend>(state_->lazy->backend) : std::nullopt;
 
         data_ = published.data_;
+        // Share the cached ownership directly with this handle. The cached
+        // result must retain its own references for still-deferred siblings.
         data_owner_ = published.data_owner_;
         shape_ = published.shape_;
         strides_ = published.strides_;
@@ -627,10 +641,8 @@ namespace lfs::core {
             }
             const cudaStream_t materialized_stream = published.state_->stream;
             bool keep_home = materialized_stream == nullptr && preserved_stream != nullptr;
-#if LFS_HAS_CUDA
             // A retired home no longer orders anything; the producer is the truth.
             keep_home = keep_home && !is_stream_retired(preserved_stream);
-#endif
             state_->stream = keep_home ? preserved_stream : materialized_stream;
         } else {
             state_->tracked = preserved_tracked;
@@ -641,9 +653,8 @@ namespace lfs::core {
             const GpuBackend backend = internal::gpu_backend_tag(*this);
             LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
                            "deferred tensor materialized on a different GPU backend than its tag");
-            if (backend != GpuBackend::CUDA) {
-                state_->stream = nullptr;
-            }
+            if (state_->stream)
+                state_->stream = static_cast<cudaStream_t>(internal::canonical_deferred_home(backend, state_->stream));
         }
 
         // when TensorState is shared, keep lazy->result so sibling handles
@@ -652,7 +663,7 @@ namespace lfs::core {
         if (state_.use_count() <= 1) {
             state_->lazy.reset();
         }
-        publish_lock.unlock();
+        lock.unlock();
 
         id_ = preserved_id;
         compute_alignment();
@@ -686,18 +697,12 @@ namespace lfs::core {
                        "Tensor constructor received null storage for a non-empty tensor");
 
         if (home_stream != nullptr && device_ == Device::GPU) {
-#if LFS_HAS_CUDA
-            unretire_stream(home_stream);
-#endif
+            internal::observe_native_target(home_stream);
         }
         state_->stream = home_stream;
         init_storage_meta();
         if (device_ == Device::GPU) {
-#if LFS_HAS_CUDA
-            storage_meta_->backend = GpuBackend::CUDA;
-#else
-            storage_meta_->backend = GpuBackend::Vulkan;
-#endif
+            storage_meta_->backend = kCompatibilityRawStorageBackend;
             storage_meta_->gpu_descriptor.byte_size = bytes();
         }
         compute_alignment();
@@ -845,13 +850,12 @@ namespace lfs::core {
     void Tensor::set_stream(cudaStream_t stream) {
         // Vulkan and Metal storage order on their own timelines; a CUDA stream identity
         // on it would make every cross-stream check bridge (a queue submit) for nothing.
-        if (internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
-            stream = nullptr;
-        }
+        // Every driver preserves the null home. Avoid a registry lookup and a
+        // virtual call when clearing it or publishing a default-target result.
+        if (stream)
+            stream = static_cast<cudaStream_t>(internal::backend_driver(internal::gpu_backend_tag(*this)).canonical_home_target(stream));
         if (stream) {
-#if LFS_HAS_CUDA
-            unretire_stream(stream);
-#endif
+            internal::observe_native_target(stream);
         }
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
@@ -883,9 +887,7 @@ namespace lfs::core {
 
     void Tensor::record_stream(cudaStream_t stream) const {
         if (stream) {
-#if LFS_HAS_CUDA
-            unretire_stream(stream);
-#endif
+            internal::observe_native_target(stream);
         }
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
@@ -916,17 +918,8 @@ namespace lfs::core {
     void Tensor::sync_to_stream(cudaStream_t execution_stream) const {
         LFS_ASSERT_MSG(is_valid(),
                        "sync_to_stream requires a valid tensor");
-        if (device_ != Device::GPU ||
-            internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
-            return;
-        }
-        const cudaStream_t home = stream();
-        if (execution_stream == home) {
-            return;
-        }
-        internal::backend_ops_for(*this).bridge(
-            internal::ExecContext{home}, internal::ExecContext{execution_stream});
-        record_stream(execution_stream);
+        if (device_ == Device::GPU && execution_stream != stream())
+            internal::backend_driver(internal::gpu_backend_tag(*this)).synchronize_tensor_target(*this, execution_stream);
     }
 
     void Tensor::relabel_allocation_for_profiler() {
@@ -975,18 +968,12 @@ namespace lfs::core {
         //
         // The backend service clears pool liveness before shutdown so concurrent
         // and late Tensor deleters cannot re-enter a destroyed singleton.
-#if LFS_HAS_CUDA
-        internal::backend_ops(GpuBackend::CUDA).shutdown();
-#endif
+        for (const auto backend : kCompiledGpuBackends)
+            internal::backend_driver(backend).shutdown_compatibility_pool();
     }
 
     void Tensor::set_memory_pool_iteration(int iteration) {
-#if LFS_HAS_CUDA
-        // Iteration telemetry must not construct CUDA's pool (and its reclaim
-        // stream) when the trainer runs on Vulkan or Metal.
-        if (configured_gpu_backend() == GpuBackend::CUDA)
-            internal::backend_ops(GpuBackend::CUDA).set_allocation_iteration(iteration);
-#endif
+        internal::backend_driver(configured_gpu_backend()).set_pool_iteration(iteration);
     }
 
     // ============= Destructor =============
@@ -1101,13 +1088,7 @@ namespace lfs::core {
             return;
         }
 
-#if LFS_HAS_CUDA
-        constexpr GpuBackend storage_less_backend = GpuBackend::CUDA;
-#elif defined(LFS_TENSOR_VULKAN)
-        constexpr GpuBackend storage_less_backend = GpuBackend::Vulkan;
-#else
-        constexpr GpuBackend storage_less_backend = GpuBackend::Metal;
-#endif
+        constexpr GpuBackend storage_less_backend = kCompatibilityPointerProbeBackend;
         const GpuBackend backend = device_ == Device::GPU && storage_meta_
                                        ? storage_meta_->backend
                                        : storage_less_backend;
@@ -1642,11 +1623,9 @@ namespace lfs::core {
 
         // Convert on the current stream, or this tensor's own when none is set,
         // after the work that produced this tensor.
-        std::optional<CUDAStreamGuard> conversion_stream;
-#if LFS_HAS_CUDA
-        if (device_ == Device::GPU && internal::gpu_backend_tag(*this) == GpuBackend::CUDA)
-            conversion_stream.emplace(prepare_inputs_for_stream({this}));
-#endif
+        std::optional<internal::TensorTargetBinding> conversion_stream;
+        if (device_ == Device::GPU)
+            conversion_stream.emplace(internal::backend_driver(internal::gpu_backend_tag(*this)), *this, false);
 
 // Macro for type conversions using launch_convert_type
 #define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)         \
@@ -1705,16 +1684,11 @@ namespace lfs::core {
             if (numel() == 0)
                 return result;
 
-            if (const auto backend = gpu_backend_of(*this); backend && *backend != GpuBackend::CUDA) {
+            if (device_ == Device::GPU) {
                 internal::backend_ops_for(*this).convert_type(
                     internal::storage_ref(*this), internal::storage_ref(result),
                     numel(), internal::ExecContext{result.stream()});
                 return result;
-            }
-
-            if (device_ == Device::GPU) {
-                // != 0 on the device, so NaN maps to true like the CPU loop.
-                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
             }
             const float* src = ptr<float>();
             unsigned char* dst = result.ptr<unsigned char>();
@@ -1802,18 +1776,19 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
-            if (device_ == Device::GPU && numel() > 0) {
-                // != 0 on the device.
-                return ne(internal::allocate_zeros_like(*this, TensorShape(), dtype_)); // rank-0 keeps the input shape
-            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            const int* src = ptr<int>();
-            unsigned char* dst = result.ptr<unsigned char>();
-            for (size_t i = 0; i < numel(); ++i) {
-                dst[i] = (src[i] != 0) ? 1 : 0;
+            if (device_ == Device::GPU) {
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
+            } else {
+                const int* src = ptr<int>();
+                unsigned char* dst = result.ptr<unsigned char>();
+                for (size_t i = 0; i < numel(); ++i)
+                    dst[i] = src[i] != 0 ? 1 : 0;
             }
             return result;
         }
@@ -3305,10 +3280,7 @@ namespace lfs::core {
 
         std::shared_ptr<void> new_owner;
         if (device_ == Device::GPU) {
-            const StorageAccountingKind accounting_kind =
-                new_gpu_storage.backend == GpuBackend::Vulkan  ? StorageAccountingKind::VulkanOwned
-                : new_gpu_storage.backend == GpuBackend::Metal ? StorageAccountingKind::MetalOwned
-                                                               : StorageAccountingKind::CudaDirect;
+            const auto accounting_kind = internal::allocation_accounting(new_gpu_storage);
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
             const GpuStorageDescriptor released_descriptor =
@@ -3319,7 +3291,7 @@ namespace lfs::core {
                                                          released_descriptor,
                                                          accounting_kind,
                                                          allocation_stream](void* ptr) {
-                if (ptr && (new_gpu_storage.backend == GpuBackend::Vulkan ||
+                if (ptr && (internal::allocation_release_after_teardown(new_gpu_storage) ||
                             !gpu_process_teardown_started())) {
                     StorageMeta owner;
                     owner.backend = new_gpu_storage.backend;
@@ -3338,20 +3310,15 @@ namespace lfs::core {
         }
         auto new_storage_meta = std::make_shared<StorageMeta>();
         if (device_ == Device::GPU) {
-            new_storage_meta->backend = storage_meta_ ? storage_meta_->backend
-                                                      : GpuBackend::CUDA;
+            new_storage_meta->backend = new_gpu_storage.backend;
             if (new_gpu_storage.meta != nullptr) {
                 new_storage_meta->gpu_descriptor =
                     new_gpu_storage.meta->gpu_descriptor;
             } else {
                 new_storage_meta->gpu_descriptor.byte_size = new_bytes;
-                new_storage_meta->gpu_descriptor.accounting_kind =
-                    StorageAccountingKind::CudaDirect;
+                new_storage_meta->gpu_descriptor.accounting_kind = internal::allocation_accounting(new_gpu_storage);
             }
-            new_storage_meta->external_kind =
-                new_gpu_storage.backend == GpuBackend::Vulkan
-                    ? ""
-                    : "cuda.direct";
+            new_storage_meta->external_kind = internal::allocation_label(new_gpu_storage);
         }
 
         // Copy existing data
@@ -3399,36 +3366,12 @@ namespace lfs::core {
           tensor_info_(t ? t->str() : "") {}
 
     Tensor Tensor::empty_exact(TensorShape shape, DataType dtype) {
-        LFS_ASSERT_MSG(is_supported_dtype(dtype), "empty_exact received an invalid dtype");
-        const size_t elements = shape.elements();
-        LFS_ASSERT_MSG(elements == 0 || dtype_size(dtype) <= std::numeric_limits<size_t>::max() / elements,
-                       "empty_exact byte count overflow");
-        const size_t bytes = elements * dtype_size(dtype);
-        // Only the CUDA pool rounds sizes up into retained buckets.
-        if (bytes == 0 || internal::resolve_new_gpu_storage_backend() != GpuBackend::CUDA) {
-            return empty(std::move(shape), Device::GPU, dtype);
-        }
-
-        Tensor t;
-        t.shape_ = shape;
-        t.strides_ = shape.strides();
-        t.storage_offset_ = 0;
-        t.is_contiguous_ = true;
-        t.device_ = Device::GPU;
-        t.dtype_ = dtype;
-        t.id_ = next_id_++;
-        t.ensure_state();
-        t.state_->stream = getCurrentCUDAStream();
-        const cudaStream_t stream = t.state_->stream;
-        void* ptr = allocate_cuda_storage(
-            bytes, stream, CudaStorageMode::ExactAsync, "tensor.exact", "tensor.empty_exact");
-        t.adopt_storage(ptr, [stream](void* p) { safe_cuda_pool_deallocate(p, stream); });
-        t.data_ = t.data_owner_.get();
-        t.compute_alignment();
-#if LFS_HAS_CUDA
-        CudaMemoryPool::instance().record_tensor(t.data_, t.shape().dims(), bytes, dtype_name(t.dtype_));
-#endif
-        return t;
+        LoadArgs args;
+        args.shape = std::move(shape);
+        args.device = Device::GPU;
+        args.dtype = dtype;
+        args.exact_allocation = true;
+        return load(LoadOp::Empty, args);
     }
 
     Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
@@ -3439,7 +3382,6 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape.rank() > 0,
                        "zeros_direct requires at least one dimension");
         const GpuBackend backend = internal::resolve_new_gpu_storage_backend();
-        const auto stream = backend == GpuBackend::CUDA ? getCurrentCUDAStream() : nullptr;
 
         const size_t current_size = shape[0];
         LFS_ASSERT_MSG(capacity >= current_size,
@@ -3457,6 +3399,7 @@ namespace lfs::core {
                             "zeros_direct byte count");
 
         if (total_bytes == 0) {
+            const auto allocation = internal::backend_driver(backend).empty_tensor_allocation(internal::TensorAllocationKind::Direct);
             Tensor t;
             t.data_ = nullptr;
             static char dummy_owner = 0;
@@ -3467,26 +3410,20 @@ namespace lfs::core {
             t.device_ = device;
             t.dtype_ = dtype;
             t.ensure_state();
-            t.state_->stream = stream;
+            t.state_->stream = static_cast<cudaStream_t>(allocation.target);
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
             t.init_storage_meta();
             t.storage_meta_->backend = backend;
-            t.storage_meta_->external_kind =
-                backend == GpuBackend::Vulkan ? "" : "cuda.direct";
+            t.storage_meta_->external_kind = allocation.external_kind;
             return t;
         }
 
         auto& backend_ops = internal::backend_ops(backend);
-        internal::StorageRef storage = backend_ops.allocate(
-            total_bytes, alignof(std::max_align_t),
-            internal::ExecContext{
-                .cuda_stream = stream,
-                .allocation_class = internal::AllocationClass::Direct,
-                .allocation_label = "zeros_direct storage allocation",
-                .allocation_operation = "tensor.zeros_direct",
-            });
+        auto allocation = backend_ops.allocate_tensor({.bytes = total_bytes, .alignment = alignof(std::max_align_t), .kind = internal::TensorAllocationKind::Direct, .label = "zeros_direct storage allocation", .operation = "tensor.zeros_direct"});
+        auto storage = allocation.storage;
+        const auto stream = static_cast<cudaStream_t>(allocation.target);
         storage.dtype = dtype;
         void* const data_ptr = storage.data;
         try {
@@ -3505,9 +3442,7 @@ namespace lfs::core {
         // Create tensor with custom deleter
         Tensor t;
         t.data_ = data_ptr;
-        const StorageAccountingKind accounting_kind =
-            backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
-                                          : StorageAccountingKind::CudaDirect;
+        const auto accounting_kind = internal::allocation_accounting(storage);
         record_storage_allocation(accounting_kind, total_bytes);
         const GpuStorageDescriptor released_descriptor =
             storage.meta != nullptr ? storage.meta->gpu_descriptor
@@ -3525,7 +3460,7 @@ namespace lfs::core {
             // release long-lived holders while CUDA is still healthy. The deleter
             // rebuilds a by-value descriptor so it never dereferences a freed
             // allocator record after shutdown and reinitialization.
-            if (storage.backend == GpuBackend::Vulkan ||
+            if (internal::allocation_release_after_teardown(storage) ||
                 !gpu_process_teardown_started()) {
                 StorageMeta owner;
                 owner.backend = storage.backend;
@@ -3552,12 +3487,9 @@ namespace lfs::core {
             t.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
         } else {
             t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
-            t.storage_meta_->gpu_descriptor.accounting_kind =
-                StorageAccountingKind::CudaDirect;
+            t.storage_meta_->gpu_descriptor.accounting_kind = internal::allocation_accounting(storage);
         }
-        t.storage_meta_->external_kind = backend == GpuBackend::Vulkan
-                                             ? ""
-                                             : "cuda.direct";
+        t.storage_meta_->external_kind = internal::allocation_label(storage);
 
         return t;
     }

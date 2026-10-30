@@ -556,12 +556,13 @@ namespace lfs::core::internal::metal {
         }
         block.meta->pending_value.store(block.guard, std::memory_order_relaxed);
         block.requested = bytes;
-        const StorageRef storage{
+        const StorageRef storage {
             .backend = GpuBackend::Metal,
             .data = reinterpret_cast<void*>(block.address),
             .byte_offset = 0,
             .dtype = DataType::UInt8,
             .meta = block.meta.get(),
+            .flags = allocation_flags(StorageAccountingKind::MetalOwned, false, true, false),
         };
         live_.emplace(block.address, std::move(block));
         live_requested_bytes_ += bytes;

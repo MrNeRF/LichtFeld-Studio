@@ -24,6 +24,15 @@ if(CASE STREQUAL "required-backend")
     return()
 endif()
 
+if(NOT EXISTS "${EXIT_RUNNER}")
+    message(FATAL_ERROR "Backend exit contract runner does not exist: ${EXIT_RUNNER}")
+endif()
+execute_process(COMMAND "${EXIT_RUNNER}"
+    RESULT_VARIABLE exit_result OUTPUT_VARIABLE exit_output ERROR_VARIABLE exit_error TIMEOUT 20)
+if(NOT "${exit_result}" STREQUAL "0" OR NOT exit_output MATCHES "Backend driver exit contracts passed")
+    message(FATAL_ERROR "Backend exit contract failed: ${exit_result}\n${exit_output}\n${exit_error}")
+endif()
+
 expect_runner(cpu_selection 0 "[  PASSED  ]"
     "--gtest_filter=Backends/TensorOperationContracts.*/CPU")
 expect_runner(empty_selection 2 "No tensor contracts executed"

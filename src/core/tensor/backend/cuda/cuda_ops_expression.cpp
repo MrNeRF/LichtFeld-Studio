@@ -1,5 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../internal/expression_pairing.hpp"
+
 #include "../../internal/expression_emitter.hpp"
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
@@ -190,5 +192,31 @@ namespace lfs::core::internal {
         void* args[]{const_cast<uint32_t*>(launch.arguments.data())};
         runtime.driver.check(runtime.driver.cuLaunchKernel(kernel->function, std::min(65535u, (work + 255) / 256),
                                                            1, 1, 256, 1, 1, 0, context.cuda_stream, args, nullptr));
+    }
+} // namespace lfs::core::internal
+
+namespace lfs::core::internal {
+    uint64_t CudaBackendOps::expression_device_address(StorageRef storage) const {
+        return reinterpret_cast<uintptr_t>(storage.data) + storage.byte_offset;
+    }
+    void CudaBackendOps::optimize_expression_pairing(ExpressionSignature& signature, const ExpressionPairingRequest& request) {
+        const auto& inputs = request.inputs;
+        const auto& strides = request.strides;
+        const auto& loaded = request.program.analysis().loaded;
+
+        std::array<bool, ExpressionProgram::max_inputs> paired{};
+        for (uint32_t i = 0; i < inputs.size(); ++i)
+            for (uint32_t j = 0; j < inputs.size() && !paired[i]; ++j) {
+                const auto& low = signature.input[i];
+                const auto& high = signature.input[j];
+                if (i == j || paired[j] || !loaded[i] || !loaded[j] || low.host || high.host || low.linear ||
+                    low.dtype != high.dtype || dtype_size(low.dtype) != 4 ||
+                    inputs[i].storage.data != inputs[j].storage.data || strides[i] != strides[j] ||
+                    expression_device_address(inputs[i].storage) % 8 != 0 || expression_device_address(inputs[j].storage) != expression_device_address(inputs[i].storage) + 4 ||
+                    std::any_of(strides[i].begin(), strides[i].end(), [](int32_t s) { return s % 2 != 0; }))
+                    continue;
+                signature.input[i].pair = int8_t(j);
+                paired[i] = paired[j] = true;
+            }
     }
 } // namespace lfs::core::internal

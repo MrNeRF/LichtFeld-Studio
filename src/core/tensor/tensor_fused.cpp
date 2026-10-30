@@ -445,6 +445,7 @@ namespace lfs::core::fused {
 
         const cudaStream_t stream = outputs[0].stream();
         std::vector<internal::ExprInput> bindings;
+        bindings.reserve(kernel.bindings.size());
         for (const auto& binding : kernel.bindings) {
             const auto& tensor = inputs[binding.input];
             internal::ExprInput input;
@@ -466,6 +467,7 @@ namespace lfs::core::fused {
             bindings.push_back(input);
         }
         std::vector<internal::ExprOutput> targets;
+        targets.reserve(outputs.size());
         for (const auto& tensor : outputs) {
             if (run) {
                 Tensor written = tensor;
@@ -481,10 +483,9 @@ namespace lfs::core::fused {
         }
         if (run) {
             internal::run_expression(kernel.program, bindings, targets, shape, internal::ExecContext{stream});
-            if (*backend == GpuBackend::CUDA)
-                for (const auto& output : outputs)
-                    if (output.stream() != stream)
-                        internal::backend_ops(*backend).bridge(internal::ExecContext{stream}, internal::ExecContext{output.stream()});
+            for (const auto& output : outputs)
+                if (output.stream() != stream)
+                    internal::backend_ops(*backend).bridge(internal::ExecContext{stream}, internal::ExecContext{output.stream()});
         } else
             internal::prepare_expression(kernel.program, bindings, targets, shape);
     }

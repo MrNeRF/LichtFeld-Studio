@@ -151,7 +151,7 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::normal(
-        const StorageRef output, StorageRef, const RandomProgram& program, ExecContext) {
+        const StorageRef output, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(normal);
         // The CUDA path draws from the process generator's stream; Vulkan draws
         // every element from its own Philox block under the program seed, so odd

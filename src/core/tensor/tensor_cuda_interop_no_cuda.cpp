@@ -4,11 +4,14 @@
 #include "core/tensor_cuda_interop.hpp"
 
 #include "core/cuda_vulkan_interop.hpp"
+#include "core/tensor_backend.hpp"
 #include "internal/tensor_impl.hpp"
 
 #include <stdexcept>
 
 namespace lfs::core {
+    int selected_cuda_device() { return 0; }
+
     namespace {
         [[noreturn]] void throw_cuda_unavailable() {
             throw std::runtime_error("CUDA support is not compiled into this build");

@@ -11,6 +11,18 @@ namespace lfs::core::internal {
 
     class VulkanBackendOps final : public GpuBackendOps {
     public:
+        uint64_t expression_device_address(StorageRef) const override;
+        void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
+        NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
+        std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
+        std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+        void name_queue(ExecContext, const char*) override;
+        StorageRef borrow_native_range(void*, size_t) override;
+        std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
+        std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
+        void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;
+        ExpressionCacheStats expression_cache_stats() override;
+        std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
         void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;
         ~VulkanBackendOps() override = default;
 
@@ -136,7 +148,7 @@ namespace lfs::core::internal {
         void bernoulli(StorageRef, const RandomProgram&, ExecContext) override;
         void randint(StorageRef, const RandomProgram&, ExecContext) override;
         void multinomial(StorageRef, StorageRef, const RandomProgram&, ExecContext) override;
-        void normal(StorageRef, StorageRef, const RandomProgram&, ExecContext) override;
+        void normal(StorageRef, const RandomProgram&, ExecContext) override;
 
         void gather(StorageRef, StorageRef, StorageRef, const StridedLayout&,
                     const StridedLayout&, const IndexProgram&, ExecContext) override;
@@ -198,6 +210,7 @@ namespace lfs::core::internal {
         void memset(const FillRequest&) override;
 
         std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+        std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) override;
         void synchronize_stream(ExecContext) override;
         void synchronize_device() override;
         void device_barrier() override;
@@ -205,6 +218,7 @@ namespace lfs::core::internal {
         SyncToken bridge(ExecContext, ExecContext) override;
         PointerClass classify_pointer(const void*) override;
         bool stream_is_capturing(ExecContext) override;
+        void validate_checked_index_execution(ExecContext context) override;
     };
 
 } // namespace lfs::core::internal

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "backend_runtime.hpp"
 #include "core/export.hpp"
 #include "descriptors.hpp"
 
@@ -21,6 +22,7 @@ namespace lfs::core {
     struct PointRegion2D;
     struct LabelUpdate;
     struct DecimateMerge;
+    struct GpuDeviceInfo;
 
     namespace tensor_ops {
         struct FusedPointwiseOpChain;
@@ -29,10 +31,19 @@ namespace lfs::core {
     namespace internal {
 
         class ReadbackBuffer;
+        class PreparedReadback;
         struct ExpressionLaunch;
+        struct ExpressionCacheStats;
 
+        struct ExpressionSignature;
+        struct ExpressionPairingRequest;
+        struct TensorAllocationRequest;
+        struct NativeTensorAllocation;
         class LFS_CORE_API GpuBackendOps {
         public:
+            virtual uint64_t expression_device_address(StorageRef) const = 0;
+            virtual void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) = 0;
+            virtual NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) = 0;
             virtual ~GpuBackendOps();
 
             virtual void compiled_expression(const ExpressionLaunch& launch, ExecContext context) = 0;
@@ -286,7 +297,7 @@ namespace lfs::core {
             virtual void multinomial(StorageRef weights, StorageRef output,
                                      const RandomProgram& program, ExecContext context) = 0;
             // Odd-sized normal generation synchronizes after copying from its scratch.
-            virtual void normal(StorageRef output, StorageRef odd_count_scratch,
+            virtual void normal(StorageRef output,
                                 const RandomProgram& program, ExecContext context) = 0;
 
             // Sub-lane C: index, masking, movement, allocation, copy and sync.
@@ -411,10 +422,22 @@ namespace lfs::core {
             virtual void memset(const FillRequest& request) = 0;
 
             virtual std::unique_ptr<ReadbackBuffer> create_readback_buffer() = 0;
+            virtual std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) = 0;
 
-            virtual void push_range(const char* name);
-            virtual void pop_range();
-            virtual void name_queue(ExecContext context, const char* name);
+            // Required native services. Each backend owns its implementation
+            // and explicitly reports features its runtime cannot provide.
+            virtual std::unique_ptr<BackendUploadBuffer> create_upload_buffer() = 0;
+            virtual std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) = 0;
+            virtual std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) = 0;
+            virtual std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) = 0;
+            virtual std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) = 0;
+            virtual StorageRef borrow_native_range(void* pointer, size_t bytes) = 0;
+            virtual void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) = 0;
+            virtual ExpressionCacheStats expression_cache_stats() = 0;
+
+            virtual void push_range(const char* name) = 0;
+            virtual void pop_range() = 0;
+            virtual void name_queue(ExecContext context, const char* name) = 0;
 
             virtual void synchronize_stream(ExecContext context) = 0;
             virtual void synchronize_device() = 0;
@@ -423,10 +446,22 @@ namespace lfs::core {
             virtual SyncToken bridge(ExecContext producer, ExecContext consumer) = 0;
             virtual PointerClass classify_pointer(const void* pointer) = 0;
             virtual bool stream_is_capturing(ExecContext context) = 0;
+            virtual void validate_checked_index_execution(ExecContext context) = 0;
         };
 
         class CudaBackendOps final : public GpuBackendOps {
         public:
+            uint64_t expression_device_address(StorageRef) const override;
+            void optimize_expression_pairing(ExpressionSignature&, const ExpressionPairingRequest&) override;
+            NativeTensorAllocation allocate_tensor(const TensorAllocationRequest&) override;
+            std::unique_ptr<BackendFence> create_fence(std::optional<void*> imported = std::nullopt) override;
+            std::unique_ptr<BackendUploadBuffer> create_upload_buffer() override;
+            StorageRef borrow_native_range(void*, size_t) override;
+            std::unique_ptr<BackendCompletion> create_completion(BackendCompletionTarget target = {}) override;
+            std::unique_ptr<BackendReadbackSlot> create_readback_slot(size_t bytes) override;
+            void where_scalar(Tensor& output, const Tensor& mask, float value, const Tensor& source) override;
+            ExpressionCacheStats expression_cache_stats() override;
+            std::unique_ptr<BackendTimestamps> create_timestamps(size_t count) override;
             ~CudaBackendOps() override;
 
             void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;
@@ -628,7 +663,7 @@ namespace lfs::core {
                          ExecContext context) override;
             void multinomial(StorageRef weights, StorageRef output,
                              const RandomProgram& program, ExecContext context) override;
-            void normal(StorageRef output, StorageRef odd_count_scratch,
+            void normal(StorageRef output,
                         const RandomProgram& program, ExecContext context) override;
 
             // Sub-lane C: index, masking, movement, allocation, copy and sync.
@@ -744,6 +779,7 @@ namespace lfs::core {
             void memset(const FillRequest& request) override;
 
             std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+            std::unique_ptr<PreparedReadback> prepare_readback(const Tensor&, const Tensor&) override;
             void push_range(const char* name) override;
             void pop_range() override;
             void name_queue(ExecContext context, const char* name) override;
@@ -754,6 +790,7 @@ namespace lfs::core {
             SyncToken bridge(ExecContext producer, ExecContext consumer) override;
             PointerClass classify_pointer(const void* pointer) override;
             bool stream_is_capturing(ExecContext context) override;
+            void validate_checked_index_execution(ExecContext context) override;
         };
 
         LFS_CORE_API GpuBackendOps& backend_ops(GpuBackend backend);

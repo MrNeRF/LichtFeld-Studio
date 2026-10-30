@@ -59,6 +59,7 @@ target_include_directories(gsplat_backend_lfs
 
 target_link_libraries(gsplat_backend_lfs
         PUBLIC
+        lfs_backend_configuration
         CUDA::cudart
         CUDA::curand
         glm::glm

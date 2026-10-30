@@ -8,6 +8,7 @@
 #include "vk_shader_table.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <format>
 #include <string_view>
 #include <vector>
@@ -59,7 +60,12 @@ namespace lfs::core::internal {
         const std::span<const uint32_t> constants) {
         std::string key = module;
         for (const uint32_t constant : constants) {
-            key += std::format(":{}", constant);
+            // Ten decimal digits cover every uint32_t. Preserve the existing
+            // cache key without constructing a formatted string per constant.
+            char digits[10];
+            const auto converted = std::to_chars(digits, digits + sizeof(digits), constant);
+            key += ':';
+            key.append(digits, converted.ptr);
         }
         std::lock_guard lock(mutex_);
         LFS_ASSERT_MSG(!shutting_down_,

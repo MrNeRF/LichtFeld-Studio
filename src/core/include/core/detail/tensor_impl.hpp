@@ -433,6 +433,7 @@ namespace lfs::core {
         Device device = Device::GPU;
         DataType dtype = DataType::Float32;
         bool use_pinned = true;
+        bool exact_allocation = false;
         std::optional<uint64_t> random_seed;
         std::variant<
             std::monostate,
@@ -741,7 +742,10 @@ namespace lfs::core {
             auto owner = std::make_shared<StorageOwner>(
                 data, StoredDeleter(std::forward<Deleter>(deleter)));
             data_owner_ = std::shared_ptr<void>(owner, data);
-            storage_meta_ = std::shared_ptr<StorageMeta>(owner, &owner->meta);
+            auto* const meta = &owner->meta;
+            // Transfer the remaining reference instead of incrementing it only
+            // to decrement it again when the local owner leaves this scope.
+            storage_meta_ = std::shared_ptr<StorageMeta>(std::move(owner), meta);
             if (device_ == Device::GPU) {
                 storage_meta_->backend = GpuBackend::CUDA;
             }

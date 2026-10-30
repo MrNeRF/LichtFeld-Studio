@@ -1,19 +1,16 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "backend/backend_driver.hpp"
+#include "backend/native_allocation.hpp"
+#include "backend/reduction_tuning.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/detail/fused_pointwise.hpp"
 #include "core/detail/tensor_half.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
-#include "core/nn/activation_arena.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#if LFS_HAS_CUDA
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
-#endif
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/lazy_config.hpp"
@@ -371,6 +368,65 @@ namespace lfs::core {
 
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
         Tensor result;
+        // Keep adoption local: an exported member would require interposable calls
+        // on ELF and prevent inlining this per-allocation path.
+        const auto adopt_native_tensor_allocation = [](Tensor& result, internal::NativeTensorAllocation&& allocation,
+                                                       const size_t bytes,
+                                                       internal::GpuBackendOps& backend) static {
+            auto storage = allocation.storage;
+            storage.dtype = result.dtype_;
+            const auto target = static_cast<cudaStream_t>(allocation.target);
+            const auto descriptor = storage.meta ? storage.meta->gpu_descriptor : GpuStorageDescriptor{};
+            const bool accounted = !allocation.owner && internal::allocation_accounted(storage);
+            if (accounted)
+                record_storage_allocation(internal::allocation_accounting(storage), bytes);
+            // Keep rollback separate from the normal owner so failed adoption releases
+            // native storage exactly once. Native deallocation is noexcept.
+            const auto release_unadopted = [&](internal::NativeTensorAllocation*) noexcept {
+                if (!allocation.owner)
+                    backend.deallocate(storage, internal::ExecContext{target});
+                if (accounted)
+                    record_storage_deallocation(internal::allocation_accounting(storage), bytes);
+            };
+            std::unique_ptr<internal::NativeTensorAllocation, decltype(release_unadopted)> rollback(
+                &allocation, release_unadopted);
+            if (allocation.owner) {
+                result.adopt_storage(storage.data, [owner = allocation.owner](void*) { (void)owner; });
+            } else {
+                result.adopt_storage(storage.data, [target, storage, bytes, descriptor, accounted](void* data) {
+                    if (!data)
+                        return;
+                    if (storage.meta) {
+                        StorageMeta metadata;
+                        metadata.backend = storage.backend;
+                        metadata.gpu_descriptor = descriptor;
+                        auto released = storage;
+                        released.meta = &metadata;
+                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{target});
+                    } else {
+                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{target});
+                    }
+                    if (accounted)
+                        Tensor::record_storage_deallocation(internal::allocation_accounting(storage), bytes);
+                });
+            }
+            (void)rollback.release();
+            result.data_ = result.data_owner_.get();
+            result.compute_alignment();
+            result.ensure_state();
+            result.state_->stream = target;
+            result.storage_meta_->backend = storage.backend;
+            result.storage_meta_->gpu_descriptor = descriptor;
+            if (!storage.meta)
+                result.storage_meta_->gpu_descriptor.byte_size = bytes;
+            // adopt_storage creates fresh metadata. Ordinary owned allocations
+            // already have an empty label and owner; only populate external data
+            // when the native allocator actually supplies it.
+            if (*allocation.external_kind)
+                result.storage_meta_->external_kind = allocation.external_kind;
+            if (allocation.owner)
+                result.storage_meta_->external_owner = std::move(allocation.owner);
+        };
         LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::GPU,
                        "tensor load received an invalid device");
         LFS_ASSERT_MSG(dtype_size(args.dtype) != 0,
@@ -393,8 +449,7 @@ namespace lfs::core {
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
             result.ensure_state();
-            result.state_->stream =
-                gpu_backend && *gpu_backend != GpuBackend::CUDA ? nullptr : getCurrentCUDAStream();
+            result.state_->stream = gpu_backend ? nullptr : getCurrentCUDAStream();
 
             LFS_ASSERT_MSG(result.shape_.elements() == 0 ||
                                dtype_size(result.dtype_) <=
@@ -413,68 +468,23 @@ namespace lfs::core {
                     std::shared_ptr<void>(&empty_owner_sentinel, [](void*) {});
                 result.init_storage_meta();
                 if (gpu_backend) {
-                    result.storage_meta_->backend = *gpu_backend;
+                    const auto allocation = internal::backend_driver(*gpu_backend).empty_tensor_allocation(args.exact_allocation ? internal::TensorAllocationKind::Exact : internal::TensorAllocationKind::Pooled);
+                    result.storage_meta_->backend = allocation.storage.backend;
+                    result.state_->stream = static_cast<cudaStream_t>(allocation.target);
                 }
                 return result;
             }
 
             if (result.device_ == Device::GPU) {
-                cudaStream_t s = result.stream();
-                if (*gpu_backend == GpuBackend::CUDA) {
-                    if (auto* arena = nn::ActivationArena::current()) {
-                        if (void* arena_ptr = arena->try_alloc(bytes)) {
-                            auto owner = arena->owner();
-                            result.adopt_storage(arena_ptr, [owner](void*) { (void)owner; });
-                            result.data_ = result.data_owner_.get();
-                            result.compute_alignment();
-                            result.storage_meta_->external_kind = "nn.arena";
-                            result.storage_meta_->external_owner = std::move(owner);
-                            result.storage_meta_->backend = *gpu_backend;
-                            result.storage_meta_->gpu_descriptor.byte_size = bytes;
-                            return result;
-                        }
-                    }
-                }
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
-                internal::StorageRef storage = backend_ops.allocate(
-                    bytes, alignof(std::max_align_t), internal::ExecContext{s});
-                storage.dtype = result.dtype_;
-                void* const ptr = storage.data;
-                const GpuStorageDescriptor released_descriptor =
-                    storage.meta != nullptr ? storage.meta->gpu_descriptor
-                                            : GpuStorageDescriptor{};
-                // Route destruction through the backend service, which is aware
-                // of ordered process teardown and pool lifetime. The deleter must
-                // not dereference the allocator record through storage.meta, which
-                // shutdown may have freed, so it rebuilds a by-value descriptor.
-                result.adopt_storage(ptr, [s, storage, bytes, released_descriptor](void* p) {
-                    if (p != nullptr) {
-                        StorageMeta owner;
-                        owner.backend = storage.backend;
-                        owner.gpu_descriptor = released_descriptor;
-                        internal::StorageRef released = storage;
-                        released.meta = storage.meta != nullptr ? &owner : nullptr;
-                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
-                        if (storage.backend == GpuBackend::Vulkan) {
-                            Tensor::record_storage_deallocation(
-                                StorageAccountingKind::VulkanOwned, bytes);
-                        }
-                    }
-                });
-                result.data_ = result.data_owner_.get();
-                result.compute_alignment(); // Compute alignment flags once
-                result.storage_meta_->backend = *gpu_backend;
-                if (storage.meta != nullptr) {
-                    result.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
-                } else {
-                    result.storage_meta_->gpu_descriptor.byte_size = bytes;
-                }
-                if (*gpu_backend == GpuBackend::Vulkan) {
-                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
-                }
+                auto allocation = backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t), .kind = args.exact_allocation ? internal::TensorAllocationKind::Exact : internal::TensorAllocationKind::Pooled, .allow_arena = !args.exact_allocation, .label = args.exact_allocation ? "tensor.exact" : "tensor.storage", .operation = args.exact_allocation ? "tensor.empty_exact" : "tensor.allocate"});
+                const bool borrowed_owner = bool(allocation.owner);
+                adopt_native_tensor_allocation(result, std::move(allocation), bytes, backend_ops);
+                if (borrowed_owner)
+                    return result;
 
                 // Record tensor allocation for profiling
-                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                if (LFS_ALLOCATION_PROFILING_ENABLED) {
                     backend_ops.record_tensor_allocation(
                         internal::storage_ref(result), internal::strided_layout(result), bytes);
                 }
@@ -673,48 +683,14 @@ namespace lfs::core {
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
             result.ensure_state();
-            result.state_->stream =
-                gpu_backend && *gpu_backend != GpuBackend::CUDA ? nullptr : getCurrentCUDAStream();
+            result.state_->stream = gpu_backend ? nullptr : getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);
 
             if (result.device_ == Device::GPU) {
-                cudaStream_t s = result.stream();
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
-                internal::StorageRef storage = backend_ops.allocate(
-                    bytes, alignof(std::max_align_t), internal::ExecContext{s});
-                storage.dtype = result.dtype_;
-                void* const ptr = storage.data;
-                const GpuStorageDescriptor released_descriptor =
-                    storage.meta != nullptr ? storage.meta->gpu_descriptor
-                                            : GpuStorageDescriptor{};
-                // pool-liveness-aware deleter (see empty/ path above); rebuilds a
-                // by-value descriptor so it never touches a freed allocator record.
-                result.data_owner_ = std::shared_ptr<void>(ptr, [s, storage, bytes, released_descriptor](void* p) {
-                    if (p != nullptr) {
-                        StorageMeta owner;
-                        owner.backend = storage.backend;
-                        owner.gpu_descriptor = released_descriptor;
-                        internal::StorageRef released = storage;
-                        released.meta = storage.meta != nullptr ? &owner : nullptr;
-                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
-                        if (storage.backend == GpuBackend::Vulkan) {
-                            Tensor::record_storage_deallocation(
-                                StorageAccountingKind::VulkanOwned, bytes);
-                        }
-                    }
-                });
-                result.data_ = result.data_owner_.get();
-                result.init_storage_meta();
-                result.storage_meta_->backend = *gpu_backend;
-                if (storage.meta != nullptr) {
-                    result.storage_meta_->gpu_descriptor = storage.meta->gpu_descriptor;
-                } else {
-                    result.storage_meta_->gpu_descriptor.byte_size = bytes;
-                }
-                if (*gpu_backend == GpuBackend::Vulkan) {
-                    record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
-                }
+                adopt_native_tensor_allocation(result, backend_ops.allocate_tensor({.bytes = bytes, .alignment = alignof(std::max_align_t)}), bytes, backend_ops);
+                const auto s = result.stream();
 
                 if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                     backend_ops.record_tensor_allocation(
@@ -834,19 +810,8 @@ namespace lfs::core {
                 size_t n = result.numel();
                 const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
                 const internal::RandomProgram program{.count = n, .first = mean, .second = std, .seed = seed};
-                if (n % 2 == 1) {
-                    auto scratch = internal::allocate_like(
-                        result, TensorShape{n + 1}, DataType::Float32);
-                    internal::backend_ops_for(result).normal(
-                        internal::storage_ref(result), internal::storage_ref(scratch),
-                        program,
-                        internal::ExecContext{result.stream()});
-                } else {
-                    internal::backend_ops_for(result).normal(
-                        internal::storage_ref(result), internal::storage_ref(result),
-                        program,
-                        internal::ExecContext{result.stream()});
-                }
+                internal::backend_ops_for(result).normal(
+                    internal::storage_ref(result), program, internal::ExecContext{result.stream()});
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
@@ -1606,13 +1571,9 @@ namespace lfs::core {
         // This is faster than transpose+contiguous+reduce because it avoids the copy.
         // Honor path override so microbench can A/B strided_fast vs transpose on 2D.
         {
-#if LFS_HAS_CUDA
-            using RP = tensor_ops::ReducePathForTesting;
-            const RP override = tensor_ops::reduce_path_override_for_testing();
+            using RP = internal::ReductionTuningPath;
+            const RP override = internal::reduction_tuning_override();
             const bool force_w2 = (override == RP::StridedFast || override == RP::Transpose);
-#else
-            const bool force_w2 = false;
-#endif
             if (!force_w2 && args.axes.size() == 1 && device_ == Device::GPU &&
                 shape_.rank() == 2 && dtype_ == DataType::Float32 && is_contiguous_) {
                 int dim = args.axes[0];
@@ -1638,9 +1599,7 @@ namespace lfs::core {
                     internal::backend_ops_for(*this).column_reduce(
                         internal::storage_ref(*this), internal::storage_ref(result),
                         M, N, program, internal::ExecContext{result.stream()});
-#if LFS_HAS_CUDA
-                    tensor_ops::set_reduce_last_path_for_testing(RP::Column);
-#endif
+                    internal::record_reduction_tuning_path(RP::Column);
                     internal::lazy_ir_record_reduce(*this, result, op_name);
                     return result;
                 }
@@ -1672,20 +1631,13 @@ namespace lfs::core {
                 }
 
                 if (inner_size >= 256) {
-#if LFS_HAS_CUDA
-                    using RP = tensor_ops::ReducePathForTesting;
-                    const RP override = tensor_ops::reduce_path_override_for_testing();
-                    bool use_strided =
-                        tensor_ops::should_prefer_strided_over_transpose(
-                            outer_size, reduce_size, inner_size);
-                    if (override == RP::StridedFast) {
+                    using RP = internal::ReductionTuningPath;
+                    const RP override = internal::reduction_tuning_override();
+                    bool use_strided = internal::prefer_strided_reduction(outer_size, reduce_size, inner_size);
+                    if (override == RP::StridedFast)
                         use_strided = true;
-                    } else if (override == RP::Transpose) {
+                    else if (override == RP::Transpose)
                         use_strided = false;
-                    }
-#else
-                    const bool use_strided = true;
-#endif
 
                     if (use_strided) {
                         std::vector<size_t> out_dims;
@@ -1710,9 +1662,7 @@ namespace lfs::core {
                             internal::storage_ref(*this), internal::storage_ref(result),
                             outer_size, reduce_size, inner_size, program,
                             internal::ExecContext{result.stream()});
-#if LFS_HAS_CUDA
-                        tensor_ops::set_reduce_last_path_for_testing(RP::StridedFast);
-#endif
+                        internal::record_reduction_tuning_path(RP::StridedFast);
                         internal::lazy_ir_record_reduce(*this, result, op_name);
                         return result;
                     }
@@ -1727,9 +1677,7 @@ namespace lfs::core {
                     perm.push_back(dim);
 
                     Tensor transposed = this->permute(perm).contiguous();
-#if LFS_HAS_CUDA
-                    tensor_ops::set_reduce_last_path_for_testing(RP::Transpose);
-#endif
+                    internal::record_reduction_tuning_path(RP::Transpose);
 
                     ReduceArgs new_args = args;
                     new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1};
@@ -1817,10 +1765,8 @@ namespace lfs::core {
 
         auto result = internal::allocate_like(
             *input, TensorShape(out_shape), out_dtype);
-        if (input->device_ == Device::GPU &&
-            internal::gpu_backend_tag(*input) == GpuBackend::CUDA) {
+        if (input->device_ == Device::GPU)
             result.set_stream(getCurrentCUDAStream());
-        }
 
         if (input->device_ == Device::GPU) {
             pin_operands({input});

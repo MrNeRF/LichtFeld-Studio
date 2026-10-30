@@ -22,7 +22,7 @@ namespace lfs::core::internal {
             }
 
             TensorCompletion signal() override {
-                return TensorCompletionAccess::metal(metal::acquire_context()->flush());
+                return TensorCompletionAccess::record(GpuBackend::Metal, { .value = metal::acquire_context()->flush(), .settle_on_release = false });
             }
 
         private:
