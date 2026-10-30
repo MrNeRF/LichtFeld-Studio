@@ -172,6 +172,43 @@ namespace lfs::core::nn::kernels {
             }
         }
 
+        // One output per thread of a convolution with one input and one output channel per group. Taps accumulate in
+        // im2col order with one FMA each, out-of-image taps as zeros, then the zero products of the GEMM's K-tile
+        // padding and the channel bias: the result equals im2col + GEMM + channel_bias bit for bit.
+        __global__ void depthwise_conv2d_kernel(const float* __restrict__ input, const float* __restrict__ weight,
+                                                const float* __restrict__ bias, float* __restrict__ output, int n,
+                                                int c, int h, int w, int k_h, int k_w, int out_h, int out_w,
+                                                int stride_h, int stride_w, int pad_h, int pad_w, int dil_h,
+                                                int dil_w, int pad_mode, bool padded_k) {
+            const long long total = static_cast<long long>(n) * c * out_h * out_w;
+            for (long long idx = blockIdx.x * static_cast<long long>(blockDim.x) + threadIdx.x; idx < total;
+                 idx += static_cast<long long>(blockDim.x) * gridDim.x) {
+                const int ow = static_cast<int>(idx % out_w);
+                const int oh = static_cast<int>((idx / out_w) % out_h);
+                const long long plane = idx / (static_cast<long long>(out_w) * out_h);
+                const int ch = static_cast<int>(plane % c);
+                const float* channel = input + plane * h * w;
+                const float* taps = weight + static_cast<long long>(ch) * k_h * k_w;
+                float acc = 0.0f;
+                for (int kh = 0; kh < k_h; ++kh) {
+                    for (int kw = 0; kw < k_w; ++kw) {
+                        int y = oh * stride_h - pad_h + kh * dil_h;
+                        int x = ow * stride_w - pad_w + kw * dil_w;
+                        if (pad_mode == 1) {
+                            y = y < 0 ? 0 : (y >= h ? h - 1 : y);
+                            x = x < 0 ? 0 : (x >= w ? w - 1 : x);
+                        }
+                        const float v = y >= 0 && y < h && x >= 0 && x < w ? __ldg(&channel[y * w + x]) : 0.0f;
+                        acc = fmaf(v, __ldg(&taps[kh * k_w + kw]), acc);
+                    }
+                }
+                if (padded_k) {
+                    acc = fmaf(0.0f, 0.0f, acc);
+                }
+                output[idx] = bias ? acc + __ldg(&bias[ch]) : acc;
+            }
+        }
+
         int grid_for(const int total) {
             const int block = 256;
             const int max_blocks = 2048;
@@ -674,6 +711,23 @@ namespace lfs::core::nn::kernels {
             input, col, n, c, h, w, k_h, k_w, out_h, out_w, stride_h, stride_w, pad_h, pad_w,
             dil_h, dil_w, c_start, c_count, pad_mode, dtype == DataType::Float16);
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.im2col");
+    }
+
+    void depthwise_conv2d(const float* input, const float* weight, const float* bias, float* output, int n, int c,
+                          int h, int w, int k_h, int k_w, int out_h, int out_w, int stride_h, int stride_w, int pad_h,
+                          int pad_w, int dil_h, int dil_w, int pad_mode, cudaStream_t stream) {
+        NvtxRange nvtx("nn.op/depthwise_conv2d");
+        const long long total = static_cast<long long>(n) * c * out_h * out_w;
+        if (total <= 0) {
+            return;
+        }
+        // The fp32 GEMM pads K to tiles of eight.
+        const bool padded_k = k_h * k_w % 8 != 0;
+        const int blocks = static_cast<int>(std::min<long long>(65535, (total + 255) / 256));
+        depthwise_conv2d_kernel<<<blocks, 256, 0, stream>>>(input, weight, bias, output, n, c, h, w, k_h, k_w, out_h,
+                                                            out_w, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+                                                            pad_mode, padded_k);
+        LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.depthwise_conv2d");
     }
 
     void col2im(const void* col, void* output, int n, int c, int h, int w, int k_h, int k_w,

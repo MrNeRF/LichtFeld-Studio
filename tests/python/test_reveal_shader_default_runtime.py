@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Compare deployed default shader output with the PR base using the same compiler."""
+"""Compare every deployed Slang shader recipe with the PR base using the same compiler."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -11,13 +12,17 @@ ROOT = Path(__file__).resolve().parents[2]
 CURRENT = ROOT / 'src/rendering/rasterizer/vulkan/shader/src/slang'
 
 
-@pytest.mark.parametrize("source,definitions", [
-    ("vertex_shader.slang", ["EXPORT_MODE=0"]),
-    ("vertex_shader.slang", ["EXPORT_MODE=0", "LFS_3DGUT_PROJECTION=1"]),
-    ("cull_splats.slang", ["EXPORT_MODE=0", "CULL_ENTRY=1"]),
-    ("alphablend_shader.slang", ["EXPORT_MODE=0", "LFS_3DGUT_RASTERIZE=1"]),
-])
-def test_default_projection_matches_base(tmp_path, source, definitions):
+def _recipes():
+    # slang_recipes.json lists every recipe the rasterizer build compiles.
+    manifest = os.environ.get('LFS_SHADER_RECIPES')
+    if not manifest or not Path(manifest).is_file():
+        return [pytest.param(None, None, marks=pytest.mark.skip(reason='requires LFS_SHADER_RECIPES'))]
+    data = json.loads(Path(manifest).read_text())
+    return [pytest.param(data['flags'], recipe, id=recipe['name']) for recipe in data['recipes']]
+
+
+@pytest.mark.parametrize("flags,recipe", _recipes())
+def test_deployed_output_matches_base(tmp_path, flags, recipe):
     compiler = os.environ.get('LFS_SLANGC')
     base = os.environ.get('LFS_SHADER_BASE_DIR')
     if not compiler or not base:
@@ -25,8 +30,8 @@ def test_default_projection_matches_base(tmp_path, source, definitions):
     outputs = []
     for source_dir in (Path(base), CURRENT):
         output = tmp_path / f'{len(outputs)}.spv'
-        subprocess.run([compiler, str(source_dir / source), '-stage', 'compute', '-O',
-                        '-fp-mode', 'fast', '-line-directive-mode', 'none', '-target', 'spirv',
-                        *[f'-D{definition}' for definition in definitions], f'-I{source_dir}', '-o', str(output)], check=True)
+        subprocess.run([compiler, str(source_dir / recipe['source']), *flags,
+                        *[f'-D{definition}' for definition in recipe['defines']], f'-I{source_dir}',
+                        '-o', str(output)], check=True)
         outputs.append(output.read_bytes())
-    assert outputs[0] == outputs[1], f'default {source} output differs from the PR base'
+    assert outputs[0] == outputs[1], f"{recipe['name']} output differs from the PR base"

@@ -3,11 +3,13 @@
 
 #include "app/licht_command.hpp"
 #include "core/argument_parser.hpp"
+#include "core/checkpoint_format.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_document.hpp"
+#include "io/project_inspector.hpp"
 #include "io/project_operations.hpp"
 #include "licht_test_support.hpp"
 
@@ -15,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -140,6 +143,49 @@ namespace {
         return path;
     }
 
+    std::vector<std::byte> checkpoint_payload(const std::int32_t iteration) {
+        lfs::core::CheckpointHeader header{};
+        header.iteration = iteration;
+        header.num_gaussians = 4;
+        header.sh_degree = 2;
+        std::vector<std::byte> result(sizeof(header));
+        std::memcpy(result.data(), &header, sizeof(header));
+        return result;
+    }
+
+    // The first iteration is the checkpoint the training model resumes from.
+    fs::path make_checkpoint_project(const fs::path& path, const std::vector<std::int32_t>& iterations) {
+        auto document = require_result_ptr(ProjectDocument::create(fixed_uuid(9100), 100));
+        for (std::size_t index = 0; index < iterations.size(); ++index) {
+            const auto uuid = fixed_uuid(9101 + index);
+            require_status(document->set_checkpoint(
+                uuid, require_result(LazyChunkValue::from_owned(checkpoint_payload(iterations[index]), uuid))));
+        }
+        const auto node = fixed_uuid(9199);
+        require_status(document->edit_scene_graph().upsert_node(SceneNodeRecord{
+            .uuid = node,
+            .type = "splat",
+            .name = "Training model",
+            .payload = PayloadBinding{.fourcc = "CKPT", .instance_uuid = fixed_uuid(9101), .source_kind = "checkpoint"},
+        }));
+        require_status(document->edit_scene_graph().set_training_model_uuid(node));
+        ProjectDocumentSaveOptions options;
+        options.disk_reserve_bytes = 0;
+        options.index_compression = IndexCompression::StoredForDeterministicTests;
+        static_cast<void>(require_result(document->save(path, options)));
+        return path;
+    }
+
+    std::vector<std::int32_t> retained_iterations(const fs::path& project) {
+        std::vector<std::int32_t> iterations;
+        for (const auto& checkpoint : require_result(inspect_project_details(project)).retained_checkpoints) {
+            if (checkpoint.retained)
+                iterations.push_back(checkpoint.iteration);
+        }
+        std::ranges::sort(iterations);
+        return iterations;
+    }
+
     std::vector<std::byte> bytes(const fs::path& path) {
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         const auto size = input.tellg();
@@ -162,6 +208,12 @@ namespace {
         if (auto* mode = std::get_if<lfs::core::args::LichtMode>(&*parsed))
             return *mode;
         return std::nullopt;
+    }
+
+    int run_licht(const std::vector<std::string>& arguments) {
+        const auto mode = parse_licht(arguments);
+        EXPECT_TRUE(mode);
+        return mode ? lfs::app::run_licht_command(*mode) : -1;
     }
 
     void expect_extracted_file(const fs::path& project, const fs::path& dataset,
@@ -317,6 +369,55 @@ namespace {
         EXPECT_NE(bytes(project), first_generation);
         expect_extracted_file(project, dataset, "images/frame.png",
                               temporary.path / "changed-extracted");
+    }
+
+    TEST(LichtCommand, ListsCheckpointsNewestFirstAndMarksTheResumeCheckpoint) {
+        TemporaryDirectory temporary;
+        const auto project = make_checkpoint_project(temporary.path / "project.licht", {30000, 7000, 15000});
+        const auto before = bytes(project);
+        testing::internal::CaptureStdout();
+        const auto status = run_licht({"LichtFeld-Studio", "licht", project.string(), "--checkpoints"});
+        const auto output = testing::internal::GetCapturedStdout();
+        ASSERT_EQ(status, 0);
+        const auto newest = output.find("30000");
+        const auto middle = output.find("15000");
+        const auto oldest = output.find("7000");
+        ASSERT_NE(newest, std::string::npos);
+        EXPECT_LT(newest, middle);
+        EXPECT_LT(middle, oldest);
+        EXPECT_NE(output.find(fixed_uuid(9101).to_string() + "  resume"), std::string::npos);
+        EXPECT_EQ(bytes(project), before);
+    }
+
+    TEST(LichtCommand, PruneCheckpointsKeepsTheResumeCheckpointAndTheNewestOthers) {
+        TemporaryDirectory temporary;
+        const ScopedEnvironmentVariable home("LFS_HOME", (temporary.path / "home").string());
+        const auto project = make_checkpoint_project(temporary.path / "project.licht", {30000, 7000, 22000, 15000});
+        ASSERT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--prune-checkpoints", "--keep", "1"}), 0);
+        EXPECT_EQ(retained_iterations(project), (std::vector<std::int32_t>{22000, 30000}));
+        ASSERT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--prune-checkpoints"}), 0);
+        EXPECT_EQ(retained_iterations(project), std::vector<std::int32_t>{30000});
+        auto reader = require_result(ProjectReader::open(project));
+        require_status(reader.verify_all());
+
+        const auto pruned = bytes(project);
+        ASSERT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--prune-checkpoints"}), 0);
+        EXPECT_EQ(bytes(project), pruned);
+    }
+
+    TEST(LichtCommand, RemoveCheckpointsByIterationAndRejectsUnknownIterations) {
+        TemporaryDirectory temporary;
+        const ScopedEnvironmentVariable home("LFS_HOME", (temporary.path / "home").string());
+        const auto project = make_checkpoint_project(temporary.path / "project.licht", {30000, 7000, 15000, 22000});
+        const auto before = bytes(project);
+        EXPECT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--remove-checkpoints", "7000,1234"}), 1);
+        EXPECT_EQ(bytes(project), before);
+
+        ASSERT_EQ(run_licht({"LichtFeld-Studio", "licht", project.string(), "--remove-checkpoints", "15000,7000"}), 0);
+        EXPECT_EQ(retained_iterations(project), (std::vector<std::int32_t>{22000, 30000}));
+        EXPECT_LT(fs::file_size(project), before.size());
+        auto reader = require_result(ProjectReader::open(project));
+        require_status(reader.verify_all());
     }
 
 } // namespace

@@ -266,7 +266,7 @@ def preferences_panel_module(monkeypatch):
             {
                 name: index
                 for index, name in enumerate(
-                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR")
+                    ("GLOBAL", "SELECTION", "TRANSLATE", "ROTATE", "SCALE", "ALIGN", "CROP_BOX", "WALK", "VR", "EDITOR")
                 )
             },
         ),
@@ -276,6 +276,9 @@ def preferences_panel_module(monkeypatch):
             VR_SNAP_TURN_RIGHT=SimpleNamespace(name="VR_SNAP_TURN_RIGHT", value=101),
             VR_RECENTER=SimpleNamespace(name="VR_RECENTER", value=102),
             EXIT_VR=SimpleNamespace(name="EXIT_VR", value=103),
+            EDITOR_TOGGLE_KIND=SimpleNamespace(name="EDITOR_TOGGLE_KIND", value=104),
+            EDITOR_RUN=SimpleNamespace(name="EDITOR_RUN", value=105),
+            EDITOR_STOP=SimpleNamespace(name="EDITOR_STOP", value=106),
             CAMERA_ORBIT=SimpleNamespace(name="CAMERA_ORBIT", value=1),
             CAMERA_PAN=SimpleNamespace(name="CAMERA_PAN", value=2),
             CAMERA_ZOOM=SimpleNamespace(name="CAMERA_ZOOM", value=3),

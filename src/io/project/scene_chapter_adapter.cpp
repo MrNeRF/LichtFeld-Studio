@@ -150,6 +150,18 @@ namespace lfs::io::project {
             return std::nullopt;
         }
 
+        // Camera tensors already live on the host; cpu() of a host tensor clones it, and four
+        // clones per camera dominated scene capture on large datasets.
+        std::vector<float> host_floats(const lfs::core::Tensor& value) {
+            if (value.device() == lfs::core::Device::CPU && value.is_contiguous()) {
+                const float* data = value.ptr<float>();
+                return std::vector<float>(data, data + value.numel());
+            }
+            const auto host = value.cpu().contiguous();
+            const float* data = host.ptr<float>();
+            return std::vector<float>(data, data + host.numel());
+        }
+
         template <std::size_t N>
         std::vector<float> tensor_values(const lfs::core::Tensor& value,
                                          const std::string_view field,
@@ -164,9 +176,7 @@ namespace lfs::io::project {
                     "Camera node {} {} must be float32 with {} values",
                     node_uuid.to_string(), field, N));
             }
-            const auto cpu = value.cpu().contiguous();
-            const float* data = cpu.ptr<float>();
-            return std::vector<float>(data, data + N);
+            return host_floats(value);
         }
 
         std::vector<float> tensor_values_bounded(
@@ -182,9 +192,7 @@ namespace lfs::io::project {
                     "Camera node {} {} must be float32 [0..16]",
                     node_uuid.to_string(), field));
             }
-            const auto cpu = value.cpu().contiguous();
-            const float* data = cpu.ptr<float>();
-            return std::vector<float>(data, data + cpu.numel());
+            return host_floats(value);
         }
 
         CameraRecord capture_camera(const lfs::core::Camera& camera,
@@ -590,11 +598,8 @@ namespace lfs::io::project {
             !status) {
             return std::move(status).error();
         }
-        for (const auto& node : state.nodes) {
-            if (auto status = result.upsert_node(node);
-                !status) {
-                return std::move(status).error();
-            }
+        if (auto status = result.replace_nodes(state.nodes); !status) {
+            return std::move(status).error();
         }
         if (auto valid = result.validate_hierarchy(); !valid) {
             return std::move(valid).error();

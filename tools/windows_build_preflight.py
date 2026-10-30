@@ -235,6 +235,34 @@ def _explicit_visualizer_symbols(masked_test: str) -> set[str]:
     return {re.sub(r"\s+", "", symbol).split("::")[-1] for symbol in qualified}
 
 
+def _declaration_scopes(masked: str) -> list[bool]:
+    """Mark file/namespace/linkage scope, excluding calls inside function bodies.
+
+    A referenced symbol can also occur in a header's inline wrapper. That call
+    must not be mistaken for an unexported declaration in the wrapper's header.
+    String literals (including extern linkage names) have already been masked.
+    """
+    scopes = {
+        match.end() - 1
+        for match in re.finditer(
+            r"\b(?:namespace(?:\s+[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*)?\s*|extern\s*)\{",
+            masked,
+        )
+    }
+    allowed = []
+    stack = []
+    blocked = 0
+    for index, character in enumerate(masked):
+        allowed.append(blocked == 0)
+        if character == "{":
+            nested = index not in scopes
+            stack.append(nested)
+            blocked += nested
+        elif character == "}" and stack:
+            blocked -= stack.pop()
+    return allowed
+
+
 def check_visualizer_test_exports(root: Path) -> list[Finding]:
     """Require exports for explicitly referenced visualizer free functions."""
 
@@ -257,11 +285,14 @@ def check_visualizer_test_exports(root: Path) -> list[Finding]:
             raw_header = header.read_text(encoding="utf-8", errors="replace")
             masked_header = mask_source(raw_header)
             blocks = _type_blocks(masked_header)
+            declaration_scopes = _declaration_scopes(masked_header)
             for name in referenced_names:
                 pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
                 unexported: list[re.Match[str]] = []
                 header_available = False
                 for match in pattern.finditer(masked_header):
+                    if not declaration_scopes[match.start()]:
+                        continue
                     if _inside_type(match.start(), blocks):
                         continue
                     prefix = masked_header[max(0, match.start() - 2) : match.start()]

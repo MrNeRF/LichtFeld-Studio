@@ -14,6 +14,7 @@ import pytest
 
 
 TOOL_MODE_NAMES = (
+    "EDITOR",
     "GLOBAL",
     "SELECTION",
     "TRANSLATE",
@@ -26,6 +27,9 @@ TOOL_MODE_NAMES = (
 )
 
 ACTION_NAMES = (
+    "EDITOR_TOGGLE_KIND",
+    "EDITOR_RUN",
+    "EDITOR_STOP",
     "EXIT_WALK",
     "NONE",
     "CAMERA_ORBIT",
@@ -637,6 +641,7 @@ def test_keymap_builds_profile_and_mode_records(keymap_bindings_module):
         {"index": "6", "label": "Mode CROP_BOX"},
         {"index": "7", "label": "Mode WALK"},
         {"index": "8", "label": "Mode VR"},
+        {"index": "9", "label": "Mode EDITOR"},
     ]
 
 

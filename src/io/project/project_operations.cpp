@@ -129,7 +129,7 @@ namespace lfs::io::project {
             return fourcc == FOURCC_PROJ || fourcc == FOURCC_PRMS ||
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
-                   fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
+                   fourcc == FOURCC_SHDR || fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
                    fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
         }
 
@@ -435,7 +435,7 @@ namespace lfs::io::project {
         }
 
         lfs::Result<ProjectReducePlan>
-        make_reduce_plan(const std::filesystem::path& path) {
+        make_reduce_plan(const std::filesystem::path& path, const bool validate_dataset_replacement = true) {
             auto reader = ProjectReader::open(path);
             if (!reader) {
                 return std::move(reader).error();
@@ -489,11 +489,15 @@ namespace lfs::io::project {
             }
             bool all_external = manifest->has_value();
             if (*manifest) {
-                auto external = validate_external_dataset(*document, **manifest);
-                if (!external) {
-                    return std::move(external).error();
+                bool external_valid = false;
+                if (validate_dataset_replacement) {
+                    auto external = validate_external_dataset(*document, **manifest);
+                    if (!external) {
+                        return std::move(external).error();
+                    }
+                    external_valid = external->valid;
                 }
-                all_external = external->valid;
+                all_external = external_valid;
                 for (const auto& entry : (**manifest).entries) {
                     const auto* row = reader->find(FOURCC_DSRC, entry.chunk_uuid);
                     plan.embedded_dataset.push_back(ProjectReduceDatasetPayload{
@@ -501,7 +505,7 @@ namespace lfs::io::project {
                         .rel_path = entry.rel_path,
                         .kind = entry.kind,
                         .bytes = row ? row_occupied_bytes(*row) : entry.bytes,
-                        .external_replacement_validated = external->valid,
+                        .external_replacement_validated = external_valid,
                     });
                 }
             } else {
@@ -1456,13 +1460,18 @@ namespace lfs::io::project {
                 return std::move(appended).error();
             auto writer = std::move(*appended);
             const auto& selected_commit = lineage[generation - 1];
+            auto selected_reader_caps = reader->commit().required_reader_capabilities;
+            auto selected_writer_caps = reader->commit().required_writer_capabilities;
+            selected_reader_caps.set(USER_SHADERS_V1, selected_commit.required_reader_capabilities.contains(USER_SHADERS_V1));
+            selected_writer_caps.set(USER_SHADERS_V1, selected_commit.required_writer_capabilities.contains(USER_SHADERS_V1));
             if (auto planned = writer.plan_commit(CommitOptions{
                     .kind = CommitKind::Explicit,
                     .snapshot_uuid = selected_commit.snapshot_uuid,
                     .min_reader_version = reader->commit().min_reader_version,
                     .min_safe_writer_version = reader->commit().min_safe_writer_version,
-                    .extra_reader_capabilities = reader->commit().required_reader_capabilities,
-                    .extra_writer_capabilities = reader->commit().required_writer_capabilities,
+                    .extra_reader_capabilities = selected_reader_caps,
+                    .extra_writer_capabilities = selected_writer_caps,
+                    .recompute_shader_capabilities = true,
                 });
                 !planned)
                 return std::move(planned).error();
@@ -1900,7 +1909,7 @@ namespace lfs::io::project {
         auto identity = detail::ProjectPathIdentity::capture(path);
         if (!identity)
             return std::move(identity).error();
-        auto plan = make_reduce_plan(path);
+        auto plan = make_reduce_plan(path, drop_embedded_dataset);
         if (!plan) {
             return std::move(plan).error();
         }
@@ -1987,14 +1996,14 @@ namespace lfs::io::project {
             remember("save:" + std::to_string(selection.save_generation), "save", bytes,
                      {{"generation", selection.save_generation}, {"date", saved.wallclock_unix_ns}});
         }
-        if (selection.checkpoint) {
-            const auto checkpoint = std::ranges::find(plan->retained_checkpoints, *selection.checkpoint,
+        for (const auto& selected : selection.checkpoints) {
+            const auto checkpoint = std::ranges::find(plan->retained_checkpoints, selected,
                                                       &ProjectReduceCheckpoint::instance_uuid);
             if (checkpoint == plan->retained_checkpoints.end()) {
                 return fail<ProjectReduceResult>(lfs::ErrorCode::NotFound, path,
                                                  "The checkpoint was not found.", "checkpoint is no longer retained", "reduce.checkpoint");
             }
-            if (*bound && **bound == *selection.checkpoint) {
+            if (*bound && **bound == selected) {
 #ifdef LFS_FORMAT_TEST_TARGET
                 return fail<ProjectReduceResult>(lfs::ErrorCode::Unsupported, path,
                                                  "Removing this checkpoint requires the full application.", "model conversion is unavailable", "reduce.checkpoint");
@@ -2041,9 +2050,9 @@ namespace lfs::io::project {
                     return std::move(updated).error();
 #endif
             }
-            if (document->remove_checkpoint(*selection.checkpoint))
+            if (document->remove_checkpoint(selected))
                 ++result.checkpoints_removed;
-            remember("checkpoint:" + selection.checkpoint->to_string(), "checkpoint", checkpoint->bytes,
+            remember("checkpoint:" + selected.to_string(), "checkpoint", checkpoint->bytes,
                      {{"iteration", checkpoint->iteration}});
         }
         if (selection.metrics) {
@@ -2081,12 +2090,12 @@ namespace lfs::io::project {
                 }
             }
         }
-        const auto operation = drop_embedded_dataset       ? "dataset_removed"
-                               : selection.save_generation ? "save_removed"
-                               : selection.checkpoint      ? "checkpoint_removed"
-                               : selection.thumbnail       ? "thumbnail_removed"
-                               : selection.metrics         ? "metrics_removed"
-                                                           : "changed";
+        const auto operation = drop_embedded_dataset            ? "dataset_removed"
+                               : selection.save_generation      ? "save_removed"
+                               : !selection.checkpoints.empty() ? "checkpoint_removed"
+                               : selection.thumbnail            ? "thumbnail_removed"
+                               : selection.metrics              ? "metrics_removed"
+                                                                : "changed";
         if (auto marked = mark_contents_edit(*document, operation, drop_embedded_dataset ? 3 : 1); !marked)
             return std::move(marked).error();
         ProjectDocumentSaveOptions save_options;
@@ -2203,12 +2212,11 @@ namespace lfs::io::project {
             return std::move(details).error();
         }
         auto after_bound = details->scene_graph.training_node_id;
-        if (*bound && (!after_bound ||
-                       !std::ranges::any_of(details->retained_checkpoints,
-                                            [&](const auto& checkpoint) {
-                                                return checkpoint.binds_scene_graph &&
-                                                       checkpoint.instance_uuid == **bound;
-                                            }))) {
+        const bool bound_removed = *bound && std::ranges::contains(selection.checkpoints, **bound);
+        if (*bound && !bound_removed && (!after_bound || !std::ranges::any_of(details->retained_checkpoints, [&](const auto& checkpoint) {
+                return checkpoint.binds_scene_graph &&
+                       checkpoint.instance_uuid == **bound;
+            }))) {
             return fail<ProjectReduceResult>(
                 lfs::ErrorCode::DataLoss, path,
                 "The reduced project lost its bound checkpoint.",

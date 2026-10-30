@@ -148,6 +148,7 @@
                 <span>@tr:sequencer.reveal_start</span><input id="reveal-start" type="text" />
                 <span>@tr:sequencer.reveal_end</span><input id="reveal-end" type="text" />
                 <span data-tooltip="sequencer.reveal_softness_hint">@tr:sequencer.reveal_softness</span><input id="reveal-softness" type="text" data-tooltip="sequencer.reveal_softness_hint" />
+                <select id="reveal-shader" class="hidden" data-tooltip="shader.open_asset" />
                 <div id="btn-remove-reveal" class="transport-btn text"><span class="transport-label">@tr:common.remove</span></div>
             </div>
         </div>

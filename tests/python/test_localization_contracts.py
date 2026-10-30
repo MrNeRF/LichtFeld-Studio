@@ -567,3 +567,14 @@ def test_locale_strings_use_real_line_breaks():
         if "\\n" in text
     ]
     assert not escaped, escaped
+
+
+def test_checkpoint_retention_labels_are_present_and_technical_english():
+    keys = ("training.save.keep_all_checkpoints", "training.tooltip.keep_all_checkpoints")
+    english = _load("en")
+    assert english[keys[0]] == "Keep all checkpoints"
+    assert "Existing checkpoint history is preserved" in english[keys[1]]
+    for path in LOCALES.glob("*.json"):
+        localized = json.loads(path.read_text(encoding="utf-8"))
+        for key in keys:
+            assert localized[key] == english[key], (path.name, key)

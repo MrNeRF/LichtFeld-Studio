@@ -145,6 +145,7 @@ namespace lfs::vis {
                 Rml::RemoveContext(context_->GetName());
             context_ = nullptr;
             document_ = nullptr;
+            gui::guiFocusState().reset();
         }
 
         static inline NullRenderInterface* render_interface_ = nullptr;
@@ -526,6 +527,38 @@ namespace lfs::vis {
         view->setEditor(nullptr);
     }
 
+    TEST_F(RmlPointerReplayTest, ShaderDocumentRendersEditsAndUndoesWithoutPythonAnalysis) {
+        static Rml::ElementInstancerGeneric<gui::PythonEditorElement> instancer;
+        Rml::Factory::RegisterElementInstancer("python-editor", &instancer);
+        editor::PythonEditor editor;
+        editor.setDocumentKind(editor::DocumentKind::Shader);
+        editor.setText("import lfs;\n");
+        auto element = document_->CreateElement("python-editor");
+        auto* view = dynamic_cast<gui::PythonEditorElement*>(element.get());
+        ASSERT_NE(view, nullptr);
+        view->setEditor(&editor);
+        document_->AppendChild(std::move(element));
+        context_->Update();
+        ASSERT_TRUE(view->Focus());
+        gui::rml_input::processKeyboardEvent(*context_, {.kind = FrameInputEventKind::Text, .text = "x"});
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_FALSE(editor.pythonAnalysisActive());
+        EXPECT_FALSE(editor.hasActiveCompletion());
+        EXPECT_TRUE(editor.syntaxSymbols().empty());
+        const auto edited = editor.getText();
+        editor.setDocumentKind(editor::DocumentKind::Python);
+        editor.setDocumentKind(editor::DocumentKind::Shader);
+        EXPECT_EQ(editor.getText(), edited);
+        gui::rml_input::processKeyboardEvent(*context_, {.scancode = SDL_SCANCODE_Z, .modifiers = SDL_KMOD_CTRL});
+        EXPECT_EQ(editor.getText(), "import lfs;\n");
+        gui::rml_input::processKeyboardEvent(*context_, {.scancode = SDL_SCANCODE_SPACE, .modifiers = SDL_KMOD_CTRL});
+        editor.refreshSyntaxDiagnostics();
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_FALSE(editor.pythonAnalysisActive());
+        EXPECT_FALSE(editor.hasActiveCompletion());
+        view->setEditor(nullptr);
+    }
+
     TEST_F(RmlPointerReplayTest, DotOffersCompletionAfterThePanelConsumesTheEdit) {
 #ifdef _WIN32
         GTEST_SKIP() << "Mock language server fixture is POSIX-only.";
@@ -554,6 +587,8 @@ namespace lfs::vis {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         EXPECT_TRUE(editor.hasActiveCompletion());
+        editor.renderRml(*view, 200.0f, 80.0f, 14.0f);
+        EXPECT_TRUE(gui::guiFocusState().want_text_input);
         view->setEditor(nullptr);
         unsetenv("LFS_PYTHON_LSP");
         unsetenv("LFS_PYTHON_LSP_WORKSPACE");

@@ -1058,6 +1058,24 @@ TEST_F(TransformsMaskTest, ImplicitMasksRetainCameraSubdirectories) {
     EXPECT_EQ(cameras[1]->mask_path(), root / "masks/back/000001.png");
 }
 
+TEST_F(TransformsMaskTest, MasksMirrorCameraSubdirectoriesBelowAnyImageRoot) {
+    const auto root = temp_dir / "photos_root";
+    const std::array<const char*, 4> sides{"green", "red", "blue", "white"};
+    nlohmann::json frames = nlohmann::json::array();
+    for (const auto* side : sides) {
+        frames.push_back({{"file_path", std::string("photos/") + side + "/_DSC0002.jpg"}});
+        write_png(root / "photos" / side / "_DSC0002.jpg", 2, 2);
+        write_png(root / "masks" / side / "_DSC0002.png", 2, 2);
+    }
+    write_dataset(root, std::move(frames));
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), sides.size());
+    for (size_t i = 0; i < sides.size(); ++i)
+        EXPECT_EQ(cameras[i]->mask_path(), root / "masks" / sides[i] / "_DSC0002.png");
+}
+
 TEST_F(TransformsMaskTest, AbsoluteImagePathRetainsRelativeMaskLookup) {
     const auto root = temp_dir / "absolute_image";
     const auto image = root / "images/front/000001.png";

@@ -24,7 +24,7 @@ def _stop(process):
 
 
 @contextmanager
-def isolated_app(directory):
+def isolated_app(directory, *, input_env=None):
     root = Path(__file__).resolve().parents[2]
     build = Path(os.environ.get("LFS_TEST_BUILD_DIR", root / "build"))
     executable = Path(os.environ.get("LFS_EXECUTABLE", build / "LichtFeld-Studio"))
@@ -59,6 +59,8 @@ def isolated_app(directory):
             number = os.read(read_fd, 32).decode().strip()
             assert number.isdigit(), f"Xvfb failed; see {directory / 'xvfb.log'}"
             env["DISPLAY"] = f":{number}"
+            if input_env is not None:
+                input_env["DISPLAY"] = env["DISPLAY"]
             with (directory / "app.log").open("w") as log:
                 app = subprocess.Popen(
                     [str(executable), "--no-splash", "--no-download", "--mcp-port", port],

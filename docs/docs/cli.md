@@ -34,6 +34,24 @@ LichtFeld-Studio licht scene.licht --embed ./dataset
 Relative dataset paths are resolved from the current working directory. COLMAP datasets with a supported sparse or
 flat layout and Transforms datasets are accepted. The project is updated in place; the source dataset is left on disk.
 
+## Remove checkpoints from a project
+
+A project trained with `--keep-all-checkpoints` keeps one training checkpoint per save. `--checkpoints` lists them, newest
+first, and marks the one training resumes from:
+
+```sh
+LichtFeld-Studio licht scene.licht --checkpoints
+LichtFeld-Studio licht scene.licht --prune-checkpoints
+LichtFeld-Studio licht scene.licht --prune-checkpoints --keep 2
+LichtFeld-Studio licht scene.licht --remove-checkpoints 7000,15000
+```
+
+`--prune-checkpoints` removes every checkpoint except the resume checkpoint; `--keep N` also keeps the N newest other
+checkpoints. `--remove-checkpoints` removes the checkpoints saved at the listed iterations. If that includes the resume
+checkpoint, the trained model stays in the project, but training can no longer resume from it. The project is compacted
+in place, and a recovery copy of the previous file is written to the LichtFeld Studio backup folder; its path is
+printed.
+
 Run `LichtFeld-Studio licht --help` for command usage.
 
 ## Sharpen training images

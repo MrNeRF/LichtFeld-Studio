@@ -51,6 +51,8 @@ set(TENSOR_SOURCES
         nn/weight_file_open.cpp
         nn/activation_arena.cpp
         nn/models/moge2.cpp
+        nn/models/sam2.cpp
+        nn/models/sam2_video.cpp
         nn/models/lpips.cpp
 )
 

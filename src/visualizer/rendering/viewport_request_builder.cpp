@@ -584,6 +584,7 @@ namespace lfs::vis {
                  .node_active_sh_degrees = ctx.scene_state.node_active_sh_degrees},
             .filters = {},
             .reveal = ctx.scene_state.reveal,
+            .custom_effect = ctx.scene_state.custom_effect,
             .overlay =
                 {.markers =
                      {.show_object_outline = outline,
@@ -961,6 +962,18 @@ namespace lfs::vis {
                 : -1;
     }
 
+    void scopeCustomEffectToSlot(std::optional<lfs::rendering::GaussianCustomEffectState>& effect,
+                                 const int visible_index) {
+        if (!effect)
+            return;
+        using State = lfs::rendering::GaussianCustomEffectState;
+        const bool kept = visible_index >= 0 && static_cast<size_t>(visible_index) < effect->objects.size();
+        effect->objects = {kept ? effect->objects[static_cast<size_t>(visible_index)] : State::Object{}};
+        if (effect->global_binding == State::kNone && effect->reveal_binding == State::kNone &&
+            effect->objects[0].binding == State::kNone)
+            effect.reset();
+    }
+
     PlyComparisonDepthSample resolvePlyComparisonDepthSample(
         const core::Scene& scene,
         const size_t split_view_offset,
@@ -1001,6 +1014,7 @@ namespace lfs::vis {
         state.transform_indices.reset();
         state.node_visibility_mask.clear();
         state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
+        scopeCustomEffectToSlot(state.custom_effect, visible_index);
 
         const auto keep_matching = [visible_index](auto& items) {
             using Item = std::decay_t<decltype(items[0])>;

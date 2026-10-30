@@ -51,20 +51,26 @@ namespace lfs::vis {
         constexpr float RING_PICK_PADDING_PX = 4.0f;
         constexpr float MIN_VOLUME_SELECTION_RADIUS = 1.0e-3f;
 
-        [[nodiscard]] bool revealMovesSplats(const RenderingManager* rendering) {
+        using SplatMotion = RenderingManager::SplatMotion;
+
+        // Geometric selection finds stored positions, so it waits while draws move splats.
+        [[nodiscard]] SplatMotion displayedSplatMotion(const RenderingManager* rendering) {
+            const auto motion = rendering ? rendering->displayedSplatMotion() : SplatMotion::None;
+            if (motion == SplatMotion::CustomEffect)
+                return motion;
             if (const auto* gui = services().guiOrNull()) {
                 const auto& controller = gui->sequencer();
                 const auto& clip = controller.timeline().revealClip();
                 if (!clip || controller.playhead() >= clip->end)
-                    return false;
-                const int effect = static_cast<int>(clip->effect);
-                return effect <= 8 || effect == 10;
+                    return SplatMotion::None;
+                return lfs::sequencer::revealMovesSplats(clip->effect) ? SplatMotion::Reveal : SplatMotion::None;
             }
-            return rendering && rendering->revealMovesSplats();
+            return motion;
         }
 
-        [[nodiscard]] SelectionResult revealSelectionBlocked(const bool notify = false) {
-            const std::string message = LOC("selection.reveal_moving_blocked");
+        [[nodiscard]] SelectionResult selectionBlocked(const SplatMotion motion, const bool notify = false) {
+            const std::string message = LOC(motion == SplatMotion::CustomEffect ? "selection.shader_effect_blocked"
+                                                                                : "selection.reveal_moving_blocked");
             if (notify) {
                 auto error = lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::FailedPrecondition,
@@ -1123,8 +1129,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectBrush(float x, float y, float radius, SelectionMode mode,
                                                   int camera_index) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         LOG_TIMER("SelectionService::selectBrush");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1160,8 +1166,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectRect(float x0, float y0, float x1, float y1, SelectionMode mode,
                                                  int camera_index) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         LOG_TIMER("SelectionService::selectRect");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1238,8 +1244,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectPolygon(const std::vector<glm::vec2>& vertices,
                                                     SelectionMode mode, int camera_index) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         LOG_TIMER("SelectionService::selectPolygon");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
@@ -1296,8 +1302,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectRing(const float x, const float y, const SelectionMode mode,
                                                  const int camera_index) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1353,8 +1359,8 @@ namespace lfs::vis {
     SelectionResult SelectionService::selectByColorAt(const float x, const float y, const SelectionMode mode,
                                                       const SelectionFilterState filters,
                                                       const int camera_index) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(true);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion, true);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1402,8 +1408,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectBoxVolume(const SelectionMode mode,
                                                       const SelectionCommitOptions options) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1441,8 +1447,8 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectSphereVolume(const SelectionMode mode,
                                                          const SelectionCommitOptions options) {
-        if (revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(false);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None)
+            return selectionBlocked(motion);
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -1488,8 +1494,9 @@ namespace lfs::vis {
         }
 
         const auto filters = defaultFilterState();
-        if ((filters.crop_filter || filters.depth_filter) && revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(true);
+        if (const auto motion = displayedSplatMotion(rendering_manager_);
+            (filters.crop_filter || filters.depth_filter) && motion != SplatMotion::None)
+            return selectionBlocked(motion, true);
         auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         return commitSelection(selection,
                                SelectionMode::Replace,
@@ -1509,8 +1516,9 @@ namespace lfs::vis {
         }
 
         const auto filters = defaultFilterState();
-        if ((filters.crop_filter || filters.depth_filter) && revealMovesSplats(rendering_manager_))
-            return revealSelectionBlocked(true);
+        if (const auto motion = displayedSplatMotion(rendering_manager_);
+            (filters.crop_filter || filters.depth_filter) && motion != SplatMotion::None)
+            return selectionBlocked(motion, true);
         const auto node_mask = effectiveNodeMask(filters.restrict_to_selected_nodes);
         auto filter_mask = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
         applyFilters(filter_mask, filters, node_mask);
@@ -1908,8 +1916,8 @@ namespace lfs::vis {
     bool SelectionService::beginInteractiveSelection(const SelectionShape shape, const SelectionMode mode,
                                                      const glm::vec2 start_pos, const float brush_radius,
                                                      const SelectionFilterState filters) {
-        if (revealMovesSplats(rendering_manager_)) {
-            (void)revealSelectionBlocked(true);
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None) {
+            (void)selectionBlocked(motion, true);
             return false;
         }
         if (!scene_manager_ || !rendering_manager_) {
@@ -2149,9 +2157,9 @@ namespace lfs::vis {
     }
 
     SelectionResult SelectionService::finishInteractiveSelection() {
-        if (revealMovesSplats(rendering_manager_)) {
+        if (const auto motion = displayedSplatMotion(rendering_manager_); motion != SplatMotion::None) {
             cancelInteractiveSelection();
-            return revealSelectionBlocked(true);
+            return selectionBlocked(motion, true);
         }
         auto& session = interactive_selection_;
         if (!session.active) {

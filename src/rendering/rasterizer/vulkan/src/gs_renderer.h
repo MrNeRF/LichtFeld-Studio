@@ -15,8 +15,9 @@
 #include <vector>
 
 namespace lfs::vis {
+    struct UserShaderTestAccess;
     struct HiGSExportTestAccess;
-}
+} // namespace lfs::vis
 
 struct VulkanGSOutlineStyle {
     float red = 0.0f;
@@ -219,6 +220,7 @@ inline constexpr uint32_t kLodCompactProtectedCap = 98304;
 inline constexpr uint32_t kLodCompactMissCap = 16384;
 
 class VulkanGSRenderer : public VulkanGSPipeline {
+    friend struct lfs::vis::UserShaderTestAccess;
     friend struct lfs::vis::HiGSExportTestAccess;
 
 public:
@@ -272,6 +274,31 @@ public:
                             PFN_vkCmdBeginConditionalRenderingEXT begin_conditional_rendering = nullptr,
                             PFN_vkCmdEndConditionalRenderingEXT end_conditional_rendering = nullptr);
     void cleanup();
+
+    struct HostInputs {
+        bool quant_pool = false, shN_q16 = false, shN_f16 = false;
+        bool gut = false, survivors = false, banded = false;
+    };
+    struct HostPlan {
+        std::array<_ComputePipeline*, 10> programs{};
+        std::size_t count = 0;
+        std::string_view host;
+        bool banded = false;
+    };
+    _ComputePipeline* planned_custom_projection_ = nullptr;
+    [[nodiscard]] _ComputePipeline& projectionProgram(const HostInputs&);
+    [[nodiscard]] HostPlan hostsFor(const HostInputs& inputs);
+    CustomEffectDraw setCustomEffect(bool enabled, const HostPlan& plan);
+    void disableCustomEffect() { (void)VulkanGSPipeline::setCustomEffect(false, {}); }
+    // The program sets of those draws; see VulkanGSPipeline.
+    using VulkanGSPipeline::ComputeProgramSource;
+    using VulkanGSPipeline::deviceGeneration;
+    using VulkanGSPipeline::drainRetiredProgramSets;
+    using VulkanGSPipeline::invalidateProgramSets;
+    using VulkanGSPipeline::prepareProgramSet;
+    using VulkanGSPipeline::ProgramSetHandle;
+    using VulkanGSPipeline::programSetReady;
+    using VulkanGSPipeline::useProgramSet;
 
     void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);
     void tagDeferredLodSelectionReadback(VkSemaphore semaphore, std::uint64_t value);
@@ -482,6 +509,13 @@ protected:
                                       bool wave_barriers_hoisted);
     void executePrepareTileSort(const VulkanGSRendererUniforms& uniforms,
                                 VulkanGSPipelineBuffers& buffers);
+    // The derived geometry of a custom effect 3DGUT draw, sized for `slots`
+    // render slots; any other projection retires it.
+    _VulkanBuffer* prepareCustomGeometry(VulkanGSPipelineBuffers& buffers, size_t slots, bool gut);
+    // The projection programs for the encoding `buffers` holds, shared by the
+    // dispatches and custom draw resolution.
+    _ComputePipeline& forwardProjectionProgram(const VulkanGSPipelineBuffers& buffers, bool gut);
+    _ComputePipeline& survivorProjectionProgram(const VulkanGSPipelineBuffers& buffers);
 
     // Binding 8 is unused (legacy write-only radii buffer deleted). Shader
     // binding numbers stay stable so tagged lists keep placeholder slot 8.

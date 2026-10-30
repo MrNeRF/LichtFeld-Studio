@@ -18,6 +18,11 @@
 #include "training/training_setup.hpp"
 
 #include <cuda_runtime.h>
+#if defined(__linux__)
+#include <dlfcn.h>
+#include <nvml.h>
+#include <unistd.h>
+#endif
 #include <glm/mat4x4.hpp>
 #include <gtest/gtest.h>
 
@@ -47,6 +52,38 @@ namespace {
 
     std::size_t align_up_for_test(std::size_t value, std::size_t alignment) {
         return ((value + alignment - 1) / alignment) * alignment;
+    }
+
+    // GPU memory NVML attributes to this process; unlike free memory, other processes cannot move it.
+    std::optional<unsigned long long> process_device_bytes() {
+#if defined(__linux__)
+        static void* const nvml = [] {
+            void* const library = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+            const auto init = library ? reinterpret_cast<decltype(&nvmlInit_v2)>(dlsym(library, "nvmlInit_v2")) : nullptr;
+            return init && init() == NVML_SUCCESS ? library : nullptr;
+        }();
+        if (!nvml)
+            return std::nullopt;
+        const auto by_bus = reinterpret_cast<decltype(&nvmlDeviceGetHandleByPciBusId_v2)>(
+            dlsym(nvml, "nvmlDeviceGetHandleByPciBusId_v2"));
+        const auto running = reinterpret_cast<decltype(&nvmlDeviceGetComputeRunningProcesses_v3)>(
+            dlsym(nvml, "nvmlDeviceGetComputeRunningProcesses_v3"));
+        int device = 0;
+        char bus_id[32] = {};
+        nvmlDevice_t handle = nullptr;
+        if (!by_bus || !running || cudaGetDevice(&device) != cudaSuccess ||
+            cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), device) != cudaSuccess || by_bus(bus_id, &handle) != NVML_SUCCESS)
+            return std::nullopt;
+        std::array<nvmlProcessInfo_t, 256> processes{};
+        unsigned count = static_cast<unsigned>(processes.size());
+        if (running(handle, &count, processes.data()) != NVML_SUCCESS)
+            return std::nullopt;
+        for (unsigned i = 0; i < count; ++i)
+            if (processes[i].pid == static_cast<unsigned>(getpid()) &&
+                processes[i].usedGpuMemory != static_cast<unsigned long long>(NVML_VALUE_NOT_AVAILABLE))
+                return processes[i].usedGpuMemory;
+#endif
+        return std::nullopt;
     }
 
     void fill_device_pattern(void* device_ptr, std::size_t floats, float base) {
@@ -1566,10 +1603,6 @@ TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
     require_cuda();
     ScopedShareableAllocLimit limit("16777216"); // 16 MiB chunks
 
-    size_t free_before = 0;
-    size_t total = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
-
     constexpr std::size_t kBytes = 100ull << 20;
     auto block_result = allocateExportableDeviceBlock(kBytes, 0, false, 160ull << 20);
     ASSERT_TRUE(block_result.has_value()) << block_result.error();
@@ -1615,11 +1648,23 @@ TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
     EXPECT_LT(block->committedPrefixBytes(), hole_off);
     EXPECT_GE(block->committed_bytes, block->committedPrefixBytes() + gran);
 
+    // Every committed byte, the hole included, must come back. Free memory is device-wide, so
+    // other processes disturb it; it is only the fallback where NVML has no per-process figure.
+    const std::size_t committed = block->committed_bytes;
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto own_alive = process_device_bytes();
+    size_t free_alive = 0;
+    size_t total = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_alive, &total), cudaSuccess);
     block.reset();
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    size_t free_after = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
-    EXPECT_GE(free_after + gran, free_before);
+    if (const auto own_after = process_device_bytes(); own_alive && own_after) {
+        EXPECT_LE(*own_after + committed, *own_alive + gran);
+    } else {
+        size_t free_after = 0;
+        ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+        EXPECT_GE(free_after + gran, free_alive + committed);
+    }
 }
 
 TEST(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {

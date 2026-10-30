@@ -5,11 +5,15 @@
 #pragma once
 
 #include "core/crop_polygon.hpp"
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "rendering/rendering.hpp"
 
 #include <cstddef>
+#include <span>
 #include <vector>
+
+struct VulkanGSRendererUniforms;
 
 namespace lfs::vis::vksplat_overlay {
 
@@ -36,7 +40,7 @@ namespace lfs::vis::vksplat_overlay {
         RevealParams = 26,
         RevealEffectBounds = 27,
         CropDirectory = 28, // (base, bucket count, 0, 0), sorted by parent index.
-        ParamCount = 29,    // Fixed prefix; dynamic directory and payload follow.
+        ParamCount = 29,    // Fixed prefix; optional custom tail, then dynamic crop directory/payload.
         CropDirectoryStride = 2,
         CropParamStride = 7,
         EllipsoidParamStride = 5,
@@ -55,6 +59,13 @@ namespace lfs::vis::vksplat_overlay {
         bool preview_enabled,
         bool transform_indices_enabled,
         std::size_t node_mask_count,
-        bool node_visibility_cull);
+        bool node_visibility_cull,
+        std::span<const float> custom_tail = {});
+
+    // The custom effect tail (custom_effect_layout.inc) placed after the fixed prefix
+    // in a custom effect draw, with `camera` the draw's projection camera.
+    [[nodiscard]] LFS_VIS_API lfs::Result<std::vector<float>> buildCustomEffectTail(
+        const lfs::rendering::ViewportRenderRequest& request,
+        const VulkanGSRendererUniforms& camera);
 
 } // namespace lfs::vis::vksplat_overlay

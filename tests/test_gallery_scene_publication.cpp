@@ -13,6 +13,7 @@
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering_types.hpp"
+#include "user_shader_sources.hpp"
 
 #include <gtest/gtest.h>
 
@@ -208,6 +209,42 @@ namespace {
     }
 
 } // namespace
+
+TEST(GalleryScenePublicationTest, PublicationStripsOnlyCustomClipFromCopiedTimeline) {
+    TemporaryDirectory temporary;
+    auto request = base_request(temporary.path / "shader.scene", ExportFormat::GALLERY_SCENE);
+    request.nodes.push_back({.snapshot = cpu_snapshot(), .name = "Generated"});
+    request.published_timeline = {{"version", 1}, {"keyframes", nlohmann::json::array()}, {"extension", "retained"}, {"reveal_clip", {{"effect", 12}, {"shader_id", fixed_uuid(19101).to_string()}, {"start", 0}, {"end", 1}, {"softness", 0.1}}}};
+    const auto original = request.published_timeline;
+    writeGalleryScenePublication(request, {}, {});
+    EXPECT_TRUE(request.shaders_omitted);
+    EXPECT_TRUE(original.contains("reveal_clip"));
+    auto reader = require_result(lfs::io::project::ProjectReader::open(request.path / "project.licht"));
+    EXPECT_FALSE(reader.find(lfs::io::project::FOURCC_SHDR, reader.superblock().project_uuid));
+    EXPECT_FALSE(reader.commit().required_reader_capabilities.contains(lfs::io::project::USER_SHADERS_V1));
+    const auto* row = reader.find(lfs::io::project::FOURCC_SEQR, reader.superblock().project_uuid);
+    ASSERT_NE(row, nullptr);
+    const auto chapter = require_result(lfs::io::project::SequencerSessionChapter::from_bytes(require_result(reader.read_chunk(*row))));
+    EXPECT_FALSE(chapter.dom().get_json("timeline.reveal_clip"));
+    EXPECT_EQ(chapter.dom().get<std::string>("timeline.extension"), "retained");
+    EXPECT_TRUE(chapter.dom().get_json("timeline.keyframes")->empty());
+    const auto source_path = request.path / "project.licht";
+    auto source = require_result(ProjectDocument::open(source_path));
+    ASSERT_TRUE(source.edit_shaders().dom().set_json("assets", nlohmann::json::array({{{"uuid", fixed_uuid(19101).to_string()}, {"name", "Generated"}, {"language", "slang"}, {"source", lfs::test::kIdentity}, {"parameters", nlohmann::json::object()}}})));
+    ASSERT_TRUE(source.edit_sequencer().dom().set_json("timeline", original));
+    ASSERT_TRUE(source.save(source_path));
+    const auto source_bytes = read_file_bytes(source_path);
+    GalleryScenePublishRequest saved;
+    std::string commit;
+    lfs::vis::gui::prepareGalleryProjectPublication({source_path, temporary.path / "saved.scene", ExportFormat::GALLERY_SCENE, ""}, saved, commit);
+    EXPECT_TRUE(saved.shaders_omitted);
+    writeGalleryScenePublication(saved, {}, {});
+    EXPECT_EQ(read_file_bytes(source_path), source_bytes);
+    auto published = require_result(ProjectDocument::open(saved.path / "project.licht"));
+    EXPECT_TRUE(published.shaders().dom().get_json("assets")->empty());
+    EXPECT_FALSE(published.sequencer().dom().get_json("timeline.reveal_clip"));
+    EXPECT_FALSE(published.source_reader()->commit().required_writer_capabilities.contains(lfs::io::project::USER_SHADERS_V1));
+}
 
 TEST(GalleryScenePublicationTest, PublishedCameraRecordsWorldExtentFromSettingsScale) {
     Viewport viewport(1920, 1080);

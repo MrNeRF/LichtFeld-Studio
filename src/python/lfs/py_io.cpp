@@ -952,7 +952,7 @@ namespace lfs::python {
             selection.thumbnail = read_option("drop_thumbnail", false);
             selection.metrics = read_option("drop_metrics", false);
             if (options.contains("save_generation")) selection.save_generation = nb::cast<std::uint64_t>(options["save_generation"]);
-            if (options.contains("checkpoint_uuid")) selection.checkpoint = parse_reference_uuid(nb::cast<std::string>(options["checkpoint_uuid"]));
+            if (options.contains("checkpoint_uuid")) selection.checkpoints.push_back(parse_reference_uuid(nb::cast<std::string>(options["checkpoint_uuid"])));
             PyProgressCallback progress_callback{std::move(progress)};
             PyCancelCallback cancel_callback{std::move(cancel)};
             std::optional<lfs::Result<project::ProjectReduceResult>> result;

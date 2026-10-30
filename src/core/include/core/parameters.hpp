@@ -290,8 +290,9 @@ namespace lfs::core {
             float init_scaling = 0.1f;
             int max_cap = 1000000;
 
-            std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
-            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
+            std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
+            std::vector<size_t> save_steps = {7'000, 30'000}; // Steps at which to save the project (project.licht)
+            bool keep_all_checkpoints = false;
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool eval_all = false;                             // Train on every image and evaluate all of them
@@ -810,6 +811,19 @@ namespace lfs::core {
             std::filesystem::path summary_file;             // Path for batch_summary.json
             std::filesystem::path report_file;              // Path for batch_report.txt
             std::string log_level = "info";
+        };
+
+        struct VideoMaskParameters {
+            std::filesystem::path input_path, output_path, model_path;
+            std::vector<std::array<float, 3>> points;
+            std::optional<std::array<float, 4>> box;
+            std::array<double, 4> circle{0.5, 0.5, 0.0, 0.0};
+            int seed_frame = 0;
+            double fps = 1.0, start_time = 0.0, end_time = -1.0;
+            float fisheye_fov = 200, view_fov = 160;
+            int dilation = 12;
+            bool recenter = false, require_operator = false;
+            bool overwrite = false, no_download = false, download_only = false;
         };
 
         // Modern C++23 functions returning expected values

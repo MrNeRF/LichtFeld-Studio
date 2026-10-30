@@ -152,6 +152,22 @@ namespace Zep {
                                                                                                   return std::make_shared<ZepSyntax>(*pBuffer, hlsl_keywords, hlsl_identifiers);
                                                                                               })});
 
+        editor.RegisterSyntaxFactory({".slang"}, SyntaxProvider{"slang", tSyntaxFactory([](ZepBuffer* buffer) {
+                                                                    auto keywords = hlsl_keywords;
+                                                                    keywords.insert({"module", "import", "interface", "extension", "associatedtype", "typealias",
+                                                                                     "generic", "where", "let", "var", "func", "This", "public", "__init",
+                                                                                     "__subscript", "property", "get", "set", "mutating", "implementing"});
+                                                                    auto identifiers = hlsl_identifiers;
+                                                                    identifiers.insert({"lfs", "LfsElement", "LfsContext", "effect", "Params", "LfsParam",
+                                                                                        "position", "rotation", "scale", "color", "opacity", "time", "progress",
+                                                                                        "cameraPosition", "boundsMin", "boundsMax", "objectId", "index",
+                                                                                        "normal", "kind", "softness", "center", "radius", "objectToWorld",
+                                                                                        "worldToView", "cameraIntrinsics", "distortionCoefficients", "imageSize",
+                                                                                        "cameraModel", "values", "param", "lfs_reveal_mask", "lfs_ease", "lfs_hash", "lfs_noise",
+                                                                                        "lfs_hsv_to_rgb", "lfs_rgb_to_hsv"});
+                                                                    return std::make_shared<ZepSyntax>(*buffer, keywords, identifiers);
+                                                                })});
+
         editor.RegisterSyntaxFactory({".cpp", ".cxx", ".hpp", ".h", ".c"}, SyntaxProvider{"cpp", tSyntaxFactory([](ZepBuffer* pBuffer) {
                                                                                               return std::make_shared<ZepSyntax>(*pBuffer, cpp_keywords, cpp_identifiers);
                                                                                           })});

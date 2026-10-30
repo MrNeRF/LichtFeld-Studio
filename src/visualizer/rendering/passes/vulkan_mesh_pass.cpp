@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
+#include "collision_preview_upload.hpp"
 #include <algorithm>
 
 #include "core/collision.hpp"
@@ -155,6 +156,9 @@ namespace lfs::vis {
         VkPipelineLayout collision_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline collision_pipeline = VK_NULL_HANDLE;
         bool collision_pipeline_attempted = false;
+        // Published only after future.get() synchronizes the worker's pipeline
+        // and layout creation. Drawing never reads worker-owned handles early.
+        bool collision_pipeline_ready = false;
         struct CollisionFrame {
             VkDevice device = VK_NULL_HANDLE;
             VmaAllocator allocator = VK_NULL_HANDLE;
@@ -166,23 +170,40 @@ namespace lfs::vis {
             VkBuffer staging = VK_NULL_HANDLE;
             VmaAllocation staging_allocation = VK_NULL_HANDLE;
             VkFence pending_upload = VK_NULL_HANDLE;
-            ~CollisionFrame() {
+            VkCommandPool upload_pool = VK_NULL_HANDLE;
+            void release() {
                 if (pending_upload && vkGetFenceStatus(device, pending_upload) != VK_SUCCESS) {
                     LOG_ERROR("Collision upload has not retired; retaining its buffers until device teardown");
                     return;
                 }
                 if (pending_upload)
                     vkDestroyFence(device, pending_upload, nullptr);
+                pending_upload = VK_NULL_HANDLE;
+                if (upload_pool)
+                    vkDestroyCommandPool(device, upload_pool, nullptr);
+                upload_pool = VK_NULL_HANDLE;
                 if (staging)
                     vmaDestroyBuffer(allocator, staging, staging_allocation);
                 if (buffer)
                     vmaDestroyBuffer(allocator, buffer, allocation);
                 if (pool)
                     vkDestroyDescriptorPool(device, pool, nullptr);
+                staging = buffer = VK_NULL_HANDLE;
+                staging_allocation = allocation = VK_NULL_HANDLE;
+                pool = VK_NULL_HANDLE;
             }
+            ~CollisionFrame() { release(); }
         };
         std::vector<std::vector<std::shared_ptr<CollisionFrame>>> collision_frames;
         std::unordered_map<const core::CollisionVolume*, std::weak_ptr<CollisionFrame>> collision_cache;
+        // Weak source identities distinguish a regenerated volume even when
+        // its allocation reuses an old address. Redraws never retry failures.
+        std::unordered_map<const core::CollisionVolume*, std::weak_ptr<const core::CollisionVolume>> collision_failed;
+        detail::CollisionPreviewUploadJob<CollisionFrame> collision_upload;
+        // Bridge completion to the retired frame slot's shared ownership.
+        std::shared_ptr<CollisionFrame> collision_completed;
+        std::shared_ptr<CollisionFrame> collision_pending;
+        std::function<void()> collision_wake;
 
         VkSampler sampler = VK_NULL_HANDLE;
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
@@ -505,8 +526,14 @@ namespace lfs::vis {
         }
 
         void destroy() {
+            // Only device teardown joins the worker. Hiding/deleting a volume
+            // merely requests cancellation and keeps the GUI running.
+            collision_upload.finish();
+            collision_completed.reset();
             collision_frames.clear();
             collision_cache.clear();
+            collision_failed.clear();
+            collision_pending.reset();
             for (auto& [_, gpu] : mesh_cache) {
                 destroyMesh(gpu);
             }
@@ -2570,125 +2597,261 @@ namespace lfs::vis {
             return true;
         }
 
+        static bool collisionUploadRetired(const CollisionFrame& frame) {
+            return !frame.pending_upload || vkGetFenceStatus(frame.device, frame.pending_upload) == VK_SUCCESS;
+        }
+
         void prepareCollision(const VulkanMeshPassParams& params) {
+            using UploadStatus = detail::CollisionUploadStatus;
+            if (auto completed = collision_upload.poll()) {
+                collision_pipeline_ready = collision_pipeline != VK_NULL_HANDLE;
+                const auto& resource = completed->resource;
+                if (completed->status == UploadStatus::Ready) {
+                    collision_cache[resource->owner.get()] = resource;
+                    collision_completed = resource;
+                } else if (completed->status != UploadStatus::Canceled) {
+                    LOG_ERROR("Collision preview upload failed; regenerate the volume to try again");
+                    collision_failed[resource->owner.get()] = resource->owner;
+                    if (!collisionUploadRetired(*resource))
+                        collision_pending = resource;
+                }
+            }
+            if (collision_pending && collisionUploadRetired(*collision_pending))
+                collision_pending.reset();
+            std::erase_if(collision_cache, [](const auto& entry) { return entry.second.expired(); });
+            std::erase_if(collision_failed, [](const auto& entry) { return entry.second.expired(); });
             if (collision_frames.size() <= params.frame_slot)
                 collision_frames.resize(params.frame_slot + 1);
             std::vector<std::shared_ptr<CollisionFrame>> resources;
+            const auto groups = params.draw_group_count >= 32 ? ~0u : (1u << params.draw_group_count) - 1u;
+            bool upload_visible = false;
             for (const auto& item : params.items) {
-                if (!item.collision)
+                if (!item.collision || !(item.collision_opacity > 0) || params.depth_view || !(item.panel_mask & groups))
                     continue;
-                if (!collision_pipeline_attempted && !createOverlayPipeline(color_format_cached, depth_format_cached, true))
-                    LOG_ERROR("Collision preview pipeline failed; other rendering is unaffected");
-                if (!collision_pipeline)
-                    break;
-                auto& cached = collision_cache[item.collision.get()];
-                auto resource = cached.lock();
-                if (!resource) {
-                    resource = std::make_shared<CollisionFrame>();
-                    resource->owner = item.collision;
-                    cached = resource;
-                    uploadCollision(*resource);
+                if (collision_upload.active() && collision_upload.resource()->owner == item.collision)
+                    upload_visible = true;
+                if (auto found = collision_cache.find(item.collision.get()); found != collision_cache.end()) {
+                    if (auto resource = found->second.lock()) {
+                        resources.push_back(std::move(resource));
+                        continue;
+                    }
                 }
-                resources.push_back(std::move(resource));
+                if (collision_upload.active() || collision_pending || collision_failed.contains(item.collision.get()))
+                    continue;
+                auto resource = std::make_shared<CollisionFrame>();
+                resource->owner = item.collision;
+                try {
+                    auto upload = [this, color_format = color_format_cached,
+                                   depth_format = depth_format_cached](CollisionFrame& frame, std::stop_token stop) {
+                        auto status = UploadStatus::Failed;
+                        try {
+                            status = uploadCollision(frame, stop, color_format, depth_format);
+                        } catch (const std::exception& error) {
+                            LOG_ERROR("Collision preview upload failed: {}", error.what());
+                            if (!collisionUploadRetired(frame))
+                                status = UploadStatus::PendingFailure;
+                        } catch (...) {
+                            LOG_ERROR("Collision preview upload failed with an unknown exception");
+                            if (!collisionUploadRetired(frame))
+                                status = UploadStatus::PendingFailure;
+                        }
+                        if (status != UploadStatus::Ready && status != UploadStatus::PendingFailure)
+                            frame.release();
+                        return status;
+                    };
+                    collision_upload.start(resource, std::move(upload), collision_wake);
+                    upload_visible = true;
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Could not start collision preview upload: {}", error.what());
+                    collision_failed[item.collision.get()] = item.collision;
+                }
             }
             // Replace only the retired slot; other in-flight frames retain their buffers.
             collision_frames[params.frame_slot] = std::move(resources);
-            std::erase_if(collision_cache, [](const auto& entry) { return entry.second.expired(); });
+            collision_completed.reset();
+            if (collision_upload.active() && !upload_visible)
+                collision_upload.cancel();
         }
 
-        void uploadCollision(CollisionFrame& frame) {
+        bool submitCollisionCopy(CollisionFrame& frame, VkDeviceSize offset, VkDeviceSize bytes) {
+            // The GUI's mesh transfer pool is externally synchronized and must
+            // never be recorded/reset by this worker. Each upload owns its pool.
+            const VkCommandPoolCreateInfo pool_info{
+                VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, nullptr,
+                VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, context->graphicsQueueFamily()};
+            if (!frame.upload_pool) {
+                if (!vk_try_bool(vkCreateCommandPool(device, &pool_info, nullptr, &frame.upload_pool),
+                                 "vkCreateCommandPool", "Collision preview upload pool"))
+                    return false;
+            } else if (!vk_try_bool(vkResetCommandPool(device, frame.upload_pool, 0),
+                                    "vkResetCommandPool", "Retired collision preview upload pool")) {
+                return false;
+            }
+            const VkCommandBufferAllocateInfo allocation{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr,
+                frame.upload_pool, VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+            VkCommandBuffer commands = VK_NULL_HANDLE;
+            if (!vk_try_bool(vkAllocateCommandBuffers(device, &allocation, &commands),
+                             "vkAllocateCommandBuffers", "Collision preview upload command"))
+                return false;
+            const VkCommandBufferBeginInfo begin{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr,
+                VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, nullptr};
+            if (!vk_try_bool(vkBeginCommandBuffer(commands, &begin),
+                             "vkBeginCommandBuffer", "Collision preview upload begin"))
+                return false;
+            const VkBufferCopy copy{0, offset, bytes};
+            vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
+            const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+                                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 1, &barrier, 0, nullptr, 0, nullptr);
+            if (!vk_try_bool(vkEndCommandBuffer(commands), "vkEndCommandBuffer", "Collision preview upload end"))
+                return false;
+            const VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkFence fence = VK_NULL_HANDLE;
+            if (!vk_try_bool(vkCreateFence(device, &fence_info, nullptr, &fence),
+                             "vkCreateFence", "Collision preview upload fence"))
+                return false;
+            const VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr,
+                                      0, nullptr, nullptr, 1, &commands, 0, nullptr};
+            const auto submitted = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, fence);
+            if (!vk_try_bool(submitted, "vk_queue_submit_synced", "Collision preview upload submit")) {
+                vkDestroyFence(device, fence, nullptr);
+                return false;
+            }
+            frame.pending_upload = fence;
+            return true;
+        }
+
+        detail::CollisionUploadStatus uploadCollision(CollisionFrame& frame, std::stop_token stop,
+                                                      VkFormat color_format, VkFormat depth_format) {
+            using UploadStatus = detail::CollisionUploadStatus;
+            auto status = UploadStatus::Failed;
             frame.device = device;
             frame.allocator = allocator;
+            if (stop.stop_requested())
+                return status = UploadStatus::Canceled;
+            if (!collision_pipeline_attempted &&
+                !createOverlayPipeline(color_format, depth_format, true))
+                LOG_ERROR("Collision preview pipeline failed; other rendering is unaffected");
+            if (!collision_pipeline)
+                return status = UploadStatus::Failed;
+            if (stop.stop_requested())
+                return status = UploadStatus::Canceled;
             const auto& volume = *frame.owner;
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(context->physicalDevice(), &properties);
             const VkDeviceSize bytes = (volume.words.size() + 4) * sizeof(uint32_t);
             if (bytes > properties.limits.maxStorageBufferRange) {
                 LOG_ERROR("Collision preview requires {} storage bytes; device limit is {}", bytes, properties.limits.maxStorageBufferRange);
-                return;
+                return status = UploadStatus::Failed;
             }
             VkBufferCreateInfo buffer_info{};
             buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             buffer_info.size = bytes;
             buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            constexpr VkDeviceSize upload_chunk = 8 * 1024 * 1024;
+            const bool stream_upload = bytes > upload_chunk;
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+            if (!stream_upload)
+                allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
             if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
                                              &frame.buffer, &frame.allocation, nullptr),
                              "vmaCreateBuffer", "Collision preview storage buffer"))
-                return;
+                return status;
 
             VkMemoryPropertyFlags memory_properties{};
             vmaGetAllocationMemoryProperties(allocator, frame.allocation, &memory_properties);
-            const bool direct_upload = (memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+            const bool direct_upload = !stream_upload &&
+                                       (memory_properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
             VmaAllocation upload_allocation = frame.allocation;
             if (!direct_upload) {
+                buffer_info.size = std::min(bytes, upload_chunk);
                 buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
                 allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
                 allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
                 if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer_info, &allocation_info,
                                                  &frame.staging, &frame.staging_allocation, nullptr),
-                                 "vmaCreateBuffer", "Collision preview staging buffer"))
-                    return;
+                                 "vmaCreateBuffer", "Collision preview staging chunk"))
+                    return status;
                 upload_allocation = frame.staging_allocation;
             }
 
-            void* mapped = nullptr;
-            if (!vk_try_bool(vmaMapMemory(allocator, upload_allocation, &mapped),
-                             "vmaMapMemory", "Collision preview upload mapping"))
-                return;
             const std::array<uint32_t, 4> header{uint32_t(volume.dimensions.x), uint32_t(volume.dimensions.y),
                                                  uint32_t(volume.dimensions.z), uint32_t(volume.edge)};
-            std::memcpy(mapped, header.data(), sizeof(header));
-            if (!volume.words.empty())
-                std::memcpy(static_cast<uint32_t*>(mapped) + header.size(), volume.words.data(),
-                            volume.words.size() * sizeof(uint32_t));
-            // VMA flushes non-coherent memory and does nothing for coherent allocations.
-            const VkResult flush_result = vmaFlushAllocation(allocator, upload_allocation, 0, bytes);
-            vmaUnmapMemory(allocator, upload_allocation);
-            if (!vk_try_bool(flush_result, "vmaFlushAllocation", "Collision preview upload flush"))
-                return;
-
-            // The immutable buffer is written and flushed before the draw's queue submission.
-            // Submission makes these host writes visible to fragment shader reads (or to the
-            // staging transfer below), so direct uploads need no copy, barrier, or upload fence.
-            if (!direct_upload) {
-                const auto commands = beginSingleTimeCommands();
-                if (commands == VK_NULL_HANDLE)
-                    return;
-                const VkBufferCopy copy{0, 0, bytes};
-                vkCmdCopyBuffer(commands, frame.staging, frame.buffer, 1, &copy);
-                const VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
-                                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT};
-                vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                     0, 1, &barrier, 0, nullptr, 0, nullptr);
-                // One upload fence, never a device-wide wait or a per-frame transfer.
-                if (!endSingleTimeCommands(commands, &frame.pending_upload))
-                    return;
+            for (VkDeviceSize offset = 0; offset < bytes; offset += upload_chunk) {
+                if (stop.stop_requested())
+                    return status = UploadStatus::Canceled;
+                const auto count = std::min(upload_chunk, bytes - offset);
+                void* mapped = nullptr;
+                if (!vk_try_bool(vmaMapMemory(allocator, upload_allocation, &mapped),
+                                 "vmaMapMemory", "Collision preview chunk mapping"))
+                    return status;
+                // Direct uploads fit in one chunk. Staging always reuses the
+                // same small host buffer; its GPU copy supplies the destination
+                // offset. Header and payload retain their exact original bytes.
+                if (offset == 0) {
+                    std::memcpy(mapped, header.data(), sizeof(header));
+                    if (count > sizeof(header))
+                        std::memcpy(static_cast<std::byte*>(mapped) + sizeof(header),
+                                    volume.words.data(), static_cast<size_t>(count - sizeof(header)));
+                } else {
+                    std::memcpy(mapped,
+                                reinterpret_cast<const std::byte*>(volume.words.data()) + offset - sizeof(header),
+                                static_cast<size_t>(count));
+                }
+                const VkResult flushed = vmaFlushAllocation(allocator, upload_allocation, 0, count);
+                vmaUnmapMemory(allocator, upload_allocation);
+                if (!vk_try_bool(flushed, "vmaFlushAllocation", "Collision preview chunk flush"))
+                    return status;
+                if (direct_upload)
+                    continue;
+                if (!submitCollisionCopy(frame, offset, count))
+                    return status = frame.pending_upload ? UploadStatus::PendingFailure : UploadStatus::Failed;
+                // Wait only on the worker. Once this bounded copy retires, the
+                // ring buffer and private command pool can be reused safely.
+                lfs::rendering::WaitContext wait_context;
+                wait_context.fingerprint = "pass.collision.upload_wait";
+                const auto wait = lfs::rendering::wait_fence_bounded(
+                    device, frame.pending_upload, std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{}, wait_context);
+                if (!wait || *wait != lfs::rendering::WaitOutcome::Ready)
+                    return status = UploadStatus::PendingFailure;
+                vkDestroyFence(device, frame.pending_upload, nullptr);
+                frame.pending_upload = VK_NULL_HANDLE;
+            }
+            if (frame.upload_pool) {
+                vkDestroyCommandPool(device, frame.upload_pool, nullptr);
+                frame.upload_pool = VK_NULL_HANDLE;
+            }
+            if (frame.staging) {
                 vmaDestroyBuffer(allocator, frame.staging, frame.staging_allocation);
                 frame.staging = VK_NULL_HANDLE;
                 frame.staging_allocation = VK_NULL_HANDLE;
             }
+            if (stop.stop_requested())
+                return status = UploadStatus::Canceled;
             const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             const VkDescriptorPoolCreateInfo pool{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, 1, 1, &size};
             if (!vk_try_bool(vkCreateDescriptorPool(device, &pool, nullptr, &frame.pool),
                              "vkCreateDescriptorPool", "Collision preview descriptors"))
-                return;
+                return status;
             const VkDescriptorSetAllocateInfo allocation{
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr, frame.pool, 1, &collision_layout};
             if (!vk_try_bool(vkAllocateDescriptorSets(device, &allocation, &frame.descriptor),
                              "vkAllocateDescriptorSets", "Collision preview descriptor"))
-                return;
+                return status;
             const VkDescriptorBufferInfo buffer{frame.buffer, 0, bytes};
             const VkWriteDescriptorSet write{
                 VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, frame.descriptor, 0, 0, 1,
                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &buffer, nullptr};
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-            LOG_DEBUG("Collision preview uploaded {} bytes for immutable volume", bytes);
+            return status = UploadStatus::Ready;
         }
 
         void prepare(const VulkanMeshPassParams& params) {
@@ -3061,7 +3224,7 @@ namespace lfs::vis {
                 vkCmdBindIndexBuffer(cb, gpu.index_buffer, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cb, sm.index_count, 1, sm.start_index, 0, 0);
             }
-            if (collision_pipeline && !params.depth_view) {
+            if (collision_pipeline_ready && !params.depth_view) {
                 for (const auto& item : params.items) {
                     const auto found = collision_cache.find(item.collision.get());
                     const auto resource = found == collision_cache.end() ? nullptr : found->second.lock();
@@ -3103,10 +3266,11 @@ namespace lfs::vis {
     VulkanMeshPass::VulkanMeshPass(VulkanMeshPass&&) noexcept = default;
     VulkanMeshPass& VulkanMeshPass::operator=(VulkanMeshPass&&) noexcept = default;
 
-    bool VulkanMeshPass::init(VulkanContext& context, VkFormat color_format, VkFormat depth_stencil_format) {
+    bool VulkanMeshPass::init(VulkanContext& context, VkFormat color_format, VkFormat depth_stencil_format, std::function<void()> collision_wake) {
         if (!impl_) {
             impl_ = std::make_unique<Impl>();
         }
+        impl_->collision_wake = std::move(collision_wake);
         return impl_->init(context, color_format, depth_stencil_format);
     }
 

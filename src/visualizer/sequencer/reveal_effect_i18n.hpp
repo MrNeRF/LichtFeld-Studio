@@ -12,7 +12,7 @@ namespace lfs::vis {
         "sequencer.reveal_effect_rain", "sequencer.reveal_effect_unveil",
         "sequencer.reveal_effect_light_edge", "sequencer.reveal_effect_rainbow",
         "sequencer.reveal_effect_dark_to_light", "sequencer.reveal_effect_distortion",
-        "sequencer.reveal_effect_camera_light"};
+        "sequencer.reveal_effect_camera_light", "sequencer.reveal_effect_custom"};
 
     inline const char* revealEffectKey(const sequencer::RevealEffect effect) {
         const int index = static_cast<int>(effect) - 1;

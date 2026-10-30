@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/utils/native_file_dialog.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/native_fs.hpp"
+#include "gui/editor/document_kind.hpp"
 #include "gui/utils/file_dialog_path.hpp"
 
 #include "core/logger.hpp"
@@ -561,8 +563,12 @@ namespace lfs::vis::gui {
             return {makeFilter("Video Files", std::move(extensions))};
         }
 
-        [[nodiscard]] std::vector<DialogFilter> pythonFilters() {
-            return {makeFilter("Python Files", {".py"})};
+        [[nodiscard]] std::vector<DialogFilter> editorFilters(const editor::DocumentKind kind, const bool save) {
+            const bool shader = kind == editor::DocumentKind::Shader;
+            return {makeFilter(!save ? LOC("editor.documents") : shader ? LOC("editor.shader_files")
+                                                                        : LOC("editor.python_files"),
+                               save ? std::vector<std::string>{shader ? ".slang" : ".py"}
+                                    : std::vector<std::string>{".py", ".slang"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> singleExtensionFilter(
@@ -815,8 +821,12 @@ namespace lfs::vis::gui {
     }
 
     std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath) {
+        return OpenPythonFileDialog(defaultPath, editor::DocumentKind::Python);
+    }
+
+    std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& defaultPath, const editor::DocumentKind kind) {
         std::filesystem::path result;
-        runDialog(makeOpenFileRequest(pythonFilters(), defaultPath), result);
+        runDialog(makeOpenFileRequest(editorFilters(kind, false), defaultPath), result);
         return result;
     }
 
@@ -975,10 +985,16 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SavePythonFileDialog(const std::string& defaultName, const std::filesystem::path& defaultPath) {
+        return SavePythonFileDialog(defaultName, defaultPath, editor::DocumentKind::Python);
+    }
+
     std::filesystem::path SavePythonFileDialog(const std::string& defaultName,
-                                               const std::filesystem::path& defaultPath) {
+                                               const std::filesystem::path& defaultPath, const editor::DocumentKind kind) {
         std::filesystem::path result;
-        runDialog(makeSaveFileRequest(pythonFilters(), defaultPath, defaultName, ".py"), result);
+        runDialog(makeSaveFileRequest(editorFilters(kind, true), defaultPath, defaultName,
+                                      kind == editor::DocumentKind::Shader ? ".slang" : ".py"),
+                  result);
         return result;
     }
 

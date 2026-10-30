@@ -10,8 +10,9 @@ namespace lfs::vis {
     struct StochasticHistoryTestAccess {
         static auto prepare(VksplatViewportRenderer& renderer, VulkanGSRendererUniforms& camera,
                             const core::SplatData& model, const VksplatViewportRenderer::OutputSlot slot,
-                            const bool content_changed = false) {
-            return renderer.prepareStochasticFrame(camera, model, slot, content_changed);
+                            const bool content_changed = false,
+                            VksplatViewportRenderer::StochasticEffect effect = {}) {
+            return renderer.prepareStochasticFrame(camera, model, slot, content_changed, std::move(effect));
         }
         static void commit(VksplatViewportRenderer& renderer,
                            const VksplatViewportRenderer::StochasticFrame& frame,

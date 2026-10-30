@@ -45,7 +45,7 @@ namespace lfs::sequencer {
 
         [[nodiscard]] bool validRevealEffect(RevealEffect effect) {
             const auto value = static_cast<int>(effect);
-            return value >= 1 && value <= 11;
+            return value >= 1 && value <= 12;
         }
 
         [[nodiscard]] glm::quat normalizedRotation(const glm::quat& rotation) {
@@ -101,11 +101,66 @@ namespace lfs::sequencer {
         return std::clamp((time - start) / (end - start), 0.0f, 1.0f);
     }
 
+    Status RevealClip::validate() const {
+        if (!validTime(start) || !validTime(end) || start < 0.0f || end <= start || !std::isfinite(softness) ||
+            softness <= 0.0f || softness > 1.0f || !validRevealEffect(effect) ||
+            (effect == RevealEffect::Custom) != shader_id.has_value() || (shader_id && shader_id->is_nil()))
+            return Status::failure(make_error(ErrorInit{.code = ErrorCode::InvalidArgument,
+                                                        .domain = ErrorDomain::App,
+                                                        .user_message = "Invalid reveal clip.",
+                                                        .detection = LFS_SOURCE_SITE_CURRENT()}));
+        return {};
+    }
+
+    nlohmann::json RevealClip::toJson() const {
+        nlohmann::json result{{"start", start},
+                              {"end", end},
+                              {"softness", softness},
+                              {"effect", static_cast<int>(effect)}};
+        if (shader_id)
+            result["shader_id"] = shader_id->to_string();
+        return result;
+    }
+
+    Result<RevealClip> RevealClip::fromJson(const nlohmann::json& value, const bool allow_extensions) {
+        RevealClip clip;
+        const auto invalid = []() {
+            return make_error(ErrorInit{.code = ErrorCode::InvalidArgument,
+                                        .domain = ErrorDomain::App,
+                                        .user_message = "Invalid reveal clip fields.",
+                                        .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        if (!value.is_object())
+            return invalid();
+        for (const auto& [key, item] : value.items())
+            if (!allow_extensions && key != "start" && key != "end" && key != "softness" && key != "effect" &&
+                key != "shader_id")
+                return invalid();
+        for (const auto* key : {"start", "end", "softness"})
+            if (!value.contains(key) || !value[key].is_number())
+                return invalid();
+        clip.start = value["start"].get<float>();
+        clip.end = value["end"].get<float>();
+        clip.softness = value["softness"].get<float>();
+        if (value.contains("effect")) {
+            if (!value["effect"].is_number_integer() || value["effect"] < 1 || value["effect"] > 12)
+                return invalid();
+            clip.effect = static_cast<RevealEffect>(value["effect"].get<int>());
+        }
+        if (value.contains("shader_id")) {
+            if (!value["shader_id"].is_string())
+                return invalid();
+            clip.shader_id = core::Uuid::from_string(value["shader_id"].get<std::string>());
+            if (!clip.shader_id)
+                return invalid();
+        }
+        if (auto valid = clip.validate(); !valid)
+            return valid.error();
+        return clip;
+    }
+
     void Timeline::setRevealClip(std::optional<RevealClip> clip) {
-        if (clip && (!validTime(clip->start) || !validTime(clip->end) ||
-                     clip->start < 0.0f || clip->end <= clip->start ||
-                     !std::isfinite(clip->softness) || clip->softness <= 0.0f || clip->softness > 1.0f ||
-                     !validRevealEffect(clip->effect)))
+        if (clip && !clip->validate())
             throw std::invalid_argument("Invalid reveal clip");
         reveal_clip_ = clip;
         if (clip)
@@ -337,7 +392,7 @@ namespace lfs::sequencer {
         if (clip_)
             json["animation_clip"] = clip_->toJson();
         if (reveal_clip_)
-            json["reveal_clip"] = {{"start", reveal_clip_->start}, {"end", reveal_clip_->end}, {"softness", reveal_clip_->softness}, {"effect", static_cast<int>(reveal_clip_->effect)}};
+            json["reveal_clip"] = reveal_clip_->toJson();
         return json;
     }
 
@@ -434,19 +489,12 @@ namespace lfs::sequencer {
 
             std::optional<RevealClip> loaded_reveal;
             if (json.contains("reveal_clip")) {
-                const auto& value = json.at("reveal_clip");
-                RevealClip reveal{jsonFloat(value.at("start"), "Reveal start"),
-                                  jsonFloat(value.at("end"), "Reveal end"),
-                                  jsonFloat(value.at("softness"), "Reveal softness")};
-                if (value.contains("effect")) {
-                    if (!value.at("effect").is_number_integer())
-                        throw std::runtime_error("Invalid reveal effect");
-                    reveal.effect = static_cast<RevealEffect>(value.at("effect").get<int>());
+                const auto reveal = RevealClip::fromJson(json.at("reveal_clip"), true);
+                if (!reveal) {
+                    LOG_ERROR("Timeline reveal rejected: {}", reveal.error().user_message());
+                    return false;
                 }
-                if (!validTime(reveal.start) || !validTime(reveal.end) || reveal.start < 0.0f ||
-                    reveal.end <= reveal.start || reveal.softness <= 0.0f || reveal.softness > 1.0f || !validRevealEffect(reveal.effect))
-                    throw std::runtime_error("Invalid reveal clip");
-                loaded_reveal = reveal;
+                loaded_reveal = *reveal;
             }
 
             // IDs were assigned in file order, so use them to preserve ties

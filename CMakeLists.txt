@@ -40,6 +40,14 @@ endif()
 list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 unset(_lfs_vulkan_validation_feature)
 
+# Opt in to lower vcpkg disk usage at the cost of slower dependency rebuilds.
+# Set this before project() loads the toolchain; keep the appended flag out of
+# the cache so turning the option off restores the original install options.
+option(LFS_VCPKG_CLEAN_AFTER_BUILD "Clean vcpkg build artifacts after installation to save disk space (slower rebuilds)" OFF)
+if(LFS_VCPKG_CLEAN_AFTER_BUILD AND NOT "--clean-after-build" IN_LIST VCPKG_INSTALL_OPTIONS)
+    list(APPEND VCPKG_INSTALL_OPTIONS "--clean-after-build")
+endif()
+
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
 # the toolchain is loaded by project().
@@ -512,6 +520,7 @@ find_package(libdeflate CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(slang CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
@@ -653,6 +662,8 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
+    src/app/mcp_shader_tools.cpp
+    src/app/mcp_editor_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/compare.cpp
     src/app/converter.cpp
@@ -1333,6 +1344,18 @@ install(TARGETS lfs_event_bridge
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+# Runtime shader compiler plus the one backend it loads: spirv-opt lives in
+# slang-glslang, which Slang looks for beside its own library. The build tree
+# uses both in place (vcpkg RPATH on Linux, the vcpkg DLL copy on Windows).
+if(WIN32)
+    set(_lfs_slang_runtime_dir ${CMAKE_INSTALL_BINDIR})
+else()
+    set(_lfs_slang_runtime_dir ${CMAKE_INSTALL_LIBDIR})
+endif()
+install(IMPORTED_RUNTIME_ARTIFACTS slang::slang slang::slang-glslang
+    RUNTIME DESTINATION ${_lfs_slang_runtime_dir}
+    LIBRARY DESTINATION ${_lfs_slang_runtime_dir})
+
 install(TARGETS lfs_visualizer
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -1350,7 +1373,9 @@ if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
     install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
             DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
             FILES_MATCHING
-            PATTERN "*.spv")
+            PATTERN "*.spv"
+            PATTERN "*.slang-module"
+            PATTERN "manifest.json")
 endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
@@ -1442,7 +1467,8 @@ if(BUILD_PORTABLE)
             "${CMAKE_BINARY_DIR}/lib"
             "${CMAKE_BINARY_DIR}/external/nvImageCodec"
             "${CUDAToolkit_BIN_DIR}"
-            "${CUDAToolkit_LIBRARY_DIR}")
+            "${CUDAToolkit_LIBRARY_DIR}"
+            "$<TARGET_FILE_DIR:slang::slang>")
     if(DEFINED VCPKG_TARGET_TRIPLET)
         list(APPEND _RUNTIME_SEARCH_DIRS
                 "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"

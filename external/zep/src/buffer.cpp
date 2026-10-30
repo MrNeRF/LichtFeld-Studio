@@ -739,7 +739,7 @@ namespace Zep {
             // Update the gap buffer with the text
             // We remove \r, we only care about \n
             for (auto& ch : text) {
-                if (ch == '\r') {
+                if (ch == '\r' && !m_preserveCarriageReturns) {
                     m_fileFlags |= FileFlags::StrippedCR;
                 } else {
                     input.push_back(ch);

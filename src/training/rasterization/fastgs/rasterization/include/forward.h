@@ -21,8 +21,14 @@ namespace fast_lfs::rasterization {
         float3* primitive_normals = nullptr;
         uint* sorted_primitive_indices = nullptr;
         size_t sorted_primitive_indices_size = 0;
+        unsigned char* contributor_masks = nullptr;
+        uint* contributor_positions = nullptr;
+        uint* primitive_touched = nullptr;
+        size_t contributor_storage_size = 0;
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
+        size_t visible_sort_scratch_size = 0;
+        unsigned tile_sort_key_bytes = 0;
     };
 
     /// Sorted indices live in the owning rasterizer arena frame. The frame
@@ -46,6 +52,14 @@ namespace fast_lfs::rasterization {
     [[nodiscard]] std::size_t sort_workspace_required_bytes() noexcept;
     [[nodiscard]] std::size_t sort_workspace_allocated_bytes() noexcept;
     [[nodiscard]] int sort_workspace_capacity_n_instances() noexcept;
+
+    // Disables the touched flags that let backward preprocessing skip occluded rows.
+    void set_touched_gating_for_testing(bool enabled) noexcept;
+    [[nodiscard]] bool touched_gating_for_testing() noexcept;
+
+    // 0: packed depth/tile keys, 1: stable depth then tile, 2: size-based dispatch.
+    void set_sort_mode_for_testing(int mode) noexcept;
+    [[nodiscard]] int sort_mode_for_testing() noexcept;
 
     // Warp-cull mode for blend_cu:
     /// 0 = enabled (production), 1 = disabled (all-1s mask, reference),

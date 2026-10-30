@@ -143,6 +143,7 @@ namespace lfs::vis::terminal {
         void initVterm();
         void destroyVterm();
         void handleResize(int new_cols, int new_rows);
+        void reflow(int new_cols, int new_rows);
         void markDirty();
 
         // libvterm callbacks
@@ -185,6 +186,12 @@ namespace lfs::vis::terminal {
         std::deque<ScrollbackLine> scrollback_;
         int scroll_offset_ = 0;
         static constexpr int MAX_SCROLLBACK = 10000;
+
+        // While reflow() changes the row count: rows pushed (-1 otherwise), whether row 0 continues the
+        // newest scrollback line, and the continuation of each row popped back.
+        int resize_pushes_ = -1;
+        bool top_continues_ = false;
+        std::vector<bool> popped_;
 
         // State
         std::atomic<bool> has_new_output_{false};

@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -96,7 +97,8 @@ namespace lfs::vis {
         // must match the render-pass attachments the caller will record into.
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
-                                VkFormat depth_stencil_format);
+                                VkFormat depth_stencil_format,
+                                std::function<void()> collision_wake = {});
 
         // Upload any new / changed mesh GPU buffers. Idempotent — caches by
         // (MeshData*, generation).

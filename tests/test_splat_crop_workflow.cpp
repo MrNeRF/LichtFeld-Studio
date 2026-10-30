@@ -579,6 +579,23 @@ namespace {
         }
     }
 
+    TEST(DynamicCropParamsTest, CustomShaderTailKeepsItsFixedAddressAndRelocatesCropDirectory) {
+        namespace ov = vksplat_overlay;
+        lfs::rendering::ViewportRenderRequest request{};
+        request.filters.crop_regions.push_back({.parent_node_index = 0});
+        const std::vector<float> tail{11, 12, 13, 14, 21, 22, 23, 24};
+        const auto params = ov::buildParams(request, false, false, false, 0, false, tail);
+        ASSERT_FALSE(params.empty());
+        EXPECT_TRUE(std::equal(tail.begin(), tail.end(), params.begin() + ov::ParamCount * 4));
+        const size_t directory = ov::ParamCount + tail.size() / 4;
+        EXPECT_EQ(params[ov::CropDirectory * 4], directory);
+        EXPECT_EQ(params[ov::CropDirectory * 4 + 1], 1);
+        EXPECT_EQ(params[directory * 4], 0);
+        EXPECT_EQ(params[directory * 4 + 1], directory + ov::CropDirectoryStride);
+        EXPECT_EQ(params.size() / 4, directory + ov::CropDirectoryStride + ov::CropParamStride);
+        EXPECT_TRUE(ov::buildParams(request, false, false, false, 0, false, std::span<const float>(tail.data(), 3)).empty());
+    }
+
     TEST(DynamicCropParamsTest, SparseOwnersAndAllShapesPackWithoutTruncationOrCrossOwnerRanges) {
         namespace ov = vksplat_overlay;
         lfs::rendering::ViewportRenderRequest request{};

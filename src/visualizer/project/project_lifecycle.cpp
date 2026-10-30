@@ -6,6 +6,8 @@
 #include "project_lifecycle.hpp"
 #include "core/native_fs.hpp"
 #include "core/resource_messages.hpp"
+#include "gui/editor/python_editor.hpp"
+#include "gui/panels/python_console_panel.hpp"
 #include "io/project_operations.hpp"
 #include "io/sfm_observation_chapter.hpp"
 
@@ -1757,6 +1759,9 @@ namespace lfs::vis::project {
                         document.project_uuid(),
                     .source_path =
                         document.source_path(),
+                    .retained_source = document.source_reader()
+                                           ? std::make_shared<lfs::io::project::ProjectReader>(document.source_reader()->share())
+                                           : nullptr,
                     .project = std::move(project),
                     .references =
                         std::move(references),
@@ -1765,6 +1770,7 @@ namespace lfs::vis::project {
                             session->gui_layout),
                     .view =
                         std::move(session->view),
+                    .shaders = std::move(session->shaders),
                     .editor =
                         std::move(session->editor),
                     .sequencer =
@@ -1778,6 +1784,7 @@ namespace lfs::vis::project {
                         std::move(*parameters),
                     .durable_commit_kind =
                         durable_commit_kind,
+                    .shader_token = session->shader_token,
                     .writer_lock_lease =
                         std::move(
                             writer_lock_lease),
@@ -1978,6 +1985,9 @@ namespace lfs::vis::project {
         [[nodiscard]] bool hasUntitledCrashDirtyChapters(
             const lfs::io::project::ProjectDocument&
                 document) {
+            const auto files = document.editor().dom().get_json("open_files");
+            if (files && std::ranges::any_of(*files, [](const auto& file) { return file.contains("kind") && file["kind"] == "shader"; }))
+                return true;
             for (const auto& chapter : document.dirty_chapters()) {
                 if (!isSessionSoftDirtyChapter(chapter)) {
                     return true;
@@ -2664,6 +2674,10 @@ namespace lfs::vis::project {
     }
 
     ProjectLifecycle::~ProjectLifecycle() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            pending_collision_open_.reset(); // join before the viewer or candidate is destroyed
+        }
         cancelTrainingStartPreparation();
         if (auto* manager = viewer_.getTrainerManager()) {
             if (auto* trainer = manager->getTrainer()) {
@@ -2767,6 +2781,11 @@ namespace lfs::vis::project {
     ProjectLifecycle::preflightSwitch(
         const ProjectSwitchDisposition disposition,
         const bool allow_active_training) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "A project is still being opened.",
+                              "Wait for collision payload preparation or cancel opening", "project.open");
+        }
         if (pending_training_start_) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
                               "The training project is still being prepared.",
@@ -2821,7 +2840,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::collisionSwitchPending() const {
         auto* gui = viewer_.getGuiManager();
-        return gui && gui->asyncTasks().sceneReplacementPending();
+        return pending_collision_open_ || (gui && gui->asyncTasks().sceneReplacementPending());
     }
 
     bool ProjectLifecycle::deferCollisionSwitch(std::move_only_function<lfs::Result<void>()>&& retry) {
@@ -3370,7 +3389,7 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::
         isBackgroundAutosaveSuppressed() const {
-        if (application_close_pending_) {
+        if (application_close_pending_ || pending_collision_open_) {
             return true;
         }
         if (close_save_state_.load(
@@ -3653,6 +3672,15 @@ namespace lfs::vis::project {
             return {};
         }
         const auto path = *document_->source_path();
+        // The head slots name the current commit; reopening the whole project is
+        // only needed when another writer moved the master past the held source.
+        if (const auto* source = document_->source_reader()) {
+            const auto head = lfs::io::project::ProjectReader::read_head_identity(path);
+            if (head && head->project_uuid == document_->project_uuid() &&
+                head->commit_uuid == source->commit().commit_uuid) {
+                return {};
+            }
+        }
         auto opened = ProjectDocument::open(
             path,
             {
@@ -3813,9 +3841,7 @@ namespace lfs::vis::project {
                         document
                             ->dirty_chapters(),
                     .hydration_state =
-                        hydrationName(
-                            hydration_.load(
-                                std::memory_order_acquire)),
+                        pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
                     .payloads = {},
                     .contains_embedded_secrets =
                         containsEmbeddedSecrets(),
@@ -3901,6 +3927,7 @@ namespace lfs::vis::project {
         }
         project_write_job_ = *handle;
         project_write_purpose_ = purpose;
+        project_write_shader_token_ = captured_shader_token_;
         project_write_destination_ =
             destination;
         project_write_scene_serial_ =
@@ -4448,6 +4475,7 @@ namespace lfs::vis::project {
         }
         project_write_job_ = *handle;
         project_write_purpose_ = purpose;
+        project_write_shader_token_ = captured_shader_token_;
         project_write_destination_ =
             std::move(master_path);
         project_write_dirty_epoch_ =
@@ -4598,6 +4626,7 @@ namespace lfs::vis::project {
                             context.error()));
                     return std::nullopt;
                 }
+                captured_shader_token_ = context->shader_token;
                 context->allow_existing_destination_replacement =
                     allow_existing_destination_replacement;
                 return std::move(*context);
@@ -4611,6 +4640,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProject(const bool wait_for_write) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (!pending_preview_png_.empty() ||
             project_write_purpose_ == ProjectWritePurpose::Thumbnail) {
             return fail<void>(lfs::ErrorCode::FailedPrecondition,
@@ -4753,6 +4787,11 @@ namespace lfs::vis::project {
 
     lfs::Result<void>
     ProjectLifecycle::prepareTrainingStartProjectAsync(std::function<lfs::Result<void>()> on_ready) {
+        if (pending_collision_open_) {
+            return fail<void>(lfs::ErrorCode::FailedPrecondition,
+                              "Wait for project opening before starting training.",
+                              "Collision payload preparation owns the project switch", "project.open");
+        }
         if (pending_training_start_) {
             return {};
         }
@@ -5040,6 +5079,7 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(context).error());
         }
+        captured_shader_token_ = context->shader_token;
         auto preview = explicitSavePreviewPng(regenerate_preview);
         if (!preview) {
             return lfs::Status::failure(
@@ -5840,6 +5880,8 @@ namespace lfs::vis::project {
                 ProjectWritePurpose::TrainingCloseSave;
         if (error.empty()) {
             if (rebases_project_dirty_state) {
+                if (auto* service = viewer_.getShaderService())
+                    service->clearDirtyIfUnchanged(project_write_shader_token_);
                 const bool write_inputs_unchanged =
                     scene_mutation_serial_.load(
                         std::memory_order_acquire) ==
@@ -5859,6 +5901,7 @@ namespace lfs::vis::project {
             jobs.completed(*project_write_job_);
             clearAutosaveFailureBackoff();
             if (was_autosave) {
+                last_autosaved_shader_token_ = project_write_shader_token_;
                 autosave_sequence_ = std::max(
                     autosave_sequence_,
                     project_write_autosave_sequence_);
@@ -6080,6 +6123,7 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::updateMaintenance() {
+        settleCollisionOpen();
         applyStartupRecoveryScan();
         settleScratchLocationCheck();
         settleProjectWrite();
@@ -6144,14 +6188,16 @@ namespace lfs::vis::project {
             parameter_manager
                 ? parameter_manager->dirtySerial()
                 : 0;
-        const bool plausibly_dirty =
-            scene_dirty_.load(
-                std::memory_order_acquire) ||
-            payload_dirty_.load(
-                std::memory_order_acquire) ||
-            (parameter_manager &&
-             parameter_manager->isDirty()) ||
-            dirty_chapters.hard || dirty_chapters.soft;
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
+        const bool plausibly_dirty = (shaders && shaders->dirty()) ||
+                                     scene_dirty_.load(
+                                         std::memory_order_acquire) ||
+                                     payload_dirty_.load(
+                                         std::memory_order_acquire) ||
+                                     (parameter_manager &&
+                                      parameter_manager->isDirty()) ||
+                                     dirty_chapters.hard || dirty_chapters.soft;
         if (!plausibly_dirty) {
             return;
         }
@@ -6183,7 +6229,7 @@ namespace lfs::vis::project {
         if (!(timer_due || epoch_due)) {
             return;
         }
-        if (last_autosaved_parameter_serial_ &&
+        if (shader_token == last_autosaved_shader_token_ && last_autosaved_parameter_serial_ &&
             document_->dirty_epoch() ==
                 last_autosaved_dirty_epoch_ &&
             scene_serial ==
@@ -6657,21 +6703,11 @@ namespace lfs::vis::project {
         if (!captured_state)
             return lfs::Status::failure(std::move(captured_state).error());
         auto collisions = std::move(captured_state->collisions);
-        auto captured_scene = lfs::io::project::materialize_scene_graph_chapter(std::move(*captured_state));
-        if (!captured_scene) {
-            return lfs::Status::failure(
-                std::move(captured_scene).error());
-        }
         std::unordered_set<lfs::core::Uuid>
             captured_scene_uuids;
-        if (const auto captured_nodes =
-                captured_scene->nodes();
-            captured_nodes) {
-            captured_scene_uuids.reserve(
-                captured_nodes->size());
-            for (const auto& node : *captured_nodes) {
-                captured_scene_uuids.insert(node.uuid);
-            }
+        captured_scene_uuids.reserve(captured_state->nodes.size());
+        for (const auto& node : captured_state->nodes) {
+            captured_scene_uuids.insert(node.uuid);
         }
         const auto old_training_uuid =
             document_->scene_graph().training_model_uuid();
@@ -6679,18 +6715,22 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(old_training_uuid).error());
         }
-        const bool drops_training_binding =
-            training_uuid.is_nil() && old_training_uuid->has_value();
-        const auto old_scene_bytes =
-            document_->scene_graph().to_bytes();
-        const auto new_scene_bytes =
-            captured_scene->to_bytes();
-        scene_capture_finished = std::chrono::steady_clock::now();
-        if (drops_training_binding ||
-            !sameBytes(old_scene_bytes, new_scene_bytes)) {
+        // Records round-trip through SCNG exactly, so comparing them replaces
+        // serializing both chapters: an unchanged scene skips the rebuild and an
+        // edit rewrites only the changed nodes.
+        if (captured_state->training_model_uuid != *old_training_uuid) {
+            auto captured_scene = lfs::io::project::materialize_scene_graph_chapter(std::move(*captured_state));
+            if (!captured_scene) {
+                return lfs::Status::failure(
+                    std::move(captured_scene).error());
+            }
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
+        } else if (captured_state->nodes != *existing_nodes) {
+            if (auto updated = document_->edit_scene_graph().update_nodes(captured_state->nodes); !updated)
+                return updated;
         }
+        scene_capture_finished = std::chrono::steady_clock::now();
         if (auto synced = lfs::io::project::sync_sfm_observations(
                 *document_, lfs::io::project::capture_sfm_observation_cameras(scene));
             !synced) {
@@ -7264,6 +7304,9 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(session).error());
             }
+            captured_shader_token_ = session->shader_token;
+            if (!sameBytes(document_->shaders().to_bytes(), session->shaders.to_bytes()))
+                document_->edit_shaders() = std::move(session->shaders);
             if (!sameBytes(
                     document_->gui_layout().to_bytes(),
                     session->gui_layout.to_bytes())) {
@@ -7697,6 +7740,7 @@ namespace lfs::vis::project {
             }
             context->allow_existing_destination_replacement =
                 allow_existing_destination_replacement;
+            captured_shader_token_ = context->shader_token;
             context->save_as_project_uuid =
                 save_as_project_uuid;
             auto preview = explicitSavePreviewPng(regenerate_preview);
@@ -8129,6 +8173,7 @@ namespace lfs::vis::project {
                     .sequencer =
                         candidate->sequencer(),
                     .metrics = candidate->metrics(),
+                    .shaders = candidate->shaders(),
                 },
                 &candidate->references(),
                 project_root);
@@ -8173,22 +8218,110 @@ namespace lfs::vis::project {
                 "The visualizer has not initialized its scene manager",
                 "project.open");
         }
-        auto shell =
-            candidate->stage_shell(
-                manager->getScene());
-        if (!shell) {
-            return lfs::Status::failure(
-                std::move(shell).error());
-        }
-        const auto shell_staged_at =
-            std::chrono::steady_clock::now();
+        const bool preload_collisions = candidate->has_deferred_collision_payloads();
+        auto worker_candidate = candidate;
+        std::move_only_function<lfs::Result<void>()> install =
+            [this, candidate = std::move(candidate), session = std::move(*session),
+             parameters = std::move(*parameters), discard_master = std::move(discard_master),
+             disposition, after_open = std::move(after_open), started, normalized_at,
+             document_opened_at, session_prepared_at, parameters_ready_at]() mutable -> lfs::Result<void> {
+            auto* manager = viewer_.getSceneManager();
+            if (!manager)
+                return fail<void>(lfs::ErrorCode::Unavailable, "The scene manager is unavailable.",
+                                  "Cannot install prepared project", "project.open");
+            auto shell = candidate->stage_shell(manager->getScene());
+            if (!shell)
+                return lfs::Status::failure(std::move(shell).error());
+            const auto shell_staged_at = std::chrono::steady_clock::now();
+            std::move_only_function<lfs::Result<void>()> commit =
+                [this, prepared = PreparedOpen{
+                           std::move(candidate), std::move(*shell), std::move(session),
+                           std::move(parameters), std::move(discard_master), disposition, std::move(after_open),
+                           std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
+            return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        };
+        if (!preload_collisions)
+            return install();
 
-        std::move_only_function<lfs::Result<void>()> commit =
-            [this, prepared = PreparedOpen{
-                       std::move(candidate), std::move(*shell), std::move(*session),
-                       std::move(*parameters), std::move(discard_master), disposition, std::move(after_open),
-                       std::array{started, normalized_at, document_opened_at, session_prepared_at, parameters_ready_at, shell_staged_at}}]() mutable { return commitOpen(std::move(prepared)); };
-        return deferCollisionSwitch(std::move(commit)) ? lfs::Result<void>{} : commit();
+        auto pending = std::make_unique<PendingCollisionOpen>();
+        auto job = viewer_.jobs().init(JobType::ProjectOpen, "Reading collision volumes...");
+        if (!job)
+            return fail<void>(lfs::ErrorCode::Unavailable, "Project opening could not be started.",
+                              "The project-open job registry has no available slot", "project.open.job");
+        pending->install = std::move(install);
+        pending->job = *job;
+        pending->epoch = epoch_.load(std::memory_order_acquire);
+        pending->scene_serial = scene_mutation_serial_.load(std::memory_order_acquire);
+        pending->parameter_serial = parameter_manager->dirtySerial();
+        if (const auto* shaders = viewer_.getShaderService())
+            pending->shader_token = shaders->projectToken();
+        auto* state = pending.get();
+        try {
+            pending->worker = std::jthread([this, state, candidate = std::move(worker_candidate)](std::stop_token stop) {
+                viewer_.jobs().work(state->job);
+                try {
+                    state->result = candidate->preload_collision_payloads([&] {
+                        return stop.stop_requested() || viewer_.jobs().cancelRequested(state->job);
+                    });
+                } catch (const std::bad_alloc& error) {
+                    state->result = fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening failed.", error.what(), "COLV");
+                } catch (const std::exception& error) {
+                    LOG_ERROR("Collision payload preparation failed: {}", error.what());
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", error.what(), "COLV");
+                } catch (...) {
+                    LOG_ERROR("Collision payload preparation failed with an unknown exception");
+                    state->result = fail<void>(lfs::ErrorCode::Internal, "Project opening failed.", "Unknown collision reader exception", "COLV");
+                }
+                state->done.store(true, std::memory_order_release);
+                viewer_.wakeMainLoop();
+            });
+        } catch (const std::exception& error) {
+            LOG_ERROR("Collision payload worker could not start: {}", error.what());
+            viewer_.jobs().failed(*job, error.what());
+            viewer_.jobs().free(*job);
+            return fail<void>(lfs::ErrorCode::ResourceExhausted, "Project opening could not be started.", error.what(), "COLV");
+        }
+        pending_collision_open_ = std::move(pending);
+        cached_project_info_.reset();
+        return {};
+    }
+
+    void ProjectLifecycle::settleCollisionOpen() {
+        if (!pending_collision_open_ || !pending_collision_open_->done.load(std::memory_order_acquire))
+            return;
+        auto pending = std::move(pending_collision_open_);
+        pending->worker.join();
+        cached_project_info_.reset();
+        if (viewer_.jobs().cancelRequested(pending->job)) {
+            viewer_.jobs().canceled(pending->job);
+            viewer_.jobs().free(pending->job);
+            if (application_close_pending_)
+                viewer_.requestApplicationClose();
+            return;
+        }
+        auto* parameters = viewer_.getParameterManager();
+        const auto* shaders = viewer_.getShaderService();
+        const auto shader_token = shaders ? shaders->projectToken() : std::array<std::uint64_t, 2>{};
+        if (pending->result &&
+            (pending->epoch != epoch_.load(std::memory_order_acquire) ||
+             pending->scene_serial != scene_mutation_serial_.load(std::memory_order_acquire) ||
+             !parameters || pending->parameter_serial != parameters->dirtySerial() ||
+             pending->shader_token != shader_token)) {
+            pending->result = fail<void>(lfs::ErrorCode::FailedPrecondition,
+                                         "The current project changed while opening. Open the project again.",
+                                         "Prepared collision open is stale; preserving the current scene", "project.open");
+        }
+        if (!pending->result) {
+            viewer_.jobs().failed(pending->job, developerError(pending->result.error()));
+            viewer_.jobs().free(pending->job);
+            publishProjectToast(std::move(pending->result).error(), gui::error_op::kOpenProject);
+            return;
+        }
+        viewer_.jobs().completed(pending->job);
+        viewer_.jobs().free(pending->job);
+        if (auto installed = pending->install(); !installed) {
+            publishProjectToast(std::move(installed).error(), gui::error_op::kOpenProject);
+        }
     }
 
     lfs::Result<void> ProjectLifecycle::commitOpen(PreparedOpen&& prepared) {
@@ -9419,6 +9552,8 @@ namespace lfs::vis::project {
     }
 
     std::optional<bool> ProjectLifecycle::dirtyProjectPreflight() const {
+        if (const auto* shaders = viewer_.getShaderService(); shaders && shaders->dirty())
+            return true;
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -9527,6 +9662,13 @@ namespace lfs::vis::project {
     ProjectLifecycle::beginOrPollCloseSave() {
         settleProjectWrite();
         markApplicationClosePending();
+        // Keep pumping the window while the reader finishes its current chunk.
+        // Joining it in the destructor would make a normal Close look hung.
+        if (pending_collision_open_) {
+            settleCollisionOpen();
+            if (pending_collision_open_)
+                return CloseSaveStatus::Saving;
+        }
         switch (close_save_state_.load(
             std::memory_order_acquire)) {
         case CloseSaveState::Saving:
@@ -9737,6 +9879,10 @@ namespace lfs::vis::project {
     }
 
     void ProjectLifecycle::markApplicationClosePending() {
+        if (pending_collision_open_) {
+            pending_collision_open_->worker.request_stop();
+            viewer_.jobs().requestCancel(pending_collision_open_->job);
+        }
         if (auto* gui = viewer_.getGuiManager())
             gui->asyncTasks().dropSceneReplacement();
         application_close_pending_ = true;
@@ -10036,9 +10182,7 @@ namespace lfs::vis::project {
             .session_dirty = session_dirty,
             .dirty_chapters = dirty_chapters,
             .hydration_state =
-                hydrationName(
-                    hydration_.load(
-                        std::memory_order_acquire)),
+                pending_collision_open_ ? "preparing" : hydrationName(hydration_.load(std::memory_order_acquire)),
             .payloads = {},
             .contains_embedded_secrets =
                 containsEmbeddedSecrets(),
@@ -11059,6 +11203,11 @@ namespace lfs::vis::project {
 
     bool ProjectLifecycle::isBlankUntitledSession()
         const {
+        if (const auto* service = viewer_.getShaderService(); service && (service->dirty() || !service->assets().empty()))
+            return false;
+        if (const auto* console = gui::panels::PythonConsoleState::tryGetInstance(); console && console->getEditor())
+            if (std::ranges::any_of(console->getEditor()->documents(), [](const auto& doc) { return doc.kind == editor::DocumentKind::Shader; }))
+                return false;
         if (!document_ || document_->source_path()) {
             return false;
         }

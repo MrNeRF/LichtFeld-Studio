@@ -439,12 +439,8 @@ namespace lfs::io {
         MaskDirCache() = default;
 
         static std::vector<std::filesystem::path> build_lookup_keys(const std::string& image_name) {
-            const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
-            const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
-
             std::vector<std::filesystem::path> keys;
             std::unordered_set<std::string> seen_keys;
-            keys.reserve(1 + 2 * MASK_SEARCH_EXTENSIONS.size());
 
             auto append_key = [&](const std::filesystem::path& key) {
                 const std::string normalized_key = detail::normalize_lookup_key(key);
@@ -453,18 +449,34 @@ namespace lfs::io {
                 }
             };
 
-            append_key(img_path);
+            auto append_variants = [&](const std::filesystem::path& img_path) {
+                const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
+                append_key(img_path);
 
-            for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
-                std::filesystem::path target = stem_path;
-                target += ext;
-                append_key(target);
-            }
+                for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
+                    std::filesystem::path target = stem_path;
+                    target += ext;
+                    append_key(target);
+                }
 
-            for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
-                std::filesystem::path target = img_path;
-                target += ext;
-                append_key(target);
+                for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
+                    std::filesystem::path target = img_path;
+                    target += ext;
+                    append_key(target);
+                }
+            };
+
+            // Masks may mirror only the subfolders below the image root, as masks/green/a.png for photos/green/a.jpg:
+            // after the full path, it loses one leading folder at a time while a folder is left to tell cameras with
+            // equal file names apart.
+            for (auto img_path = lfs::core::utf8_to_path(image_name);;) {
+                append_variants(img_path);
+                if (std::distance(img_path.begin(), img_path.end()) <= 2)
+                    break;
+                std::filesystem::path below;
+                for (auto part = std::next(img_path.begin()); part != img_path.end(); ++part)
+                    below /= *part;
+                img_path = below;
             }
 
             return keys;

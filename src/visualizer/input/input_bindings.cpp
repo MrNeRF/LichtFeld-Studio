@@ -78,7 +78,7 @@ namespace lfs::vis::input {
             publishKeymapNotice(lfs::ErrorCode::InvalidArgument, std::move(message));
         }
 
-        constexpr int PROFILE_VERSION = 39; // Add VR snap turn, recenter and exit actions.
+        constexpr int PROFILE_VERSION = 40; // Editor document commands.
 
         [[nodiscard]] std::optional<Binding> parseStoredBinding(const nlohmann::json& value);
         [[nodiscard]] std::string triggerIdentity(const Binding& binding);
@@ -139,7 +139,7 @@ namespace lfs::vis::input {
 
         static_assert(kLatestHistoricalProfileVersion == PROFILE_VERSION - 1,
                       "Snapshot the previous keymap defaults before bumping PROFILE_VERSION");
-        constexpr Action LAST_ACTION = Action::EXIT_VR;
+        constexpr Action LAST_ACTION = Action::EDITOR_STOP;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -343,7 +343,7 @@ namespace lfs::vis::input {
         }
 
         [[nodiscard]] bool isKnownToolMode(const int value) noexcept {
-            return std::ranges::any_of(kAllToolModes, [value](const ToolMode mode) {
+            return std::ranges::any_of(kAllKeymapScopes, [value](const ToolMode mode) {
                 return static_cast<int>(mode) == value;
             });
         }
@@ -2139,6 +2139,10 @@ namespace lfs::vis::input {
                                     KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_ALT},
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_F5}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_KP_ENTER, MODIFIER_CTRL}, Action::EDITOR_RUN, "Run Document"});
+        profile.bindings.push_back({ToolMode::EDITOR, KeyTrigger{KEY_C, MODIFIER_CTRL}, Action::EDITOR_STOP, "Stop Document"});
         profile.bindings.push_back({ToolMode::WALK, KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::EXIT_WALK, "Exit Walk"});
         profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_LEFT, MODIFIER_NONE}, Action::VR_SNAP_TURN_LEFT, "Snap Turn Left"});
         profile.bindings.push_back({ToolMode::VR, KeyTrigger{KEY_RIGHT, MODIFIER_NONE}, Action::VR_SNAP_TURN_RIGHT, "Snap Turn Right"});
@@ -2268,6 +2272,9 @@ namespace lfs::vis::input {
         case Action::TOOL_MIRROR: return "Mirror Tool";
         case Action::TOOL_ALIGN: return "Align Tool";
         case Action::TOOL_SCALE_DISTANCE: return "Scale Distance Tool";
+        case Action::EDITOR_TOGGLE_KIND: return "Toggle Document Kind";
+        case Action::EDITOR_RUN: return "Run Document";
+        case Action::EDITOR_STOP: return "Stop Document";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::NEXT_SIDEBAR_CATEGORY: return "Next Sidebar Category";
@@ -2376,6 +2383,9 @@ namespace lfs::vis::input {
         case Action::TOOL_MIRROR: return "tool_mirror";
         case Action::TOOL_ALIGN: return "tool_align";
         case Action::TOOL_SCALE_DISTANCE: return "tool_scale_distance";
+        case Action::EDITOR_TOGGLE_KIND: return "editor_toggle_kind";
+        case Action::EDITOR_RUN: return "editor_run";
+        case Action::EDITOR_STOP: return "editor_stop";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::NEXT_SIDEBAR_CATEGORY: return "next_sidebar_category";
@@ -2433,6 +2443,7 @@ namespace lfs::vis::input {
             {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
             {ToolMode::WALK, "walk", "Walk"},
             {ToolMode::VR, "vr", "VR"},
+            {ToolMode::EDITOR, "editor", "Editor"},
         };
     } // namespace
 
@@ -3187,6 +3198,9 @@ namespace lfs::vis::input {
         case Action::ASSET_REFRESH:
         case Action::TOGGLE_PYTHON_CONSOLE:
         case Action::UNGROUP_SELECTED_SCENE_NODE:
+        case Action::EDITOR_TOGGLE_KIND:
+        case Action::EDITOR_RUN:
+        case Action::EDITOR_STOP:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;

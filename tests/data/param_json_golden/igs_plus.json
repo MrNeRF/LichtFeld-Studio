@@ -55,6 +55,7 @@
   "init_scaling": 0.10000000149011612,
   "invert_masks": false,
   "iterations": 30000,
+  "keep_all_checkpoints": false,
   "lambda_dssim": 0.20000000298023224,
   "late_lr_anneal": 1.0,
   "mask_mode": "none",

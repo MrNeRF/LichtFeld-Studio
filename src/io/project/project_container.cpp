@@ -2761,7 +2761,7 @@ namespace lfs::io::project {
                                CLEAN_PROOF_REUSE,
                                CHUNK_BYTESHUFFLE_ZSTD_V1,
                                ENCODED_SCENE_ASSETS,
-                               COLLISION_VOLUMES_V1}) {
+                               COLLISION_VOLUMES_V1, USER_SHADERS_V1}) {
             result.set(bit);
         }
         return result;

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "user_shader_test_access.hpp"
+
 #include "app/include/app/mcp_sequencer_tools.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -29,8 +31,11 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 14> kSequencerToolNames = {
+    constexpr std::array<const char*, 17> kSequencerToolNames = {
         "sequencer.get",
+        "sequencer.reveal_get",
+        "sequencer.reveal_set",
+        "sequencer.reveal_remove",
         "sequencer.add_keyframe",
         "sequencer.update_keyframe",
         "sequencer.select_keyframe",
@@ -363,6 +368,37 @@ TEST_F(McpSequencerToolsTest, RegisteredSchemasAreIdOnly) {
     EXPECT_EQ(result["error"]["code"], "InvalidArgument");
     EXPECT_EQ(result["error"]["details"]["parameter"], "keyframe_id");
     EXPECT_EQ(result["error_message"], "Missing required parameter: keyframe_id");
+}
+
+TEST_F(McpSequencerToolsTest, CustomRevealWireValidationAndSharedBinding) {
+    namespace shaders = lfs::vis::shaders;
+    lfs::core::Scene scene;
+    shaders::ShaderService service(scene, {}, [] {});
+    backend_.controller.setShaderService(&service);
+    const auto asset = lfs::vis::ShaderCommands{service}.createAsset("Reveal", "draft");
+    ASSERT_TRUE(asset);
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    const auto read = lfs::mcp::tool_to_json(find_tool("sequencer.reveal_get"));
+    EXPECT_TRUE(read["annotations"]["readOnlyHint"].get<bool>());
+    EXPECT_EQ(read["_meta"]["app.lichtfeld/category"], "sequencer");
+    const auto write = lfs::mcp::tool_to_json(find_tool("sequencer.reveal_set"));
+    EXPECT_FALSE(write["annotations"]["readOnlyHint"].get<bool>());
+    const json clip{{"start", 1}, {"end", 4}, {"softness", .25}, {"effect", 12}, {"shader_id", asset->to_string()}};
+    ASSERT_FALSE(registry.call_tool("sequencer.reveal_set", clip).contains("error"));
+    EXPECT_EQ(registry.call_tool("sequencer.reveal_get", {})["reveal"], clip);
+    for (const auto& patch : std::vector<json>{{{"shader_id", json::array()}},
+                                               {{"shader_id", "bad"}},
+                                               {{"effect", 2}},
+                                               {{"extra", 1}},
+                                               {{"softness", -1}}}) {
+        auto invalid = clip;
+        invalid.update(patch);
+        EXPECT_TRUE(registry.call_tool("sequencer.reveal_set", invalid).contains("error"));
+        EXPECT_EQ(registry.call_tool("sequencer.reveal_get", {})["reveal"], clip);
+    }
+    EXPECT_EQ(service.boundAsset({shaders::ShaderSlot::Kind::Reveal, {}}), *asset);
+    ASSERT_FALSE(registry.call_tool("sequencer.reveal_remove", {}).contains("error"));
+    EXPECT_FALSE(service.boundAsset({shaders::ShaderSlot::Kind::Reveal, {}}));
 }
 
 TEST_F(McpSequencerToolsTest, PlaybackSpeedRejectsValuesOutsideControllerRange) {

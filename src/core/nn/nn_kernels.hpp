@@ -8,6 +8,18 @@
 #include <cuda_runtime.h>
 
 namespace lfs::core::nn::kernels {
+    void resample_pil_axis(const float* input, float* output, const int* bounds, const int* coefficients,
+                           int taps, int planes, int in_h, int in_w, int out_h, int out_w,
+                           bool horizontal, cudaStream_t stream);
+    void round_bfloat16(const float* input, float* output, size_t count, cudaStream_t stream);
+    void dilate_binary_disk(const float* input, float* horizontal_distance, float* output,
+                            int planes, int height, int width, int radius, cudaStream_t stream);
+    void fill_small_background(const float* input, float* output, int planes, int height, int width, float fill,
+                               cudaStream_t stream);
+    void remove_small_foreground(const float* input, float* output, int planes, int height, int width, float fill,
+                                 cudaStream_t stream);
+    void rotary_embedding_2d(const void* input, void* output, int sequences, int tokens, int dim,
+                             int height, int width, int excluded_tokens, DataType dtype, cudaStream_t stream);
 
     // Activation integers match lfs::core::nn::Activation.
     // Coord/resize integers match CoordTransform / ResizeMode.
@@ -85,10 +97,19 @@ namespace lfs::core::nn::kernels {
                 int dil_h, int dil_w, int c_start, int c_count, int pad_mode, DataType dtype,
                 cudaStream_t stream);
 
+    // fp32 convolution with one input and one output channel per group; weight [C, 1, k_h, k_w], NCHW in and out.
+    void depthwise_conv2d(const float* input, const float* weight, const float* bias, float* output, int n, int c,
+                          int h, int w, int k_h, int k_w, int out_h, int out_w, int stride_h, int stride_w, int pad_h,
+                          int pad_w, int dil_h, int dil_w, int pad_mode, cudaStream_t stream);
+
     void col2im(const void* col, void* output, int n, int c, int h, int w, int k_h, int k_w,
                 int in_h, int in_w, int stride_h, int stride_w, int pad_h, int pad_w,
                 int dil_h, int dil_w, int c_start, int c_count, DataType dtype,
                 cudaStream_t stream);
+
+    void resize_bilinear_antialiased_axis(const void* input, void* output, int planes,
+                                          int in_h, int in_w, int out_h, int out_w,
+                                          bool horizontal, DataType dtype, cudaStream_t stream);
 
     void resize2d(const void* input, void* output, int n, int c, int in_h, int in_w,
                   int out_h, int out_w, int mode, int coord, DataType dtype,

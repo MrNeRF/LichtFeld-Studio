@@ -40,6 +40,7 @@ namespace {
     // FastGS sort storage is one exact phase allocation. One values buffer is
     // copied into the retained prefix before phase B; the keys and the other
     // values buffer are dead after forward rasterization.
+    template <typename Key>
     struct FastGSSortWorkspace {
         char* base = nullptr;
         size_t total_bytes = 0;
@@ -49,19 +50,19 @@ namespace {
 
         [[nodiscard]] size_t per_key_buffer_bytes() const noexcept {
             return static_cast<size_t>(n_instances) *
-                   sizeof(raster::InstanceKey);
+                   sizeof(Key);
         }
 
         [[nodiscard]] size_t per_index_buffer_bytes() const noexcept {
             return static_cast<size_t>(n_instances) * sizeof(uint);
         }
 
-        [[nodiscard]] raster::InstanceKey* keys_current() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(base);
+        [[nodiscard]] Key* keys_current() const noexcept {
+            return reinterpret_cast<Key*>(base);
         }
 
-        [[nodiscard]] raster::InstanceKey* keys_alternate() const noexcept {
-            return reinterpret_cast<raster::InstanceKey*>(
+        [[nodiscard]] Key* keys_alternate() const noexcept {
+            return reinterpret_cast<Key*>(
                 base + per_key_buffer_bytes());
         }
 
@@ -103,10 +104,28 @@ namespace {
     };
 
     // test hooks (host-side; passed as kernel args each launch).
+    std::atomic<int> g_sort_mode{2};
+    std::atomic<bool> g_touched_gating{true};
     std::atomic<int> g_warp_cull_mode{0};            // 0=on, 1=off, 2=wrong empty
     std::atomic<int> g_blend_batch_size_override{0}; // 0 = use config::blend_batch_size
 
 } // namespace
+
+void fast_lfs::rasterization::set_touched_gating_for_testing(const bool enabled) noexcept {
+    g_touched_gating.store(enabled, std::memory_order_relaxed);
+}
+
+bool fast_lfs::rasterization::touched_gating_for_testing() noexcept {
+    return g_touched_gating.load(std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::set_sort_mode_for_testing(const int mode) noexcept {
+    g_sort_mode.store(mode >= 0 && mode <= 2 ? mode : 2, std::memory_order_relaxed);
+}
+
+int fast_lfs::rasterization::sort_mode_for_testing() noexcept {
+    return g_sort_mode.load(std::memory_order_relaxed);
+}
 
 void fast_lfs::rasterization::release_sorted_primitive_indices(
     void* ptr,
@@ -239,9 +258,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                                  float* depths,
                                  std::uint64_t* n_touched_tiles,
                                  ushort4* screen_bounds,
-                                 PackedMeanBBox* mean2d,
-                                 float4* conic_opacity,
-                                 float4* color,
+                                 ProjectedRecord* projected,
                                  float3* normals,
                                  const uint n_work_items,
                                  float* screen_share) {
@@ -263,9 +280,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             depths,
             n_touched_tiles,
             screen_bounds,
-            mean2d,
-            conic_opacity,
-            color,
+            projected,
             normals,
             n_work_items,
             n_primitives,
@@ -299,7 +314,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
 
     launch_preprocess(nullptr,
                       visibility_buffers.visibility_mask,
-                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
                       static_cast<uint>(n_primitives), max_screen_share);
     LFS_FASTGS_PHASE_CHECK("fastgs.forward.preprocess.visibility");
 
@@ -382,9 +397,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                           per_primitive_buffers.depths,
                           per_primitive_buffers.n_touched_tiles,
                           per_primitive_buffers.screen_bounds,
-                          per_primitive_buffers.mean2d,
-                          per_primitive_buffers.conic_opacity,
-                          per_primitive_buffers.color,
+                          per_primitive_buffers.projected,
                           primitive_normals,
                           static_cast<uint>(n_visible), nullptr);
         check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
@@ -421,7 +434,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     int n_instances = 0;
     uint* sorted_primitive_indices = nullptr;
     size_t per_instance_sort_total_size = 0;
-    FastGSSortWorkspace sort_workspace;
+    size_t visible_sort_scratch_size = 0;
+    unsigned tile_sort_key_bytes = 0;
 
     if (n_visible > 0) {
         check_cuda_with_fastgs_status(
@@ -445,124 +459,207 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             h_n_instances, static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
         if (n_instances > 0) {
-            cub::DoubleBuffer<InstanceKey> query_keys(
-                static_cast<InstanceKey*>(nullptr),
-                static_cast<InstanceKey*>(nullptr));
-            cub::DoubleBuffer<uint> query_indices(
-                static_cast<uint*>(nullptr),
-                static_cast<uint*>(nullptr));
-            size_t cub_bytes = 0;
-            check_cuda_with_fastgs_status(
-                cub::DeviceRadixSort::SortPairs(
-                    nullptr,
-                    cub_bytes,
-                    query_keys,
-                    query_indices,
-                    n_instances,
-                    0,
-                    key_end_bit,
-                    stream),
-                "cub::DeviceRadixSort::SortPairs workspace query",
-                forward_status,
-                "radix sort workspace query",
-                static_cast<uint64_t>(n_primitives),
-                n_tiles_u64);
-            LFS_ASSERT_MSG(
-                cub_bytes > 0,
-                "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
+            auto sort_instances = [&]<typename Key, bool DepthOrdered>(const uint* ordered_indices, const int sort_end_bit) {
+                FastGSSortWorkspace<Key> sort_workspace;
+                cub::DoubleBuffer<Key> query_keys(
+                    static_cast<Key*>(nullptr),
+                    static_cast<Key*>(nullptr));
+                cub::DoubleBuffer<uint> query_indices(
+                    static_cast<uint*>(nullptr),
+                    static_cast<uint*>(nullptr));
+                size_t cub_bytes = 0;
+                check_cuda_with_fastgs_status(
+                    cub::DeviceRadixSort::SortPairs(
+                        nullptr,
+                        cub_bytes,
+                        query_keys,
+                        query_indices,
+                        n_instances,
+                        0,
+                        sort_end_bit,
+                        stream),
+                    "cub::DeviceRadixSort::SortPairs workspace query",
+                    forward_status,
+                    "radix sort workspace query",
+                    static_cast<uint64_t>(n_primitives),
+                    n_tiles_u64);
+                LFS_ASSERT_MSG(
+                    cub_bytes > 0,
+                    "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
 
-            constexpr size_t bytes_per_instance =
-                2 * sizeof(InstanceKey) + 2 * sizeof(uint);
-            const size_t n = static_cast<size_t>(n_instances);
-            if (n > std::numeric_limits<size_t>::max() / bytes_per_instance) {
-                throw std::overflow_error("FastGS exact sort workspace size overflow");
+                constexpr size_t bytes_per_instance =
+                    2 * sizeof(Key) + 2 * sizeof(uint);
+                const size_t n = static_cast<size_t>(n_instances);
+                if (n > std::numeric_limits<size_t>::max() / bytes_per_instance) {
+                    throw std::overflow_error("FastGS exact sort workspace size overflow");
+                }
+                const size_t data_bytes = n * bytes_per_instance;
+                const size_t cub_offset_bytes = aligned_cub_workspace_offset(data_bytes);
+                if (cub_bytes > std::numeric_limits<size_t>::max() - cub_offset_bytes) {
+                    throw std::overflow_error("FastGS exact sort workspace size overflow");
+                }
+                const size_t total_bytes = cub_offset_bytes + cub_bytes;
+                char* const sort_blob = phase_buffers_func(total_bytes);
+                if (!sort_blob) {
+                    throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS sort buffers from arena");
+                }
+                sort_workspace.bind_layout(
+                    sort_blob, n_instances, cub_bytes, cub_offset_bytes, total_bytes);
+                per_instance_sort_total_size = total_bytes;
+                tile_sort_key_bytes = sizeof(Key);
+
+                cub::DoubleBuffer<Key> keys(
+                    sort_workspace.keys_current(),
+                    sort_workspace.keys_alternate());
+                cub::DoubleBuffer<uint> primitive_indices(
+                    sort_workspace.primitive_indices_current(),
+                    sort_workspace.primitive_indices_alternate());
+
+                kernels::forward::create_instances_cu<Key, DepthOrdered><<<div_round_up(n_visible, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
+                    per_primitive_buffers.n_touched_tiles,
+                    per_primitive_buffers.offset,
+                    per_primitive_buffers.depth_keys,
+                    per_primitive_buffers.screen_bounds,
+                    per_primitive_buffers.projected,
+                    ordered_indices,
+                    visibility_buffers.primitive_work_indices,
+                    keys.Current(),
+                    primitive_indices.Current(),
+                    forward_status,
+                    grid.x,
+                    static_cast<uint>(n_visible),
+                    static_cast<uint>(n_instances));
+                LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
+                check_cuda_with_fastgs_status(cudaGetLastError(), "create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+                sync_fastgs_phase_if_requested("create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+                check_cuda_with_fastgs_status(
+                    cub::DeviceRadixSort::SortPairs(
+                        sort_workspace.cub_workspace(),
+                        sort_workspace.cub_workspace_bytes,
+                        keys,
+                        primitive_indices,
+                        n_instances, 0, sort_end_bit,
+                        stream),
+                    "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
+                    forward_status,
+                    "radix sort",
+                    static_cast<uint64_t>(n_primitives),
+                    n_tiles_u64);
+                LFS_FASTGS_PHASE_CHECK("cub::DeviceRadixSort::SortPairs (Tile/Depth)");
+                sync_fastgs_phase_if_requested(
+                    "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
+                    forward_status,
+                    "radix sort",
+                    static_cast<uint64_t>(n_primitives),
+                    n_tiles_u64);
+
+                const uint* sorted_source = primitive_indices.Current();
+                if (sorted_source != sort_workspace.primitive_indices_current() &&
+                    sorted_source != sort_workspace.primitive_indices_alternate()) {
+                    throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
+                }
+
+                kernels::forward::extract_instance_ranges_cu<Key><<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
+                    keys.Current(),
+                    per_tile_buffers.instance_ranges,
+                    forward_status,
+                    n_tiles_u32,
+                    static_cast<uint>(n_instances),
+                    /*d_n_instances=*/nullptr);
+                LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
+                check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+                sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+                // Retain one compact sorted values copy at the phase base.  The
+                // sort keys and ping-pong scratch can then be overwritten by the
+                // backward helpers, while backward still sees stable ordering.
+                sorted_primitive_indices = reinterpret_cast<uint*>(
+                    retain_phase_prefix_func(sorted_source,
+                                             static_cast<size_t>(n_instances) * sizeof(uint)));
+            };
+            const int sort_mode = sort_mode_for_testing();
+            // Keep small and low-duplication frames on the packed-key path.
+            // The forced mode supports small and boundary cases in correctness tests.
+            const bool depth_ordered = sort_mode == 1 ||
+                                       (sort_mode == 2 && n_instances >= 65536 &&
+                                        static_cast<uint64_t>(n_instances) >= 4ull * static_cast<uint64_t>(n_visible));
+            if (depth_ordered) {
+                size_t depth_cub_bytes = 0;
+                LFS_CUDA_CHECK_MSG(cub::DeviceRadixSort::SortPairs(
+                                       nullptr, depth_cub_bytes,
+                                       static_cast<const uint*>(nullptr), static_cast<uint*>(nullptr),
+                                       static_cast<const uint*>(nullptr), static_cast<uint*>(nullptr),
+                                       n_visible, 0, 32, stream),
+                                   "FastGS visible-depth sort query");
+                const size_t key_bytes = static_cast<size_t>(n_visible) * sizeof(uint);
+                auto allocate = [&](size_t bytes) {
+                    const size_t aligned_bytes = aligned_cub_workspace_offset(bytes);
+                    if (aligned_bytes > std::numeric_limits<size_t>::max() - visible_sort_scratch_size)
+                        throw std::overflow_error("FastGS visible sort storage overflow");
+                    char* memory = phase_buffers_func(bytes);
+                    if (!memory)
+                        throw std::runtime_error("OUT_OF_MEMORY: FastGS visible-depth sort storage");
+                    visible_sort_scratch_size += aligned_bytes;
+                    return memory;
+                };
+                auto* sorted_depth = reinterpret_cast<uint*>(allocate(key_bytes));
+                auto* depth_order = reinterpret_cast<uint*>(allocate(key_bytes));
+                auto* ordered_counts = reinterpret_cast<std::uint64_t*>(allocate(static_cast<size_t>(n_visible) * sizeof(std::uint64_t)));
+                auto* depth_scratch = allocate(depth_cub_bytes);
+                LFS_CUDA_CHECK_MSG(cub::DeviceRadixSort::SortPairs(
+                                       depth_scratch, depth_cub_bytes, per_primitive_buffers.depth_keys, sorted_depth,
+                                       visibility_buffers.visible_indices, depth_order, n_visible, 0, 32, stream),
+                                   "FastGS stable visible-depth sort");
+                kernels::forward::gather_depth_ordered_counts_cu<<<div_round_up(static_cast<uint>(n_visible), 256u), 256, 0, stream>>>(
+                    depth_order, visibility_buffers.primitive_work_indices, per_primitive_buffers.n_touched_tiles,
+                    ordered_counts, static_cast<uint>(n_visible));
+                LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.depth_ordered_counts");
+                LFS_CUDA_CHECK_MSG(cub::DeviceScan::InclusiveSum(
+                                       per_primitive_buffers.cub_workspace, per_primitive_buffers.cub_workspace_size,
+                                       ordered_counts, per_primitive_buffers.offset, n_visible, stream),
+                                   "FastGS depth-ordered instance offsets");
+                const int tile_bits = std::max(1, key_end_bit - kInstanceDepthBits);
+                if (n_tiles_u32 <= 65536u)
+                    sort_instances.template operator()<std::uint16_t, true>(depth_order, tile_bits);
+                else
+                    sort_instances.template operator()<uint, true>(depth_order, tile_bits);
+            } else {
+                sort_instances.template operator()<InstanceKey, false>(visibility_buffers.visible_indices, key_end_bit);
             }
-            const size_t data_bytes = n * bytes_per_instance;
-            const size_t cub_offset_bytes = aligned_cub_workspace_offset(data_bytes);
-            if (cub_bytes > std::numeric_limits<size_t>::max() - cub_offset_bytes) {
-                throw std::overflow_error("FastGS exact sort workspace size overflow");
-            }
-            const size_t total_bytes = cub_offset_bytes + cub_bytes;
-            char* const sort_blob = phase_buffers_func(total_bytes);
-            if (!sort_blob) {
-                throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS sort buffers from arena");
-            }
-            sort_workspace.bind_layout(
-                sort_blob, n_instances, cub_bytes, cub_offset_bytes, total_bytes);
-            per_instance_sort_total_size = total_bytes;
-
-            cub::DoubleBuffer<InstanceKey> keys(
-                sort_workspace.keys_current(),
-                sort_workspace.keys_alternate());
-            cub::DoubleBuffer<uint> primitive_indices(
-                sort_workspace.primitive_indices_current(),
-                sort_workspace.primitive_indices_alternate());
-
-            kernels::forward::create_instances_cu<<<div_round_up(n_visible, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
-                per_primitive_buffers.n_touched_tiles,
-                per_primitive_buffers.offset,
-                per_primitive_buffers.depth_keys,
-                per_primitive_buffers.screen_bounds,
-                per_primitive_buffers.mean2d,
-                per_primitive_buffers.conic_opacity,
-                visibility_buffers.visible_indices,
-                keys.Current(),
-                primitive_indices.Current(),
-                forward_status,
-                grid.x,
-                static_cast<uint>(n_visible),
-                static_cast<uint>(n_instances));
-            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
-            check_cuda_with_fastgs_status(cudaGetLastError(), "create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
-            sync_fastgs_phase_if_requested("create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
-
-            check_cuda_with_fastgs_status(
-                cub::DeviceRadixSort::SortPairs(
-                    sort_workspace.cub_workspace(),
-                    sort_workspace.cub_workspace_bytes,
-                    keys,
-                    primitive_indices,
-                    n_instances, 0, key_end_bit,
-                    stream),
-                "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
-                forward_status,
-                "radix sort",
-                static_cast<uint64_t>(n_primitives),
-                n_tiles_u64);
-            LFS_FASTGS_PHASE_CHECK("cub::DeviceRadixSort::SortPairs (Tile/Depth)");
-            sync_fastgs_phase_if_requested(
-                "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
-                forward_status,
-                "radix sort",
-                static_cast<uint64_t>(n_primitives),
-                n_tiles_u64);
-
-            const uint* sorted_source = primitive_indices.Current();
-            if (sorted_source != sort_workspace.primitive_indices_current() &&
-                sorted_source != sort_workspace.primitive_indices_alternate()) {
-                throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
-            }
-
-            kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
-                keys.Current(),
-                per_tile_buffers.instance_ranges,
-                forward_status,
-                n_tiles_u32,
-                static_cast<uint>(n_instances),
-                /*d_n_instances=*/nullptr);
-            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
-            check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
-            sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
-
-            // Retain one compact sorted values copy at the phase base.  The
-            // sort keys and ping-pong scratch can then be overwritten by the
-            // backward helpers, while backward still sees stable ordering.
-            sorted_primitive_indices = reinterpret_cast<uint*>(
-                retain_phase_prefix_func(sorted_source,
-                                         static_cast<size_t>(n_instances) * sizeof(uint)));
         }
     }
 
+    unsigned char* contributor_masks = nullptr;
+    uint* contributor_positions = nullptr;
+    uint* primitive_touched = nullptr;
+    size_t contributor_storage_size = 0;
+    if (n_instances > 0) {
+        const size_t masks_bytes = aligned_cub_workspace_offset(static_cast<size_t>(n_instances));
+        const size_t positions_bytes = aligned_cub_workspace_offset(static_cast<size_t>(n_instances) * sizeof(uint));
+        if (masks_bytes > std::numeric_limits<size_t>::max() - positions_bytes)
+            throw std::overflow_error("FastGS contributor storage overflow");
+        const size_t touched_bytes = g_touched_gating.load(std::memory_order_relaxed)
+                                         ? aligned_cub_workspace_offset(static_cast<size_t>(n_visible) * sizeof(uint))
+                                         : 0;
+        contributor_storage_size = masks_bytes + positions_bytes;
+        if (touched_bytes > std::numeric_limits<size_t>::max() - contributor_storage_size)
+            throw std::overflow_error("FastGS touched storage overflow");
+        contributor_storage_size += touched_bytes;
+        char* memory = phase_buffers_func(contributor_storage_size);
+        if (!memory)
+            throw std::runtime_error("OUT_OF_MEMORY: FastGS contributor storage");
+        contributor_masks = reinterpret_cast<unsigned char*>(memory);
+        contributor_positions = reinterpret_cast<uint*>(memory + masks_bytes);
+        if (touched_bytes) {
+            primitive_touched = reinterpret_cast<uint*>(memory + masks_bytes + positions_bytes);
+            LFS_CUDA_CHECK_MSG(cudaMemsetAsync(primitive_touched, 0, touched_bytes, stream), "FastGS touched reset");
+        }
+        const size_t indices_bytes = aligned_cub_workspace_offset(static_cast<size_t>(n_instances) * sizeof(uint));
+        if (contributor_storage_size > std::numeric_limits<size_t>::max() - indices_bytes)
+            throw std::overflow_error("FastGS contributor prefix overflow");
+        retain_phase_prefix_func(sorted_primitive_indices, indices_bytes + contributor_storage_size);
+    }
     // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
@@ -570,10 +667,10 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
+            contributor_masks,
+            contributor_positions,
             visibility_buffers.primitive_work_indices,
-            per_primitive_buffers.mean2d,
-            per_primitive_buffers.conic_opacity,
-            per_primitive_buffers.color,
+            per_primitive_buffers.projected,
             per_primitive_buffers.depths,
             primitive_normals,
             image,
@@ -613,8 +710,14 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     result.primitive_work_indices = visibility_buffers.primitive_work_indices;
     result.primitive_normals = primitive_normals;
     result.sorted_primitive_indices = sorted_primitive_indices;
+    result.contributor_masks = contributor_masks;
+    result.contributor_positions = contributor_positions;
+    result.primitive_touched = primitive_touched;
+    result.contributor_storage_size = contributor_storage_size;
     result.sorted_primitive_indices_size = static_cast<size_t>(std::max(n_instances, 0)) * sizeof(uint);
     result.per_instance_sort_total_size = per_instance_sort_total_size;
+    result.visible_sort_scratch_size = visible_sort_scratch_size;
+    result.tile_sort_key_bytes = tile_sort_key_bytes;
     result.per_instance_sort_scratch_size = per_instance_sort_total_size > result.sorted_primitive_indices_size
                                                 ? per_instance_sort_total_size - result.sorted_primitive_indices_size
                                                 : 0;

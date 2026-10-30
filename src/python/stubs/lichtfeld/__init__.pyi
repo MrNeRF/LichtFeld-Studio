@@ -24,6 +24,7 @@ from . import (
     scene as scene,
     scripts as scripts,
     selection as selection,
+    shaders as shaders,
     ui as ui,
     undo as undo
 )
@@ -2726,6 +2727,15 @@ class OptimizationParams:
     def save_steps(self) -> list[int]:
         """List of iterations at which to save the project (project.licht)"""
 
+    @property
+    def keep_all_checkpoints(self) -> bool:
+        """
+        Keep every training checkpoint; otherwise replace the superseded checkpoint and preserve existing history
+        """
+
+    @keep_all_checkpoints.setter
+    def keep_all_checkpoints(self, arg: bool, /) -> None: ...
+
     def add_save_step(self, step: int) -> None:
         """Add a save step (ignored if duplicate)"""
 
@@ -3041,4 +3051,4 @@ def scale_scene_by_apriltags(constraints: Sequence[tuple[int, int, float]], fami
     Calibrate the complete scene from a background editor script. Explicit targets allow partial scaling; viewer-thread calls are rejected
     """
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'SplatSimplifyResult', 'SplatSimplifyMergeTree', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'simplify_splat_data_with_history', 'build_splat_lod_hierarchy', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'on_scene_time', 'clear_scene_time', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp', 'shaders')

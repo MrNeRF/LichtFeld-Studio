@@ -160,7 +160,8 @@ namespace lfs::vis {
             struct PipPreviewKey {
                 std::optional<sequencer::KeyframeId> selected_id;
                 uint64_t timeline_revision = 0;
-                float playhead = 0.0f;
+                float playhead = 0.0f; // the time shown, also a selected keyframe's
+                uint64_t custom_effect_generation = 0;
                 glm::vec3 position{0.0f};
                 glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
                 float focal_length_mm = 0.0f;

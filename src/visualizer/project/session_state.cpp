@@ -29,6 +29,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "sequencer/sequencer_controller.hpp"
+#include "shaders/shader_api.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer_impl.hpp"
@@ -1465,6 +1466,8 @@ namespace lfs::vis::project {
                 chapters.gui_layout.validate();
             !valid)
             return std::move(valid).error();
+        if (auto valid = chapters.shaders.validate(); !valid)
+            return std::move(valid).error();
         if (auto valid = chapters.editor.validate();
             !valid)
             return std::move(valid).error();
@@ -1637,7 +1640,13 @@ namespace lfs::vis::project {
     }
 
     std::optional<PreparedGuiSessionRestore>
-    GuiSessionRestoreCoordinator::takeReady() {
+    GuiSessionRestoreCoordinator::takeReady(const bool scene_ready) {
+        if (pending_ && !scene_ready) {
+            const auto files = pending_->chapters.editor.dom().get_json("open_files");
+            if (!pending_->chapters.shaders.dom().get_json("assets")->empty() ||
+                (files && std::ranges::any_of(*files, [](const auto& file) { return file.contains("kind") && file["kind"] == "shader"; })))
+                return std::nullopt;
+        }
         if (!ready())
             return std::nullopt;
         auto result = std::move(pending_);
@@ -2373,6 +2382,13 @@ namespace lfs::vis::project {
         const std::span<const lfs::core::Uuid>
             omit_node_uuids) {
         auto result = retained;
+        if (const auto* service = viewer.getShaderService()) {
+            auto snapshot = service->captureProject(retained.shaders, omit_node_uuids);
+            if (!snapshot)
+                return std::move(snapshot).error();
+            result.shaders = std::move(snapshot->chapter);
+            result.shader_token = snapshot->token;
+        }
         const auto* gui_manager =
             viewer.getGuiManager();
         const auto* rendering_manager =
@@ -2574,7 +2590,24 @@ namespace lfs::vis::project {
                      session.items()) {
                     file[key] = value;
                 }
-                if (open_file.modified) {
+                bool embed = open_file.modified;
+                if (open_file.document.kind == editor::DocumentKind::Shader) {
+                    file["kind"] = "shader";
+                    auto target = open_file.document.target;
+                    if (std::ranges::contains(omit_node_uuids, target.node))
+                        target = {};
+                    file["target"] = shaders::shaderTarget(target);
+                    const auto asset = open_file.document.shader_asset;
+                    const auto library = result.shaders.dom().get_json("assets");
+                    const auto found = asset ? std::ranges::find_if(*library, [&](const auto& a) { return a["uuid"] == asset->to_string(); }) : library->end();
+                    embed = found == library->end() || (*found)["source"] != open_file.text;
+                    if (found != library->end())
+                        file["shader_id"] = asset->to_string();
+                    file["modified"] = embed;
+                    if (open_file.modified != embed)
+                        file["file_modified"] = open_file.modified;
+                }
+                if (embed) {
                     file["embedded_buffer"] =
                         open_file.text;
                     file["share_warning"] = true;
@@ -2627,7 +2660,13 @@ namespace lfs::vis::project {
                         continue;
                     }
                     auto entry = *found;
-                    if (!live_file.modified) {
+                    const auto known = std::ranges::find_if(live_files, [&](const auto& f) { return f["locator"] == live_file.locator; });
+                    if (entry.value("kind", std::string{}) == "shader" || live_file.document.kind == editor::DocumentKind::Shader) {
+                        for (const auto* key : {"kind", "shader_id", "target", "file_modified", "embedded_buffer", "share_warning"})
+                            if (!known->contains(key))
+                                entry.erase(key);
+                    }
+                    if (!known->contains("embedded_buffer")) {
                         entry.erase(
                             "embedded_buffer");
                         entry.erase(
@@ -3060,6 +3099,10 @@ namespace lfs::vis::project {
         // the other timeline members, including extensions from newer writers.
         if (!controller.timeline().revealClip()) {
             if (auto removed = result.sequencer.dom().remove("timeline.reveal_clip"); !removed)
+                return std::move(removed).error();
+        }
+        if (controller.timeline().revealClip() && !controller.timeline().revealClip()->shader_id) {
+            if (auto removed = result.sequencer.dom().remove("timeline.reveal_clip.shader_id"); !removed)
                 return std::move(removed).error();
         }
         // The live timeline owns the key list. The additive merge preserves
@@ -3529,6 +3572,22 @@ namespace lfs::vis::project {
             }
         }
 
+        void shader_restore_warning(VisualizerImpl& viewer, const std::vector<std::string>& warnings) {
+            if (warnings.empty())
+                return;
+            std::string details;
+            for (const auto& warning : warnings) {
+                LOG_WARN("Shader restore: {}", warning);
+                if (details.size() < 2048)
+                    details += warning + "\n";
+            }
+            if (auto* gui = viewer.getGuiManager())
+                gui->enqueueToast({.title = LOC("editor.shader"),
+                                   .message = LOCF("shader.restore_warning", details),
+                                   .level = gui::ErrorNoticeLevel::Warning,
+                                   .fingerprint = std::hash<std::string>{}("shader-restore")});
+        }
+
         void apply_editor(
             VisualizerImpl& viewer,
             const Json& root) {
@@ -3566,12 +3625,34 @@ namespace lfs::vis::project {
                         file, "locator");
                 if (!locator)
                     continue;
-                const bool modified =
-                    scalar<bool>(
-                        file, "modified")
-                        .value_or(false);
+                const bool shader = scalar<std::string>(file, "kind") == "shader";
+                const bool modified = shader ? scalar<bool>(file, "file_modified").value_or(scalar<bool>(file, "modified").value_or(false)) : scalar<bool>(file, "modified").value_or(false);
+                editor::EditorDocument document;
+                if (shader) {
+                    document.kind = editor::DocumentKind::Shader;
+                    if (const auto id = scalar<std::string>(file, "shader_id"))
+                        document.shader_asset = core::Uuid::from_string(*id);
+                    if (const auto target = file.find("target"); target != file.end()) {
+                        auto parsed = shaders::parseShaderTarget(nlohmann::json::parse(target->dump()));
+                        if (parsed && viewer.getShaderService() && viewer.getShaderService()->validateTarget(*parsed))
+                            document.target = *parsed;
+                        else
+                            shader_restore_warning(viewer, {"EDTR.target: invalid shader target"});
+                    }
+                }
                 std::string text;
-                if (modified) {
+                if (shader) {
+                    const auto assets = viewer.getShaderService() ? viewer.getShaderService()->assets() : std::vector<shaders::ShaderAsset>{};
+                    const auto asset = std::ranges::find_if(assets, [&](const auto& a) { return document.shader_asset == a.id; });
+                    if (asset != assets.end()) {
+                        text = asset->source;
+                        document.asset_revision = asset->revision;
+                    } else if (document.shader_asset) {
+                        document.shader_asset.reset();
+                        shader_restore_warning(viewer, {"EDTR.shader_id: missing shader asset"});
+                    }
+                    text = scalar<std::string>(file, "embedded_buffer").value_or(text);
+                } else if (modified) {
                     text = scalar<std::string>(
                                file,
                                "embedded_buffer")
@@ -3602,6 +3683,7 @@ namespace lfs::vis::project {
                             .editor =
                                 editor_state_from_json(
                                     file),
+                            .document = document,
                         });
             }
             if (workspace.active_file &&
@@ -4108,8 +4190,8 @@ namespace lfs::vis::project {
                 const auto standard_json =
                     nlohmann::json::parse(
                         timeline->dump());
-                (void)controller.loadFromJson(
-                    standard_json);
+                if (!controller.loadFromJson(standard_json))
+                    shader_restore_warning(viewer, {"SEQR.timeline: timeline could not be restored"});
             }
 
             if (const auto clips =
@@ -4385,10 +4467,35 @@ namespace lfs::vis::project {
             viewer, *view, bookmarks,
             prepared.environment_map_path);
         apply_guil(viewer, *gui);
-        apply_editor(viewer, *editor);
+        if (auto* service = viewer.getShaderService()) {
+            std::optional<core::Uuid> reveal;
+            auto& timeline = (*sequencer)["timeline"];
+            if (timeline.contains("reveal_clip") && timeline["reveal_clip"].is_object()) {
+                auto& clip = timeline["reveal_clip"];
+                if (clip.contains("effect") && clip["effect"] == 12) {
+                    if (const auto id = scalar<std::string>(clip, "shader_id"))
+                        reveal = core::Uuid::from_string(*id);
+                    const auto assets = prepared.chapters.shaders.dom().get_json("assets");
+                    if (!reveal || std::ranges::none_of(*assets, [&](const auto& a) { return a["uuid"] == reveal->to_string(); })) {
+                        timeline.erase("reveal_clip");
+                        reveal.reset();
+                        shader_restore_warning(viewer, {"SEQR.reveal_clip: missing shader asset; only this clip was skipped"});
+                    }
+                }
+            }
+            shader_restore_warning(viewer, service->restoreProject(prepared.chapters.shaders, reveal));
+        }
         apply_sequencer(
             viewer, *sequencer,
             prepared.ply_sequence_directory);
+        apply_editor(viewer, *editor);
+        if (auto* service = viewer.getShaderService()) {
+            auto restored = service->captureProject(prepared.chapters.shaders);
+            if (restored)
+                service->clearDirtyIfUnchanged(restored->token);
+            else
+                shader_restore_warning(viewer, {std::string(restored.error().user_message())});
+        }
         if (auto* trainer =
                 viewer.getTrainerManager()) {
             trainer->restoreProjectMetrics(

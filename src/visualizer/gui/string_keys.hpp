@@ -918,7 +918,10 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
         inline constexpr const char* VIDEO_EXPORT_SEQUENCE_CHANGED = "runtime.video_export_sequence_changed";
         inline constexpr const char* VIDEO_EXPORT_SEQUENCE_FRAME_TIMEOUT = "runtime.video_export_sequence_frame_timeout";
+        inline constexpr const char* EXPORT_SHADER_UNAVAILABLE = "runtime.export_shader_unavailable";
+        inline constexpr const char* EXPORT_SHADER_NOT_READY = "runtime.export_shader_not_ready";
         inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
+        inline constexpr const char* EXPORT_STOPPED = "runtime.export_stopped";
         inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
         inline constexpr const char* EXPORT_STREAMED_LOD = "runtime.export_streamed_lod";
         inline constexpr const char* EXPORT_EXTENSION_REQUIRED = "runtime.export_extension_required";

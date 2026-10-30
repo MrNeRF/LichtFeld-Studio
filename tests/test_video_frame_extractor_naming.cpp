@@ -196,12 +196,10 @@ namespace {
         return count;
     }
 
-    uint64_t hashFile(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
+    uint64_t hashPixels(const unsigned char* pixels, const std::size_t size) {
         uint64_t hash = 14695981039346656037ull;
-        char byte = 0;
-        while (input.get(byte))
-            hash = (hash ^ static_cast<uint8_t>(byte)) * 1099511628211ull;
+        for (std::size_t index = 0; index < size; ++index)
+            hash = (hash ^ pixels[index]) * 1099511628211ull;
         return hash;
     }
 
@@ -301,6 +299,10 @@ namespace lfs::gui {
     public:
         static const std::filesystem::path& videoPath(const VideoExtractorDialog& dialog) { return dialog.video_path_; }
         static const std::filesystem::path& outputPath(const VideoExtractorDialog& dialog) { return dialog.output_dir_; }
+        static bool masking(const VideoExtractorDialog& dialog,
+                            preprocessing::VideoMaskExtractionOptions& options, std::string& error) {
+            return dialog.collectMaskingOptions(options, error);
+        }
         static void outputPath(VideoExtractorDialog& dialog, const std::filesystem::path& path) { dialog.output_dir_ = path; }
         static bool naming(VideoExtractorDialog& dialog, int selection, const std::string& custom,
                            const std::filesystem::path& video, std::string& pattern, std::string& error) {
@@ -405,6 +407,9 @@ namespace lfs::gui {
         }
         static void syncBatchList(VideoExtractorDialog& dialog) { dialog.syncBatchList(); }
         static void syncExtractionStatus(VideoExtractorDialog& dialog) { dialog.syncExtractionStatus(); }
+        static void completeWithWarning(VideoExtractorDialog& dialog, const std::string& warning) {
+            dialog.setExtractionComplete(warning);
+        }
         static bool attach(VideoExtractorDialog& dialog, Rml::ElementDocument* document) {
             dialog.document_ = document;
             dialog.cacheElements();
@@ -1510,6 +1515,78 @@ namespace {
         Rml::ElementFormControlInput* input = nullptr;
         std::unique_ptr<lfs::gui::VideoExtractorDialog> dialog;
     };
+    TEST_F(VideoExtractorNamingUiTest, MaskingStartsDisabledAndValidatesManualControls) {
+        RecordProperty("catches", "Default-enabled masking or disconnected circle and seed controls changes extraction requests");
+        auto* toggle = document->GetElementById("masking-toggle");
+        auto* options_row = document->GetElementById("masking-options");
+        ASSERT_NE(toggle, nullptr);
+        ASSERT_NE(options_row, nullptr);
+        EXPECT_FALSE(toggle->HasAttribute("checked"));
+        EXPECT_EQ(options_row->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        lfs::preprocessing::VideoMaskExtractionOptions options;
+        std::string error;
+        ASSERT_TRUE(NamingAccess::masking(*dialog, options, error));
+        EXPECT_FALSE(options.enabled);
+        for (const char* id : {"masking-toggle", "mask-circle", "mask-recenter", "mask-manual-seed", "mask-require-operator"})
+            document->GetElementById(id)->SetAttribute("checked", "");
+        const auto value = [&](const char* id, const char* text) {
+            auto* field = dynamic_cast<Rml::ElementFormControlInput*>(document->GetElementById(id));
+            ASSERT_NE(field, nullptr);
+            field->SetValue(text);
+        };
+        value("mask-fov", "195");
+        value("mask-view-fov", "145");
+        value("mask-dilation", "7");
+        const auto model_path = std::filesystem::path(PROJECT_ROOT_PATH) / "tests/data/nn/lpips_crop_a.png";
+        value("mask-model", model_path.string().c_str());
+        value("mask-seed-x", "0.35");
+        value("mask-seed-y", "0.4");
+        value("mask-seed-frame", "18");
+        sync();
+        EXPECT_NE(options_row->GetProperty<Rml::Style::Display>("display"), Rml::Style::Display::None);
+        ASSERT_TRUE(NamingAccess::masking(*dialog, options, error));
+        EXPECT_TRUE(options.enabled);
+        EXPECT_DOUBLE_EQ(options.circle.radius_x, 0.5);
+        EXPECT_TRUE(options.masking.recenter_fisheye);
+        EXPECT_FLOAT_EQ(options.masking.fisheye_fov_degrees, 195);
+        EXPECT_FLOAT_EQ(options.masking.view_fov_degrees, 145);
+        EXPECT_EQ(options.masking.dilation_radius, 7);
+        EXPECT_TRUE(options.masking.require_operator);
+        EXPECT_EQ(options.masking.weights, model_path);
+        ASSERT_TRUE(options.masking.prompt.has_value());
+        EXPECT_EQ(options.masking.prompt->frame, 18);
+        EXPECT_FLOAT_EQ(options.masking.prompt->points.front()[0], 0.35f);
+        EXPECT_FLOAT_EQ(options.masking.prompt->points.front()[1], 0.4f);
+        for (const char* invalid : {"-1", "129", "1.5"}) {
+            value("mask-dilation", invalid);
+            EXPECT_FALSE(NamingAccess::masking(*dialog, options, error));
+        }
+        value("mask-dilation", "7");
+        value("mask-model", "missing-model.lfw");
+        EXPECT_FALSE(NamingAccess::masking(*dialog, options, error));
+        value("mask-model", "");
+        value("mask-view-fov", "360");
+        EXPECT_FALSE(NamingAccess::masking(*dialog, options, error));
+        value("mask-view-fov", "145");
+        value("mask-seed-x", "1.1");
+        EXPECT_FALSE(NamingAccess::masking(*dialog, options, error));
+        value("mask-seed-x", "0.35");
+        value("mask-fov", "nan");
+        EXPECT_FALSE(NamingAccess::masking(*dialog, options, error));
+        NamingAccess::extracting(*dialog, true);
+        sync();
+        for (const char* id : {"masking-toggle", "mask-circle", "mask-recenter", "mask-fov", "mask-manual-seed",
+                               "mask-seed-x", "mask-seed-y", "mask-seed-frame", "mask-dilation", "mask-view-fov", "mask-require-operator", "mask-model"})
+            EXPECT_TRUE(document->GetElementById(id)->HasAttribute("disabled")) << id;
+        NamingAccess::extracting(*dialog, false);
+        // Catches a warning being discarded or displayed with the successful-result style.
+        NamingAccess::completeWithWarning(*dialog, "Operator was not localized: not enough camera motion.");
+        NamingAccess::syncExtractionStatus(*dialog);
+        EXPECT_TRUE(document->GetElementById("complete-section")->IsClassSet("status-section--warning"));
+        EXPECT_FALSE(document->GetElementById("complete-section")->IsClassSet("status-section--success"));
+        EXPECT_NE(document->GetElementById("complete-text")->GetInnerRML().find("not enough camera motion"), std::string::npos);
+    }
+
     TEST_F(VideoExtractorNamingUiTest, VisibilityCustomMemoryAndValidation) {
         EXPECT_EQ(select->GetSelection(), 2);
         auto* row = document->GetElementById("custom-pattern-row");
@@ -2328,6 +2405,33 @@ TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheVideoWhenAudioOutlastsIt) {
     EXPECT_EQ(metadata["frames"].size(), 9u);
 }
 
+TEST(VideoFrameExtractorTrim, SparseFpsStopsAtTheLastDecodableFrameInAStreamCopy) {
+    if (!cudaAvailable())
+        GTEST_SKIP() << "Requires NVDEC for sparse FPS extraction";
+
+    TempDir temp("stream_copy_tail");
+    const auto source = std::filesystem::path(PROJECT_ROOT_PATH) /
+                        "tests/data/video/h264_stream_copy.mp4";
+    for (const double end_time : {-1.0, 0.4}) {
+        SCOPED_TRACE(end_time);
+        auto params = extractionParams(source, temp.path / std::to_string(end_time));
+        params.mode = ExtractionMode::FPS;
+        params.fps = 3.0;
+        params.end_time = end_time;
+
+        VideoFrameExtractor extractor;
+        std::string error;
+        ASSERT_TRUE(extractor.extract(params, error)) << error;
+        EXPECT_EQ(extractor.lastOutcome(), lfs::io::ExtractionOutcome::Completed);
+        EXPECT_EQ(countPngFiles(params.output_dir), 1u);
+        const auto metadata = readMetadata(params.output_dir);
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["strategy"], "keyframe_seek");
+        EXPECT_EQ(metadata["processing"]["frame_selection"]["estimated_targets"], 1);
+        ASSERT_EQ(metadata["frames"].size(), 1u);
+        EXPECT_DOUBLE_EQ(metadata["frames"][0]["timestamp"].get<double>(), 0.0);
+    }
+}
+
 TEST(VideoFrameExtractorTrim, PlayerFullRangeKeepsTheLastFrame) {
     if (!cudaAvailable())
         GTEST_SKIP() << "CUDA device required for VideoEncoder-based fixture";
@@ -2611,15 +2715,23 @@ TEST(VideoFrameExtractorOutputNaming, TimestampedGeneratedClipKeepsFrameHashes) 
     ASSERT_TRUE(extractor.extract(params, error)) << error;
     ASSERT_EQ(countPngFiles(params.output_dir), frame_count);
 
+    // Keep the original NVDEC pixel reference independent of PNG compression.
     const std::vector<uint64_t> expected_hashes{
-        10352205363336413648ull, 7130132853937651006ull,
-        5101170480245039264ull, 7651893699709116084ull,
-        16033737104459939555ull, 3741773652504481905ull};
+        4447340953764640790ull, 6700247232541181701ull,
+        18018889043452171844ull, 15686283614649312191ull,
+        3742041256909694354ull, 8649771673398531241ull};
     std::vector<uint64_t> hashes;
     for (int index = 1; index <= frame_count; ++index) {
+        SCOPED_TRACE(index);
         const auto frame = params.output_dir / ("frame_" + std::to_string(index) + ".png");
         ASSERT_TRUE(std::filesystem::exists(frame));
-        hashes.push_back(hashFile(frame));
+        const auto [pixels, width, height, channels] = lfs::core::load_image(frame);
+        ASSERT_NE(pixels, nullptr);
+        const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> image(pixels, lfs::core::free_image);
+        ASSERT_EQ(width, 64);
+        ASSERT_EQ(height, 48);
+        ASSERT_EQ(channels, 3);
+        hashes.push_back(hashPixels(pixels, static_cast<std::size_t>(width) * height * channels));
     }
     EXPECT_EQ(hashes, expected_hashes);
 }

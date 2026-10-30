@@ -63,6 +63,10 @@ namespace lfs::vis {
 namespace lfs::vis {
     class DataLoadingService;
 
+    namespace shaders {
+        class ShaderService;
+    } // namespace shaders
+
     namespace tools {
         class AlignTool;
         class ScaleDistanceTool;
@@ -192,6 +196,7 @@ namespace lfs::vis {
         bool consumeProjectSaveStarted() override;
         bool consumeProjectCreateSucceeded() override;
         bool projectCreatePending() const override;
+        [[nodiscard]] bool projectOpenPending() const override;
         void projectWaitWrite() override;
         lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() override;
@@ -215,6 +220,8 @@ namespace lfs::vis {
         const WindowManager* getWindowManager() const {
             return window_manager_.get();
         }
+        shaders::ShaderService* getShaderService() { return shader_service_.get(); }
+        const shaders::ShaderService* getShaderService() const { return shader_service_.get(); }
         RenderingManager* getRenderingManager() override { return rendering_manager_.get(); }
         const RenderingManager* getRenderingManager() const {
             return rendering_manager_.get();
@@ -320,6 +327,7 @@ namespace lfs::vis {
         friend class AlignDepthIntegrationTest;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
+        friend class CollisionProjectOpenTest;
         friend void installSessionTestInputController(VisualizerImpl& viewer);
         friend class VisualizerImplResetTest_AprilTagJobShutdownSettlesPendingRequestWaiter_Test;
         friend class VisualizerImplResetTest_DirectSplatLoadRejectsActiveTrainingWithoutConsent_Test;
@@ -729,6 +737,8 @@ namespace lfs::vis {
         DemandToken gui_animation_demand_;
         DemandToken python_animation_demand_;
         std::unique_ptr<SceneManager> scene_manager_;
+        // Reads the scene; declared after it so it is destroyed first.
+        std::unique_ptr<shaders::ShaderService> shader_service_;
         std::shared_ptr<TrainerManager> trainer_manager_;
         std::unique_ptr<DataLoadingService> data_loader_;
         std::unique_ptr<ParameterManager> parameter_manager_;

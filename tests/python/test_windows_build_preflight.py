@@ -131,6 +131,26 @@ class WindowsBuildPreflightTests(unittest.TestCase):
         )
         self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
 
+    def test_calls_inside_inline_bodies_are_not_declarations(self) -> None:
+        self.write(
+            "src/visualizer/gui/widget.hpp",
+            "namespace lfs::vis::gui {\n"
+            "inline int wrapper(int size) {\n"
+            "    int area = 0;\n"
+            "    if (!makeWidget(size))\n"
+            "        return 0;\n"
+            "    const bool again = makeWidget(size + 1);\n"
+            "    return again ? area : 1;\n"
+            "}\n"
+            "}\n",
+        )
+        self.write(
+            "tests/test_widget.cpp",
+            '#include "gui/widget.hpp"\n'
+            "void test() { (void)lfs::vis::gui::makeWidget(3); }\n",
+        )
+        self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
+
     def test_inline_definition_is_available_without_dll_export(self) -> None:
         self.write(
             "src/visualizer/gui/widget.hpp",
@@ -145,6 +165,60 @@ class WindowsBuildPreflightTests(unittest.TestCase):
             "void test() { (void)makeWidget(3); }\n",
         )
         self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
+
+    def test_header_wrapper_calls_are_not_dll_declarations(self) -> None:
+        for statement in (
+            "if (!makeWidget(3)) return false;",
+            "auto result = makeWidget(3);",
+            "makeWidget(3);",
+            "return makeWidget(3);",
+            "auto deferred = [] { return makeWidget(3); };",
+        ):
+            with self.subTest(statement=statement):
+                self.write(
+                    "src/visualizer/gui/widget.hpp",
+                    "namespace lfs::vis::gui {\n"
+                    "inline bool wrapper() { " + statement + " }\n}\n",
+                )
+                self.write(
+                    "tests/test_widget.cpp",
+                    '#include "gui/widget.hpp"\n'
+                    "using lfs::vis::gui::makeWidget;\n",
+                )
+                self.assertEqual([], preflight.check_visualizer_test_exports(self.root))
+
+    def test_wrapper_does_not_hide_unexported_declaration(self) -> None:
+        self.write(
+            "src/visualizer/gui/widget.hpp",
+            "namespace lfs::vis::gui {\n"
+            "bool makeWidget(int size);\n"
+            "inline bool wrapper() { if (!makeWidget(3)) return false; return true; }\n"
+            "}\n",
+        )
+        self.write(
+            "tests/test_widget.cpp",
+            '#include "gui/widget.hpp"\nusing lfs::vis::gui::makeWidget;\n',
+        )
+        findings = preflight.check_visualizer_test_exports(self.root)
+        self.assertEqual(1, len(findings))
+        self.assertEqual(2, findings[0].line)
+
+    def test_nested_namespace_and_linkage_still_require_exports(self) -> None:
+        for opening, closing in (
+            ("namespace lfs { namespace vis {", "}}"),
+            ("namespace lfs::vis { namespace {", "}}"),
+            ('namespace lfs::vis { extern "C" {', "}}"),
+        ):
+            with self.subTest(opening=opening):
+                self.write(
+                    "src/visualizer/gui/widget.hpp",
+                    opening + "\nbool makeWidget(int size);\n" + closing,
+                )
+                self.write(
+                    "tests/test_widget.cpp",
+                    '#include "gui/widget.hpp"\nusing lfs::vis::makeWidget;\n',
+                )
+                self.assertEqual(1, len(preflight.check_visualizer_test_exports(self.root)))
 
     def test_compile_database_validation(self) -> None:
         database = self.write(

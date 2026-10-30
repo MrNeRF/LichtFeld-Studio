@@ -84,6 +84,7 @@ namespace lfs::io {
                 const AVStream* const stream = context->streams[i];
                 const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
                 if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC) &&
                     parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
                     parameters->height > 0) {
                     return static_cast<int>(i);
@@ -1168,6 +1169,15 @@ namespace lfs::io {
                         return static_cast<int64_t>(timestamp);
                     };
 
+                frame = av_frame_alloc();
+                sw_frame = av_frame_alloc();
+                packet = av_packet_alloc();
+                if (!frame || !sw_frame || !packet) {
+                    error = "Failed to allocate frame/packet";
+                    throw std::runtime_error(error);
+                }
+                DecoderPump decoder_pump(fmt_ctx, codec_ctx, packet, video_stream_idx);
+
                 const double start_time = params.start_time;
                 bool extract_to_stream_end = params.end_time < 0.0;
                 const bool unknown_stream_end = extract_to_stream_end &&
@@ -1194,6 +1204,47 @@ namespace lfs::io {
                 }
                 extract_to_stream_end = extract_to_stream_end &&
                                         !(params.sharpness.enabled && params.sharpness.window_mode);
+                // Stream copies can report an end beyond the last frame's presentation interval.
+                // Bound FPS targets by decoded coverage before scheduling them.
+                if (params.mode == ExtractionMode::FPS &&
+                    !params.sharpness.enabled && !untimed_stream && fmt_ctx->pb &&
+                    (fmt_ctx->pb->seekable & AVIO_SEEKABLE_NORMAL) &&
+                    av_seek_frame(fmt_ctx, video_stream_idx,
+                                  stream_timestamp_for_time(end_time) - 1,
+                                  AVSEEK_FLAG_BACKWARD) >= 0) {
+                    avcodec_flush_buffers(codec_ctx);
+                    decoder_pump.resetAfterSeek();
+                    double decoded_end_time = -1.0;
+                    while (true) {
+                        if (params.cancel_requested && params.cancel_requested())
+                            throw ExtractionCancelled{};
+                        const DecoderPumpResult result = decoder_pump.next(frame, error);
+                        if (result == DecoderPumpResult::Error)
+                            throw std::runtime_error(error);
+                        if (result == DecoderPumpResult::EndOfStream)
+                            break;
+                        if (frame->best_effort_timestamp == AV_NOPTS_VALUE && frame->pts == AV_NOPTS_VALUE) {
+                            decoded_end_time = end_time;
+                            break;
+                        }
+                        const double frame_time = frameTimestampSeconds(
+                            frame, time_base, 0, video_fps, stream_start_seconds, false);
+                        if (frame_time >= end_time)
+                            break;
+                        const double frame_duration = frame->duration > 0
+                                                          ? static_cast<double>(frame->duration) * time_base
+                                                          : 1.0 / video_fps;
+                        decoded_end_time = std::max(decoded_end_time, frame_time + frame_duration);
+                    }
+                    if (decoded_end_time > start_time)
+                        end_time = std::min(end_time, decoded_end_time);
+                    if (av_seek_frame(fmt_ctx, video_stream_idx, stream_start_timestamp,
+                                      AVSEEK_FLAG_BACKWARD) < 0) {
+                        throw std::runtime_error("Failed to rewind video after checking its final frame");
+                    }
+                    avcodec_flush_buffers(codec_ctx);
+                    decoder_pump.resetAfterSeek();
+                }
                 const double trim_duration = unknown_stream_end
                                                  ? 0.0
                                                  : end_time - start_time;
@@ -1279,15 +1330,6 @@ namespace lfs::io {
                 if (needs_scale) {
                     LOG_INFO("Output resolution: {}x{} (from {}x{})", out_width, out_height, src_width, src_height);
                 }
-
-                frame = av_frame_alloc();
-                sw_frame = av_frame_alloc();
-                packet = av_packet_alloc();
-                if (!frame || !sw_frame || !packet) {
-                    error = "Failed to allocate frame/packet";
-                    throw std::runtime_error(error);
-                }
-                DecoderPump decoder_pump(fmt_ctx, codec_ctx, packet, video_stream_idx);
 
                 cpu_contiguous_buffer = new uint8_t[frame_size];
 
@@ -1558,6 +1600,9 @@ namespace lfs::io {
                             }
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
+                            if (params.frame_written)
+                                params.frame_written({batch_filenames[i], batch_encode_w, batch_encode_h,
+                                                      batch_meta.at(i).timestamp, batch_meta.at(i).source_frame});
                             if (params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
                                                         batch_meta[i].timestamp,
@@ -1681,6 +1726,8 @@ namespace lfs::io {
                                                  lfs::core::path_to_utf8(fname));
                     } else {
                         ++written_count;
+                        if (params.frame_written)
+                            params.frame_written({fname, write_w, write_h, best->timestamp, best->source_frame});
                         if (params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
                                                     best->timestamp,
@@ -1908,6 +1955,8 @@ namespace lfs::io {
                                                     cpu_contiguous_buffer, params.format,
                                                     params.jpg_quality)) {
                             ++written_count;
+                            if (params.frame_written)
+                                params.frame_written({filename, hw_rot_w, hw_rot_h, current_frame_time, current_src_frame});
                             if (params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                         current_frame_time,
@@ -2029,6 +2078,8 @@ namespace lfs::io {
                                                 cpu_contiguous_buffer, params.format,
                                                 params.jpg_quality)) {
                         ++written_count;
+                        if (params.frame_written)
+                            params.frame_written({filename, sw_rot_w, sw_rot_h, current_frame_time, current_src_frame});
                         if (params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
                                                     current_frame_time,

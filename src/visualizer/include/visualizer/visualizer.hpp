@@ -315,6 +315,9 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool projectCreatePending() const {
             return false;
         }
+        [[nodiscard]] virtual bool projectOpenPending() const {
+            return false;
+        }
         virtual void projectWaitWrite() {}
         virtual lfs::Result<ProjectMenuInfo>
         projectGetMenuInfo() {

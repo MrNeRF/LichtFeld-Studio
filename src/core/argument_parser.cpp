@@ -104,6 +104,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--keep-all-checkpoints", "keep_all_checkpoints", Bool},
+            OptimizationCliBinding{"--no-keep-all-checkpoints", "keep_all_checkpoints", Bool, true},
             OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--eval-flip", "eval_flip", Bool},
             OptimizationCliBinding{"--eval-space", "eval_space", Enum},
@@ -720,6 +722,7 @@ namespace {
                 "compare -- Score test images against reference images\n"
                 "eval -- Score a finished model or splat file against its images\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
+                "mask-video -- Generate SAM2 masks for a video or extracted frames\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
                 "batch-train -- Train multiple Gaussian Splatting datasets sequentially\n"
                 "plugin -- Manage plugins (create, check, list)\n"
@@ -957,6 +960,8 @@ namespace {
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
+            ::args::Flag keep_all_checkpoints(output_group, "enabled", lfs::core::args::optimization_cli_help("--keep-all-checkpoints"), {"keep-all-checkpoints"});
+            ::args::Flag no_keep_all_checkpoints(output_group, "disabled", "Replace the checkpoint superseded by each new training save, preserving existing history. Overrides the saved project setting.", {"no-keep-all-checkpoints"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
             ::args::ValueFlag<uint32_t> save_project_at_iteration(
@@ -1071,6 +1076,10 @@ namespace {
                 }
                 return false;
             };
+
+            if (keep_all_checkpoints && no_keep_all_checkpoints) {
+                return std::unexpected("--keep-all-checkpoints and --no-keep-all-checkpoints are mutually exclusive");
+            }
 
             if (cli_option_present({"-i", "--iter"}) && cli_option_present({"--steps-scaler"})) {
                 return std::unexpected("--iter and --steps-scaler are mutually exclusive: --iter sets the iteration count exactly, --steps-scaler rescales the default schedule");
@@ -1678,6 +1687,8 @@ namespace {
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
                                         mcp_port_val = per_launch_mcp_port,
                                         no_save_eval_images_flag = bool(no_save_eval_images),
+                                        keep_all_checkpoints_flag = bool(keep_all_checkpoints),
+                                        no_keep_all_checkpoints_flag = bool(no_keep_all_checkpoints),
                                         bg_mode_val = parsed_bg_mode,
                                         bg_color_val = parsed_bg_color,
                                         bg_image_path_val = cli_option_present({"--bg-image-path"}) ? std::optional<std::string>(::args::get(bg_image_path)) : std::optional<std::string>(),
@@ -1868,6 +1879,10 @@ namespace {
                 setVal(debug_python_port_val, opt.debug_python_port);
                 if (no_save_eval_images_flag)
                     opt.enable_save_eval_images = false;
+                if (keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = true;
+                if (no_keep_all_checkpoints_flag)
+                    opt.keep_all_checkpoints = false;
                 if (bg_mode_val) {
                     opt.bg_mode = *bg_mode_val;
                     opt.bg_modulation = *bg_mode_val == lfs::core::param::BackgroundMode::Modulation;
@@ -1989,6 +2004,7 @@ namespace {
                 note_opt("debug_python", debug_python_flag);
                 note_opt("debug_python_port", debug_python_port_val.has_value());
                 note_opt("enable_save_eval_images", no_save_eval_images_flag);
+                note_opt("keep_all_checkpoints", keep_all_checkpoints_flag || no_keep_all_checkpoints_flag);
                 note_opt("bg_mode", bg_mode_val.has_value());
                 note_opt("bg_modulation", bg_mode_val.has_value());
                 note_opt("bg_color", bg_color_val.has_value());
@@ -2122,7 +2138,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[], const
 
     if (args.size() >= 2 && !args[1].starts_with('-') &&
         args[1] != "convert" && args[1] != "mesh2splat" &&
-        args[1] != "mesh-to-splat" && args[1] != "preprocess" &&
+        args[1] != "mesh-to-splat" && args[1] != "preprocess" && args[1] != "mask-video" &&
         args[1] != "compare" && args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
@@ -2731,6 +2747,115 @@ dataset options work as in training; see the Evaluation page of the docs.
         return core_args::CompareMode{std::move(params)};
     }
 
+    std::expected<lfs::core::args::ParsedArgs, std::string> parseVideoMaskArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        ::args::ArgumentParser parser("LichtFeld Studio - SAM2 video masking\n",
+                                      "Input is a video file or a dataset root containing images/. Masks contain 0 for ignored pixels and 255 for retained pixels.\n"
+                                      "Examples:\n  LichtFeld-Studio mask-video clip.mp4 --output dataset --fps 1\n"
+                                      "  LichtFeld-Studio mask-video dataset --seed 0.5,0.8 --seed-frame 0\n");
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "input", "Video file or dataset root");
+        ::args::ValueFlag<std::string> output(parser, "folder", "Output dataset root (required for video input)", {'o', "output"});
+        ::args::ValueFlag<std::string> model(parser, "file", "Local SAM2.1 video .lfw weights", {"model"});
+        ::args::ValueFlag<double> fps(parser, "fps", "Extracted frames per second (default: 1)", {"fps"});
+        ::args::ValueFlag<double> start(parser, "seconds", "Video trim start", {"start"});
+        ::args::ValueFlag<double> end(parser, "seconds", "Video trim end", {"end"});
+        ::args::ValueFlagList<std::string> seed(parser, "x,y[,label]", "Normalized operator seed; repeat for multiple points, label 1 or 0", {"seed"});
+        ::args::ValueFlag<int> seed_frame(parser, "index", "Zero-based extracted frame for seed (default: 0)", {"seed-frame"});
+        ::args::ValueFlag<std::string> box(parser, "x0,y0,x1,y1", "Normalized operator seed box", {"seed-box"});
+        ::args::ValueFlag<std::string> circle(parser, "cx,cy,rx,ry", "Normalized fisheye image circle", {"circle"});
+        ::args::Flag fisheye(parser, "fisheye", "Use a centered image circle with radii 0.5", {"fisheye"});
+        ::args::Flag recenter(parser, "recenter", "Recenter the operator in a fisheye view", {"recenter"});
+        ::args::ValueFlag<float> fisheye_fov(parser, "degrees", "Fisheye field of view (default: 200)", {"fisheye-fov"});
+        ::args::ValueFlag<float> view_fov(parser, "degrees", "Recentered field of view (default: 160)", {"view-fov"});
+        ::args::ValueFlag<int> dilation(parser, "pixels", "Mask dilation radius (default: 12)", {"dilation"});
+        ::args::Flag require_operator(parser, "require-operator", "Fail when no operator can be localized", {"require-operator"});
+        ::args::Flag overwrite(parser, "overwrite", "Replace existing generated masks and extracted frames", {'y', "overwrite"});
+        ::args::Flag no_download(parser, "no-download", "Require cached or local weights", {"no-download"});
+        ::args::Flag download_only(parser, "download-only", "Download/verify weights and exit", {"download-only"});
+        parser.Prog(std::string(argv[0]) + " mask-video");
+        try {
+            parser.ParseArgs(std::vector<std::string>(argv + 2, argv + argc));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+        lfs::core::param::VideoMaskParameters params;
+        if (input)
+            params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        if (output)
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        if (model)
+            params.model_path = lfs::core::utf8_to_path(::args::get(model));
+        if (fps)
+            params.fps = ::args::get(fps);
+        if (start)
+            params.start_time = ::args::get(start);
+        if (end)
+            params.end_time = ::args::get(end);
+        if (seed_frame)
+            params.seed_frame = ::args::get(seed_frame);
+        if (fisheye_fov)
+            params.fisheye_fov = ::args::get(fisheye_fov);
+        if (view_fov)
+            params.view_fov = ::args::get(view_fov);
+        if (dilation)
+            params.dilation = ::args::get(dilation);
+        params.recenter = recenter;
+        params.require_operator = require_operator;
+        params.overwrite = overwrite;
+        params.no_download = no_download;
+        params.download_only = download_only;
+        if (fisheye)
+            params.circle = {0.5, 0.5, 0.5, 0.5};
+        const auto numbers = [](std::string text) {
+            std::vector<double> values;
+            std::replace(text.begin(), text.end(), ',', ' ');
+            std::istringstream stream(text);
+            double value;
+            while (stream >> value)
+                values.push_back(value);
+            if (!stream.eof())
+                values.clear();
+            return values;
+        };
+        for (const auto& point : ::args::get(seed)) {
+            const auto v = numbers(point);
+            if ((v.size() != 2 && v.size() != 3) || !(v[0] >= 0 && v[0] <= 1 && v[1] >= 0 && v[1] <= 1) ||
+                (v.size() == 3 && v[2] != 0 && v[2] != 1))
+                return std::unexpected("--seed expects normalized x,y and optional label 0 or 1");
+            params.points.push_back({float(v[0]), float(v[1]), v.size() == 3 ? float(v[2]) : 1.0f});
+        }
+        if (box) {
+            const auto v = numbers(::args::get(box));
+            if (v.size() != 4 || !(v[0] >= 0 && v[1] >= 0 && v[2] <= 1 && v[3] <= 1 && v[0] < v[2] && v[1] < v[3]))
+                return std::unexpected("--seed-box expects normalized x0,y0,x1,y1 bounds");
+            params.box = {float(v[0]), float(v[1]), float(v[2]), float(v[3])};
+            if (params.points.empty())
+                params.points.push_back({float((v[0] + v[2]) / 2), float((v[1] + v[3]) / 2), 1});
+        }
+        if (circle) {
+            const auto v = numbers(::args::get(circle));
+            if (v.size() != 4 || !std::ranges::all_of(v, [](double x) { return std::isfinite(x); }) ||
+                !(v[2] > 0 && v[3] > 0))
+                return std::unexpected("--circle expects finite cx,cy and positive rx,ry");
+            std::copy_n(v.begin(), 4, params.circle.begin());
+        }
+        if (!(params.fps > 0 && params.fps <= 1000) || !std::isfinite(params.start_time) || params.start_time < 0 ||
+            !std::isfinite(params.end_time) || (params.end_time != -1 && params.end_time <= params.start_time))
+            return std::unexpected("Invalid frame rate or trim range");
+        if (params.seed_frame < 0 || params.dilation < 0 || params.dilation > 128 ||
+            !(params.fisheye_fov > 0 && params.fisheye_fov < 360 && params.view_fov > 0 && params.view_fov < 360))
+            return std::unexpected("Invalid seed frame, dilation or field of view");
+        if (params.recenter && params.circle[2] <= 0)
+            return std::unexpected("--recenter requires --fisheye or --circle");
+        if (!params.download_only && params.input_path.empty())
+            return std::unexpected(std::format("Missing video or dataset path\n\n{}", parser.Help()));
+        return core_args::VideoMaskMode{std::move(params)};
+    }
+
     std::expected<lfs::core::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
         namespace core_args = lfs::core::args;
         namespace param = lfs::core::param;
@@ -2848,9 +2973,19 @@ dataset options work as in training; see the Evaluation page of the docs.
     std::optional<lfs::core::args::ParsedArgs> parseLichtArgs(
         const int argc, const char* const argv[], std::string& error) {
         namespace core_args = lfs::core::args;
+        using Action = core_args::LichtMode::Action;
         constexpr std::string_view usage =
             "Usage: LichtFeld-Studio licht <project.licht> --embed [dataset]\n"
-            "       LichtFeld-Studio licht --help\n";
+            "       LichtFeld-Studio licht <project.licht> --checkpoints\n"
+            "       LichtFeld-Studio licht <project.licht> --prune-checkpoints [--keep N]\n"
+            "       LichtFeld-Studio licht <project.licht> --remove-checkpoints <iteration>[,<iteration>...]\n"
+            "       LichtFeld-Studio licht --help\n"
+            "\n"
+            "  --embed [dataset]        Embed the referenced dataset, or the given dataset folder.\n"
+            "  --checkpoints            List the training checkpoints stored in the project.\n"
+            "  --prune-checkpoints      Remove every checkpoint except the one training resumes from;\n"
+            "                           --keep N also keeps the N newest other checkpoints.\n"
+            "  --remove-checkpoints     Remove the checkpoints saved at these iterations.\n";
         const auto invalid = [&](const std::string_view detail) {
             error = std::format("{}\n{}", detail, usage);
             return std::optional<core_args::ParsedArgs>{};
@@ -2863,11 +2998,15 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (argc < 3 || std::string_view(argv[2]) == "--help") {
             return invalid("Missing .licht project path.");
         }
-        if (argc < 4 || std::string_view(argv[3]) != "--embed") {
-            return invalid("The licht command currently requires --embed.");
+        if (argc < 4) {
+            return invalid("Missing licht action.");
         }
-        if (argc > 5) {
-            return invalid("Unexpected argument: " + std::string(argv[5]));
+        const std::string_view action = argv[3];
+        const auto max_arguments = action == "--embed" || action == "--remove-checkpoints" ? 5
+                                   : action == "--prune-checkpoints"                       ? 6
+                                                                                           : 4;
+        if (argc > max_arguments) {
+            return invalid("Unexpected argument: " + std::string(argv[max_arguments]));
         }
         const auto project = lfs::core::utf8_to_path(argv[2]);
         if (project.extension() != ".licht") {
@@ -2876,18 +3015,58 @@ dataset options work as in training; see the Evaluation page of the docs.
         if (!lfs::core::native_fs::is_regular_file(project)) {
             return invalid("The .licht project file could not be found.");
         }
-        std::optional<std::filesystem::path> dataset;
-        if (argc == 5) {
-            if (std::string_view(argv[4]).starts_with('-')) {
-                return invalid(std::format("Unknown licht argument: {}", argv[4]));
+        core_args::LichtMode mode{.project_path = project};
+        if (action == "--embed") {
+            if (argc == 5) {
+                if (std::string_view(argv[4]).starts_with('-')) {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                auto override_path = lfs::core::utf8_to_path(argv[4]);
+                if (override_path.is_relative()) {
+                    override_path = lfs::core::native_fs::current_path() / override_path;
+                }
+                mode.dataset_path = override_path.lexically_normal();
             }
-            auto override_path = lfs::core::utf8_to_path(argv[4]);
-            if (override_path.is_relative()) {
-                override_path = lfs::core::native_fs::current_path() / override_path;
+        } else if (action == "--checkpoints") {
+            mode.action = Action::LIST_CHECKPOINTS;
+        } else if (action == "--prune-checkpoints") {
+            mode.action = Action::PRUNE_CHECKPOINTS;
+            if (argc > 4) {
+                if (std::string_view(argv[4]) != "--keep") {
+                    return invalid(std::format("Unknown licht argument: {}", argv[4]));
+                }
+                const std::string_view count = argc == 6 ? argv[5] : "";
+                const auto [end, parse_error] = std::from_chars(
+                    count.data(), count.data() + count.size(), mode.keep_checkpoints);
+                if (count.empty() || parse_error != std::errc{} || end != count.data() + count.size()) {
+                    return invalid("--keep needs a checkpoint count, e.g. --keep 2.");
+                }
             }
-            dataset = override_path.lexically_normal();
+        } else if (action == "--remove-checkpoints") {
+            mode.action = Action::REMOVE_CHECKPOINTS;
+            std::string_view rest = argc == 5 ? argv[4] : "";
+            while (true) {
+                const auto comma = rest.find(',');
+                const auto token = rest.substr(0, comma);
+                std::int32_t iteration = 0;
+                const auto [end, parse_error] = std::from_chars(
+                    token.data(), token.data() + token.size(), iteration);
+                if (token.empty() || parse_error != std::errc{} ||
+                    end != token.data() + token.size() || iteration < 0) {
+                    return invalid("--remove-checkpoints needs checkpoint iterations, e.g. 7000,15000.");
+                }
+                mode.checkpoint_iterations.push_back(iteration);
+                if (comma == std::string_view::npos)
+                    break;
+                rest.remove_prefix(comma + 1);
+            }
+            std::ranges::sort(mode.checkpoint_iterations);
+            const auto duplicates = std::ranges::unique(mode.checkpoint_iterations);
+            mode.checkpoint_iterations.erase(duplicates.begin(), duplicates.end());
+        } else {
+            return invalid(std::format("Unknown licht argument: {}", action));
         }
-        return core_args::ParsedArgs{core_args::LichtMode{project, dataset}};
+        return core_args::ParsedArgs{std::move(mode)};
     }
 
     std::optional<lfs::core::args::ParsedArgs> parseBatchTrainArgs(
@@ -3147,6 +3326,8 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return std::unexpected(std::move(error));
         } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
             return parseMesh2SplatArgs(argc, argv);
+        } else if (arg1 == "mask-video") {
+            return parseVideoMaskArgs(argc, argv);
         } else if (arg1 == "preprocess") {
             return parsePreprocessArgs(argc, argv);
         } else if (arg1 == "compare") {

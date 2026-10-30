@@ -106,6 +106,9 @@ namespace lfs::python {
 
         // Expose Action enum
         nb::enum_<Action>(keymap, "Action")
+            .value("EDITOR_TOGGLE_KIND", Action::EDITOR_TOGGLE_KIND)
+            .value("EDITOR_RUN", Action::EDITOR_RUN)
+            .value("EDITOR_STOP", Action::EDITOR_STOP)
             .value("NONE", Action::NONE)
             .value("CAMERA_ORBIT", Action::CAMERA_ORBIT)
             .value("CAMERA_PAN", Action::CAMERA_PAN)
@@ -211,6 +214,7 @@ namespace lfs::python {
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
+            .value("EDITOR", ToolMode::EDITOR)
             .value("GLOBAL", ToolMode::GLOBAL)
             .value("SELECTION", ToolMode::SELECTION)
             .value("TRANSLATE", ToolMode::TRANSLATE)
