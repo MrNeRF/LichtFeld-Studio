@@ -100,9 +100,19 @@ namespace lfs::media::detail {
             if (!input.eof() || size > 16384)
                 return checkpointError(ErrorCode::Unavailable, "Could not read checkpoint record");
             auto record = Json::parse(buffer.data(), buffer.data() + size, nullptr, false);
-            if (record.is_discarded())
+            if (record.is_discarded() || !record.is_object())
                 return checkpointError(ErrorCode::FailedPrecondition, "Malformed checkpoint record");
             return record;
+        }
+        Result<std::string> checkpointImageEncoder(const Json& identity) {
+            if (!identity.is_object() || !identity.contains("checkpoint_version") ||
+                !identity["checkpoint_version"].is_number_integer() || identity["checkpoint_version"] != 2 ||
+                !identity.contains("image_encoder") || !identity["image_encoder"].is_string())
+                return checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint identity schema");
+            const auto provider = identity["image_encoder"].get<std::string>();
+            if (provider != "cpu" && provider != "nvimagecodec_cuda")
+                return checkpointError(ErrorCode::FailedPrecondition, "Unknown checkpoint image encoder");
+            return provider;
         }
         SinkResult publishRecord(const std::filesystem::path& path, const Json& value) {
             const auto bytes = value.dump();
@@ -136,8 +146,8 @@ namespace lfs::media::detail {
         const auto identity = readRecord(path);
         if (!identity)
             return SinkResult::failure(identity.error());
-        if (!identity->is_object())
-            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint identity schema"));
+        if (auto provider = checkpointImageEncoder(*identity); !provider)
+            return SinkResult::failure(provider.error());
         if (identity->contains("sidecar_metadata_policy"))
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Existing source metadata sidecars require their checkpoint mode or a fresh output directory"));
         return {};
@@ -155,19 +165,28 @@ namespace lfs::media::detail {
     SinkResult ResumableFileSink::begin(const SinkSession& session) {
         if (output_.files.remove_stale_frames)
             return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Resume cannot remove stale extraction output"));
-        const auto input_digest = fileDigest(request_.input, cancelled_);
-        if (!input_digest)
-            return SinkResult::failure(input_digest.error());
         const auto& r = request_;
         const auto& f = output_.files;
+        const auto output_status = lfs::core::native_fs::symlink_status(f.output_directory);
+        if (output_status.type() != std::filesystem::file_type::not_found && !lfs::core::native_fs::is_directory(output_status))
+            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Resume output must be a non-symlink directory"));
+        const auto checkpoint_status = lfs::core::native_fs::symlink_status(checkpoint_);
+        if (checkpoint_status.type() != std::filesystem::file_type::not_found && !lfs::core::native_fs::is_directory(checkpoint_status))
+            return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint must be a non-symlink directory"));
         const auto identity_path = checkpoint_ / "identity.json";
         std::string previous_provider;
         if (lfs::core::native_fs::exists(identity_path) && !emptyReservation(identity_path)) {
             const auto previous = readRecord(identity_path);
             if (!previous)
                 return SinkResult::failure(previous.error());
-            previous_provider = previous->value("image_encoder", std::string{});
+            const auto provider = checkpointImageEncoder(*previous);
+            if (!provider)
+                return SinkResult::failure(provider.error());
+            previous_provider = *provider;
         }
+        const auto input_digest = fileDigest(request_.input, cancelled_);
+        if (!input_digest)
+            return SinkResult::failure(input_digest.error());
         gpu_jpeg_.reset();
         if (f.format == FrameFileFormat::JPEG && r.allow_hardware_decode && previous_provider != "cpu") {
             gpu_jpeg_ = createGpuJpegEncoder({session.output.width, session.output.height,
@@ -182,14 +201,6 @@ namespace lfs::media::detail {
         applied_rotation_ = session.applied_rotation;
         embedded_metadata_.reset();
         sidecar_metadata_.reset();
-        if (output_.write_source_metadata_sidecars) {
-            if (!source_metadata_)
-                return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image sidecars require a source observation"));
-            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true);
-            if (!prepared)
-                return SinkResult::failure(prepared.error());
-            sidecar_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
-        }
         if (output_.files.embed_source_metadata) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image metadata requires a source observation"));
@@ -197,6 +208,16 @@ namespace lfs::media::detail {
             if (!prepared)
                 return SinkResult::failure(prepared.error());
             embedded_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
+        }
+        if (output_.write_source_metadata_sidecars && embedded_metadata_ && embedded_metadata_->extended_markers.empty()) {
+            sidecar_metadata_ = embedded_metadata_;
+        } else if (output_.write_source_metadata_sidecars) {
+            if (!source_metadata_)
+                return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image sidecars require a source observation"));
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true);
+            if (!prepared)
+                return SinkResult::failure(prepared.error());
+            sidecar_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
         }
         identity_ = {{"checkpoint_version", 2}, {"pipeline_version", 1}, {"application_build", GIT_TAGGED_VERSION}, {"ffmpeg", av_version_info()}, {"codec_version", avcodec_version()}, {"codec_configuration", avcodec_configuration()}, {"input_sha256", *input_digest}};
         identity_["image_encoder"] = imageEncoderBackend();
@@ -227,10 +248,14 @@ namespace lfs::media::detail {
         }
         if (sidecar_metadata_) {
             identity_["sidecar_metadata_policy"] = sidecar_metadata_policy;
-            identity_["sidecar_naming"] = "image-filename-plus-xmp-v1";
-            Sha256 source_digest;
-            source_digest.update({reinterpret_cast<const std::uint8_t*>(sidecar_metadata_->source_properties.data()), sidecar_metadata_->source_properties.size()});
-            identity_["sidecar_source_sha256"] = source_digest.finish();
+            identity_["sidecar_naming"] = sidecar_metadata_naming;
+            if (sidecar_metadata_ == embedded_metadata_) {
+                identity_["sidecar_source_sha256"] = identity_["embedded_source_sha256"];
+            } else {
+                Sha256 source_digest;
+                source_digest.update({reinterpret_cast<const std::uint8_t*>(sidecar_metadata_->source_properties.data()), sidecar_metadata_->source_properties.size()});
+                identity_["sidecar_source_sha256"] = source_digest.finish();
+            }
         }
         if (output_.preserve_source_metadata || f.embed_source_metadata || sidecar_metadata_)
             identity_["source_metadata_policy"] = source_metadata_preservation_policy;
@@ -337,7 +362,7 @@ namespace lfs::media::detail {
         std::filesystem::path sidecar_name, sidecar_destination;
         if (sidecar_metadata_) {
             sidecar_name = name;
-            sidecar_name += ".xmp";
+            sidecar_name += sidecar_metadata_suffix;
             sidecar_destination = output_.files.output_directory / sidecar_name;
         }
         const auto record_path = checkpoint_ / ("frame-" + std::to_string(accepted_) + ".json");
@@ -466,7 +491,7 @@ namespace lfs::media::detail {
         record["file_sha256"] = *encoded_digest;
         const auto staged_sidecar = sidecar_metadata_ ? checkpoint_ / sidecar_name : std::filesystem::path{};
         if (sidecar_metadata_ && !sidecar_retained) {
-            auto packet = imageXmpPacket(*sidecar_metadata_, frame.layout.width, frame.layout.height, frame.info);
+            auto packet = imageXmpPacket(*sidecar_metadata_, frame.layout.width, frame.layout.height, frame.info, true);
             if (!packet)
                 return SinkResult::failure(packet.error());
             Sha256 digest;

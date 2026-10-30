@@ -1600,7 +1600,13 @@ class MediaBindings(unittest.TestCase):
         request = self.metadata_request(comment='A<&"' * 4000)
         request.end_seconds = .01
         output.files.embed_source_metadata = True
-        for label, fmt, extension in (("png", media.FrameFileFormat.PNG, ".png"), ("jpeg", media.FrameFileFormat.JPEG, ".jpg")):
+        for label, fmt, extension in (("png", media.FrameFileFormat.PNG, ".png"), ("jpeg", media.FrameFileFormat.JPEG, ".jpg"),
+                                       ("tiff16", media.FrameFileFormat.TIFF16, ".tif"), ("exr", media.FrameFileFormat.EXR, ".exr"),
+                                       ("jxl", media.FrameFileFormat.JXL, ".jxl"), ("avif", media.FrameFileFormat.AVIF, ".avif")):
+            if label not in ("png", "jpeg"):
+                request.output_format = media.FramePixelFormat.RGBFloat32
+                request.input_color.transfer = media.ColorTransfer.Linear
+                request.input_color.primaries = media.ColorPrimaries.Bt709
             output.files.format = fmt
             output.files.output_directory = self.root / ("both metadata destinations-" + label)
             media.MediaIngest.extract_files(request, output)
@@ -1610,6 +1616,16 @@ class MediaBindings(unittest.TestCase):
             self.assertEqual(observed["metadata"]["image_xmp"]["status"], "collected")
             sidecar = Path(str(image) + ".xmp")
             self.assertTrue(sidecar.is_file())
+            if label != "jpeg":
+                import xml.etree.ElementTree as ET
+                packet = bytes.fromhex(observed["metadata"]["image_xmp"]["blocks"][0]["payload_bytes"])
+                inline = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                          if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                external = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(sidecar.read_bytes()).iter()
+                            if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                self.assertEqual(inline["MetadataPolicy"], label + "-static-source-xmp-v1")
+                self.assertEqual(external["MetadataPolicy"], "image-static-source-xmp-v1")
+                self.assertEqual(inline["SourceMetadata"], external["SourceMetadata"])
             if label == "jpeg":
                 import xml.etree.ElementTree as ET
                 _, _, _, _, catalog, chunks = jpeg_metadata_fixture.read(image.read_bytes())
@@ -1617,6 +1633,21 @@ class MediaBindings(unittest.TestCase):
                 facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(sidecar.read_bytes()).iter()
                          if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
                 self.assertEqual(catalog, json.loads(facts["SourceMetadata"]))
+
+        # Standard JPEG XMP can share the immutable source template as well.
+        request = self.metadata_request()
+        request.end_seconds = .01
+        output.files.format = media.FrameFileFormat.JPEG
+        output.files.output_directory = self.root / "both-standard-jpeg"
+        media.MediaIngest.extract_files(request, output)
+        image = next(output.files.output_directory.glob("*.jpg"))
+        _, _, _, _, catalog, chunks = jpeg_metadata_fixture.read(image.read_bytes())
+        self.assertLessEqual(chunks, 1)
+        import xml.etree.ElementTree as ET
+        sidecar = Path(str(image) + ".xmp")
+        facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(sidecar.read_bytes()).iter()
+                 if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+        self.assertEqual(catalog, json.loads(facts["SourceMetadata"]))
 
     def test_avif_item_oracle_rejects_undeclared_reference_origin(self):
         def box(kind, payload):

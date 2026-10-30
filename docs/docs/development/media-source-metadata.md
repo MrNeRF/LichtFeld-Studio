@@ -783,6 +783,11 @@ formats. The extraction manifest records `sidecar` on each frame,
 `sidecar_metadata_policy: image-static-source-xmp-v1` and
 `sidecar_naming: image-filename-plus-xmp-v1`.
 
+When embedding and sidecars are both requested, their immutable prepared source
+properties are shared whenever the carrier uses the ordinary packet. JPEG
+Extended XMP keeps its separate segmented representation. Packet policy is
+selected at serialization, without mutating the shared properties.
+
 The packet uses the shared source catalog, frame timing, output dimensions and
 applied rotation. The same 32 MiB packet ceiling and XML escaping apply. Static
 GPS and container creation facts remain static source observations. This is an
@@ -801,7 +806,10 @@ one published member. On the next identical request, replay verifies each
 retained member and regenerates only a missing member. A retained image is not
 re-encoded when only its sidecar is missing. Modified members are refused; only
 tracked zero-length reservations use the existing reservation recovery policy.
-Sidecar verification stops at the packet byte budget. Identity includes the
+Sidecar verification stops at the packet byte budget. Existing checkpoint/output paths are checked before reading the checkpoint or
+hashing the source. Checkpoint records must be JSON objects, and version/encoder
+types and supported values are validated before provider selection.
+Identity includes the
 sidecar policy, naming, source properties and existing source/selection/encoder
 identity. A different source locator, timing origin or metadata mode cannot
 silently adopt the checkpoint.

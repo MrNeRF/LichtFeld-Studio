@@ -2032,6 +2032,54 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(sidecar.read_bytes(), packet + b" ")
         self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
 
+    def test_source_metadata_sidecars_checkpoint_schema_refusal(self):
+        directory = self.root / "sidecar-identity-schema"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+        self.invoke(*args)
+        identity_path = directory / ".media-ingest-checkpoint/identity.json"
+        identity_bytes = identity_path.read_bytes()
+        identity = json.loads(identity_bytes)
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()}
+        variants = [True, {}, {**identity, "image_encoder": 3}, {**identity, "image_encoder": "unknown"}]
+        for value in variants:
+            with self.subTest(identity=value):
+                identity_path.write_text(json.dumps(value), encoding="utf-8")
+                result, _ = self.invoke(*args, code=4)
+                self.assertEqual(result["error"]["code"], "FailedPrecondition")
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()})
+        identity_path.write_bytes(identity_bytes)
+        self.invoke(*args)
+
+    def test_source_metadata_sidecars_checkpoint_symlink_is_refused(self):
+        directory = self.root / "sidecar-symlink"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+        self.invoke(*args)
+        checkpoint = directory / ".media-ingest-checkpoint"
+        moved = self.root / "outside-checkpoint"
+        checkpoint.rename(moved)
+        try:
+            try:
+                checkpoint.symlink_to(moved, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"Directory symlinks unavailable: {error}")
+            # Reading this identity before checking its parent would reach the
+            # malformed JSON schema instead of refusing the checkpoint link.
+            target = moved / "identity.json"
+            target.write_bytes(b"true")
+            before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()}
+            for flags in (args, args[:-1]):
+                result, _ = self.invoke(*flags, code=4)
+                self.assertEqual(result["error"]["code"], "FailedPrecondition")
+                self.assertIn("non-symlink", result["error"]["message"])
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()})
+                self.assertEqual(target.read_bytes(), b"true")
+        finally:
+            if checkpoint.is_symlink():
+                checkpoint.unlink()
+            moved.rename(checkpoint)
+
     def test_embedded_avif_metadata_cli(self):
         import xml.etree.ElementTree as ET
         directory = self.root / "embedded-avif"

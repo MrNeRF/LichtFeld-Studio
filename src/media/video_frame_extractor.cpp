@@ -2692,7 +2692,7 @@ namespace lfs::io {
                             root["embedded_metadata_policy"] = embeddedMetadataPolicy(params.format);
                         if (params.write_source_metadata_sidecars) {
                             root["sidecar_metadata_policy"] = media::detail::sidecar_metadata_policy;
-                            root["sidecar_naming"] = "image-filename-plus-xmp-v1";
+                            root["sidecar_naming"] = media::detail::sidecar_metadata_naming;
                         }
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
@@ -2985,7 +2985,7 @@ namespace lfs::io {
 
                         if (params.write_source_metadata_sidecars)
                             for (auto& frame : frames)
-                                frame["sidecar"] = frame["file"].get<std::string>() + ".xmp";
+                                frame["sidecar"] = frame["file"].get<std::string>() + media::detail::sidecar_metadata_suffix;
 
                         // SDR historically replaces its manifest; float output has
                         // an explicit collision policy. Preserve both contracts.
