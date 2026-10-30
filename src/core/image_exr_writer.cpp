@@ -91,7 +91,7 @@ namespace lfs::core::image_codecs {
             for (const auto component : options.chromaticities)
                 if (!std::isfinite(component))
                     return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, std::format("EXR chromaticity must be finite (value={})", component)));
-            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string::npos)
+            if (!valid_xmp_packet(xmp))
                 return Result<void>::failure(encodeError(ErrorCode::InvalidArgument, "Invalid EXR XMP packet"));
             constexpr size_t metadata_limit = 1024 * 1024 + 4096;
             if (options.text.size() > 32)

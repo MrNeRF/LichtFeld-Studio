@@ -1352,7 +1352,7 @@ namespace lfs::core::image_codecs {
 #ifndef _WIN32
             if (hdr && target.sample_type == SampleType::Float32) {
                 const int descriptor = open(path.c_str(), O_RDONLY);
-                struct stat file_status {};
+                struct stat file_status{};
                 if (descriptor >= 0 && fstat(descriptor, &file_status) == 0 && file_status.st_size > 0 &&
                     file_status.st_size <= std::numeric_limits<int>::max()) {
                     const auto size = static_cast<std::size_t>(file_status.st_size);
@@ -4084,7 +4084,7 @@ namespace lfs::core::image_codecs {
         if (width <= 0 || height <= 0 || channels < 1 || channels > 4 ||
             static_cast<std::size_t>(width) > std::numeric_limits<std::size_t>::max() / channels / 2)
             return invalid("Unsupported TIFF16 layout");
-        if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+        if (!valid_xmp_packet(xmp))
             return invalid("Invalid TIFF16 XMP packet");
         const auto row_bytes = static_cast<std::size_t>(width) * channels * 2;
         if (row_stride < row_bytes || row_stride > std::numeric_limits<std::size_t>::max() / height ||
