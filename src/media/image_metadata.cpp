@@ -122,12 +122,12 @@ namespace lfs::media::detail {
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if ((metadata.format == FrameFileFormat::JPEG || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
+        if (((metadata.format == FrameFileFormat::JPEG && !metadata.sidecar) || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
             tree += tree_start;
-            frameProperties(tree, width, height, metadata.applied_rotation, info, embeddedMetadataPolicy(metadata.format));
+            frameProperties(tree, width, height, metadata.applied_rotation, info, metadata.sidecar ? std::string_view(sidecar_metadata_policy) : embeddedMetadataPolicy(metadata.format));
             if (tree.size() + metadata.source_properties.size() + imageXmpSuffix().size() > max_packet_bytes)
                 return metadataError(ErrorCode::ResourceExhausted, "Image XMP exceeds the export packet budget");
             return tree;
@@ -135,7 +135,7 @@ namespace lfs::media::detail {
             return metadataError(ErrorCode::ResourceExhausted, "Image frame metadata allocation failed");
         }
     }
-    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format) {
+    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar) {
         if (embeddedMetadataPolicy(format).empty())
             return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
         try {
@@ -155,9 +155,10 @@ namespace lfs::media::detail {
                 return metadataError(ErrorCode::ResourceExhausted, "Image source metadata exceeds the export packet budget");
             EmbeddedImageMetadata result;
             result.format = format;
+            result.sidecar = sidecar;
             result.applied_rotation = applied_rotation;
             property(result.source_properties, "SourceMetadata", json);
-            if (format != FrameFileFormat::JPEG)
+            if (format != FrameFileFormat::JPEG || sidecar)
                 return result;
             // Reserve only the largest frame envelope this writer can produce.
             // A valid Standard packet must not depend on the MD5 provider.

@@ -66,7 +66,8 @@ namespace lfs::media::detail {
                 return result;
             }
         };
-        Result<std::string> fileDigest(const std::filesystem::path& path, const std::function<bool()>& cancelled) {
+        Result<std::string> fileDigest(const std::filesystem::path& path, const std::function<bool()>& cancelled,
+                                       std::uintmax_t maximum_bytes = std::numeric_limits<std::uintmax_t>::max()) {
             if (!lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(path)))
                 return checkpointError(ErrorCode::FailedPrecondition, "Checkpoint requires a regular, non-symlink file: " + core::path_to_utf8(path));
             std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
@@ -74,11 +75,16 @@ namespace lfs::media::detail {
                 return checkpointError(ErrorCode::Unavailable, "Could not read checkpoint input: " + core::path_to_utf8(path));
             Sha256 digest;
             std::array<std::uint8_t, 65536> buffer{};
+            std::uintmax_t total = 0;
             while (input) {
                 if (cancelled && cancelled())
                     return checkpointError(ErrorCode::Cancelled, "Checkpoint verification cancelled");
                 input.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-                digest.update(std::span(buffer.data(), static_cast<std::size_t>(input.gcount())));
+                const auto bytes = static_cast<std::size_t>(input.gcount());
+                if (bytes > maximum_bytes - total)
+                    return checkpointError(ErrorCode::FailedPrecondition, "Checkpoint file exceeds its byte limit");
+                total += bytes;
+                digest.update(std::span(buffer.data(), bytes));
             }
             if (!input.eof())
                 return checkpointError(ErrorCode::Unavailable, "Checkpoint input read failed: " + core::path_to_utf8(path));
@@ -155,6 +161,15 @@ namespace lfs::media::detail {
         source_metadata_ = session.source_metadata;
         applied_rotation_ = session.applied_rotation;
         embedded_metadata_.reset();
+        sidecar_metadata_.reset();
+        if (output_.write_source_metadata_sidecars) {
+            if (!source_metadata_)
+                return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image sidecars require a source observation"));
+            auto prepared = prepareImageMetadata(*source_metadata_, applied_rotation_, f.format, true);
+            if (!prepared)
+                return SinkResult::failure(prepared.error());
+            sidecar_metadata_ = std::make_shared<const EmbeddedImageMetadata>(std::move(*prepared));
+        }
         if (output_.files.embed_source_metadata) {
             if (!source_metadata_)
                 return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Image metadata requires a source observation"));
@@ -190,7 +205,14 @@ namespace lfs::media::detail {
             source_digest.update(embedded_metadata_->extended_markers);
             identity_["embedded_source_sha256"] = source_digest.finish();
         }
-        if (output_.preserve_source_metadata || f.embed_source_metadata)
+        if (sidecar_metadata_) {
+            identity_["sidecar_metadata_policy"] = sidecar_metadata_policy;
+            identity_["sidecar_naming"] = "image-filename-plus-xmp-v1";
+            Sha256 source_digest;
+            source_digest.update({reinterpret_cast<const std::uint8_t*>(sidecar_metadata_->source_properties.data()), sidecar_metadata_->source_properties.size()});
+            identity_["sidecar_source_sha256"] = source_digest.finish();
+        }
+        if (output_.preserve_source_metadata || f.embed_source_metadata || sidecar_metadata_)
             identity_["source_metadata_policy"] = source_metadata_preservation_policy;
         if (r.float_color_profile != FloatColorProfile::Sdr)
             identity_["float_color_profile"] = static_cast<int>(r.float_color_profile);
@@ -292,6 +314,12 @@ namespace lfs::media::detail {
         if (name != name.filename() || name.empty() || !filenames_.insert(name).second)
             return SinkResult::failure(checkpointError(ErrorCode::InvalidArgument, "Resume requires unique plain frame filenames"));
         const auto destination = output_.files.output_directory / name;
+        std::filesystem::path sidecar_name, sidecar_destination;
+        if (sidecar_metadata_) {
+            sidecar_name = name;
+            sidecar_name += ".xmp";
+            sidecar_destination = output_.files.output_directory / sidecar_name;
+        }
         const auto record_path = checkpoint_ / ("frame-" + std::to_string(accepted_) + ".json");
         Sha256 pixel_digest;
         const auto row_bytes = static_cast<std::size_t>(frame.layout.width) * pixelBytes(frame.layout.format);
@@ -302,14 +330,23 @@ namespace lfs::media::detail {
             const auto& pts = *frame.info.source_timestamp;
             record["pts"] = {pts.ticks, pts.time_base.numerator, pts.time_base.denominator};
         }
-        if (output_.files.embed_source_metadata)
+        if (output_.files.embed_source_metadata || sidecar_metadata_)
             record["timestamp_origin"] = static_cast<int>(frame.info.timestamp_origin);
+        if (sidecar_metadata_)
+            record["sidecar"] = core::path_to_utf8(sidecar_name);
+        bool image_retained = false;
+        bool sidecar_retained = false;
         if (lfs::core::native_fs::exists(record_path)) {
             const auto old = readRecord(record_path);
             if (!old)
                 return SinkResult::failure(old.error());
             auto expected = *old;
             expected.erase("file_sha256");
+            if (sidecar_metadata_) {
+                if (!old->contains("sidecar_sha256") || !(*old)["sidecar_sha256"].is_string())
+                    return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Invalid checkpoint sidecar schema"));
+                expected.erase("sidecar_sha256");
+            }
             if (record != expected || !old->contains("file_sha256") || !(*old)["file_sha256"].is_string())
                 return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint frame selection or pixels changed"));
             record = *old;
@@ -321,10 +358,25 @@ namespace lfs::media::detail {
                     return SinkResult::failure(digest.error());
                 if (*digest != record["file_sha256"].get<std::string>())
                     return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint output is truncated or modified"));
+                image_retained = true;
+            }
+            if (sidecar_metadata_) {
+                if (auto recovered = discardReservation(sidecar_destination); !recovered)
+                    return recovered;
+                if (lfs::core::native_fs::exists(sidecar_destination)) {
+                    const auto digest = fileDigest(sidecar_destination, cancelled_, core::image_codecs::max_xmp_packet_bytes);
+                    if (!digest)
+                        return SinkResult::failure(digest.error());
+                    if (*digest != record["sidecar_sha256"].get<std::string>())
+                        return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint sidecar is truncated or modified"));
+                    sidecar_retained = true;
+                }
+            }
+            if (image_retained && (!sidecar_metadata_ || sidecar_retained)) {
                 ++accepted_;
                 return {};
             }
-        } else if (lfs::core::native_fs::exists(destination)) {
+        } else if (lfs::core::native_fs::exists(destination) || (sidecar_metadata_ && lfs::core::native_fs::exists(sidecar_destination))) {
             return SinkResult::failure(checkpointError(ErrorCode::AlreadyExists, "Untracked output cannot be overwritten by resume"));
         }
         // Encode once with the existing file sink. Record the exact encoded bytes
@@ -333,7 +385,7 @@ namespace lfs::media::detail {
         staging_options.output_directory = checkpoint_;
         staging_options.remove_stale_frames = false;
         staging_options.image_output.overwrite = true;
-        if (output_.files.embed_source_metadata)
+        if (output_.files.embed_source_metadata || sidecar_metadata_)
             staging_options.image_output.cancelled = cancelled_;
         staging_options.exr.overwrite = true;
         staging_options.tiff16.overwrite = true;
@@ -343,59 +395,82 @@ namespace lfs::media::detail {
         staging_options.jxl.overwrite = true;
         staging_options.jxl.cancelled = cancelled_;
         const auto staged = checkpoint_ / name;
-        Result<std::string> encoded_digest = std::string{};
-        if (gpu_jpeg_) {
-            std::vector<std::uint8_t> packed;
-            const auto* pixels = frame.pixels.data();
-            if (frame.layout.row_stride != row_bytes) {
-                packed.reserve(row_bytes * frame.layout.height);
-                for (int row = 0; row < frame.layout.height; ++row) {
-                    const auto bytes = frame.pixels.subspan(static_cast<std::size_t>(row) * frame.layout.row_stride, row_bytes);
-                    packed.insert(packed.end(), bytes.begin(), bytes.end());
+        Result<std::string> encoded_digest = image_retained ? record["file_sha256"].get<std::string>() : std::string{};
+        if (!image_retained) {
+            if (gpu_jpeg_) {
+                std::vector<std::uint8_t> packed;
+                const auto* pixels = frame.pixels.data();
+                if (frame.layout.row_stride != row_bytes) {
+                    packed.reserve(row_bytes * frame.layout.height);
+                    for (int row = 0; row < frame.layout.height; ++row) {
+                        const auto bytes = frame.pixels.subspan(static_cast<std::size_t>(row) * frame.layout.row_stride, row_bytes);
+                        packed.insert(packed.end(), bytes.begin(), bytes.end());
+                    }
+                    pixels = packed.data();
                 }
-                pixels = packed.data();
-            }
-            const auto quality = std::clamp(output_.files.jpeg_quality == 0 ? 90 : output_.files.jpeg_quality, 1, 100);
-            auto encoded = gpu_jpeg_->encode({gpu_jpeg_->queueHost(0, pixels)}, frame.layout.width, frame.layout.height, quality);
-            if (encoded.size() != 1 || encoded[0].empty())
-                return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG encoder returned an incomplete frame"));
-            if (!embedded_metadata_) {
-                Sha256 digest;
-                digest.update(encoded[0]);
-                encoded_digest = digest.finish();
-            }
-            auto staged_result = core::writeFileAtomically(staged, [&](FILE* stream) -> SinkResult {
+                const auto quality = std::clamp(output_.files.jpeg_quality == 0 ? 90 : output_.files.jpeg_quality, 1, 100);
+                auto encoded = gpu_jpeg_->encode({gpu_jpeg_->queueHost(0, pixels)}, frame.layout.width, frame.layout.height, quality);
+                if (encoded.size() != 1 || encoded[0].empty())
+                    return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG encoder returned an incomplete frame"));
+                if (!embedded_metadata_) {
+                    Sha256 digest;
+                    digest.update(encoded[0]);
+                    encoded_digest = digest.finish();
+                }
+                auto staged_result = core::writeFileAtomically(staged, [&](FILE* stream) -> SinkResult {
+                    if (embedded_metadata_)
+                        return writeJpegMetadata(stream, encoded[0], *embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
+                    if (std::fwrite(encoded[0].data(), 1, encoded[0].size(), stream) != encoded[0].size())
+                        return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG staging write failed"));
+                    return {};
+                },
+                                                               {.overwrite = true, .durable = false, .cancelled = cancelled_});
+                if (!staged_result)
+                    return staged_result;
                 if (embedded_metadata_)
-                    return writeJpegMetadata(stream, encoded[0], *embedded_metadata_, frame.layout.width, frame.layout.height, frame.info);
-                if (std::fwrite(encoded[0].data(), 1, encoded[0].size(), stream) != encoded[0].size())
-                    return SinkResult::failure(checkpointError(ErrorCode::Unavailable, "Checkpoint GPU JPEG staging write failed"));
-                return {};
-            },
-                                                           {.overwrite = true, .durable = false, .cancelled = cancelled_});
-            if (!staged_result)
-                return staged_result;
-            if (embedded_metadata_)
+                    encoded_digest = fileDigest(staged, cancelled_);
+            } else {
+                FileFrameSink staging(std::move(staging_options));
+                if (auto begun = staging.beginPrepared({.applied_rotation = applied_rotation_, .source_metadata = source_metadata_}, embedded_metadata_); !begun)
+                    return begun;
+                if (auto written = staging.write(frame); !written)
+                    return written;
+                if (auto completed = staging.complete({SinkOutcome::Completed, 1, {}}); !completed)
+                    return completed;
                 encoded_digest = fileDigest(staged, cancelled_);
-        } else {
-            FileFrameSink staging(std::move(staging_options));
-            if (auto begun = staging.beginPrepared({.applied_rotation = applied_rotation_, .source_metadata = source_metadata_}, embedded_metadata_); !begun)
-                return begun;
-            if (auto written = staging.write(frame); !written)
-                return written;
-            if (auto completed = staging.complete({SinkOutcome::Completed, 1, {}}); !completed)
-                return completed;
-            encoded_digest = fileDigest(staged, cancelled_);
+            }
         }
         if (!encoded_digest)
             return SinkResult::failure(encoded_digest.error());
         if (record.contains("file_sha256") && record["file_sha256"].get<std::string>() != *encoded_digest)
             return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint encoder output changed"));
         record["file_sha256"] = *encoded_digest;
+        const auto staged_sidecar = sidecar_metadata_ ? checkpoint_ / sidecar_name : std::filesystem::path{};
+        if (sidecar_metadata_ && !sidecar_retained) {
+            auto packet = imageXmpPacket(*sidecar_metadata_, frame.layout.width, frame.layout.height, frame.info);
+            if (!packet)
+                return SinkResult::failure(packet.error());
+            Sha256 digest;
+            digest.update({reinterpret_cast<const std::uint8_t*>(packet->data()), packet->size()});
+            const auto sidecar_digest = digest.finish();
+            if (record.contains("sidecar_sha256") && record["sidecar_sha256"].get<std::string>() != sidecar_digest)
+                return SinkResult::failure(checkpointError(ErrorCode::FailedPrecondition, "Checkpoint sidecar output changed"));
+            record["sidecar_sha256"] = sidecar_digest;
+            if (auto saved = core::writeTextFileAtomically(staged_sidecar, *packet, {.overwrite = true, .durable = false, .create_directories = false, .cancelled = cancelled_}); !saved)
+                return saved;
+        }
         if (auto saved = publishRecord(record_path, record); !saved)
             return saved;
-        const auto committed = core::publishStagedFileAtomically(staged, destination, cancelled_);
-        if (!committed)
-            return committed;
+        if (!image_retained) {
+            const auto committed = core::publishStagedFileAtomically(staged, destination, cancelled_);
+            if (!committed)
+                return committed;
+        }
+        if (sidecar_metadata_ && !sidecar_retained) {
+            const auto committed = core::publishStagedFileAtomically(staged_sidecar, sidecar_destination, cancelled_);
+            if (!committed)
+                return committed;
+        }
         ++accepted_;
         return {};
     }
@@ -408,12 +483,14 @@ namespace lfs::media::detail {
     SinkResult ResumableFileSink::complete(const SinkSummary&) {
         active_ = false;
         embedded_metadata_.reset();
+        sidecar_metadata_.reset();
         source_metadata_.reset();
         return {};
     }
     void ResumableFileSink::abort(const SinkSummary&) noexcept {
         active_ = false;
         embedded_metadata_.reset();
+        sidecar_metadata_.reset();
         source_metadata_.reset();
     }
 } // namespace lfs::media::detail

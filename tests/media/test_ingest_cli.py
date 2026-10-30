@@ -1980,6 +1980,54 @@ class IngestCLI(unittest.TestCase):
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
 
+    def test_source_metadata_sidecars_cli(self):
+        import xml.etree.ElementTree as ET
+        directory = self.root / "source-sidecars é 日本語"
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--format", "png", "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
+        self.assertTrue(result["success"])
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["sidecar_metadata_policy"], "image-static-source-xmp-v1")
+        self.assertTrue(manifest["frames"])
+        before = {}
+        for entry in manifest["frames"]:
+            self.assertEqual(entry["sidecar"], entry["file"] + ".xmp")
+            image, sidecar = directory / entry["file"], directory / entry["sidecar"]
+            ET.fromstring(sidecar.read_bytes())
+            before[image.name] = image.read_bytes(), image.stat().st_mtime_ns
+            before[sidecar.name] = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--format", "png", "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
+        self.assertTrue(result["success"])
+        self.assertEqual(before, {name: ((directory / name).read_bytes(), (directory / name).stat().st_mtime_ns) for name in before})
+
+    def test_source_metadata_sidecars_cli_recovers_and_refuses_corruption(self):
+        directory = self.root / "sidecar-cli-recovery"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+        self.invoke(*args)
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertTrue(manifest["frames"])
+        entry = manifest["frames"][0]
+        image, sidecar = directory / entry["file"], directory / entry["sidecar"]
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
+        packet = sidecar.read_bytes()
+        sidecar.unlink()
+        self.invoke(*args)
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+        self.assertEqual(sidecar.read_bytes(), packet)
+        sidecar_snapshot = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        image.unlink()
+        self.invoke(*args)
+        self.assertEqual(image.read_bytes(), image_snapshot[0])
+        self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
+        sidecar.write_bytes(packet + b" ")
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
+        result, _ = self.invoke(*args, code=4)
+        self.assertEqual(result["error"]["code"], "FailedPrecondition")
+        self.assertEqual(sidecar.read_bytes(), packet + b" ")
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+
     def test_embedded_avif_metadata_cli(self):
         import xml.etree.ElementTree as ET
         directory = self.root / "embedded-avif"

@@ -33,5 +33,6 @@ namespace lfs::media::detail {
         int applied_rotation_ = 0;
         std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
         std::shared_ptr<const EmbeddedImageMetadata> embedded_metadata_;
+        std::shared_ptr<const EmbeddedImageMetadata> sidecar_metadata_;
     };
 } // namespace lfs::media::detail

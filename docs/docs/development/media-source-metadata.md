@@ -771,3 +771,47 @@ contract; the explicit XMP API handles this packet. Embedding preserves private
 source information, including GPS, identifiers and locator bytes, under the
 existing opt-in preservation policy. No additional encoder or provider overlay
 is required for metadata insertion.
+
+
+### XMP sidecars for extracted frames
+
+`FileExtraction::write_source_metadata_sidecars`, the matching Python property,
+and CLI `--source-metadata-sidecars` write one UTF-8 XMP file beside each selected
+image. The name is the complete image filename followed by `.xmp`, for example
+`frame_1.jpg.xmp`. Keeping the image extension avoids collisions between image
+formats. The extraction manifest records `sidecar` on each frame,
+`sidecar_metadata_policy: image-static-source-xmp-v1` and
+`sidecar_naming: image-filename-plus-xmp-v1`.
+
+The packet uses the shared source catalog, frame timing, output dimensions and
+applied rotation. The same 32 MiB packet ceiling and XML escaping apply. Static
+GPS and container creation facts remain static source observations. This is an
+explicit preservation option and can retain private identifiers, GPS and locator
+bytes. It also enables source preservation in the manifest. Embedded metadata
+can be requested independently or together with the sidecar; without embedding,
+the image writer receives no additional metadata.
+
+Sidecar extraction uses the existing verified checkpoint even when `resume` is
+false. It retains `.media-ingest-checkpoint` to support recovery, rejects stale
+frame removal, and never adopts untracked output. Before either file is published,
+the checkpoint records the selected pixels, image digest, sidecar digest, timing
+and names. Image and sidecar publication each use the existing atomic no-replace
+operation. The pair is not a single atomic transaction: an interruption can leave
+one published member. On the next identical request, replay verifies each
+retained member and regenerates only a missing member. A retained image is not
+re-encoded when only its sidecar is missing. Modified members are refused; only
+tracked zero-length reservations use the existing reservation recovery policy.
+Sidecar verification stops at the packet byte budget. Identity includes the
+sidecar policy, naming, source properties and existing source/selection/encoder
+identity. A different source locator, timing origin or metadata mode cannot
+silently adopt the checkpoint.
+
+Use the same sidecar option and output directory to recover an interrupted run.
+Choose a fresh output directory when intentionally changing its identity.
+Publication is not a power-loss durability guarantee. Concurrent or external
+modification is not repaired by overwriting an unexpected file.
+
+This consumer is file extraction through MediaIngest (C++, Python and CLI).
+External XMP collection and automatic sidecar discovery remain separate readers;
+export does not enable them. Generic rendered image sequences continue to use
+their existing APIs.

@@ -112,7 +112,7 @@ namespace lfs::media {
                     return failure(ErrorCode::InvalidArgument, "HDR float profiles require float output without HDR tone mapping", 0);
                 auto p = parameters(request);
                 if (files) {
-                    p.allow_hardware_encode = !files->resume;
+                    p.allow_hardware_encode = !files->resume && !files->write_source_metadata_sidecars;
                     p.output_dir = files->files.output_directory;
                     p.filename_pattern = files->files.filename_pattern;
                     p.first_source_frame_number = files->files.first_source_frame_number;
@@ -122,17 +122,18 @@ namespace lfs::media {
                                                                                                   : files->files.format == FrameFileFormat::EXR    ? io::ImageFormat::EXR
                                                                                                                                                    : io::ImageFormat::JPG;
                     p.jpg_quality = files->files.jpeg_quality;
-                    p.preserve_source_metadata = files->preserve_source_metadata || files->files.embed_source_metadata;
+                    p.preserve_source_metadata = files->preserve_source_metadata || files->files.embed_source_metadata || files->write_source_metadata_sidecars;
                     p.embed_source_metadata = files->files.embed_source_metadata;
+                    p.write_source_metadata_sidecars = files->write_source_metadata_sidecars;
                     p.jpeg_metadata_output = files->files.image_output;
-                    if (p.embed_source_metadata && detail::embeddedMetadataPolicy(files->files.format).empty())
+                    if ((p.embed_source_metadata || p.write_source_metadata_sidecars) && detail::embeddedMetadataPolicy(files->files.format).empty())
                         return failure(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output", 0);
                     p.generate_metadata = files->write_metadata || p.preserve_source_metadata || files->files.format == FrameFileFormat::EXR || files->files.format == FrameFileFormat::TIFF16 || files->files.format == FrameFileFormat::JXL || files->files.format == FrameFileFormat::AVIF;
                     // Resume regenerates the derived manifest only after the sink
                     // verifies the checkpoint identity and every recorded frame.
-                    p.overwrite_metadata = files->resume || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
-                                                                                                                                      : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
-                                                                                                                                                                                       : files->files.exr.overwrite);
+                    p.overwrite_metadata = files->resume || files->write_source_metadata_sidecars || (files->files.format == FrameFileFormat::AVIF ? files->files.avif.overwrite : files->files.format == FrameFileFormat::JXL  ? files->files.jxl.overwrite
+                                                                                                                                                                               : files->files.format == FrameFileFormat::TIFF16 ? files->files.tiff16.overwrite
+                                                                                                                                                                                                                                : files->files.exr.overwrite);
                     p.tiff16_transfer = files->files.tiff16.transfer;
                     p.jxl_lossless = files->files.jxl.lossless;
                     p.jxl_distance = files->files.jxl.distance;
@@ -200,7 +201,7 @@ namespace lfs::media {
                 io::VideoFrameExtractor engine;
                 auto file_options = files ? files->files : FileFrameSinkOptions{};
                 file_options.preserve_metadata = p.generate_metadata;
-                if (files && files->files.embed_source_metadata) {
+                if (files && (files->files.embed_source_metadata || files->write_source_metadata_sidecars)) {
                     const auto sink_cancel = files->files.image_output.cancelled;
                     file_options.image_output.cancelled = [&, sink_cancel] { return (request.cancelled && request.cancelled()) || (sink_cancel && sink_cancel()); };
                     p.jpeg_metadata_output = file_options.image_output;
@@ -228,7 +229,7 @@ namespace lfs::media {
                 }
                 FileFrameSink file_sink(std::move(file_options));
                 std::unique_ptr<detail::ResumableFileSink> resume_sink;
-                if (files && files->resume)
+                if (files && (files->resume || files->write_source_metadata_sidecars))
                     resume_sink = std::make_unique<detail::ResumableFileSink>(request, *files);
                 TrackingSink tracked(sink ? *sink : resume_sink ? static_cast<FrameSink&>(*resume_sink)
                                                                 : static_cast<FrameSink&>(file_sink));

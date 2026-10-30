@@ -1040,6 +1040,11 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
+            if (params.write_source_metadata_sidecars && (!provided_sink || !legacy_file_policy || !params.preserve_source_metadata || embeddedMetadataPolicy(params.format).empty())) {
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Source metadata sidecars require the MediaIngest file checkpoint sink", .detection = LFS_SOURCE_SITE_CURRENT()});
+                error = std::string(failure_->detail());
+                return false;
+            }
             if (params.embed_source_metadata && (!params.preserve_source_metadata || embeddedMetadataPolicy(params.format).empty())) {
                 failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
@@ -1592,7 +1597,7 @@ namespace lfs::io {
                             throw std::runtime_error(std::string(failure_->detail()));
                         }
                         source_metadata = media::json_detail::sourceMetadataResult(*catalog, *summary);
-                        if (params.embed_source_metadata)
+                        if (params.embed_source_metadata || params.write_source_metadata_sidecars)
                             session.source_metadata = std::make_shared<const media::SourceMetadataCatalog>(std::move(*catalog));
                     } catch (const std::bad_alloc&) {
                         failure_ = make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Source metadata snapshot allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()});
@@ -2685,6 +2690,10 @@ namespace lfs::io {
                         root["schema_version"] = 2;
                         if (params.embed_source_metadata)
                             root["embedded_metadata_policy"] = embeddedMetadataPolicy(params.format);
+                        if (params.write_source_metadata_sidecars) {
+                            root["sidecar_metadata_policy"] = media::detail::sidecar_metadata_policy;
+                            root["sidecar_naming"] = "image-filename-plus-xmp-v1";
+                        }
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);
@@ -2973,6 +2982,10 @@ namespace lfs::io {
                                               {"timestamp_origin", f.frame.timestamp_origin == media::TimestampOrigin::BestEffort ? "best_effort" : f.frame.timestamp_origin == media::TimestampOrigin::Presentation ? "presentation"
                                                                                                                                                                                                                      : "missing"}});
                         }
+
+                        if (params.write_source_metadata_sidecars)
+                            for (auto& frame : frames)
+                                frame["sidecar"] = frame["file"].get<std::string>() + ".xmp";
 
                         // SDR historically replaces its manifest; float output has
                         // an explicit collision policy. Preserve both contracts.

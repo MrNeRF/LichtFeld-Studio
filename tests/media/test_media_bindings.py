@@ -901,7 +901,7 @@ class MediaBindings(unittest.TestCase):
         del request, report, file_report
         self.assertEqual(before, frames[0].pixels)
 
-    def metadata_request(self, multitrack=False):
+    def metadata_request(self, multitrack=False, comment="STATIC_METADATA_SENTINEL"):
         request = self.request()
         path = self.root / (self._testMethodName + ".mkv")
         command = [os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-y", "-i", str(request.input)]
@@ -910,7 +910,7 @@ class MediaBindings(unittest.TestCase):
         command += ["-map", "0:v:0", "-c:v", "copy"]
         if multitrack:
             command += ["-map", "1:a:0", "-c:a", "pcm_s16le", "-metadata:s:a:0", "title=AUDIO_METADATA_SENTINEL", "-shortest"]
-        command += ["-metadata", "comment=STATIC_METADATA_SENTINEL", "-metadata", "location=+01.2500+002.5000/",
+        command += ["-metadata", "comment=" + comment, "-metadata", "location=+01.2500+002.5000/",
                     "-write_crc32", "0", str(path)]
         subprocess.run(command, check=True, capture_output=True, timeout=30)
         request.input = path
@@ -1406,6 +1406,177 @@ class MediaBindings(unittest.TestCase):
                     self.assertEqual(decoded[0], decoded[1])
                     with self.assertRaises(AssertionError):
                         source_exif_fixture.read_export_avif(data[:12])
+
+    def test_source_metadata_sidecars_cover_all_formats_and_preserve_images(self):
+        import xml.etree.ElementTree as ET
+        for name, fmt, extension in (("png", media.FrameFileFormat.PNG, ".png"),
+                                     ("jpeg", media.FrameFileFormat.JPEG, ".jpg"),
+                                     ("tiff", media.FrameFileFormat.TIFF16, ".tif"),
+                                     ("exr", media.FrameFileFormat.EXR, ".exr"),
+                                     ("jxl", media.FrameFileFormat.JXL, ".jxl"),
+                                     ("avif", media.FrameFileFormat.AVIF, ".avif")):
+            with self.subTest(format=name):
+                request = self.metadata_request(multitrack=(name == "avif"), comment='A<&"' * 4000)
+                request.end_seconds = .21 if name == "png" else .01
+                request.geometry.clockwise_rotation = 90
+                if name not in ("png", "jpeg"):
+                    request.output_format = media.FramePixelFormat.RGBFloat32
+                    request.input_color.transfer = media.ColorTransfer.Linear
+                    request.input_color.primaries = media.ColorPrimaries.Bt709
+                plain = media.FileExtraction()
+                plain.files.format = fmt
+                plain.files.output_directory = self.root / ("plain-" + name)
+                media.MediaIngest.extract_files(request, plain)
+                output = media.FileExtraction()
+                output.files.format = fmt
+                output.files.output_directory = self.root / ("sidecar é 日本語-" + name)
+                output.write_source_metadata_sidecars = True
+                self.assertFalse(output.resume)
+                self.assertGreater(media.MediaIngest.extract_files(request, output).frames_accepted, 0)
+                root = output.files.output_directory
+                manifest = json.loads((root / "extraction_metadata.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["sidecar_metadata_policy"], "image-static-source-xmp-v1")
+                self.assertEqual(manifest["sidecar_naming"], "image-filename-plus-xmp-v1")
+                if name == "png":
+                    self.assertGreater(len(manifest["frames"]), 1)
+                video = next(stream for stream in manifest["source_metadata"]["metadata"]["description"]["streams"] if stream["kind"] == "video")
+                for entry in manifest["frames"]:
+                    image = root / entry["file"]
+                    self.assertEqual(image.suffix, extension)
+                    self.assertEqual(image.read_bytes(), (plain.files.output_directory / image.name).read_bytes())
+                    self.assertEqual(entry["sidecar"], image.name + ".xmp")
+                    packet = (root / entry["sidecar"]).read_bytes()
+                    self.assertGreater(len(packet), 65535)
+                    facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packet).iter()
+                             if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+                    self.assertEqual(facts["MetadataPolicy"], "image-static-source-xmp-v1")
+                    self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+                    self.assertEqual((facts["PixelWidth"], facts["PixelHeight"]), ("32", "64"))
+                    self.assertEqual(facts["AppliedClockwiseRotation"], "90")
+                    self.assertEqual(int(facts["SourceFrame"]), entry["source_frame"])
+                    self.assertEqual(int(facts["SourceTimestampTicks"]), entry["source_pts"])
+                    self.assertEqual(facts["TimestampOrigin"], entry["timestamp_origin"])
+                    self.assertEqual([int(facts["SourceTimeBaseNumerator"]), int(facts["SourceTimeBaseDenominator"])], video["time_base"])
+                    if name == "jxl":
+                        # The external FFmpeg test tools need not ship a JXL decoder.
+                        # Exercise the full production decoder through the native test adapter.
+                        config = self.root / "decode-jxl.json"
+                        config.write_text(json.dumps({"operation": "decode-image", "input": str(image)}), encoding="utf-8")
+                        runner = METADATA_CLI.with_name("media_extraction_runner" + (".exe" if os.name == "nt" else ""))
+                        decoded = json.loads(subprocess.check_output([str(runner), str(config)], timeout=30))
+                        self.assertEqual((decoded["width"], decoded["height"]), (32, 64))
+                        self.assertGreater(decoded["bytes"], 0)
+                    else:
+                        decoded = subprocess.check_output([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"),
+                                   "-v", "error", "-i", str(image), "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-"], timeout=30)
+                        self.assertEqual(len(decoded), 32 * 64 * 12)
+                before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.suffix in (extension, ".xmp")}
+                media.MediaIngest.extract_files(request, output)
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in root.iterdir() if p.suffix in (extension, ".xmp")})
+
+    def test_source_metadata_sidecars_recover_partial_pairs_and_refuse_tampering(self):
+        request = self.metadata_request()
+        request.end_seconds = .01
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "partial pair é"
+        output.write_source_metadata_sidecars = True
+        root = output.files.output_directory
+        image = root / "frame_1.png"
+        sidecar = root / "frame_1.png.xmp"
+        # Cancel after the image publication, before its sidecar is published.
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output, cancelled=lambda: image.exists() and not sidecar.exists())
+        self.assertTrue(image.is_file())
+        self.assertFalse(sidecar.exists())
+        record_path = root / ".media-ingest-checkpoint/frame-0.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        original_image = image.read_bytes(), image.stat().st_mtime_ns
+        self.assertEqual(record["file_sha256"], hashlib.sha256(original_image[0]).hexdigest())
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual(original_image, (image.read_bytes(), image.stat().st_mtime_ns))
+        original_sidecar = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        self.assertEqual(record["sidecar_sha256"], hashlib.sha256(original_sidecar[0]).hexdigest())
+        # Recover the opposite partial pair without replacing the retained XMP.
+        image.unlink()
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual(image.read_bytes(), original_image[0])
+        self.assertEqual(original_sidecar, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
+        sidecar.write_bytes(original_sidecar[0] + b" ")
+        tampered = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(tampered, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+        sidecar.write_bytes(original_sidecar[0])
+        media.MediaIngest.extract_files(request, output)
+        # Only a tracked empty reservation may be regenerated.
+        sidecar.write_bytes(b"")
+        media.MediaIngest.extract_files(request, output)
+        self.assertEqual(sidecar.read_bytes(), original_sidecar[0])
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+        with sidecar.open("wb") as stream:
+            stream.truncate(32 * 1024 * 1024 + 1)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(sidecar.stat().st_size, 32 * 1024 * 1024 + 1)
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+        sidecar.write_bytes(original_sidecar[0])
+        original_record = record_path.read_bytes()
+        for key, value in (("sidecar", "../foreign.xmp"), ("sidecar_sha256", []), ("timestamp_origin", 99)):
+            bad_record = json.loads(original_record)
+            bad_record[key] = value
+            record_path.write_text(json.dumps(bad_record), encoding="utf-8")
+            with self.assertRaises(MEDIA_ERROR):
+                media.MediaIngest.extract_files(request, output)
+            self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+            self.assertEqual(sidecar.read_bytes(), original_sidecar[0])
+            record_path.write_bytes(original_record)
+        media.MediaIngest.extract_files(request, output)
+        # Destination changes and source locator aliases must not adopt a pair.
+        output.resume = True
+        output.write_source_metadata_sidecars = False
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        output.write_source_metadata_sidecars = True
+        alias = self.root / "same source alias.mkv"
+        shutil.copyfile(request.input, alias)
+        original_source = request.input
+        request.input = alias
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        request.input = original_source
+        media.MediaIngest.extract_files(request, output)
+
+    def test_source_metadata_sidecars_refuse_untracked_companions(self):
+        request = self.metadata_request()
+        request.end_seconds = .01
+        output = media.FileExtraction()
+        output.files.output_directory = self.root / "foreign-sidecar"
+        output.write_source_metadata_sidecars = True
+        root = output.files.output_directory
+        root.mkdir()
+        foreign = root / "frame_1.png.xmp"
+        foreign.write_bytes(b"foreign XMP")
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(foreign.read_bytes(), b"foreign XMP")
+        self.assertFalse((root / "frame_1.png").exists())
+        foreign.write_bytes(b"")
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.extract_files(request, output)
+        self.assertEqual(foreign.read_bytes(), b"")
+        self.assertFalse((root / "frame_1.png").exists())
+        foreign.unlink()
+        media.MediaIngest.extract_files(request, output)
+        output.files.embed_source_metadata = True
+        output.files.output_directory = self.root / "both metadata destinations"
+        media.MediaIngest.extract_files(request, output)
+        root = output.files.output_directory
+        image = next(root.glob("*.png"))
+        observed = json.loads(media.MediaIngest.source_metadata_json(image))
+        self.assertEqual(observed["metadata"]["image_xmp"]["status"], "collected")
+        self.assertTrue(Path(str(image) + ".xmp").is_file())
 
     def test_avif_item_oracle_rejects_undeclared_reference_origin(self):
         def box(kind, payload):
