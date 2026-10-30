@@ -2565,6 +2565,8 @@ namespace lfs::core {
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
 
+                // The copies stay on the result's queue, which already follows each input's producer, so the host
+                // need not wait for them.
                 for (size_t i = 1; i < tensors.size(); ++i) {
                     const size_t bytes = tensors[i].bytes();
                     const size_t tensor_rows = tensors[i].shape()[0];
@@ -2578,7 +2580,7 @@ namespace lfs::core {
                             .dst = internal::offset_storage_ref(
                                 internal::storage_ref(result), offset),
                             .bytes = bytes,
-                            .synchronous = true,
+                            .synchronous = false,
                             .context = internal::ExecContext{result.stream()},
                         });
                     offset += bytes;
@@ -2620,6 +2622,7 @@ namespace lfs::core {
         if (resolved_dim == 0) {
             // Concatenating along first dimension - completely contiguous
             if (first_device == Device::GPU) {
+                // Queue-ordered copies, as in the in-place path: no host wait per input.
                 size_t offset = 0;
                 for (const auto& t : tensors) {
                     size_t bytes = t.bytes();
@@ -2629,7 +2632,7 @@ namespace lfs::core {
                             .dst = internal::offset_storage_ref(
                                 internal::storage_ref(result), offset),
                             .bytes = bytes,
-                            .synchronous = true,
+                            .synchronous = false,
                             .context = internal::ExecContext{result.stream()},
                         });
                     offset += bytes;
