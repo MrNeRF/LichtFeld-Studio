@@ -3,14 +3,14 @@
 
 #include "core/tensor_cuda_interop.hpp"
 
-#include "core/cuda_vulkan_interop.hpp"
-#include "core/tensor_backend.hpp"
 #include "../../internal/tensor_impl.hpp"
 #include "../native_pressure.hpp"
 #include "../random_state.hpp"
 #include "../reduction_tuning.hpp"
 #include "../target_lifetime.hpp"
+#include "core/cuda_vulkan_interop.hpp"
 #include "core/pinned_allocator_stats.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <stdexcept>
 
