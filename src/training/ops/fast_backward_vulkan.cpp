@@ -26,12 +26,12 @@ namespace lfs::training::vulkan {
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
             uint64_t impact_sum, impact_peak;
         };
-        static_assert(sizeof(BackPush) == 568);
-        static_assert(offsetof(BackPush, impact_sum) == 552);
-        static_assert(offsetof(BackPush, image_gradient) == 336);
-        static_assert(offsetof(BackPush, densify) == 456);
-        static_assert(offsetof(BackPush, scale_weight) == 468);
-        static_assert(offsetof(BackPush, opacity_elements) == 484);
+        static_assert(sizeof(BackPush) == 576);
+        static_assert(offsetof(BackPush, impact_sum) == 560);
+        static_assert(offsetof(BackPush, image_gradient) == 344);
+        static_assert(offsetof(BackPush, densify) == 464);
+        static_assert(offsetof(BackPush, scale_weight) == 476);
+        static_assert(offsetof(BackPush, opacity_elements) == 492);
     } // namespace
     void fast_pop_scores(const FastSaved& saved, In bg_color, In bg_image, Out scores) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast POP scores require a created state");
@@ -59,7 +59,7 @@ namespace lfs::training::vulkan {
         const std::array writes{ref(scratch)};
         dispatch(context->caps().shader_atomic_float ? "fast_backward_atomic" : "fast_backward", b,
                  reads, writes, std::min(s.push.grid_width * s.push.grid_height, context->caps().max_workgroup_count[0]),
-                 specialization(s.push, 0) | (1u << 23) | (1u << 24));
+                 s.variant(0) | (1u << 23) | (1u << 24));
         accumulate_pop_view_scores(scores, scratch);
     }
     void fast_backward(FastSaved& saved, const RenderGradients& gradient, Out densification, In error,
@@ -182,7 +182,7 @@ namespace lfs::training::vulkan {
             }
         }
         const std::string_view shader = context->caps().shader_atomic_float ? "fast_backward_atomic" : "fast_backward";
-        const uint32_t variant = specialization(p, 0) |
+        const uint32_t variant = s.variant(0) |
                                  (uint32_t(b.depth_gradient != 0) << 18) | (uint32_t(b.normal_gradient != 0) << 19) |
                                  (uint32_t(b.densify != 0 && b.densification != 0) << 20) | (uint32_t(b.scores != 0) << 21) |
                                  (uint32_t(count_visible) << 22) | (uint32_t(impact) << 23);
@@ -246,6 +246,7 @@ namespace lfs::training {
             if (saved.backend) {
                 auto& state = static_cast<vulkan::FastState&>(*saved.backend);
                 const bool indirect = state.indirect;
+                const bool quadrants = state.quadrants;
                 const bool submit_before_status = state.submit_before_status;
                 auto* timer = state.timer;
                 auto scratch = std::move(state.scratch);
@@ -253,6 +254,7 @@ namespace lfs::training {
                 state = vulkan::FastState{};
                 state.timer = timer;
                 state.indirect = indirect;
+                state.quadrants = quadrants;
                 state.submit_before_status = submit_before_status;
                 state.scratch = std::move(scratch);
                 state.scalar_readback = std::move(readback);
@@ -301,6 +303,7 @@ namespace lfs::training {
             record_vram_tensor(scope, "forward.depth_values_a", s.depth_values_a);
             record_vram_tensor(scope, "forward.depth_values_b", s.depth_values_b);
             record_vram_tensor(scope, "forward.ordered_counts", s.ordered_counts);
+            record_vram_tensor(scope, "forward.contributors", s.contributors);
             record_vram_tensor(scope, "output.depth", s.depth);
             record_vram_tensor(scope, "output.normal", s.normal);
             record_vram_current(scope, "backward.screen_gradient", backward ? size_t(s.push.visible) * 16 * 4 : 0, true);

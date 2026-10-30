@@ -389,6 +389,19 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast_common.slangh"
             "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh" lfs_tensor_spirv_finalize
     VERBATIM)
+set(_fast_forward_quadrant_spv "${LFS_TRAINING_SPV_DIR}/fast_forward_quadrant.spv")
+add_custom_command(
+    OUTPUT "${_fast_forward_quadrant_spv}" "${LFS_TRAINING_SPV_DIR}/fast_forward_quadrant.json"
+    COMMAND ${LFS_TENSOR_SLANGC} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast_forward.slang"
+            -entry main -stage compute -O -fp-mode precise -line-directive-mode none
+            -target spirv -profile glsl_460 -emit-spirv-directly -D FAST_FORWARD_THREADS=128
+            -o "${LFS_TRAINING_SPV_DIR}/fast_forward_quadrant.raw.spv"
+    COMMAND lfs_tensor_spirv_finalize "${LFS_TRAINING_SPV_DIR}/fast_forward_quadrant.raw.spv"
+            "${_fast_forward_quadrant_spv}" "${LFS_TRAINING_SPV_DIR}/fast_forward_quadrant.json"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast_forward.slang"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fast_common.slangh"
+            "${CMAKE_SOURCE_DIR}/src/core/tensor/backend/vulkan/shaders/sh_decode.slangh" lfs_tensor_spirv_finalize
+    VERBATIM)
 foreach(_variant IN ITEMS fast_backward fast_backward_atomic)
     if(_variant STREQUAL "fast_backward_atomic")
         set(_native 1)
@@ -541,7 +554,7 @@ add_custom_command(
             pair_sort "${_pair_sort_spv}" pair_sort_match "${_pair_sort_match_spv}" pair_sort_ballot "${_pair_sort_ballot_spv}"
             fast_backward "${LFS_TRAINING_SPV_DIR}/fast_backward.spv"
             fast_backward_atomic "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv"
-            fast_forward "${_fast_forward_spv}" photometric "${_photometric_spv}"
+            fast_forward "${_fast_forward_spv}" fast_forward_quadrant "${_fast_forward_quadrant_spv}" photometric "${_photometric_spv}"
             photometric_fused "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv"
             photometric_fused_gradient "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
             sh_ops "${_sh_ops_spv}" extra_loss "${_extra_loss_spv}" adam "${_adam_spv}"
@@ -560,7 +573,7 @@ add_custom_command(
             geometry "${_geometry_spv}" geometry_fp32 "${_geometry_fp32_spv}"
     DEPENDS "${_blob_spv}" "${_structure_spv}" "${_flip_spv}" "${LFS_TRAINING_SPV_DIR}/fast_backward.spv" "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv" "${_gsplat_forward_spv}" "${LFS_TRAINING_SPV_DIR}/gsplat_backward.spv" "${LFS_TRAINING_SPV_DIR}/gsplat_backward_atomic.spv"
             "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv" "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
-            "${_fast_forward_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_pair_sort_ballot_spv}" lfs_tensor_spirv_finalize
+            "${_fast_forward_spv}" "${_fast_forward_quadrant_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_pair_sort_ballot_spv}" lfs_tensor_spirv_finalize
             "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_mesh_mask_spv}" ${_bilateral_spv} "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
             "${CMAKE_CURRENT_SOURCE_DIR}/training_shader_table.hpp"
     COMMENT "embed training shaders"

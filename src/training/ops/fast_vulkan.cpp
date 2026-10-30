@@ -19,7 +19,7 @@ namespace lfs::training::vulkan {
                 result.push_back(ref(t));
         for (const auto* t : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work, &s.work_to_original,
                               &s.counts, &s.keys_a, &s.keys_b, &s.values_a, &s.values_b, &s.ranges, &s.transmittance, &s.last,
-                              &s.depth_keys_a, &s.depth_keys_b, &s.depth_values_a, &s.depth_values_b, &s.ordered_counts,
+                              &s.depth_keys_a, &s.depth_keys_b, &s.depth_values_a, &s.depth_values_b, &s.ordered_counts, &s.contributors,
                               &s.image, &s.alpha, &s.depth, &s.normal})
             if (t->is_valid() && t->numel())
                 result.push_back(ref(*t));
@@ -71,7 +71,7 @@ namespace lfs::training::vulkan {
                                 &s.work_to_original, &s.inputs[11], &s.ordered_counts});
             } else if (stage == 3) {
                 append(reads, {&s.projected, &s.offsets, &s.depth_values_a, &s.depth_values_b});
-                append(writes, {&s.keys_a, &s.values_a});
+                append(writes, {&s.keys_a, &s.values_a, &s.counts});
             } else if (stage == 9) {
                 append(reads, {&s.projected, &s.counts, &s.offsets});
                 append(writes, {&s.depth_keys_a, &s.depth_values_a, &s.visibility});
@@ -85,15 +85,18 @@ namespace lfs::training::vulkan {
                 LFS_ASSERT_MSG(stage == 5, "Unexpected forward raster stage");
                 append(reads, {&s.projected, &s.values_a, &s.values_b, &s.ranges,
                                &s.inputs[9], &s.inputs[10]});
-                append(writes, {&s.image, &s.alpha, &s.depth, &s.normal,
-                                &s.transmittance, &s.last});
+                // The quadrant blend compacts tile lists in place, stores
+                // contributor records separately and marks
+                // contributing splats in the spent tile counts.
+                append(writes, {&s.image, &s.alpha, &s.depth, &s.normal, &s.transmittance, &s.last,
+                                &s.contributors, &s.values_a, &s.values_b, &s.ranges, &s.counts});
             }
             if (s.push.padding != 0 && stage >= 3 && stage <= 5) {
                 const size_t word = stage == 3 ? 4 : stage == 4 ? 12
                                                                 : 20;
-                dispatch("fast_forward", s.push, reads, writes, 0, specialization(s.push, stage), ref(s.visibility), word * 4);
+                dispatch("fast_forward", s.push, reads, writes, 0, s.variant(stage), ref(s.visibility), word * 4);
             } else
-                dispatch("fast_forward", s.push, reads, writes, groups(work), specialization(s.push, stage));
+                dispatch("fast_forward", s.push, reads, writes, groups(work), s.variant(stage));
         }
         RasterResult failure(FastState& s, RasterResult::Code code, std::string message) {
             s.message = std::move(message);
@@ -139,7 +142,7 @@ namespace lfs::training::vulkan {
                              &s.work_to_original, &s.counts, &s.keys_a, &s.keys_b,
                              &s.values_a, &s.values_b, &s.ranges, &s.transmittance,
                              &s.last, &s.depth_keys_a, &s.depth_keys_b,
-                             &s.depth_values_a, &s.depth_values_b, &s.ordered_counts})
+                             &s.depth_values_a, &s.depth_values_b, &s.ordered_counts, &s.contributors})
             *tensor = Tensor{};
         auto& p = s.push;
         p = {};
@@ -278,6 +281,9 @@ namespace lfs::training::vulkan {
                         s.values_a = Tensor(s.scratch[10]);
                         s.values_b = Tensor(s.scratch[11]);
                         p.instances = capacity;
+                        // Depth-ordered tile keys are 32-bit; contributor records need two words.
+                        s.contributors = s.temporary(32, capacity, DataType::Int64);
+                        p.contributors = address(s.contributors);
                         p.keys = address(s.keys_a);
                         p.values = address(s.values_a);
                         p.stage = 8;
@@ -329,6 +335,8 @@ namespace lfs::training::vulkan {
                         return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
                     p.instances = static_cast<uint32_t>(instances);
                     s.mark(6);
+                    s.contributors = s.temporary(32, p.instances, DataType::Int64);
+                    p.contributors = address(s.contributors);
                     s.keys_a = s.temporary(8, p.instances, key_type);
                     s.keys_b = s.temporary(9, p.instances, key_type);
                     s.values_a = s.temporary(10, p.instances, DataType::UInt32);

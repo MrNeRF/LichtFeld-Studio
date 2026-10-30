@@ -12,7 +12,7 @@ struct FastPush {
     float fx, fy, cx, cy, clipLeft, clipRight, clipTop, clipBottom;
     uint64_t shBounds;
     uint shFormat, padding;
-    uint64_t depthOrder, orderedCounts;
+    uint64_t depthOrder, orderedCounts, contributors;
 };
 void specializeFast(inout FastPush p, uint bits) {
     p.stage = bits & 15;
@@ -155,4 +155,42 @@ float3 background(FastPush p, uint pixel) {
     uint n = p.width * p.height;
     return p.backgroundImage != 0 ? float3(loadFloat(p.backgroundImage, pixel), loadFloat(p.backgroundImage, n + pixel), loadFloat(p.backgroundImage, 2 * n + pixel)) : p.background != 0 ? load3(p.background, 0)
                                                                                                                                                                                           : float3(0);
+}
+
+// Set on every Fast pipeline when wave32 can be required (dispatch.cpp). The
+// blend then runs as four 32-lane subgroups, each owning an 8x8 quadrant of a
+// 16x16 tile with two vertically adjacent pixels per lane; without it all
+// stages keep the subgroup-size independent layout.
+static const uint kFastQuadrants = 1u << 25;
+uint quadrantRank(uint thread, uint row) {
+    uint warp = thread / 32, lane = thread % 32;
+    return ((warp / 2) * 8 + 2 * (lane / 8) + row) * 16 + (warp % 2) * 8 + lane % 8;
+}
+uint quadrantPixel(FastPush p, uint tile, uint rank) {
+    uint x = (tile % p.gridWidth) * 16 + rank % 16;
+    uint y = (tile / p.gridWidth) * 16 + rank / 16;
+    return x < p.width && y < p.height ? y * p.width + x : 0xffffffffu;
+}
+// Rows are evaluated in base 2, exp(-q) = exp2(-log2(e) q), through these two
+// functions only, so the forward and backward blends accept the same splats.
+// Terms that depend on the pixel column are shared by both rows of a lane.
+struct AlphaColumn {
+    float constant, slope, c, opacity;
+};
+AlphaColumn alphaColumn(Projected o, float dx) {
+    AlphaColumn v;
+    v.constant = ((-0.7213475204444817f * o.a) * dx) * dx;
+    v.slope = (-1.4426950408889634f * o.b) * dx;
+    v.c = -0.7213475204444817f * o.c;
+    v.opacity = o.opacity;
+    return v;
+}
+float columnAlpha(AlphaColumn v, float dy) {
+    return v.opacity * exp2(fma(fma(v.c, dy, v.slope), dy, v.constant));
+}
+// Shared staging is private to a subgroup; make its writes visible before reuse.
+void subgroupBarrier() {
+    spirv_asm {
+        OpControlBarrier Subgroup Subgroup AcquireRelease|WorkgroupMemory;
+    };
 }

@@ -4,6 +4,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <string>
@@ -408,6 +409,125 @@ namespace {
             for (size_t field = 0; field < captures[0].size(); ++field) {
                 SCOPED_TRACE(field);
                 EXPECT_TRUE(captures[0][field] == captures[1][field]);
+            }
+        }
+    }
+    TEST(TensorVulkanTrainingFault, QuadrantBlendCompactsTileListsAndMatchesPortableBlend) {
+        using namespace lfs;
+        using core::DataType;
+        using core::Device;
+        using core::Tensor;
+        if (!core::gpu_backend_available(core::GpuBackend::Vulkan))
+            GTEST_SKIP();
+        core::GpuBackendScope scope(core::GpuBackend::Vulkan);
+        const auto& table = training::vulkan_fast_ops();
+        // Dense overlapping splats: tiles hold several 128-entry batches and many
+        // entries no pixel blends, which the quadrant forward drops.
+        for (const size_t count : {size_t{3000}, size_t{131072}}) {
+            SCOPED_TRACE(count);
+            std::vector<float> positions(count * 3), rotations(count * 4), scales(count * 3), opacities(count), colors(count * 3);
+            uint32_t seed = 12345u;
+            const auto next = [&seed] {
+                seed = seed * 1664525u + 1013904223u;
+                return float(seed >> 8) / float(1u << 24);
+            };
+            for (size_t i = 3000; i < count; ++i)
+                positions[i * 3 + 2] = -1.f;
+            for (size_t i = 0; i < 3000; ++i) {
+                const float depth = 2.f + 2.f * next();
+                positions[i * 3] = (next() - 0.5f) * 1.3f * depth;
+                positions[i * 3 + 1] = (next() - 0.5f) * 0.9f * depth;
+                positions[i * 3 + 2] = depth;
+                for (size_t c = 0; c < 4; ++c)
+                    rotations[i * 4 + c] = c == 0 ? 1.f : next() - 0.5f;
+                for (size_t c = 0; c < 3; ++c) {
+                    scales[i * 3 + c] = -4.f + 1.5f * next();
+                    colors[i * 3 + c] = next() - 0.5f;
+                }
+                opacities[i] = 4.f * next() - 1.f;
+            }
+            auto means = Tensor::from_vector(positions, {count, 3}, Device::GPU);
+            auto rotation = Tensor::from_vector(rotations, {count, 4}, Device::GPU);
+            auto scale = Tensor::from_vector(scales, {count, 3}, Device::GPU);
+            auto opacity = Tensor::from_vector(opacities, {count}, Device::GPU);
+            auto dc = Tensor::from_vector(colors, {count, 3}, Device::GPU);
+            auto view = Tensor::eye(4, Device::GPU), camera = Tensor::zeros({3}, Device::GPU);
+            auto background = Tensor::from_vector({0.12f, 0.07f, 0.18f}, {3}, Device::GPU);
+            Tensor absent;
+            const auto relative = [](const Tensor& actual, const Tensor& expected) {
+                const auto a = actual.cpu().contiguous(), b = expected.cpu().contiguous();
+                double difference = 0, reference = 0;
+                for (size_t i = 0; i < b.numel(); ++i) {
+                    const double x = a.ptr<float>()[i], y = b.ptr<float>()[i];
+                    difference += (x - y) * (x - y);
+                    reference += y * y;
+                }
+                return reference > 0 ? std::sqrt(difference / reference) : std::sqrt(difference);
+            };
+            for (const auto [width, height] : {std::pair{67, 45}, std::pair{17, 31}}) {
+                SCOPED_TRACE(std::to_string(width) + "x" + std::to_string(height));
+                const size_t pixels = size_t(width) * height;
+                const auto pattern = [pixels](size_t channels, float scale, float offset, uint32_t state) {
+                    std::vector<float> values(channels * pixels);
+                    for (auto& value : values) {
+                        state = state * 1664525u + 1013904223u;
+                        value = offset + scale * (float(state >> 8) / float(1u << 24) - 0.5f);
+                    }
+                    return values;
+                };
+                const auto image_gradient = Tensor::from_vector(pattern(3, 2e-3f, 0.f, 1u), {3, size_t(height), size_t(width)}, Device::GPU);
+                const auto alpha_gradient = Tensor::from_vector(pattern(1, 2e-3f, 0.f, 2u), {1, size_t(height), size_t(width)}, Device::GPU);
+                const auto depth_gradient = Tensor::from_vector(pattern(1, 2e-4f, 0.f, 3u), {1, size_t(height), size_t(width)}, Device::GPU);
+                const auto normal_gradient = Tensor::from_vector(pattern(3, 2e-3f, 0.f, 4u), {3, size_t(height), size_t(width)}, Device::GPU);
+                const auto error = Tensor::from_vector(pattern(1, 1.f, 0.5f, 5u), {size_t(height), size_t(width)}, Device::GPU);
+                const auto edge = Tensor::from_vector(pattern(1, 1.f, 0.5f, 6u), {size_t(height), size_t(width)}, Device::GPU);
+                struct Result {
+                    Tensor image, alpha, depth, normal, densification, scores;
+                    std::array<Tensor, 5> gradients;
+                    int64_t entries = 0;
+                };
+                const auto run = [&](bool quadrants) {
+                    Result r;
+                    gpu_ops::FastSaved saved{.backend = table.create()};
+                    auto& state = static_cast<training::vulkan::FastState&>(*saved.backend);
+                    state.quadrants = quadrants;
+                    const gpu_ops::FastParams params{.full_image = {height, width}, .intrinsics = {0.9f * width, 0.9f * width, width * 0.5f, height * 0.5f}, .render_normal = true, .render_depth = true};
+                    const gpu_ops::SplatInputs inputs{means, scale, rotation, opacity, dc, absent, absent};
+                    const auto result = table.forward(saved, inputs, view, camera, background, absent, params, {r.image, r.alpha, r.depth, r.normal}, absent);
+                    EXPECT_EQ(result.code, gpu_ops::RasterResult::Code::Success);
+                    const auto ranges = state.ranges.cpu().contiguous();
+                    for (size_t tile = 0; tile < ranges.numel() / 2; ++tile)
+                        r.entries += ranges.ptr<int32_t>()[tile * 2 + 1] - ranges.ptr<int32_t>()[tile * 2];
+                    r.densification = Tensor::zeros({2, count}, Device::GPU);
+                    r.scores = Tensor::zeros({count}, Device::GPU);
+                    constexpr std::array<size_t, 5> widths{3, 3, 4, 1, 3};
+                    const auto capture = [&](size_t slot) {
+                        gpu_ops::BackwardAdamParam group{absent, absent, absent, absent, absent, absent, absent};
+                        if (slot < 5)
+                            group.gradient = r.gradients[slot] = Tensor::zeros({count * widths[slot]}, Device::GPU);
+                        return group;
+                    };
+                    const gpu_ops::BackwardAdam adam{.groups = {capture(0), capture(1), capture(2), capture(3), capture(4), capture(5)}, .scale_reg_loss = absent, .opacity_reg_loss = absent};
+                    table.backward(saved, {image_gradient, alpha_gradient, depth_gradient, normal_gradient}, r.densification, error, edge, r.scores, adam, DensificationType::MRNF);
+                    table.release(saved);
+                    return r;
+                };
+                const auto quadrant = run(true), portable = run(false);
+                // Only devices that can require 32-lane subgroups compact.
+                if (quadrant.entries == portable.entries)
+                    GTEST_SKIP() << "Quadrant blend layout unavailable";
+                EXPECT_LT(quadrant.entries, portable.entries);
+                // Both layouts evaluate the same Gaussian, in base 2 or base e.
+                EXPECT_LT(relative(quadrant.image, portable.image), 1e-5);
+                EXPECT_LT(relative(quadrant.alpha, portable.alpha), 1e-5);
+                EXPECT_LT(relative(quadrant.depth, portable.depth), 1e-5);
+                EXPECT_LT(relative(quadrant.normal, portable.normal), 1e-5);
+                EXPECT_LT(relative(quadrant.densification, portable.densification), 1e-4);
+                EXPECT_LT(relative(quadrant.scores, portable.scores), 1e-4);
+                for (size_t slot = 0; slot < 5; ++slot) {
+                    SCOPED_TRACE(slot);
+                    EXPECT_LT(relative(quadrant.gradients[slot], portable.gradients[slot]), 1e-4);
+                }
             }
         }
     }

@@ -3,6 +3,7 @@
 #include "dispatch.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
+#include "fast_state.hpp"
 #include "training_shader_table.hpp"
 #include <map>
 #include <mutex>
@@ -41,8 +42,29 @@ namespace lfs::training::vulkan {
             std::lock_guard lock(mutex);
             if (const auto found = cache.find(key); found != cache.end())
                 return found->second;
+            const bool fast = name == "fast_forward" || name == "fast_backward" || name == "fast_backward_atomic";
+            const bool fast_raster = fast && (specialization & 15u) == (name == "fast_forward" ? 5u : 0u);
+            const bool gsplat_raster =
+                (name == "gsplat_backward" || name == "gsplat_backward_atomic") && specialization == 0;
+            VkPhysicalDeviceSubgroupSizeControlProperties size_properties{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &size_properties;
+            vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
+            // Raster kernels with a 32-lane layout require wave32 wherever the
+            // device lets a compute pipeline require it.
+            const bool wave32 = context->caps().subgroup_size_control &&
+                                context->caps().min_subgroup_size <= 32 && context->caps().max_subgroup_size >= 32 &&
+                                (size_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
+                                size_properties.maxComputeWorkgroupSubgroups >= 4;
+            // Every Fast pipeline of a device drops a requested quadrant layout
+            // together, so forward and backward always agree on it.
+            if (fast && !wave32)
+                specialization &= ~fast_quadrants;
+            const bool quadrant = fast && (specialization & fast_quadrants) != 0;
+            const std::string_view module_name = fast_raster && name == "fast_forward" && quadrant ? "fast_forward_quadrant" : name;
             const auto modules = vulkan::embedded_training_shaders();
-            const auto module = std::ranges::find(modules, name,
+            const auto module = std::ranges::find(modules, module_name,
                                                   &vulkan::EmbeddedShader::name);
             LFS_ASSERT_MSG(module != modules.end(), "Vulkan training shader module is missing");
             VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -68,30 +90,10 @@ namespace lfs::training::vulkan {
             stage.pName = "main";
             VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required_size{
                 VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
-            // Raster kernels have a shuffle-based logical warp path. Select
-            // wave32 for compatible AMD raster stages; other stages and vendors
-            // retain their existing subgroup selection.
-            const bool gsplat_raster =
-                (name == "gsplat_backward" || name == "gsplat_backward_atomic") && specialization == 0;
-            // Fast stage is packed into the low four bits; higher bits describe
-            // SH, output and densification variants of the same raster kernel.
-            const bool fast_raster =
-                (name == "fast_backward" || name == "fast_backward_atomic") && (specialization & 15u) == 0;
-            const bool fast_forward_raster = name == "fast_forward" && (specialization & 15u) == 5;
-            if ((gsplat_raster || fast_raster || fast_forward_raster) &&
-                context->caps().subgroup_size == 64 && context->caps().subgroup_size_control &&
-                context->caps().min_subgroup_size <= 32 && context->caps().max_subgroup_size >= 32) {
-                VkPhysicalDeviceSubgroupSizeControlProperties size_properties{
-                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
-                VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-                properties.pNext = &size_properties;
-                vkGetPhysicalDeviceProperties2(context->physical_device(), &properties);
-                if (properties.properties.vendorID == 0x1002 &&
-                    (size_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) &&
-                    size_properties.maxComputeWorkgroupSubgroups >= (fast_forward_raster ? 8u : 4u)) {
-                    required_size.requiredSubgroupSize = 32;
-                    stage.pNext = &required_size;
-                }
+            // gsplat keeps its shuffle path on default 64-lane devices only.
+            if ((fast_raster && quadrant) || (gsplat_raster && wave32 && context->caps().subgroup_size == 64)) {
+                required_size.requiredSubgroupSize = 32;
+                stage.pNext = &required_size;
             }
             const VkSpecializationMapEntry entry{0, 0, sizeof(specialization)};
             const VkSpecializationInfo constants{1, &entry, sizeof(specialization), &specialization};
@@ -101,7 +103,7 @@ namespace lfs::training::vulkan {
             info.stage = stage;
             info.layout = pipeline->layout;
             auto result = vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &info, nullptr, &pipeline->handle);
-            if (result != VK_SUCCESS && info.stage.pNext && result != VK_ERROR_DEVICE_LOST) {
+            if (result != VK_SUCCESS && info.stage.pNext && !fast && result != VK_ERROR_DEVICE_LOST) {
                 LOG_WARN("Vulkan training kernel {}: wave32 pipeline rejected (VkResult {}); falling back to the device default subgroup size",
                          name, static_cast<int>(result));
                 if (pipeline->handle != VK_NULL_HANDLE) {
@@ -114,7 +116,7 @@ namespace lfs::training::vulkan {
             vk_check(context.get(), result, "vkCreateComputePipelines(training.dispatch)");
             if (info.stage.pNext)
                 LOG_DEBUG("Vulkan training kernel {} stage {} uses required subgroup size 32", name, specialization);
-            if (info.stage.pNext && fast_forward_raster)
+            if (info.stage.pNext && name == "fast_forward")
                 LOG_INFO("Vulkan Fast raster forward: using subgroup size 32");
             cache.emplace(key, pipeline);
             release_at_shutdown(*context, mutex, cache);
