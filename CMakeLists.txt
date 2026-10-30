@@ -40,6 +40,14 @@ endif()
 list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
 unset(_lfs_vulkan_validation_feature)
 
+# Opt in to lower vcpkg disk usage at the cost of slower dependency rebuilds.
+# Set this before project() loads the toolchain; keep the appended flag out of
+# the cache so turning the option off restores the original install options.
+option(LFS_VCPKG_CLEAN_AFTER_BUILD "Clean vcpkg build artifacts after installation to save disk space (slower rebuilds)" OFF)
+if(LFS_VCPKG_CLEAN_AFTER_BUILD AND NOT "--clean-after-build" IN_LIST VCPKG_INSTALL_OPTIONS)
+    list(APPEND VCPKG_INSTALL_OPTIONS "--clean-after-build")
+endif()
+
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
 # the toolchain is loaded by project().
