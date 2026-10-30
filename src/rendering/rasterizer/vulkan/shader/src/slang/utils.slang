@@ -1310,24 +1310,19 @@ static const uint OVERLAY_PARAM_MARKER_FLAGS = 22;
 static const uint OVERLAY_PARAM_SELECTION_CURSOR = 23;
 static const uint OVERLAY_PARAM_SELECTION_FLAGS = 24;
 static const uint OVERLAY_PARAM_VISIBILITY_FLAGS = 25;
-static const uint OVERLAY_PARAM_CROP_EXTRA_BASE = 26;
+// Fixed prefix and dynamic crop directory mirror vksplat_overlay_params.hpp.
+static const uint OVERLAY_PARAM_REVEAL = 26;
+static const uint OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS = 27;
+static const uint OVERLAY_PARAM_CROP_DIRECTORY = 28;
+static const uint OVERLAY_PARAM_COUNT = 29;
+static const uint OVERLAY_PARAM_CROP_DIRECTORY_STRIDE = 2;
 static const uint OVERLAY_PARAM_CROP_STRIDE = 7;
-static const uint OVERLAY_PARAM_CROP_EXTRA_COUNT = 15;
-static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE = OVERLAY_PARAM_CROP_EXTRA_BASE + OVERLAY_PARAM_CROP_STRIDE * OVERLAY_PARAM_CROP_EXTRA_COUNT;
 static const uint OVERLAY_PARAM_ELLIPSOID_STRIDE = 5;
-static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT = 15;
-// Polygon slots: flags, (half_depth, vertex_count), world->local rows, then two
-// vertices per float4. Mirrors vksplat_overlay_params.hpp.
-static const uint OVERLAY_PARAM_CROP_POLYGON_BASE = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
 static const uint OVERLAY_PARAM_CROP_POLYGON_PARAMS = 1;
 static const uint OVERLAY_PARAM_CROP_POLYGON_TRANSFORM = 2;
 static const uint OVERLAY_PARAM_CROP_POLYGON_VERTICES = 6;
 static const uint OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES = 64;
 static const uint OVERLAY_PARAM_CROP_POLYGON_STRIDE = OVERLAY_PARAM_CROP_POLYGON_VERTICES + OVERLAY_PARAM_CROP_POLYGON_MAX_VERTICES / 2;
-static const uint OVERLAY_PARAM_CROP_POLYGON_COUNT = 16;
-static const uint OVERLAY_PARAM_REVEAL = OVERLAY_PARAM_CROP_POLYGON_BASE + OVERLAY_PARAM_CROP_POLYGON_STRIDE * OVERLAY_PARAM_CROP_POLYGON_COUNT;
-static const uint OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS = OVERLAY_PARAM_REVEAL + 1;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_REVEAL_EFFECT_BOUNDS + 1;
 
 // Adapted from https://github.com/sparkjsdev/spark/blob/main/examples/splat-reveal-effects/index.html
 // Spark Spread's radial expansion, seed/full scale, and color stages. Map the

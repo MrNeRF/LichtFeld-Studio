@@ -2553,21 +2553,8 @@ namespace lfs::vis {
                 return;
 
             case input::Action::APPLY_CROP_BOX: {
-                // Apply the selected polygon or ellipsoid, otherwise the cropbox
-                if (tool_context_) {
-                    if (auto* sm = tool_context_->getSceneManager()) {
-                        if (sm->getSelectedNodeCropPolygonId() != core::NULL_NODE) {
-                            cmd::ApplyCropPolygon{}.emit();
-                            return;
-                        }
-                        const auto ellipsoid_id = sm->getSelectedNodeEllipsoidId();
-                        if (ellipsoid_id != core::NULL_NODE) {
-                            cmd::ApplyEllipsoid{}.emit();
-                            return;
-                        }
-                    }
-                }
-                cmd::ApplyCropBox{}.emit();
+                if (gui)
+                    gui->gizmo().finishCropTool();
                 return;
             }
 

@@ -134,6 +134,9 @@ def _poll_can_scale_distance(_context) -> bool:
 
 
 def _poll_can_cropbox(context) -> bool:
+    # Scene groups do not own crop effects yet, including mixed selections.
+    if "GROUP" in _selected_node_types():
+        return False
     if not _poll_has_scene(context):
         return False
     if _selection_is_crop_volume():

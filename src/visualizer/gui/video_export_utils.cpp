@@ -126,11 +126,21 @@ namespace lfs::vis::gui {
             cropbox_snapshot.world_transform = cb.world_transform;
             if (cb.data) {
                 cropbox_snapshot.data = *cb.data;
+                cropbox_snapshot.data.enabled = cropbox_snapshot.data.enabled && cb.crop_effects_enabled;
             }
             snapshot.cropboxes.push_back(std::move(cropbox_snapshot));
         }
         snapshot.selected_cropbox_index = render_state.selected_cropbox_index;
 
+        for (const auto& el : render_state.ellipsoids) {
+            if (el.data)
+                snapshot.ellipsoids.push_back(VideoExportEllipsoidSnapshot{
+                    .node_id = el.node_id,
+                    .parent_splat_id = el.parent_splat_id,
+                    .parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id),
+                    .data = [&] { auto data = *el.data; data.enabled = data.enabled && el.crop_effects_enabled; return data; }(),
+                    .world_transform = el.world_transform});
+        }
         const lfs::core::NodeId active_ellipsoid_id = scene_manager.getActiveSelectionEllipsoidId();
         for (const auto& el : render_state.ellipsoids) {
             if (!el.data)
@@ -141,7 +151,7 @@ namespace lfs::vis::gui {
                 .node_id = el.node_id,
                 .parent_splat_id = el.parent_splat_id,
                 .parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id),
-                .data = *el.data,
+                .data = [&] { auto data = *el.data; data.enabled = data.enabled && el.crop_effects_enabled; return data; }(),
                 .world_transform = el.world_transform,
             };
             break;
@@ -155,7 +165,7 @@ namespace lfs::vis::gui {
                     .node_id = el.node_id,
                     .parent_splat_id = el.parent_splat_id,
                     .parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id),
-                    .data = *el.data,
+                    .data = [&] { auto data = *el.data; data.enabled = data.enabled && el.crop_effects_enabled; return data; }(),
                     .world_transform = el.world_transform,
                 };
                 break;
@@ -173,7 +183,7 @@ namespace lfs::vis::gui {
                 .node_id = polygon.node_id,
                 .parent_splat_id = polygon.parent_splat_id,
                 .parent_node_index = scene.getVisibleNodeIndex(polygon.parent_splat_id),
-                .data = *polygon.data,
+                .data = [&] { auto data = *polygon.data; data.enabled = data.enabled && polygon.crop_effects_enabled; return data; }(),
                 .world_transform = polygon.world_transform,
             });
         }

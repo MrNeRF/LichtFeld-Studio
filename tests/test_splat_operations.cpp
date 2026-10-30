@@ -3,11 +3,7 @@
 
 #include "core/splat_operations.hpp"
 
-#include <filesystem>
-#include <fstream>
 #include <gtest/gtest.h>
-#include <iterator>
-#include <regex>
 #include <set>
 
 namespace {
@@ -31,108 +27,23 @@ namespace {
         }
     };
 
-    TEST(SplatOperationCatalogTest, OnlySplatOwnersAndExistingCapabilitiesAreAdvertised) {
-        std::set<std::string_view> identifiers;
-        std::set<SplatOperationKind> kinds;
+    TEST(SplatOperationCatalogTest, DescribesOnlySceneElementsAndExistingOperatorPaths) {
+        std::set<NodeType> types;
         for (const auto& descriptor : splatOperationDescriptors()) {
-            EXPECT_TRUE(identifiers.insert(descriptor.identifier).second);
-            EXPECT_TRUE(kinds.insert(descriptor.kind).second);
+            EXPECT_TRUE(types.insert(descriptor.node_type).second);
             EXPECT_EQ(splatOperationDescriptor(descriptor.kind), &descriptor);
-            EXPECT_EQ(descriptor.supportsOwner(NodeType::SPLAT),
-                      descriptor.storage != SplatOperationStorage::CommandOnly &&
-                          descriptor.scope == SplatOperationScope::Object);
-            for (const auto type : {NodeType::GROUP, NodeType::DATASET, NodeType::POINTCLOUD,
-                                    NodeType::MESH, NodeType::CAMERA, NodeType::PLY_SEQUENCE})
-                EXPECT_FALSE(descriptor.supportsOwner(type));
-            EXPECT_FALSE(descriptor.capabilities.supports_group_owner);
-            EXPECT_FALSE(descriptor.capabilities.reorder);
-            if (descriptor.storage == SplatOperationStorage::SceneVolume) {
-                EXPECT_TRUE(descriptor.capabilities.set_enabled);
-                EXPECT_TRUE(descriptor.capabilities.edit_parameters);
-                EXPECT_TRUE(descriptor.capabilities.show_helper);
-            } else {
-                EXPECT_FALSE(descriptor.capabilities.set_enabled);
-                EXPECT_FALSE(descriptor.capabilities.edit_parameters);
-                EXPECT_FALSE(descriptor.capabilities.show_helper);
+            EXPECT_EQ(splatOperationDescriptor(descriptor.node_type), &descriptor);
+            if (descriptor.category == SplatOperationCategory::CropVolume)
+                EXPECT_FALSE(descriptor.set_operator.empty());
+            else {
+                EXPECT_TRUE(descriptor.set_operator.empty());
+                EXPECT_TRUE(descriptor.duplicate_operator.empty());
             }
         }
-        EXPECT_EQ(splatOperationDescriptors().size(), 32);
+        EXPECT_EQ(splatOperationDescriptors().size(), 4);
+        EXPECT_EQ(splatOperationDescriptor(NodeType::SPLAT), nullptr);
+        EXPECT_EQ(splatOperationDescriptor(NodeType::GROUP), nullptr);
         EXPECT_EQ(splatOperationDescriptor(static_cast<SplatOperationKind>(99)), nullptr);
-        EXPECT_EQ(splatOperationDescriptor(SplatOperationKind::Simplify)->storage, SplatOperationStorage::CommandOnly);
-        EXPECT_TRUE(splatOperationDescriptor(SplatOperationKind::Collision)->capabilities.export_result);
-        EXPECT_FALSE(splatOperationDescriptor(SplatOperationKind::Simplify)->capabilities.export_result);
-    }
-
-    TEST(SplatOperationCatalogTest, CoversEveryNativeSplatToolbarToolWithoutTurningCommandsIntoModifiers) {
-        std::set<std::string_view> tools;
-        for (const auto& descriptor : splatOperationDescriptors()) {
-            if (!descriptor.tool_identifier.empty())
-                tools.insert(descriptor.tool_identifier);
-            if (descriptor.category == SplatOperationCategory::Selection ||
-                descriptor.category == SplatOperationCategory::SelectionFilter ||
-                descriptor.category == SplatOperationCategory::Transform ||
-                descriptor.category == SplatOperationCategory::DirectEdit ||
-                descriptor.category == SplatOperationCategory::SceneOrganization) {
-                EXPECT_EQ(descriptor.storage, SplatOperationStorage::CommandOnly);
-                EXPECT_FALSE(descriptor.capabilities.set_enabled);
-                EXPECT_FALSE(descriptor.capabilities.reorder);
-            }
-        }
-        // Compare against the actual toolbar definitions, so a newly registered
-        // native tool cannot silently disappear from this classification.
-        const auto path = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/lfs_plugins/tool_defs/builtin.py";
-        std::ifstream input(path);
-        ASSERT_TRUE(input) << path;
-        const std::string source{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-        const std::regex pattern{R"re(id\s*=\s*"(builtin\.[a-z_]+)")re"};
-        std::set<std::string> expected;
-        for (auto it = std::sregex_iterator(source.begin(), source.end(), pattern); it != std::sregex_iterator(); ++it)
-            expected.insert((*it)[1].str());
-        ASSERT_FALSE(expected.empty());
-        const std::set<std::string> actual(tools.begin(), tools.end());
-        EXPECT_EQ(actual, expected);
-    }
-
-    TEST(SplatOperationCatalogTest, GlobalSelectionAndViewportStateCannotBeOwnedByASplat) {
-        for (const auto kind : {SplatOperationKind::Select, SplatOperationKind::SelectAll,
-                                SplatOperationKind::SelectNone, SplatOperationKind::SelectInvert,
-                                SplatOperationKind::SelectGrow, SplatOperationKind::SelectShrink,
-                                SplatOperationKind::SelectByOpacity, SplatOperationKind::SelectByScale,
-                                SplatOperationKind::SelectionGroups, SplatOperationKind::Mirror,
-                                SplatOperationKind::DeleteSelection, SplatOperationKind::CopySelection,
-                                SplatOperationKind::CutSelection, SplatOperationKind::PasteSelection,
-                                SplatOperationKind::GroupSelection}) {
-            const auto* descriptor = splatOperationDescriptor(kind);
-            ASSERT_NE(descriptor, nullptr);
-            EXPECT_EQ(descriptor->scope, SplatOperationScope::SceneSelection);
-            EXPECT_FALSE(descriptor->supportsOwner(NodeType::SPLAT));
-        }
-        for (const auto kind : {SplatOperationKind::SelectionDepthFilter, SplatOperationKind::SelectionCropFilter}) {
-            const auto* descriptor = splatOperationDescriptor(kind);
-            ASSERT_NE(descriptor, nullptr);
-            EXPECT_EQ(descriptor->scope, SplatOperationScope::ViewportTool);
-            EXPECT_FALSE(descriptor->supportsOwner(NodeType::SPLAT));
-        }
-        const auto* simplify = splatOperationDescriptor(SplatOperationKind::Simplify);
-        EXPECT_EQ(simplify->scope, SplatOperationScope::Object);
-        EXPECT_FALSE(simplify->supportsOwner(NodeType::SPLAT)); // Source target, not a persisted recipe.
-        EXPECT_EQ(splatOperationDescriptor(SplatOperationKind::WriteGaussianField)->scope, SplatOperationScope::Object);
-    }
-
-    TEST(SplatOperationCatalogTest, VolumeActionsMatchExistingCommandsAndAreNotInventedForOtherTools) {
-        for (const auto& descriptor : splatOperationDescriptors()) {
-            const bool volume = descriptor.storage == SplatOperationStorage::SceneVolume;
-            const auto& caps = descriptor.capabilities;
-            EXPECT_EQ(caps.fit, volume);
-            EXPECT_EQ(caps.reset, volume);
-            EXPECT_EQ(caps.invert, volume);
-            EXPECT_EQ(caps.apply_to_geometry, volume);
-            EXPECT_EQ(caps.remove_element, volume || descriptor.kind == SplatOperationKind::Collision);
-            if (volume) {
-                EXPECT_EQ(descriptor.scope, SplatOperationScope::Object);
-                EXPECT_TRUE(descriptor.supportsOwner(NodeType::SPLAT));
-            }
-        }
     }
 
     TEST_F(SplatOperationsTest, CropSnapshotPreservesPayloadAndSeparatesVisibilityFromEnabled) {
@@ -220,46 +131,48 @@ namespace {
             owner.type = type;
             const auto result = readSplatOperation(owner, element);
             ASSERT_FALSE(result);
-            EXPECT_EQ(result.error(), SplatOperationReadError::UnsupportedOwner);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::Unsupported);
+            EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::Core);
+            EXPECT_FALSE(result.error().detail().empty());
         }
     }
 
     TEST_F(SplatOperationsTest, RejectsWrongOwnerAndInconsistentChildListsEvenWithMatchingNames) {
         owner.name = element.name = "same";
         element.parent_id = 99;
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::NotDirectChild);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::FailedPrecondition);
         element.parent_id = owner.id;
         owner.children.clear();
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::NotDirectChild);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::FailedPrecondition);
     }
 
     TEST_F(SplatOperationsTest, RejectsMissingPayloadForEverySupportedElement) {
         element.cropbox.reset();
         for (const auto type : {NodeType::CROPBOX, NodeType::ELLIPSOID, NodeType::CROP_POLYGON, NodeType::COLLISION}) {
             element.type = type;
-            EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::MissingPayload);
+            EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::FailedPrecondition);
         }
     }
 
     TEST_F(SplatOperationsTest, DoesNotInferOperationsFromOrdinaryChildren) {
         for (const auto type : {NodeType::SPLAT, NodeType::CAMERA, NodeType::GROUP, NodeType::MESH}) {
             element.type = type;
-            EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::UnsupportedElement);
+            EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::Unsupported);
         }
     }
 
     TEST_F(SplatOperationsTest, RequiresDistinctStableIdentitiesAndDoesNotGenerateThem) {
         const auto uuid = element.uuid;
         element.uuid = {};
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::InvalidIdentity);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::InvalidArgument);
         EXPECT_EQ(element.uuid, Uuid{});
         element.uuid = owner.uuid;
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::InvalidIdentity);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::InvalidArgument);
         element.uuid = uuid;
         owner.id = NULL_NODE;
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::InvalidIdentity);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::InvalidArgument);
         owner.id = -2;
-        EXPECT_EQ(readSplatOperation(owner, element).error(), SplatOperationReadError::InvalidIdentity);
+        EXPECT_EQ(readSplatOperation(owner, element).error().code(), lfs::ErrorCode::InvalidArgument);
     }
 
     TEST_F(SplatOperationsTest, MetadataReadDoesNotRequireHydratingOwnerGeometryOrDependOnNames) {

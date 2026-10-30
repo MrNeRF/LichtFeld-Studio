@@ -1250,3 +1250,32 @@ crf-curve {
 .frame-tooltip.visible {
     display: block;
 }
+
+/* Shared compact switch: scene crop effects, MCP status and preferences. */
+.mcp-switch-track,
+.preferences-mcp-switch-track,
+.crop-effect-toggle {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+.mcp-switch-knob,
+.preferences-mcp-switch-knob,
+.crop-effect-dot {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+#mcp-toggle.is-on .mcp-switch-knob,
+.preferences-mcp-toggle.is-on .preferences-mcp-switch-knob,
+.crop-effect-toggle.active .crop-effect-dot {
+    left: 13dp;
+}
+.crop-effect-toggle { cursor: pointer; }

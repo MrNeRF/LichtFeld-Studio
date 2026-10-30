@@ -2252,7 +2252,7 @@ namespace lfs::vis::input {
         case Action::SELECT_MODE_COLOR: return "Selection: Color";
         case Action::SELECT_MODE_BOX: return "Selection: Box";
         case Action::SELECT_MODE_SPHERE: return "Selection: Sphere";
-        case Action::APPLY_CROP_BOX: return "Apply Crop Box";
+        case Action::APPLY_CROP_BOX: return "Finish Crop Editing";
         case Action::NODE_PICK: return "Pick Node";
         case Action::NODE_RECT_SELECT: return "Rectangle Select Nodes";
         case Action::TOGGLE_UI: return "Toggle UI";

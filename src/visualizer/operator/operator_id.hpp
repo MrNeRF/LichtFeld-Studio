@@ -40,6 +40,8 @@ namespace lfs::vis::op {
 
         ScaleDistancePickPoint,
 
+        CropVolumeDuplicate,
+
         _Count
     };
 

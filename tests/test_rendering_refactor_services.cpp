@@ -13,6 +13,7 @@
 #include "core/services.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "gui/video_export_utils.hpp"
 #include "gui/volume_guide_visibility.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/loader.hpp"
@@ -2891,11 +2892,15 @@ namespace lfs::vis {
         ASSERT_EQ(renderables.size(), 1u);
         EXPECT_EQ(renderables.front().parent_splat_id, splat);
 
-        // Drawn for one splat in one camera plane: duplicates start without it.
+        // Crop instances retain their local plane and payload on a duplicated splat.
         const auto copy = scene.duplicateNode("Model");
         ASSERT_FALSE(copy.empty());
-        EXPECT_EQ(scene.getCropPolygonForSplat(scene.getNodeIdByName(copy)), core::NULL_NODE);
-        EXPECT_TRUE(scene.duplicateNode("Model_crop_polygon").empty());
+        const auto copied_polygon = scene.getCropPolygonForSplat(scene.getNodeIdByName(copy));
+        ASSERT_NE(copied_polygon, core::NULL_NODE);
+        EXPECT_NE(scene.getNodeById(copied_polygon)->uuid, scene.getNodeById(polygon)->uuid);
+        EXPECT_EQ(scene.getNodeById(copied_polygon)->crop_polygon->vertices, changed.vertices);
+        EXPECT_EQ(scene.getNodeById(copied_polygon)->local_transform.get(), far_away);
+        EXPECT_FALSE(scene.duplicateNode("Model_crop_polygon").empty());
         EXPECT_EQ(scene.getCropPolygonForSplat(splat), polygon);
 
         scene.removeNode("Model_crop_polygon", false);
@@ -2915,6 +2920,51 @@ namespace lfs::vis {
         ASSERT_NE(restored, core::NULL_NODE);
         EXPECT_FLOAT_EQ(scene.getCropPolygonData(restored)->half_depth, 2.0f);
         EXPECT_TRUE(scene.getCropPolygonData(restored)->inverse);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, VideoExportSnapshotRetainsAllRepeatedEllipsoids) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto owner = scene.addSplat("Stack", makeTwoPointTestSplat(0.0f, 2.0f));
+        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
+        scene.getNodeById(ellipsoid)->ellipsoid->enabled = true;
+        const auto copy = cap::duplicateSplatCrop(manager, nullptr, scene.getNodeById(ellipsoid)->uuid);
+        ASSERT_TRUE(copy);
+        manager.selectNode(*copy);
+        const auto snapshot = gui::captureVideoExportSceneSnapshot(manager, gui::VideoExportCapture::ImmediateRender);
+        ASSERT_TRUE(snapshot);
+        ASSERT_EQ(snapshot->ellipsoids.size(), 2u);
+        const auto state = gui::makeVideoExportGaussianSceneState(*snapshot);
+        ASSERT_EQ(state.ellipsoids.size(), 2u);
+        EXPECT_NE(state.ellipsoids[0].node_id, state.ellipsoids[1].node_id);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, CopyPasteRetainsRepeatedCropChildren) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto owner = scene.addSplat("Stack", makeTwoPointTestSplat(0.0f, 2.0f));
+        const auto box = scene.addCropBox("Box", owner);
+        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
+        const auto polygon = scene.addCropPolygon("Polygon", owner, makeCropPolygonData());
+        for (const auto id : {box, ellipsoid, polygon})
+            ASSERT_FALSE(scene.duplicateNode(scene.getNodeById(id)->name).empty());
+        const auto duplicated = scene.duplicateNode("Stack");
+        ASSERT_FALSE(duplicated.empty());
+        ASSERT_EQ(scene.getNode(duplicated)->children.size(), 6u);
+        manager.selectNode(owner);
+        ASSERT_TRUE(manager.copySelectedNodes());
+        const auto pasted = manager.pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        const auto* copy = scene.getNode(pasted.front());
+        ASSERT_NE(copy, nullptr);
+        ASSERT_EQ(copy->children.size(), 6);
+        for (const auto type : {core::NodeType::CROPBOX, core::NodeType::ELLIPSOID, core::NodeType::CROP_POLYGON}) {
+            size_t count = 0;
+            for (const auto id : copy->children)
+                if (scene.getNodeById(id)->type == type)
+                    ++count;
+            EXPECT_EQ(count, 2u);
+        }
     }
 
     TEST_F(SceneManagerRenderStateTest, CropPolygonReplacesTheOtherVolumesInOneUndoStep) {
@@ -3313,58 +3363,20 @@ namespace lfs::vis {
                         .filters.crop_polygon_regions.empty());
     }
 
-    TEST(VksplatOverlayParamsTest, CropPolygonSlotsPackDenselyAfterTheEllipsoids) {
+    TEST(VksplatOverlayParamsTest, PolygonDirectoryKeepsEveryValidVolumeBeyondSixteen) {
         namespace ov = vksplat_overlay;
-        static_assert(ov::CropPolygonBase == ov::EllipsoidExtraBase + ov::EllipsoidParamStride * ov::EllipsoidExtraCount);
-        static_assert(ov::CropPolygonParamStride == ov::CropPolygonVertices + core::kMaxCropPolygonVertices / 2);
-        static_assert(ov::RevealParams == ov::CropPolygonBase + ov::CropPolygonParamStride * ov::CropPolygonCount);
-
-        const glm::mat4 transform =
-            glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, -2.0f, 3.0f)), glm::vec3(2.0f, 3.0f, 4.0f));
-        const auto region = [&](std::vector<glm::vec2> vertices, const bool inverse, const int parent) {
-            return lfs::rendering::GaussianScopedCropPolygonFilter{
-                .bounds = {.vertices = std::move(vertices), .half_depth = 0.5f, .transform = transform},
-                .inverse = inverse,
-                .desaturate = inverse,
-                .parent_node_index = parent};
-        };
-        std::vector<glm::vec2> full(core::kMaxCropPolygonVertices);
-        for (size_t i = 0; i < full.size(); ++i)
-            full[i] = {std::cos(0.1f * static_cast<float>(i)), std::sin(0.1f * static_cast<float>(i))};
-
         lfs::rendering::ViewportRenderRequest request{};
-        request.filters.crop_polygon_regions = {
-            region({{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.5f, 2.0f}, {0.0f, 1.0f}}, true, 3),
-            region({{0.0f, 0.0f}, {1.0f, 0.0f}}, false, 1), // Degenerate: skipped without a gap.
-            region(full, false, 2),
-        };
-        auto params = ov::buildParams(request, false, false, false, 0, false);
-        ASSERT_EQ(params.size(), std::size_t{ov::ParamCount} * 4u);
-        const auto slot = [&](const std::size_t index) {
-            return glm::vec4(params[index * 4], params[index * 4 + 1], params[index * 4 + 2], params[index * 4 + 3]);
-        };
-
-        const std::size_t first = ov::CropPolygonBase;
-        EXPECT_EQ(slot(first), glm::vec4(1.0f, 1.0f, 1.0f, 3.0f));
-        EXPECT_EQ(slot(first + ov::CropPolygonParams), glm::vec4(0.5f, 5.0f, 0.0f, 0.0f));
-        for (int row = 0; row < 4; ++row)
-            EXPECT_EQ(slot(first + ov::CropPolygonTransform + row),
-                      glm::vec4(transform[0][row], transform[1][row], transform[2][row], transform[3][row]));
-        EXPECT_EQ(slot(first + ov::CropPolygonVertices), glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
-        EXPECT_EQ(slot(first + ov::CropPolygonVertices + 1), glm::vec4(1.0f, 1.0f, 0.5f, 2.0f));
-        EXPECT_EQ(slot(first + ov::CropPolygonVertices + 2), glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-
-        const std::size_t second = first + ov::CropPolygonParamStride;
-        EXPECT_EQ(slot(second), glm::vec4(1.0f, 0.0f, 0.0f, 2.0f));
-        EXPECT_EQ(slot(second + ov::CropPolygonParams).y, static_cast<float>(core::kMaxCropPolygonVertices));
-        EXPECT_EQ(slot(second + ov::CropPolygonParamStride - 1), glm::vec4(full[62], full[63]));
-        EXPECT_EQ(slot(second + ov::CropPolygonParamStride), glm::vec4(0.0f));
-
-        // More polygons than slots: the table keeps its size and the last slot holds the 16th.
-        request.filters.crop_polygon_regions.assign(ov::CropPolygonCount + 4, region(full, false, 7));
-        params = ov::buildParams(request, false, false, false, 0, false);
-        ASSERT_EQ(params.size(), std::size_t{ov::ParamCount} * 4u);
-        EXPECT_EQ(slot(first + (ov::CropPolygonCount - 1) * ov::CropPolygonParamStride).w, 7.0f);
+        for (int i = 0; i < 40; ++i)
+            request.filters.crop_polygon_regions.push_back({.bounds = {.vertices = {{0, 0}, {1, 0}, {1, 1}, {0, 1}}, .half_depth = 0.5f, .transform = glm::mat4(1.0f)},
+                                                            .inverse = i == 39,
+                                                            .parent_node_index = 7});
+        const auto params = ov::buildParams(request, false, false, false, 0, false);
+        ASSERT_EQ(params.size(), (ov::ParamCount + ov::CropDirectoryStride + 40 * ov::CropPolygonParamStride) * 4u);
+        const auto directory = static_cast<size_t>(params[ov::CropDirectory * 4]);
+        EXPECT_EQ(params[(directory + 1) * 4 + 2], 40.0f);
+        const auto first = static_cast<size_t>(params[(directory + 1) * 4 + 1]);
+        EXPECT_EQ(params[(first + 39 * ov::CropPolygonParamStride) * 4 + 1], 1.0f);
+        EXPECT_EQ(params[(first + ov::CropPolygonParams) * 4], 0.5f);
     }
 
     TEST(VksplatOverlayParamsTest, RevealParametersArePackedForProjection) {

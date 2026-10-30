@@ -802,7 +802,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         lambda use_percentile=False: state.calls.append(("fit_crop_tool", use_percentile)),
         raising=False,
     )
-    monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "finish_crop_tool", lambda: state.calls.append(("finish_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
     state.crop_inverse = False
@@ -833,7 +833,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "crop_trim",
         "crop_reset",
         "crop_toggle_inverse",
-        "crop_apply",
+        "crop_finish",
         "crop_delete",
     ]
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "ellipsoid")["icon_src"] == "../icon/sphere.png"
@@ -850,7 +850,7 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         "scene.fit_to_scene_trimmed",
         "scene.reset_crop",
         "toolbar.invert_crop",
-        "common.apply",
+        "splat_inspector.finish",
         "scene.delete",
     ]
     assert snapshot["crop_action_buttons"][-1]["separator_before"] is True
@@ -881,10 +881,10 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
 
     assert state.calls[-1] == ("reset_crop_tool",)
 
-    controller.dispatch("crop_apply", "")
+    monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: pytest.fail("Finish must never bake geometry"), raising=False)
+    controller.dispatch("crop_finish", "")
 
-    assert state.calls[-1] == ("apply_crop_tool",)
-
+    assert state.calls[-1] == ("finish_crop_tool",)
     controller.dispatch("crop_delete", "")
 
     assert state.calls[-1] == ("delete_crop_tool_volume",)
@@ -943,7 +943,7 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     )
     monkeypatch.setattr(lf_stub.ui, "start_crop_polygon", lambda: state.calls.append(("start_crop_polygon",)), raising=False)
     monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
-    monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "finish_crop_tool", lambda: state.calls.append(("finish_crop_tool",)), raising=False)
     monkeypatch.setattr(
         lf_stub.ui, "fit_crop_tool", lambda trimmed: state.calls.append(("fit_crop_tool", trimmed)), raising=False
     )
@@ -981,20 +981,20 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
         "crop_trim": True,
         "crop_reset": True,
         "crop_toggle_inverse": True,
-        "crop_apply": True,
+        "crop_finish": True,
         "crop_delete": True,
     }
 
     controller.dispatch("crop_fit", "")
     controller.dispatch("crop_trim", "")
     controller.dispatch("crop_reset", "")
-    controller.dispatch("crop_apply", "")
+    controller.dispatch("crop_finish", "")
     controller.dispatch("crop_delete", "")
     assert state.calls[-5:] == [
         ("fit_crop_tool", False),
         ("fit_crop_tool", True),
         ("reset_crop_tool",),
-        ("apply_crop_tool",),
+        ("finish_crop_tool",),
         ("delete_crop_tool_volume",),
     ]
 
@@ -1002,6 +1002,8 @@ def test_crop_polygon_button_starts_drawing_and_enables_fit_and_reset(toolbar_mo
     polygon_node = SimpleNamespace(id=2, name="Model_crop_polygon", type=SimpleNamespace(name="CROP_POLYGON"), children=())
     splat.children = (polygon_node.id,)
     scene.get_node_by_id = lambda node_id: {1: splat, 2: polygon_node}.get(node_id)
+    scene.get_node = lambda name: polygon_node if name == polygon_node.name else splat
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: [polygon_node.name], raising=False)
     state.crop_shape = "box"
     state.calls.clear()
     state.active_tool = ""
@@ -1489,7 +1491,7 @@ def test_crop_tool_activation_infers_selected_ellipsoid(toolbar_module, monkeypa
     assert state.crop_shape == "ellipsoid"
 
 
-def test_crop_tool_activation_infers_existing_target_ellipsoid(toolbar_module, monkeypatch):
+def test_crop_toolbar_on_splat_creates_fresh_instance_instead_of_reusing_child(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     state = SimpleNamespace(
@@ -1543,13 +1545,14 @@ def test_crop_tool_activation_infers_existing_target_ellipsoid(toolbar_module, m
         raising=False,
     )
 
+    monkeypatch.setattr(lf_stub.ui, "new_crop_tool", lambda shape: state.calls.append(("new_crop_tool", shape)), raising=False)
     controller = module._GizmoToolbarController()
     controller.dispatch("tool", "builtin.cropbox")
 
-    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
-    assert ("add_ellipsoid", "Model") in state.calls
-    assert ("add_cropbox", "Model") not in state.calls
-    assert state.crop_shape == "ellipsoid"
+    assert ("new_crop_tool", "box") in state.calls
+    assert not any(call[0] in ("add_cropbox", "add_ellipsoid") for call in state.calls)
+    assert state.crop_shape == "box"
+
 def test_selection_volume_modes_show_inline_gizmo_controls(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
@@ -2795,3 +2798,82 @@ def test_scale_distance_toolbar_actions_and_snapshot(toolbar_module, monkeypatch
     controller._sync_scale_distance()
     assert model.bound_funcs["scale_distance_can_apply"]() is False
     assert model.bound_funcs["scale_distance_can_reset"]() is False
+
+
+@pytest.mark.parametrize("shape", ["box", "ellipsoid", "polygon"])
+@pytest.mark.parametrize("accepted", [True, False])
+def test_crop_shape_change_never_calls_creation_or_redraw_paths(toolbar_module, monkeypatch, shape, accepted):
+    module, *_ = toolbar_module
+    ui = sys.modules["lichtfeld"].ui
+    calls = []
+    monkeypatch.setattr(ui, "change_crop_tool_shape", lambda value: calls.append(value) or accepted, raising=False)
+    for name in ("add_cropbox", "add_ellipsoid", "start_crop_polygon", "new_crop_tool", "set_crop_tool_shape", "set_active_operator"):
+        monkeypatch.setattr(ui, name, lambda *args: pytest.fail("Changing shape must not create/reopen a crop"), raising=False)
+    module._GizmoToolbarController().dispatch("crop_object", shape)
+    assert calls == [shape]
+
+
+@pytest.mark.parametrize("operation", ["translate", "rotate", "scale"])
+def test_crop_operation_change_keeps_the_current_volume(toolbar_module, monkeypatch, operation):
+    module, *_ = toolbar_module
+    ui = sys.modules["lichtfeld"].ui
+    calls = []
+    monkeypatch.setattr(ui, "set_crop_tool_operation", lambda value: calls.append(value), raising=False)
+    for name in ("add_cropbox", "add_ellipsoid", "start_crop_polygon", "new_crop_tool", "set_crop_tool_shape", "set_active_operator"):
+        monkeypatch.setattr(ui, name, lambda *args: pytest.fail("Changing operation must not recreate the volume"), raising=False)
+    module._GizmoToolbarController().dispatch("crop_transform", operation)
+    assert calls == [operation]
+
+
+@pytest.mark.parametrize("operation", ["translate", "rotate", "scale"])
+def test_crop_transform_highlight_uses_actual_crop_operation(toolbar_module, monkeypatch, operation):
+    module, *_ = toolbar_module
+    ui = sys.modules["lichtfeld"].ui
+    monkeypatch.setattr(ui, "get_crop_tool_operation", lambda: operation, raising=False)
+    monkeypatch.setattr(ui, "get_gizmo_type", lambda: "stale", raising=False)
+    records = module._GizmoToolbarController()._build_crop_transform_records("builtin.cropbox")
+    assert [record["value"] for record in records if record["selected"]] == [operation]
+
+
+@pytest.mark.parametrize("shape", ["box", "ellipsoid", "polygon"])
+@pytest.mark.parametrize("locked", [True, False])
+def test_existing_crop_keeps_only_its_saved_shape_enabled(toolbar_module, monkeypatch, shape, locked):
+    module, *_ = toolbar_module
+    ui = sys.modules["lichtfeld"].ui
+    monkeypatch.setattr(ui, "is_crop_tool_shape_locked", lambda: locked, raising=False)
+    controller = module._GizmoToolbarController()
+    monkeypatch.setattr(controller, "_active_crop_shape", lambda: shape)
+    records = controller._build_crop_object_records("builtin.cropbox")
+    assert [r["value"] for r in records if r["enabled"]] == ([shape] if locked else ["box", "ellipsoid", "polygon"])
+    assert [r["value"] for r in records if r["selected"]] == [shape]
+
+
+@pytest.mark.parametrize("node_type,shape", [("CROPBOX", "box"), ("ELLIPSOID", "ellipsoid"), ("CROP_POLYGON", "polygon")])
+def test_toolbar_creates_new_crop_when_finished_crop_is_still_selected(toolbar_module, monkeypatch, node_type, shape):
+    module, *_ = toolbar_module
+    lf = sys.modules["lichtfeld"]
+    node = SimpleNamespace(type=SimpleNamespace(name=node_type), uuid="existing-crop", children=[])
+    monkeypatch.setattr(lf, "get_selected_node_names", lambda: ["saved-crop"], raising=False)
+    monkeypatch.setattr(lf, "get_scene", lambda: SimpleNamespace(get_node=lambda name: node), raising=False)
+    monkeypatch.setattr(lf.ui, "get_active_tool", lambda: "", raising=False)
+    monkeypatch.setattr(lf.ui, "set_crop_tool_shape", lambda value: None, raising=False)
+    monkeypatch.setattr(lf.ui, "edit_crop_tool", lambda *args: pytest.fail("Toolbar must not reopen the selected crop"), raising=False)
+    create = MagicMock()
+    monkeypatch.setattr(lf.ui, "new_crop_tool", create, raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get", lambda tool: SimpleNamespace(can_activate=lambda context: True))
+    module._GizmoToolbarController().dispatch("tool", "builtin.cropbox")
+    create.assert_called_once_with(shape)
+
+
+@pytest.mark.parametrize("selected", [["group"], ["splat", "group"]])
+def test_crop_toolbar_direct_activation_rejects_scene_groups(toolbar_module, monkeypatch, selected):
+    module, *_ = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    nodes = {"group": SimpleNamespace(type="NodeType.GROUP"), "splat": SimpleNamespace(type="NodeType.SPLAT")}
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: selected, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: SimpleNamespace(get_node=nodes.get), raising=False)
+    def unexpected(*args, **kwargs):
+        pytest.fail("Unsupported group crop must not change the tool or create a volume")
+    for name in ("set_crop_tool_shape", "new_crop_tool", "add_cropbox", "set_active_operator"):
+        monkeypatch.setattr(lf_stub.ui, name, unexpected, raising=False)
+    module._GizmoToolbarController()._activate_crop_tool()

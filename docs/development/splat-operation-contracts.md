@@ -1,127 +1,321 @@
-# Splat operation contracts
+# Splat crop workflow and operation contracts
 
-The read-only catalog in `core/splat_operations.hpp` classifies existing native
-splat editing tools. It is a foundation for an object inspector, not a second
-operator registry, execution engine or persistent modifier stack. Catalog IDs
-are classification IDs; they must not be passed to the operator dispatcher.
-`tool_identifier`, when present, names the existing toolbar entry.
+The scene tree consumes `core/splat_operations.hpp` for direct splat-owned
+crop volumes. The tree is the only element list. There is no extra inspector,
+button panel, persistent modifier stack, or second operator registry.
 
-## Coverage
+## Before and after
 
-| Category | Existing paths classified |
+| Before | After |
 | --- | --- |
-| Crop volume | Crop Box, ellipsoid, Crop Polygon |
-| Derived data | Collision generation and exported result |
-| Geometry reduction | Splat simplification producing another splat |
-| Transform | Translate, rotate, scale, set transform, bake transform, align, scale by distance |
-| Selection | Selection tool, all/none/invert, grow/shrink, by opacity/scale, selection groups |
-| Selection filter | Depth and crop filters |
-| Direct edit | Mirror, Gaussian deletion/copy/cut/paste, Gaussian field writes |
-| Scene organization | Duplicate splat, reparent splat, group selection |
+| Selecting a splat exposed New crop buttons | No additional controls below the tree |
+| Toolbar could reuse a splat's existing crop | Toolbar activation creates a fresh volume on the selected splat or crop owner |
+| Single-clicking a crop entered editing immediately | Single click selects; double click enters editing |
+| Eye and Enable represented two easily confused states | Crop row has one small effect switch; outlines follow selection |
+| Footer duplicated Edit, Duplicate and numeric controls | Viewport toolbar edits; context menu provides secondary actions |
+| Checkmark could bake geometry | Checkmark / Enter / pie Finish retain the editable volume |
 
-The selection toolbar entry includes its existing Centers, Rectangle, Polygon,
-Lasso, Rings, Color, Box and Sphere submodes. Local/World, pivot and mirror axes
-remain settings of the existing tools, not independent modifier instances.
-The test compares toolbar bindings with the actual native Python definitions.
+```text
+Select splat -> toolbar crop -> new independent crop -> edit -> Finish
+Select crop  -> outline only -> double click -> edit that instance -> Finish
+Crop row switch -> enable/disable its filtering effect
+Crop context menu -> Edit / Duplicate / Apply to geometry... / Delete
+```
 
-Navigation, rendering/postprocess settings, import/export workflows, training,
-temporal editing and Mesh-to-Splat are outside this splat-editing catalog.
-Group-only commands such as ungroup and merge are also outside this first
-single-splat contract. A catalog entry does not change the legacy command's
-multi-selection support or advertise a group-owned operation.
+Selecting the splat does not expose creation controls in the scene tree or
+its context menu. The viewport toolbar is the creation path. Selecting a crop
+shows its outline without entering editing. Double click and the context-menu
+Edit action use the same explicit crop-edit entry point. Crop shapes retain their
+existing toolbar parameters, fitting and reset actions.
 
-## Descriptors and permissions
+The switch represents only the crop effect's enabled flag. Helper visibility
+is driven transiently by selection; it does not enable or disable filtering.
+Ordinary objects retain their visibility eye. The bulk visibility eye is hidden
+when the selection includes crops, avoiding a second ambiguous crop control.
 
-The catalog can be used in a splat editing context without assigning every
-entry to that splat. `scope` explicitly identifies the authoritative state:
+## Minimal descriptors with real consumers
 
-| Scope | Meaning | Entries |
+Fit and Reset remain toolbar actions and are not duplicated as unused descriptor fields.
+The runtime table contains only the four existing splat element types.
+There are no new `splat.*` classification strings and no capability
+boolean matrix. Empty action IDs mean that no registered action is exposed.
+
+| Element | Category | Set operator | Fit | Reset | Repeat |
+| --- | --- | --- | --- | --- | --- |
+| Crop Box | Crop volume | `crop_box.set` | `crop_box.fit` | `crop_box.reset` | `crop_volume.duplicate` |
+| Ellipsoid | Crop volume | `ellipsoid.set` | `ellipsoid.fit` | `ellipsoid.reset` | `crop_volume.duplicate` |
+| Crop Polygon | Crop volume | `crop_polygon.set` | Not exposed here | Not exposed here | `crop_volume.duplicate` |
+| Collision | Generated result | None | None | None | None |
+
+The scene tree invokes the live registered operators for executable controls. Invocation still passes through existing poll, validation and undo.
+Tests register the actual scene and polygon operators and check every referenced
+ID. This avoids validating a duplicate list of expected IDs or parsing Python
+source as a substitute for registry discovery.
+
+## Controls and lifecycle
+
+- On a selected splat or one of its crops, activating the viewport crop tool creates a fresh
+  volume using the chosen shape, without replacing existing volumes. Polygon
+  creation enters drawing; cancellation retains the previous scene.
+- A single click selects an existing crop and shows its outline. Double click
+  enters viewport editing. Selecting another item leaves crop editing.
+- The crop row switch toggles only its filtering effect through its registered
+  setter, explicit UUID, validation and undo. There is no Enable footer button.
+- Duplicate copies the existing volume's settings through the context menu.
+- Checkmark, Enter and crop pie Finish preserve the volume, existing enabled
+  flag and source geometry. Normal project Save persists the scene to disk.
+- Apply to geometry is a separate crop context-menu action with confirmation,
+  target name, and UUID/owner/lock revalidation. It bakes only the selected volume
+  and removes it, preserving the other volumes and the existing undo transaction.
+- Collision remains a generated result and retains its ordinary visibility eye.
+
+Names are RML-escaped. Locks inherited from ancestors, disabled editing modes and
+modal operations gate mutations. Numeric fields are not duplicated in the tree.
+The Python edit/create/finish bindings marshal mutations onto the viewer thread.
+
+## Repeated crop instances on one splat
+
+`crop_volume.duplicate` is a real registered operator with a concrete scene-tree
+consumer. It copies the selected box, ellipsoid or polygon into another direct
+child of the same SPLAT, with a new UUID, unique name and independent payload.
+It copies local transform, volume parameters, enabled state and helper visibility;
+it never clones the splat geometry. The source and other crop instances remain
+unchanged. The existing scene-graph patch history provides undo/redo.
+
+The initial composition rule is **intersection**: a Gaussian must pass every
+enabled crop attached to its splat. An inverse volume excludes its region.
+Disabling one instance removes only its constraint. No union, arbitrary Boolean
+expression or order-dependent modifier evaluation is introduced. The renderer
+and render-crop selection filter already apply their lists with this semantics.
+
+The crop context menu exposes Duplicate for all three shapes. The viewport
+toolbar on a selected splat creates a fresh instance; Duplicate copies settings.
+Repeated polygons retain an independent copy of their outline and local plane.
+Point clouds and groups do not gain the repetition command.
+
+Crop filters use a dynamically sized GPU storage-buffer table. A sorted owner
+index points to separate contiguous box, ellipsoid and polygon ranges. Shader
+lookup is logarithmic in the number of owners; filter evaluation visits only
+its owner and optional global filters. There is no 16-volume truncation in
+creation, duplication, conversion, clipboard, viewport or video export.
+
+The fixed overlay prefix retains legacy point-cloud/single-volume filters,
+selection, view and reveal controls. Dynamic offsets/counts are exact float
+integers; oversized tables fail explicitly before allocation instead of losing
+filters. Upload layout, descriptor range and per-frame byte cache follow the
+actual initialized payload, including shrink/removal. The GPU storage-buffer
+limit is checked before upload; allocation failures propagate normally.
+
+Request-side crop filters carry CPU-only source node IDs. A gizmo preview replaces
+its exact source, preserving siblings and inversion; a parent-only ambiguous
+legacy preview cannot overwrite an arbitrary instance. A disabled source is not
+reintroduced as an extra render filter. Source node identity stays CPU-only and is not uploaded as filter payload.
+
+Video snapshots retain every ellipsoid, as they already retain boxes/polygons.
+The legacy point-cloud active-ellipsoid field remains separate. Splat duplication
+and node clipboard paths preserve repeated crop children; project serialization
+continues to store their existing UUID-bearing scene nodes. The collective gate adds the optional boolean documented below.
+
+Training-region bounds/loss semantics remain the existing training contract;
+this increment does not claim multi-region training support or change it.
+Applying one crop to geometry remains the explicit existing action for that
+volume, distinct from baking an entire stack or exporting filtered geometry.
+
+## Exact targets and standard errors
+
+`readSplatOperation(owner, element)` returns `lfs::Result<SplatOperationSnapshot>`.
+Errors use `lfs::Error`, Core domain, a standard code and diagnostic detail:
+unsupported owner/element, invalid identity, inconsistent ownership, or missing
+payload. No separate error enum is introduced.
+
+The reader checks non-nil distinct UUIDs and valid distinct node IDs, SPLAT owner
+type and reciprocal direct parent/child links. It copies parameters, local
+transform and local visibility/lock flags. It contains no Gaussian tensors or
+voxel words, never hydrates geometry and never generates identities or falls back
+to names, selection or ancestors. Collision `enabled` is absent.
+
+Read live nodes on the scene-owning thread or under the caller's existing read
+protection. Snapshots are detached; later mutations must re-resolve identities.
+
+The scene tree re-resolves owner and element identities before mutations.
+Context-menu bake confirmations revalidate the captured UUIDs and ownership. The existing volume Set/Fit/Reset
+operators now accept optional `node_uuid`; it takes precedence over `node` and
+selection. An invalid, deleted or wrong-type explicit UUID cancels the command,
+without falling back. Legacy callers that omit it retain their current behavior.
+
+## Inventory versus runtime contract
+
+The broader inventory still includes transform, selection, depth/crop selection
+filters, Gaussian clipboard/deletion/field edits, simplification and scene
+organization. They remain commands or shared tool/selection state, rather than
+persistent object-owned modifier instances. They do not need unused descriptor
+rows in the runtime table. All eight native toolbar tools remain
+unchanged; cataloging them does not require another registry.
+
+| Inventory category | Existing functions |
+| --- | --- |
+| Transform | Translate, rotate, scale, set/bake transform, align, scale by distance |
+| Selection | Selection tool and submodes, all/none/invert, grow/shrink, opacity/scale queries and selection groups |
+| Selection filters | Depth and crop filters |
+| Direct edit | Mirror, Gaussian delete/copy/cut/paste and field writes |
+| Reduction | Splat simplification producing another splat; no persistent editable recipe inferred |
+| Organization | Duplicate/reparent splat and group selection; no new group-owned effects |
+
+Group owners, point-cloud changes, new camera models, sequencing, postprocess,
+training and Mesh-to-Splat remain outside this increment. The crop GPU parameter layout is updated;
+Saved crop hierarchy is unchanged. The collective gate described below adds one optional project field and a SceneNode flag.
+
+## Editing versus creation
+
+Double click (or context-menu Edit) reopens the saved crop with its type fixed.
+The current type stays selected; the other two types use the standard disabled
+style. The native entry point rejects shape changes during that session.
+Transform operations and Finish remain available. A new creation starts unlocked
+and does not inherit the previous session's type lock. The main toolbar creates
+a fresh instance even if a finished crop remains selected in the tree.
+
+## Review cleanup — 30 October 2026
+
+The splat-specific effect switch only intercepts direct SPLAT children.
+Point-cloud crop eyes retain ordinary helper visibility and do not toggle the
+payload's enabled flag. Removed the unreachable legacy box/ellipsoid drag state
+and rollback blocks, unused Fit/Reset descriptor fields, duplicate Python
+fallback checks and 28 translations per language left by the removed inspector.
+
+Dynamic crop tables are transient rendering data. Scene node identity, crop
+payloads remain unchanged. The collective gate below extends project serialization with an optional boolean. The shared switch style
+continues to serve Preferences and the MCP popup; the scene-tree variant only
+reduces its dimensions.
+
+## Verification
+
+Enable `BUILD_SPLAT_WORKFLOW_TESTS=ON` in an application build for
+`lichtfeld_splat_crop_workflow_tests` / CTest `lichtfeld.splat_crop_workflow`.
+The ordinary suite uses the real operator registry and retained RML tree without
+requiring a window or GPU renderer. Its optional clipboard hydration regression
+uses CUDA; opt in with `LFS_TEST_CROP_CLIPBOARD_GPU=1` on a GPU validation host.
+The core readers have their own `lichtfeld_splat_operation_tests` target.
+
+Final local Windows validation:
+
+- 25 crop workflow/tree/packing tests, including the opt-in GPU clipboard test;
+- 11 core reader/descriptor tests and 219 Python toolbar/preferences/UI tests;
+- successful application/shader builds with sccache and FAST_COMPILE;
+- clang-format, diff whitespace, I/O discipline and error-debt gates pass;
+- English/Italian keys match, with no new undefined localization references.
+  The broad localization scanner still reports 127 existing undefined references
+  elsewhere; its baseline comparison is recorded separately.
+
+Real GPU image comparisons used an isolated 64-Gaussian fixture and 120 crops
+(40 per type) in both 3dgs and 3dgut. The fortieth box, ellipsoid and polygon each
+changed the pixels; disabling it restored the reference exactly. Duplicating the
+splat preserved all 120 crop children. Hiding the original through its crops and
+removing it produced identical images, exercising owner isolation and index
+remapping; undo restored the subtree. Removing 240 crop children shrank the
+buffer without changing the nonrestrictive image, and regrowing one restrictive
+crop reproduced the owner-isolated reference exactly.
+
+The native GPU clipboard regression separately verifies duplicate and paste of
+40 crops of each type, parent/UUID ownership and paste undo/redo. The pixel
+checks cover the interactive viewport, not a new exhaustive matrix of video,
+training, VR, stochastic transparency or every graphics driver.
+
+## Virtual Crop container — 30 October 2026
+
+Each SPLAT with direct crop children has one collapsible `Crop (N)` row in the
+scene tree. This is a presentation container, not a Scene GROUP: crop UUIDs,
+real parents, origins and transforms remain unchanged. Point-cloud rows keep
+their previous behavior. The container is initially collapsed; expansion is
+session-only. It is excluded from scene counts, selection ranges, Select All,
+drag/reparent destinations and transform tools. Double click only folds it.
+
+The container switch suspends all its crop effects without changing individual
+`enabled` flags. Child switches are dimmed while suspended. Viewport filters and
+video export honor the same gate; helper visibility remains independent.
+The SPLAT flag `crop_effects_enabled` is saved as an optional SCNG boolean;
+missing fields default to true, and malformed types are rejected. Duplicate,
+clipboard and undo snapshots preserve it.
+
+Right-click actions:
+
+| Action | Result | Undo |
 | --- | --- | --- |
-| `Object` | Node/payload state or a command with explicit object targets | Volumes, collision results, simplification request, transforms, duplicate/reparent, field writes |
-| `SceneSelection` | Shared selection/mask, selection groups or commands consuming it | Selection tools and queries, grow/shrink, mirror, selection clipboard/editing, group selection |
-| `ViewportTool` | Shared tool/view settings, not an object's property | Selection depth and crop filters |
+| Enable/disable | Changes the collective gate only | One entry |
+| Apply active crops to geometry | Prepares the intersection on detached data, applies its deletion mask, removes enabled volumes; disabled volumes remain | One transaction |
+| Delete all crops | Removes every crop volume, preserves source geometry and unrelated children, resets the empty container gate | One transaction |
 
-Object commands may resolve multiple selected nodes. Scope describes the state
-being edited, not how many targets the command accepts. `supportsOwner(SPLAT)`
-is true only for existing object-backed volumes and collision results; a
-command such as simplification can target a splat without owning a persistent
-recipe on it. No entry enables group owners or reordering. Capabilities describe implemented paths, not whether an action is
-currently allowed: live training, locks, hydration, selection and active jobs
-still require the existing application poll/validation services.
+Bake requires an enabled container, resident SPLAT data and valid, unlocked
+active crops. Delete requires every affected crop to be unlocked. Both commands
+show a confirmation; its callback checks the exact owner UUID, member UUIDs and
+scene revision before invoking the manager validation. Training/tool/modal locks
+are checked again at execution. Individual volumes retain their existing edit
+and removal commands.
 
-Crop volumes expose editable parameters, local enable state and helper display
-paths. Their action capabilities also include Fit, Reset, Invert, Apply to
-geometry and Remove element, corresponding to the existing crop command paths.
-Apply is a geometry edit, not a promise that applying can be reversed later
-without undo. Remove deletes the volume node; it is distinct from disabling its
-effect. Collisions expose removal of their result node and generation/export, but no persistent editable recipe
-or independent operation enable switch. Simplification is command-only: its
-parameters live in the current request, not in a recoverable operation on every
-resulting splat. Selection, transforms and editing remain commands rather than
-being mislabeled as nondestructive modifiers.
+The UI container does not introduce group-owned effects or change crop order:
+all enabled crop volumes continue to combine by intersection, with inverse
+volumes excluding their regions.
 
-The existing crop tool can convert or replace other crop volume shapes. This
-catalog does not promise that arbitrary crop shapes coexist or form an ordered
-stack, nor does it change those replacement rules.
+Validation of the collective container: 31 native workflow/tree/packing tests
+(including CUDA clipboard), 11 core tests and 178 Python tests pass; 72 Python
+API-completeness cases skip outside the embedded application. The complete
+Windows application builds with sccache and FAST_COMPILE. Real GPU comparisons
+confirm the collective gate in both 3dgs and 3dgut. Runtime checks cover reopening
+a saved disabled gate, active-only bake retaining a disabled volume, delete-all
+preserving geometry and undo/redo of both operations. These checks do not claim
+an exhaustive manual review of every menu or graphics driver.
 
-## Volume actions and existing routes
+## General solidity review — 30 October 2026
 
-These are discoverable capabilities, not new dispatch IDs or setters. The
-caller still validates the current target and uses the established command.
+The review found and corrected three selection inconsistencies:
 
-| Action capability | Crop Box | Ellipsoid | Crop Polygon |
-| --- | --- | --- | --- |
-| `fit` | `CropBoxFitOperator` / `cap::fitCropBoxToParent` | `EllipsoidFitOperator` / `cap::fitEllipsoidToParent` | `GizmoManager::fitSelectedCropPolygon` / `cap::fitCropPolygonToParent` |
-| `reset` | `CropBoxResetOperator` / `cap::resetCropBox` | `EllipsoidResetOperator` / `cap::resetEllipsoid` | `GizmoManager::resetSelectedCropPolygon` / `cap::resetCropPolygon` |
-| `invert` | Existing volume update / crop inverse command | Existing volume update / crop inverse command | Existing volume update / crop inverse command |
-| `apply_to_geometry` | `ApplyCropBox` | `ApplyEllipsoid` | `ApplyCropPolygon` |
-| `remove_element` | Existing crop-volume deletion | Existing crop-volume deletion | Existing crop-volume deletion |
+- Python `Scene.apply_crop_filter` now checks the collective gate as well as each
+  volume's enabled flag, matching viewport and export behavior.
+- Native scene selection filtering evaluates every enabled crop with its own
+  model index. It no longer chooses a single volume according to the selected
+  tree row or applies that volume globally to other splats. Explicit selection
+  volumes keep their global scope and replace the scene filters of their own
+  shape, preserving that workflow.
+- Point rendering's live preview rechecks the persistent volume/gate, so a stale
+  gizmo flag cannot reactivate a suspended or individually disabled crop.
 
-`fit_crop_tool`, `reset_crop_tool`, `toggle_crop_tool_inverse`,
-`apply_crop_tool` and `delete_crop_tool_volume` are current UI entry points.
-Some resolve the active shape/selection; future inspector callers must establish
-or resolve the intended target through the same validated command path rather
-than assuming these entry points accept an arbitrary UUID.
+The training load rollback descriptor now preserves the collective flag. Removed
+its now-unused selection lookup helper. The virtual tree's organization pass
+uses constant-time snapshot lookups instead of repeatedly searching the entire
+crop list for every child.
 
-## Reading existing scene data
+New native regressions exercise repeated crop intersection, selection with
+another owner or no owner selected, isolation of the other model, gate off/on,
+all three crop shapes and stale point-preview state. The final suites pass
+33 workflow/tree/packing/CUDA tests and 11 core tests. Runtime Python checks on
+an isolated 64-Gaussian project exercise each of the three shapes with gate
+on/off. The complete application builds with sccache and FAST_COMPILE.
 
-`readSplatOperation(owner, element)` returns a detached snapshot of a direct
-crop-volume or collision child of a splat. Pass live nodes from the same scene
-on the scene-owning thread, or under the caller's existing scene read protection.
-The adapter checks owner type, distinct non-nil identities and reciprocal direct
-parent/child links. It never falls back to selection, names or ancestors.
+The ordinary Python toolbar/preferences suite passes 178 tests, with 72 native
+API checks skipped by its external Python 3.11 runner. A supplementary attempt
+to include the histogram suite cannot initialize its native fixture in that
+runner (`ModuleNotFoundError: lichtfeld`, whose built module targets Python
+3.12); those histogram cases are not reported as passing. Native selection and
+embedded Python crop-filter behavior are covered separately above.
 
-The snapshot copies existing parameters and the child's local transform. It
-contains no Gaussian tensors or voxel words and does not hydrate unloaded
-geometry. `enabled` is absent for collision results. `node_visible` and
-`node_locked` are local node flags; ancestor state and global renderer switches
-must not be inferred from them. The snapshot survives payload removal, but its
-UUIDs must be resolved and revalidated before any later edit.
+Scope of assurance: source review, native/RML event tests, real CUDA selection
+and GPU image checks; no claim of exhaustive manual GUI review or allocation
+failure injection. Existing user files were not modified during runtime checks;
+the test application uses a separate LFS_HOME and a copied project.
 
-The adapter is an inspection path, not parameter validation. It preserves
-existing payload values verbatim and reports missing payloads rather than
-manufacturing defaults. It cannot recover a recipe from an ordinary splat
-produced by simplification, and does not invent operation UUIDs.
+Review GPU finale: ripetuti 120 crop (40 per tipo) in 3dgs e 3dgut; ogni quarantesimo crop modifica i pixel e spegnerlo ripristina esattamente il riferimento (delta 0). Istanza e progetto di test isolati, copia finale salvata e istanza chiusa.
 
-## Authoritative data and mutation paths
 
-| Read data | Authoritative source | Existing mutation path to reuse |
-| --- | --- | --- |
-| Crop Box | `SceneNode::cropbox` and local transform | `CropBoxSetOperator` / `cap::updateCropBox`, existing gizmo and undo paths |
-| Ellipsoid | `SceneNode::ellipsoid` and local transform | `EllipsoidSetOperator` / `cap::updateEllipsoid`, existing gizmo and undo paths |
-| Crop Polygon | `SceneNode::crop_polygon` and local transform | `CropPolygonSetOperator` and existing contour editing commands |
-| Collision parameters | Completed `CollisionVolume::settings` | `generate_collision` / `AsyncTaskManager::startCollision`; export through the existing collision job |
-| Simplification request | Current `SplatSimplifyOptions` request | `simplify_splats` / existing async simplification service |
-| Node visibility and lock | Existing observable node properties | SceneManager and established undo-aware scene commands |
+### Crop su gruppi normali disabilitato — 30 ottobre 2026
 
-The adapter deliberately adds no setter and does not bypass undo or job capture
-checks. Future UI/API consumers must resolve targets explicitly and reuse these
-paths; they must not write cached snapshot parameters back directly.
+Il supporto ai modificatori resta limitato ai singoli splat. Il comando Crop è
+ora disabilitato quando la selezione include un GROUP della scena, anche insieme
+a splat o volumi crop. Il controllo è presente nei poll Python e nativo;
+l'attivazione diretta della toolbar rifiuta la stessa selezione prima di cambiare
+strumento, forma o creare nodi. I percorsi già esistenti per splat, point cloud,
+dataset e singoli volumi non sono modificati. Il contenitore virtuale Crop (N)
+conserva il comportamento organizzativo già descritto.
 
-## Persistence and compatibility
+Verifica: 106 test Python di toolbar, definizioni e registro strumenti passati,
+compresi i nuovi casi GROUP e selezioni miste. Build con cache e FAST_COMPILE.
 
-No fields are added to SceneNode, the project chapters or existing payloads.
-No migrations, serializer changes, generated IDs, renderer gates or evaluation
-changes are introduced. The original node payload remains the sole source of
-truth. New recipes, source/result separation and group aggregation require
-subsequent changes with their own persistence and runtime contracts.
+Verifica runtime finale: scena utente ripristinata con 2.997.954 Gaussiane; sul gruppo reale poll Python, poll nativo e record del pulsante Crop risultano disabilitati. Passati anche i 33 test C++ workflow. Preview aggiornata lasciata aperta sulla copia salvata prima della build.

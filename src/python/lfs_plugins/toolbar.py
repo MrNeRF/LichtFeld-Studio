@@ -612,7 +612,11 @@ class _GizmoToolbarController:
         return node is not None and self._node_type_name(node) == expected_type
 
     def _build_crop_object_records(self, active_tool_id):
+        import lichtfeld as lf
+
         active = active_tool_id == self._CROP_TOOL_ID
+        locked_getter = getattr(lf.ui, "is_crop_tool_shape_locked", None)
+        shape_locked = active and callable(locked_getter) and locked_getter()
         active_shape = self._active_crop_shape() if active else "box"
         return [
             _button_record(
@@ -623,7 +627,7 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.crop_box",
                 tooltip_text="Crop Box",
                 selected=active and active_shape == "box",
-                enabled=active,
+                enabled=active and (not shape_locked or active_shape == "box"),
             ),
             _button_record(
                 "crop-object-ellipsoid",
@@ -633,7 +637,7 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.ellipsoid",
                 tooltip_text="Ellipsoid",
                 selected=active and active_shape == "ellipsoid",
-                enabled=active,
+                enabled=active and (not shape_locked or active_shape == "ellipsoid"),
             ),
             _button_record(
                 "crop-object-polygon",
@@ -643,7 +647,7 @@ class _GizmoToolbarController:
                 tooltip_key="toolbar.crop_polygon",
                 tooltip_text="Crop Polygon",
                 selected=active and active_shape == "polygon",
-                enabled=active,
+                enabled=active and (not shape_locked or active_shape == "polygon"),
             ),
         ]
 
@@ -651,9 +655,13 @@ class _GizmoToolbarController:
         import lichtfeld as lf
 
         active = active_tool_id == self._CROP_TOOL_ID
-        active_gizmo = lf.ui.get_gizmo_type() if active and hasattr(lf.ui, "get_gizmo_type") else ""
-        if active and not active_gizmo:
-            active_gizmo = "translate"
+        active_gizmo = ""
+        if active:
+            getter = getattr(lf.ui, "get_crop_tool_operation", None)
+            if not callable(getter):
+                getter = getattr(lf.ui, "get_gizmo_type", None)
+            active_gizmo = getter() if callable(getter) else ""
+            active_gizmo = active_gizmo or "translate"
         return self._build_gizmo_operation_records(active, active_gizmo)
 
     def _build_gizmo_operation_records(self, active, active_gizmo):
@@ -885,12 +893,12 @@ class _GizmoToolbarController:
                 enabled=inverse is not None,
             ),
             _button_record(
-                "crop-apply",
-                "crop_apply",
+                "crop-finish",
+                "crop_finish",
                 "",
                 _icon_src("check"),
-                tooltip_key="common.apply",
-                tooltip_text="Apply",
+                tooltip_key="splat_inspector.finish",
+                tooltip_text="Finish crop editing",
                 action_id="APPLY_CROP_BOX",
                 enabled=active,
             ),
@@ -982,13 +990,26 @@ class _GizmoToolbarController:
     def _activate_crop_tool(self, gizmo_type="translate", infer_selection_shape=True):
         import lichtfeld as lf
 
-        shape = self._active_crop_shape(infer_selection_shape)
+        selected_getter = getattr(lf, "get_selected_node_names", None)
+        selected = (selected_getter() or []) if callable(selected_getter) else []
+        scene_getter = getattr(lf, "get_scene", None)
+        scene = scene_getter() if callable(scene_getter) else None
+        get_node = getattr(scene, "get_node", None)
+        node = get_node(selected[0]) if len(selected) == 1 and callable(get_node) else None
+        if callable(get_node) and any(self._node_type_name(get_node(name)) == "GROUP" for name in selected):
+            return
+        shape = self._active_crop_shape(infer_selection_shape and self._node_type_name(node) != "SPLAT")
         if infer_selection_shape:
             set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
             if callable(set_shape):
                 set_shape(shape)
-        selected_getter = getattr(lf, "get_selected_node_names", None)
-        selected = (selected_getter() or []) if callable(selected_getter) else []
+        if self._node_type_name(node) == "SPLAT" or (
+            infer_selection_shape and self._node_type_name(node) in ("CROPBOX", "ELLIPSOID", "CROP_POLYGON")
+        ):
+            create = getattr(lf.ui, "new_crop_tool", None)
+            if callable(create):
+                create(shape)
+                return
         if shape == "box" and selected:
             add_cropbox = getattr(lf.ui, "add_cropbox", None)
             if callable(add_cropbox):
@@ -1129,6 +1150,10 @@ class _GizmoToolbarController:
 
         if action == "crop_object":
             if value in self._CROP_OBJECT_SHAPES:
+                change_shape = getattr(lf.ui, "change_crop_tool_shape", None)
+                if callable(change_shape):
+                    change_shape(value)
+                    return
                 current_gizmo = lf.ui.get_gizmo_type() if hasattr(lf.ui, "get_gizmo_type") else ""
                 set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
                 if callable(set_shape):
@@ -1138,10 +1163,11 @@ class _GizmoToolbarController:
 
         if action == "crop_transform":
             if value in self._CROP_TRANSFORM_GIZMOS:
+                set_operation = getattr(lf.ui, "set_crop_tool_operation", None)
+                if callable(set_operation):
+                    set_operation(value)
+                    return
                 if self._selection_volume_active(lf.ui.get_active_tool()):
-                    set_operation = getattr(lf.ui, "set_crop_tool_operation", None)
-                    if callable(set_operation):
-                        set_operation(value)
                     return
                 self._activate_crop_tool(value, infer_selection_shape=False)
             return
@@ -1164,10 +1190,10 @@ class _GizmoToolbarController:
                 reset_crop_tool()
             return
 
-        if action == "crop_apply":
-            apply_crop_tool = getattr(lf.ui, "apply_crop_tool", None)
-            if callable(apply_crop_tool):
-                apply_crop_tool()
+        if action == "crop_finish":
+            finish_crop_tool = getattr(lf.ui, "finish_crop_tool", None)
+            if callable(finish_crop_tool):
+                finish_crop_tool()
             return
 
         if action == "align_toggle_preview":
@@ -2254,7 +2280,7 @@ class _ViewportToolbarController:
             "crop_trim",
             "crop_reset",
             "crop_toggle_inverse",
-            "crop_apply",
+            "crop_finish",
             "crop_delete",
             "crop_toggle_enabled",
             "align_toggle_preview",

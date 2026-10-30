@@ -27,7 +27,7 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS AND NOT BUILD_SPLAT_WORKFLOW_TESTS)
         return()
     endif()
 endif()
@@ -48,6 +48,23 @@ target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
 add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
 set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
 
+# Focused real-registry and retained-DOM consumer tests; no window or GPU renderer.
+if(TARGET lfs_visualizer AND (BUILD_TESTS OR BUILD_VISUALIZER_TESTS OR BUILD_SPLAT_WORKFLOW_TESTS))
+    add_executable(lichtfeld_splat_crop_workflow_tests test_splat_crop_workflow.cpp)
+    target_compile_features(lichtfeld_splat_crop_workflow_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_splat_crop_workflow_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_include_directories(lichtfeld_splat_crop_workflow_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(lichtfeld_splat_crop_workflow_tests PRIVATE
+        lfs_visualizer lfs_core lfs_io lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_splat_crop_workflow_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_splat_crop_workflow_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.splat_crop_workflow COMMAND lichtfeld_splat_crop_workflow_tests)
+    set_tests_properties(lichtfeld.splat_crop_workflow PROPERTIES LABELS "cpu;scene;ui" TIMEOUT 60)
+endif()
+
 add_executable(lichtfeld_collision_tests test_collision.cpp
     ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
@@ -61,7 +78,7 @@ set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" T
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
-if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
+if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS OR BUILD_SPLAT_WORKFLOW_TESTS))
     add_executable(lichtfeld_native_filesystem_tests
         test_native_filesystem.cpp test_native_logging.cpp native_filesystem_test.manifest)
     target_compile_features(lichtfeld_native_filesystem_tests PRIVATE cxx_std_23)
@@ -324,7 +341,7 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         $<TARGET_PROPERTY:${PROJECT_NAME},LINK_LIBRARIES>
         GTest::gtest_main
     )
-    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS AND NOT BUILD_SPLAT_WORKFLOW_TESTS)
         return()
     endif()
 endif()

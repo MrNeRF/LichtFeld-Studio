@@ -2801,6 +2801,12 @@ namespace lfs::io::project {
                 }
                 result.payload = std::move(*parsed);
             }
+            if (const Json* enabled = JsonChapterDom::read_json_ref(element, "crop_effects_enabled")) {
+                if (!enabled->is_boolean())
+                    return fail<SceneNodeRecord>(lfs::ErrorCode::DataLoss, "Invalid crop group state.", "crop_effects_enabled must be boolean", "SCNG", "nodes.crop_effects_enabled");
+                result.crop_effects_enabled = enabled->get<bool>();
+            }
+
             if (const Json* cropbox =
                     JsonChapterDom::read_json_ref(element, "cropbox");
                 cropbox) {
@@ -3021,6 +3027,7 @@ namespace lfs::io::project {
         element["visible"] = value.visible;
         element["locked"] = value.locked;
         element["training_enabled"] = value.training_enabled;
+        element["crop_effects_enabled"] = value.crop_effects_enabled;
         element["payload_diverged"] = value.payload_diverged;
         if (value.point_cloud_source)
             element["point_cloud_source"] = true;

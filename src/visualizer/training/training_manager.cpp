@@ -466,6 +466,7 @@ namespace lfs::vis {
                 result.visible = node.visible.get();
                 result.locked = node.locked.get();
                 result.training_enabled = node.training_enabled;
+                result.crop_effects_enabled = node.crop_effects_enabled;
                 result.payload_diverged = node.payload_diverged;
                 result.point_cloud_source = node.point_cloud_source;
                 result.payload_hydration = node.payload_hydration;

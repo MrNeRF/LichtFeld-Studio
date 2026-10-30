@@ -641,17 +641,6 @@ namespace lfs::vis {
             };
         }
 
-        template <typename RenderableT>
-        [[nodiscard]] const RenderableT* findRenderableByNodeId(const std::vector<RenderableT>& items,
-                                                                const core::NodeId node_id) {
-            if (node_id == core::NULL_NODE) {
-                return nullptr;
-            }
-            const auto it = std::find_if(items.begin(), items.end(),
-                                         [node_id](const auto& item) { return item.node_id == node_id; });
-            return (it == items.end()) ? nullptr : &(*it);
-        }
-
         [[nodiscard]] std::optional<core::Tensor> tryBuildVksplatSelectionMask(
             SceneManager* const scene_manager,
             RenderingManager* const rendering_manager,
@@ -3760,126 +3749,94 @@ namespace lfs::vis {
             return;
         }
 
-        core::Tensor crop_t;
-        core::Tensor crop_min;
-        core::Tensor crop_max;
-        const core::Tensor* crop_t_ptr = nullptr;
-        const core::Tensor* crop_min_ptr = nullptr;
-        const core::Tensor* crop_max_ptr = nullptr;
-        bool crop_inverse = false;
-
-        const auto render_state = [&] {
-            LOG_TIMER("applyCropFilter.buildRenderState");
-            return scene_manager_->buildRenderState();
-        }();
-        if (crop_box_transform && crop_box_min && crop_box_max) {
-            crop_t_ptr = crop_box_transform;
-            crop_min_ptr = crop_box_min;
-            crop_max_ptr = crop_box_max;
-        } else if (use_scene_filters) {
-            if (const auto* const cb =
-                    findRenderableByNodeId(render_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
-                cb && cb->data) {
-                const glm::mat4 inv_transform = glm::inverse(cb->world_transform);
-                const float* const t_ptr = glm::value_ptr(inv_transform);
-                crop_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
-                crop_min = core::Tensor::from_vector({cb->data->min.x, cb->data->min.y, cb->data->min.z}, {3});
-                crop_max = core::Tensor::from_vector({cb->data->max.x, cb->data->max.y, cb->data->max.z}, {3});
-                crop_t_ptr = &crop_t;
-                crop_min_ptr = &crop_min;
-                crop_max_ptr = &crop_max;
-                crop_inverse = cb->data->inverse;
-            }
-        }
-
-        core::Tensor ellip_t;
-        core::Tensor ellip_radii;
-        const core::Tensor* ellip_t_ptr = nullptr;
-        const core::Tensor* ellip_radii_ptr = nullptr;
-        bool ellipsoid_inverse = false;
-
-        if (ellipsoid_transform && ellipsoid_radii) {
-            ellip_t_ptr = ellipsoid_transform;
-            ellip_radii_ptr = ellipsoid_radii;
-        } else if (use_scene_filters) {
-            if (const auto* const el =
-                    findRenderableByNodeId(render_state.ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
-                el && el->data) {
-                const glm::mat4 inv_transform = glm::inverse(el->world_transform);
-                const float* const t_ptr = glm::value_ptr(inv_transform);
-                ellip_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
-                ellip_radii = core::Tensor::from_vector({el->data->radii.x, el->data->radii.y, el->data->radii.z}, {3});
-                ellip_t_ptr = &ellip_t;
-                ellip_radii_ptr = &ellip_radii;
-                ellipsoid_inverse = el->data->inverse;
-            }
-        }
-
-        // Polygons only come from the scene; the selection volumes are boxes and spheres.
-        core::Tensor polygon_t;
-        core::Tensor polygon_vertices;
-        std::optional<rendering::SelectionCropPolygon> polygon;
-        if (use_scene_filters) {
-            if (const auto* const cp = findRenderableByNodeId(render_state.crop_polygons,
-                                                              scene_manager_->getActiveSelectionCropPolygonId());
-                cp && cp->data) {
-                const glm::mat4 inv_transform = glm::inverse(cp->world_transform);
-                const float* const t_ptr = glm::value_ptr(inv_transform);
-                polygon_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
-                std::vector<float> outline;
-                outline.reserve(cp->data->vertices.size() * 2);
-                for (const glm::vec2& vertex : cp->data->vertices)
-                    outline.insert(outline.end(), {vertex.x, vertex.y});
-                polygon_vertices = core::Tensor::from_vector(outline, {cp->data->vertices.size(), size_t{2}});
-                polygon = rendering::SelectionCropPolygon{
-                    .transform = &polygon_t,
-                    .vertices = &polygon_vertices,
-                    .half_depth = cp->data->half_depth,
-                    .inverse = cp->data->inverse,
-                };
-            }
-        }
-
-        if (!crop_t_ptr && !ellip_t_ptr && !polygon) {
+        const auto render_state = scene_manager_->buildRenderState();
+        const bool explicit_box = crop_box_transform && crop_box_min && crop_box_max;
+        const bool explicit_ellipsoid = ellipsoid_transform && ellipsoid_radii;
+        const auto enabled = [](const auto& volume) {
+            return volume.data && volume.data->enabled && volume.crop_effects_enabled && volume.parent_node_index >= 0;
+        };
+        const bool scene_box = use_scene_filters && !explicit_box && std::any_of(render_state.cropboxes.begin(), render_state.cropboxes.end(), enabled);
+        const bool scene_ellipsoid = use_scene_filters && !explicit_ellipsoid && std::any_of(render_state.ellipsoids.begin(), render_state.ellipsoids.end(), enabled);
+        const bool scene_polygon = use_scene_filters && std::any_of(render_state.crop_polygons.begin(), render_state.crop_polygons.end(), enabled);
+        if (!explicit_box && !explicit_ellipsoid && !scene_box && !scene_ellipsoid && !scene_polygon)
             return;
-        }
 
         core::Tensor model_transforms_cuda;
         const core::Tensor* model_transforms_ptr = nullptr;
         if (!render_state.model_transforms.empty()) {
-            LOG_TIMER("applyCropFilter.uploadModelTransformsToCuda");
             model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
             model_transforms_ptr = &model_transforms_cuda;
         }
-
         core::Tensor transform_indices_cuda;
         const core::Tensor* transform_indices_ptr = nullptr;
         if (render_state.transform_indices && render_state.transform_indices->is_valid() &&
             render_state.transform_indices->numel() == means.size(0)) {
-            if (render_state.transform_indices->device() == core::Device::CUDA) {
+            if (render_state.transform_indices->device() == core::Device::CUDA)
                 transform_indices_ptr = render_state.transform_indices.get();
-            } else {
-                LOG_TIMER("applyCropFilter.transform_indices_to_cuda");
+            else {
                 transform_indices_cuda = render_state.transform_indices->cuda();
                 transform_indices_ptr = &transform_indices_cuda;
             }
         }
-
-        {
-            LOG_TIMER("applyCropFilter.filter_selection_by_crop");
-            rendering::filter_selection_by_crop(
-                selection, means,
-                crop_t_ptr,
-                crop_min_ptr,
-                crop_max_ptr,
-                crop_inverse,
-                ellip_t_ptr,
-                ellip_radii_ptr,
-                ellipsoid_inverse,
-                model_transforms_ptr,
-                transform_indices_ptr,
-                -1,
-                polygon ? &*polygon : nullptr);
+        // Explicit selection volumes retain their global scope and replace only
+        // their own shape's scene filters. Persistent crops are owner-scoped and
+        // compose by intersection, independently of which tree row is selected.
+        if (explicit_box || explicit_ellipsoid) {
+            rendering::filter_selection_by_crop(selection, means,
+                                                explicit_box ? crop_box_transform : nullptr,
+                                                explicit_box ? crop_box_min : nullptr,
+                                                explicit_box ? crop_box_max : nullptr, false,
+                                                explicit_ellipsoid ? ellipsoid_transform : nullptr,
+                                                explicit_ellipsoid ? ellipsoid_radii : nullptr, false,
+                                                model_transforms_ptr, transform_indices_ptr, -1);
+        }
+        const auto transform_tensor = [](const glm::mat4& world) {
+            const auto inverse = glm::inverse(world);
+            const float* values = glm::value_ptr(inverse);
+            return core::Tensor::from_vector(std::vector<float>(values, values + 16), {4, 4});
+        };
+        const auto vector_tensor = [](const glm::vec3& value) {
+            return core::Tensor::from_vector({value.x, value.y, value.z}, {3});
+        };
+        if (scene_box) {
+            for (const auto& box : render_state.cropboxes) {
+                if (!enabled(box))
+                    continue;
+                const auto transform = transform_tensor(box.world_transform);
+                const auto minimum = vector_tensor(box.data->min);
+                const auto maximum = vector_tensor(box.data->max);
+                rendering::filter_selection_by_crop(selection, means, &transform, &minimum, &maximum, box.data->inverse,
+                                                    nullptr, nullptr, false, model_transforms_ptr, transform_indices_ptr, box.parent_node_index);
+            }
+        }
+        if (scene_ellipsoid) {
+            for (const auto& ellipsoid : render_state.ellipsoids) {
+                if (!enabled(ellipsoid))
+                    continue;
+                const auto transform = transform_tensor(ellipsoid.world_transform);
+                const auto radii = vector_tensor(glm::max(glm::abs(ellipsoid.data->radii), glm::vec3(1e-8f)));
+                rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                    &transform, &radii, ellipsoid.data->inverse, model_transforms_ptr, transform_indices_ptr, ellipsoid.parent_node_index);
+            }
+        }
+        if (scene_polygon) {
+            for (const auto& polygon : render_state.crop_polygons) {
+                if (!enabled(polygon))
+                    continue;
+                const auto transform = transform_tensor(polygon.world_transform);
+                std::vector<float> outline;
+                outline.reserve(polygon.data->vertices.size() * 2);
+                for (const auto& vertex : polygon.data->vertices)
+                    outline.insert(outline.end(), {vertex.x, vertex.y});
+                const auto vertices = core::Tensor::from_vector(outline, {polygon.data->vertices.size(), size_t{2}});
+                const rendering::SelectionCropPolygon filter{
+                    .transform = &transform,
+                    .vertices = &vertices,
+                    .half_depth = polygon.data->half_depth,
+                    .inverse = polygon.data->inverse};
+                rendering::filter_selection_by_crop(selection, means, nullptr, nullptr, nullptr, false,
+                                                    nullptr, nullptr, false, model_transforms_ptr, transform_indices_ptr, polygon.parent_node_index, &filter);
+            }
         }
     }
 

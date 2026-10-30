@@ -536,8 +536,7 @@ namespace lfs::vis::gui {
             });
         }
 
-        if (snapshot.active_ellipsoid) {
-            const auto& el = *snapshot.active_ellipsoid;
+        const auto append_ellipsoid = [&](const VideoExportEllipsoidSnapshot& el) {
             state.ellipsoids.push_back(lfs::core::Scene::RenderableEllipsoid{
                 .node_id = el.node_id,
                 .parent_splat_id = el.parent_splat_id,
@@ -547,7 +546,11 @@ namespace lfs::vis::gui {
                 .local_transform = glm::mat4(1.0f),
                 .effectively_visible = true,
             });
-        }
+        };
+        for (const auto& el : snapshot.ellipsoids)
+            append_ellipsoid(el);
+        if (snapshot.ellipsoids.empty() && snapshot.active_ellipsoid)
+            append_ellipsoid(*snapshot.active_ellipsoid);
 
         state.crop_polygons.reserve(snapshot.crop_polygons.size());
         for (const auto& polygon : snapshot.crop_polygons) {
@@ -3557,7 +3560,7 @@ namespace lfs::vis::gui {
                              mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, render_size, sequence_uuid, sequence_frame = sequence_uuid ? sequence_frames[frame] : 0,
                              cam_state = frame_states[frame], reveal_clip,
                              clip_time = lfs::io::video::videoExportSampleTime(frame, export_options.framerate, export_options.framerate_denominator)]() mutable
-                            -> std::expected<lfs::core::Tensor, std::string> {
+                                -> std::expected<lfs::core::Tensor, std::string> {
                                 if (sequence_uuid) {
                                     auto& sequencer_ui = viewer->getGuiManager()->sequencerUI();
                                     const auto* current = sequencer_ui.controller().plySequence();

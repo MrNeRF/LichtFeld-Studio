@@ -2987,6 +2987,12 @@ assert lf.ui.get_crop_tool_inverse() is True
             ASSERT_TRUE(gizmo.persistActiveCropToolToNode(false));
             ASSERT_NO_FATAL_FAILURE(expectSavedAsSceneState(viewer));
 
+            const auto gaussian_count = viewer.getScene().getTotalGaussianCount();
+            const auto uuid = viewer.getScene().getNode(cropbox_name)->uuid;
+            gizmo.finishCropTool();
+            EXPECT_NE(viewer.getScene().getNodeByUuid(uuid), nullptr);
+            EXPECT_EQ(viewer.getScene().getTotalGaussianCount(), gaussian_count);
+            EXPECT_FALSE(gizmo.isCropToolActive());
             const auto* const cropbox = viewer.getScene().getNode(cropbox_name);
             ASSERT_NE(cropbox, nullptr);
             EXPECT_EQ(cropbox->cropbox->min, glm::vec3(-0.25f, -0.5f, -0.75f));

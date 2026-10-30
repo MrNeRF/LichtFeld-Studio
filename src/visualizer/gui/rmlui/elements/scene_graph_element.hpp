@@ -44,14 +44,15 @@ namespace lfs::vis::gui {
             size_t count = 0;
             bool all_visible = false;
             bool any_visible = false;
+            bool has_crop_volume = false;
             bool all_training_compatible = false;
             bool all_training_enabled = false;
             bool any_training_enabled = false;
             bool all_delete_enabled = false;
         };
 
-        explicit SceneGraphElement(const Rml::String& tag);
-        ~SceneGraphElement() override;
+        LFS_VIS_API explicit SceneGraphElement(const Rml::String& tag);
+        LFS_VIS_API ~SceneGraphElement() override;
 
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
@@ -66,7 +67,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] size_t rootCount() const { return root_count_; }
         [[nodiscard]] size_t modelCount() const { return model_count_; }
-        [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
+        [[nodiscard]] size_t nodeCount() const { return real_node_count_; }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
         [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
         [[nodiscard]] SelectionActionState selectionActionState() const;
@@ -120,6 +121,9 @@ namespace lfs::vis::gui {
             std::string name;
             bool visible = true;
             bool camera_frustum_container = false;
+            bool crop_volume = false;
+            core::NodeId crop_group_owner = core::NULL_NODE;
+            bool crop_parent_enabled = true;
             bool has_children = false;
             bool training_enabled = true;
             bool training_mixed = false;
@@ -169,6 +173,8 @@ namespace lfs::vis::gui {
             Rml::Element* content = nullptr;
             Rml::Element* selection_checkbox = nullptr;
             Rml::Element* vis_icon = nullptr;
+            Rml::Element* crop_toggle = nullptr;
+            Rml::Element* crop_toggle_dot = nullptr;
             Rml::Element* delete_icon = nullptr;
             Rml::Element* training_toggle_icon = nullptr;
             Rml::Element* training_mixed_mark = nullptr;
@@ -275,6 +281,14 @@ namespace lfs::vis::gui {
         Rml::Element* header_arrow_el_ = nullptr;
         Rml::Element* header_label_el_ = nullptr;
 
+        [[nodiscard]] core::NodeId cropGroupOwner(core::NodeId id) const {
+            const auto it = node_snapshots_.find(id);
+            return it == node_snapshots_.end() ? core::NULL_NODE : it->second.crop_group_owner;
+        }
+        std::unordered_map<core::Uuid, core::NodeId> crop_group_ids_;
+        core::NodeId next_crop_group_id_ = -2;
+        core::NodeId selected_crop_group_ = core::NULL_NODE;
+        size_t real_node_count_ = 0;
         std::vector<RowSlot> row_slots_;
         std::unordered_map<core::NodeId, NodeSnapshot> node_snapshots_;
         std::vector<core::NodeId> root_ids_;

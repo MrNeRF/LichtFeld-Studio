@@ -328,6 +328,7 @@ namespace lfs::io::project {
                 .visible = node.visible.get(),
                 .locked = node.locked.get(),
                 .training_enabled = node.training_enabled,
+                .crop_effects_enabled = node.crop_effects_enabled,
                 .payload_diverged = node.payload_diverged,
                 .point_cloud_source = node.point_cloud_source,
                 .georef_pose = std::nullopt,
@@ -748,6 +749,7 @@ namespace lfs::io::project {
                     .visible = record.visible,
                     .locked = record.locked,
                     .training_enabled = record.training_enabled,
+                    .crop_effects_enabled = record.crop_effects_enabled,
                     .payload_diverged = record.payload_diverged,
                     .point_cloud_source = record.point_cloud_source,
                     .payload_hydration =

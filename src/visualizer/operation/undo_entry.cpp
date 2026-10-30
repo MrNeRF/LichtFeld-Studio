@@ -300,6 +300,10 @@ namespace lfs::vis::op {
                 scene.setCameraTrainingEnabled(node->id, target.training_enabled);
             else
                 node->training_enabled = target.training_enabled;
+            if (node->crop_effects_enabled != target.crop_effects_enabled) {
+                node->crop_effects_enabled = target.crop_effects_enabled;
+                scene.notifyMutation(lfs::core::Scene::MutationType::VISIBILITY_CHANGED);
+            }
             node->payload_diverged = target.payload_diverged;
             node->point_cloud_source = target.point_cloud_source;
             restorePlyPathForSnapshot(scene_manager, target.uuid, target.source_path);
@@ -821,6 +825,7 @@ namespace lfs::vis::op {
             snapshot.visible = node.visible.get();
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
+            snapshot.crop_effects_enabled = node.crop_effects_enabled;
             snapshot.payload_diverged = node.payload_diverged;
             snapshot.point_cloud_source = node.point_cloud_source;
 
@@ -897,6 +902,7 @@ namespace lfs::vis::op {
             snapshot.visible = node.visible.get();
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
+            snapshot.crop_effects_enabled = node.crop_effects_enabled;
             snapshot.payload_diverged = node.payload_diverged;
             snapshot.point_cloud_source = node.point_cloud_source;
             snapshot.transient = node.transient;
@@ -1473,7 +1479,7 @@ namespace lfs::vis::op {
             total.cpu_bytes += sizeof(snapshot.uuid) + sizeof(snapshot.parent_uuid) +
                                snapshot.name.size() + snapshot.parent_name.size() + sizeof(snapshot.local_transform) +
                                sizeof(snapshot.visible) + sizeof(snapshot.locked) +
-                               sizeof(snapshot.training_enabled) + sizeof(snapshot.payload_diverged) +
+                               sizeof(snapshot.training_enabled) + sizeof(snapshot.crop_effects_enabled) + sizeof(snapshot.payload_diverged) +
                                sizeof(snapshot.gaussian_count) +
                                sizeof(snapshot.centroid);
             if (snapshot.source_path) {
@@ -1736,6 +1742,7 @@ namespace lfs::vis::op {
                 existing->visible.setQuiet(snapshot.visible);
                 existing->locked.setQuiet(snapshot.locked);
                 existing->training_enabled = snapshot.training_enabled;
+                existing->crop_effects_enabled = snapshot.crop_effects_enabled;
                 existing->payload_diverged = snapshot.payload_diverged;
                 existing->point_cloud_source = snapshot.point_cloud_source;
                 existing->transient = snapshot.transient;
@@ -1763,6 +1770,7 @@ namespace lfs::vis::op {
             restored->visible.setQuiet(snapshot.visible);
             restored->locked.setQuiet(snapshot.locked);
             restored->training_enabled = snapshot.training_enabled;
+            restored->crop_effects_enabled = snapshot.crop_effects_enabled;
             restored->payload_diverged = snapshot.payload_diverged;
             restored->point_cloud_source = snapshot.point_cloud_source;
             restored->transient = snapshot.transient;
@@ -2294,6 +2302,7 @@ namespace lfs::vis::op {
           visible(other.visible),
           locked(other.locked),
           training_enabled(other.training_enabled),
+          crop_effects_enabled(other.crop_effects_enabled),
           payload_diverged(other.payload_diverged),
           point_cloud_source(other.point_cloud_source),
           transient(other.transient),

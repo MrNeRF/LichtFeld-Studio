@@ -4557,6 +4557,7 @@ namespace lfs::core {
         node->visible.set(desc.visible, false);
         node->locked.set(desc.locked, false);
         node->training_enabled = desc.training_enabled;
+        node->crop_effects_enabled = desc.crop_effects_enabled;
         node->payload_diverged = desc.payload_diverged;
         node->point_cloud_source = desc.point_cloud_source;
         node->payload_hydration = desc.payload_hydration;
@@ -5067,29 +5068,25 @@ namespace lfs::core {
                 new_id = addPlySequence(new_name, parent_id, src->gaussian_count.load(std::memory_order_acquire));
             } else if (src_type == NodeType::KEYFRAME && src->keyframe) {
                 new_id = addKeyframe(new_name, parent_id, std::make_unique<KeyframeData>(*src->keyframe));
-            } else if (src_type == NodeType::CROPBOX) {
-                const auto* src_for_cropbox = getNodeById(src_id);
-                if (src_for_cropbox && src_for_cropbox->cropbox && parent_id != NULL_NODE) {
-                    new_id = addCropBox(new_name, parent_id);
-                    if (auto* new_node = getNodeById(new_id)) {
-                        if (new_node->cropbox) {
-                            *new_node->cropbox = *src_for_cropbox->cropbox;
-                        }
-                    }
-                }
-            } else if (src_type == NodeType::ELLIPSOID) {
-                const auto* src_for_ellipsoid = getNodeById(src_id);
-                if (src_for_ellipsoid && src_for_ellipsoid->ellipsoid && parent_id != NULL_NODE) {
-                    new_id = addEllipsoid(new_name, parent_id);
-                    if (auto* new_node = getNodeById(new_id)) {
-                        if (new_node->ellipsoid) {
-                            *new_node->ellipsoid = *src_for_ellipsoid->ellipsoid;
-                        }
-                    }
-                }
-            } else if (src_type == NodeType::CROP_POLYGON) {
-                // Drawn in a camera plane for one splat; duplicates start without it.
-                return NULL_NODE;
+            } else if (src_type == NodeType::CROPBOX || src_type == NodeType::ELLIPSOID || src_type == NodeType::CROP_POLYGON) {
+                const auto* parent = getNodeById(parent_id);
+                if (src_type == NodeType::CROP_POLYGON && (!parent || parent->type != NodeType::SPLAT))
+                    return NULL_NODE;
+                RestoreNodeDesc copy;
+                copy.uuid = generate_uuid_v4();
+                copy.type = src_type;
+                copy.name = new_name;
+                copy.parent = parent_id;
+                copy.local_transform = src_transform;
+                copy.visible = src_visible;
+                copy.locked = src_locked;
+                if (src->cropbox)
+                    copy.cropbox = std::make_unique<CropBoxData>(*src->cropbox);
+                if (src->ellipsoid)
+                    copy.ellipsoid = std::make_unique<EllipsoidData>(*src->ellipsoid);
+                if (src->crop_polygon)
+                    copy.crop_polygon = std::make_unique<CropPolygonData>(*src->crop_polygon);
+                new_id = restoreNodeWithUuid(std::move(copy));
             } else if (src_type == NodeType::POINTCLOUD && src->point_cloud) {
                 auto cloned = std::make_shared<PointCloud>(*src->point_cloud);
                 for (auto member : {&PointCloud::means, &PointCloud::colors, &PointCloud::normals,
@@ -5145,6 +5142,8 @@ namespace lfs::core {
             if (new_id == NULL_NODE) {
                 return NULL_NODE;
             }
+            if (auto* copy = getNodeById(new_id))
+                copy->crop_effects_enabled = getNodeById(src_id)->crop_effects_enabled;
 
             if (src_type == NodeType::SPLAT && selection_slices) {
                 const auto source_slice = selection_slices->find(src_uuid);
@@ -6248,6 +6247,8 @@ namespace lfs::core {
             rcb.local_transform = node->local_transform.get();
             rcb.effectively_visible = effectively_visible;
             rcb.parent_effectively_visible = parent_effectively_visible;
+            const auto* owner = getNodeById(node->parent_id);
+            rcb.crop_effects_enabled = !owner || owner->type != NodeType::SPLAT || owner->crop_effects_enabled;
             result.push_back(rcb);
         }
 
@@ -6319,6 +6320,8 @@ namespace lfs::core {
             rel.local_transform = node->local_transform.get();
             rel.effectively_visible = effectively_visible;
             rel.parent_effectively_visible = parent_effectively_visible;
+            const auto* owner = getNodeById(node->parent_id);
+            rel.crop_effects_enabled = !owner || owner->type != NodeType::SPLAT || owner->crop_effects_enabled;
             result.push_back(rel);
         }
 
@@ -6388,6 +6391,7 @@ namespace lfs::core {
                 .local_transform = node->local_transform.get(),
                 .effectively_visible = effectively_visible,
                 .parent_effectively_visible = isNodeEffectivelyVisible(node->parent_id),
+                .crop_effects_enabled = !getNodeById(node->parent_id) || getNodeById(node->parent_id)->type != NodeType::SPLAT || getNodeById(node->parent_id)->crop_effects_enabled,
             });
         }
 

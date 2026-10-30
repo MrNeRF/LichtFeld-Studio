@@ -329,6 +329,72 @@ void apply_crop_polygon_filter(
     }
 }
 
+// Validate a complete span without overflowing start + count * stride.
+bool crop_span_valid(uint start, uint count, uint stride, uint total) {
+    return start <= total && count <= (total - start) / stride;
+}
+
+void apply_crop_bucket(StructuredBuffer<float4> params, uint directory, uint total,
+                       int node_idx, float3 mean_ws, inout bool active, inout uint flags) {
+    float4 first = params[directory];
+    float4 second = params[directory + 1u];
+    uint base = uint(max(overlay_int(first.y), 0));
+    uint count = uint(max(overlay_int(first.z), 0));
+    if (crop_span_valid(base, count, OVERLAY_PARAM_CROP_STRIDE, total)) {
+        for (uint i = 0u; i < count && active; ++i) {
+            uint slot = base + i * OVERLAY_PARAM_CROP_STRIDE;
+            apply_crop_box_filter(params, slot, params[slot], node_idx, mean_ws, active, flags);
+        }
+    }
+    base = uint(max(overlay_int(first.w), 0));
+    count = uint(max(overlay_int(second.x), 0));
+    if (crop_span_valid(base, count, OVERLAY_PARAM_ELLIPSOID_STRIDE, total)) {
+        for (uint i = 0u; i < count && active; ++i) {
+            uint slot = base + i * OVERLAY_PARAM_ELLIPSOID_STRIDE;
+            apply_ellipsoid_filter(params, slot, params[slot], node_idx, mean_ws, active, flags);
+        }
+    }
+    base = uint(max(overlay_int(second.y), 0));
+    count = uint(max(overlay_int(second.z), 0));
+    if (crop_span_valid(base, count, OVERLAY_PARAM_CROP_POLYGON_STRIDE, total)) {
+        for (uint i = 0u; i < count && active; ++i) {
+            uint slot = base + i * OVERLAY_PARAM_CROP_POLYGON_STRIDE;
+            apply_crop_polygon_filter(params, slot, params[slot], node_idx, mean_ws, active, flags);
+        }
+    }
+}
+
+void apply_scoped_crop_filters(StructuredBuffer<float4> params, int node_idx, float3 mean_ws,
+                               inout bool active, inout uint flags) {
+    if (!active) return;
+    float4 header = params[OVERLAY_PARAM_CROP_DIRECTORY];
+    uint count = uint(max(overlay_int(header.y), 0));
+    if (count == 0u) return;
+    uint base = uint(max(overlay_int(header.x), 0));
+    uint total, stride;
+    params.GetDimensions(total, stride);
+    if (!crop_span_valid(base, count, OVERLAY_PARAM_CROP_DIRECTORY_STRIDE, total)) return;
+    uint lo = 0u;
+    if (overlay_int(params[base].x) < 0) {
+        apply_crop_bucket(params, base, total, node_idx, mean_ws, active, flags);
+        lo = 1u;
+    }
+    if (!active || node_idx < 0) return;
+    uint hi = count;
+    // Binary lookup visits O(log owners); filter work depends only on this owner.
+    while (lo < hi) {
+        uint mid = lo + (hi - lo) / 2u;
+        uint slot = base + mid * OVERLAY_PARAM_CROP_DIRECTORY_STRIDE;
+        int parent = overlay_int(params[slot].x);
+        if (parent < node_idx) lo = mid + 1u;
+        else if (parent > node_idx) hi = mid;
+        else {
+            apply_crop_bucket(params, slot, total, node_idx, mean_ws, active, flags);
+            return;
+        }
+    }
+}
+
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
     float3 xyz_ws_in,
@@ -352,57 +418,15 @@ SplatActiveState compute_splat_active_state(
                          ? transform_point_rows(model_transforms, model_transform_base, xyz_ws_in)
                          : xyz_ws_in;
 
-    // Host packs crop boxes densely: primary at CROP_FLAGS, then extras. If the
-    // primary enable bit is off, no crop is active — skip the whole 16-slot walk.
-    // When extras exist they are contiguous; stop at the first disabled slot.
-    {
-        float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
-        if (overlay_enabled(crop_flags.x)) {
-            apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS, crop_flags,
-                                  node_idx, mean_ws,
-                                  active, overlay_flags);
-            for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
-                const uint flags_idx =
-                    OVERLAY_PARAM_CROP_EXTRA_BASE + crop_i * OVERLAY_PARAM_CROP_STRIDE;
-                float4 extra_flags = overlay_params[flags_idx];
-                if (!overlay_enabled(extra_flags.x))
-                    break;
-                apply_crop_box_filter(overlay_params, flags_idx, extra_flags,
-                                      node_idx, mean_ws,
-                                      active, overlay_flags);
-            }
-        }
-    }
-
-    {
-        float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
-        if (overlay_enabled(ellipsoid_flags.x)) {
-            apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS, ellipsoid_flags,
-                                   node_idx, mean_ws,
-                                   active, overlay_flags);
-            for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
-                const uint flags_idx =
-                    OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + ellipsoid_i * OVERLAY_PARAM_ELLIPSOID_STRIDE;
-                float4 extra_flags = overlay_params[flags_idx];
-                if (!overlay_enabled(extra_flags.x))
-                    break;
-                apply_ellipsoid_filter(overlay_params, flags_idx, extra_flags,
-                                       node_idx, mean_ws,
-                                       active, overlay_flags);
-            }
-        }
-    }
-
-    // Densely packed like the boxes and ellipsoids: stop at the first disabled slot.
-    for (uint polygon_i = 0u; polygon_i < OVERLAY_PARAM_CROP_POLYGON_COUNT; ++polygon_i) {
-        const uint flags_idx = OVERLAY_PARAM_CROP_POLYGON_BASE + polygon_i * OVERLAY_PARAM_CROP_POLYGON_STRIDE;
-        float4 polygon_flags = overlay_params[flags_idx];
-        if (!overlay_enabled(polygon_flags.x))
-            break;
-        apply_crop_polygon_filter(overlay_params, flags_idx, polygon_flags,
-                                  node_idx, mean_ws,
-                                  active, overlay_flags);
-    }
+    // Preserve legacy single-volume / point-cloud filters. Scoped volumes use
+    // an owner-indexed dynamic directory, so unrelated crops are never traversed.
+    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
+    apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS, crop_flags,
+                          node_idx, mean_ws, active, overlay_flags);
+    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
+    apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS, ellipsoid_flags,
+                           node_idx, mean_ws, active, overlay_flags);
+    apply_scoped_crop_filters(overlay_params, node_idx, mean_ws, active, overlay_flags);
 
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
     if (active && overlay_enabled(view_flags.x)) {
