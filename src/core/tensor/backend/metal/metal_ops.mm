@@ -3675,17 +3675,17 @@ namespace lfs::core::internal {
     void MetalBackendOps::record_tensor_allocation(StorageRef, const StridedLayout&, size_t) {}
 
     // Storage is shared with the CPU, so host copies are plain memcpy once the
-    // last batch that may use the memory completed. An asynchronous upload into
-    // storage that the GPU still uses stages the bytes instead and copies them
-    // on the GPU after that use, so the host does not wait.
+    // last batch that may use the memory completed. An upload into storage that
+    // the GPU still uses stages the bytes instead and copies them on the GPU
+    // after that use, so the host does not wait. That holds for a synchronous
+    // upload too: it owes the caller only its source back on return, and later
+    // GPU work and host reads of the destination come after the staged copy.
     void MetalBackendOps::copy_host_to_device(const CopyRequest& request) {
         LFS_FACADE_TRACE(service_copy_host_to_device);
         if (request.bytes == 0)
             return;
         const auto context = acquire_context();
-        const uint64_t last_use = context->last_use(request.dst);
-        if (request.synchronous || last_use <= context->completed()) {
-            context->wait(last_use);
+        if (context->last_use(request.dst) <= context->completed()) {
             host_copy(context->host(request.dst), host_bytes(request.src), request.bytes);
             return;
         }

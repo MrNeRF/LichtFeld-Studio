@@ -13,6 +13,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_export.hpp"
 #include "core/tensor_filters.hpp"
 #include "core/tensor_fused.hpp"
@@ -24,6 +25,7 @@
 #include "core/tensor_sh.hpp"
 #include "core/tensor_spatial.hpp"
 #include "core/tensor_splat.hpp"
+#include "core/tensor_upload.hpp"
 
 #include <gtest/gtest.h>
 
@@ -34,6 +36,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <set>
 #include <span>
@@ -99,6 +102,28 @@ namespace {
             ASSERT_EQ(gpu_backend_of(metal), GpuBackend::Metal);
             expect_close(metal, cpu, 0.0f, 0.0f);
         }
+    }
+
+    // A synchronous upload into storage that queued GPU work still uses stages its bytes instead of waiting for
+    // that work: it returns while the work runs, and the device sees the bytes after it.
+    TEST_F(TensorMetal, UploadIntoStorageInUseReturnsBeforeTheGpuFinishes) {
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t n = 2048;
+        Tensor product = Tensor::ones({n, n}, Device::GPU);
+        const Tensor identity = Tensor::eye(n, Device::GPU);
+        for (int i = 0; i < 40; ++i)
+            product = product.mm(identity);
+        Tensor destination = Tensor::empty({n}, Device::GPU);
+        destination.copy_from(product.slice(0, 0, 1).reshape({n})); // the queued work's last use of the destination
+        TensorFence queued(GpuBackend::Metal);
+        queued.record(TensorExecutionTarget::current());
+        if (queued.ready())
+            GTEST_SKIP() << "the GPU finished the queued work before the upload";
+        std::vector<float> values(n);
+        std::iota(values.begin(), values.end(), 0.0f);
+        destination.copy_from(Tensor::from_vector(values, {n}, Device::CPU));
+        EXPECT_FALSE(queued.ready()) << "the upload waited for the GPU";
+        EXPECT_EQ(destination.cpu().to_vector(), values);
     }
 
     TEST_F(TensorMetal, FactoriesMatchCpu) {
