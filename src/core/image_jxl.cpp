@@ -866,11 +866,6 @@ namespace lfs::core::image_codecs {
     }
 
     Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
-                             size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options) {
-        return encode_jxl_memory(input, width, height, channels, type, stride, output, options, {});
-    }
-
-    Status encode_jxl_memory(std::span<const uint8_t> input, int width, int height, int channels, SampleType type,
                              size_t stride, std::vector<uint8_t>& output, const JxlEncodeOptions& options, std::string_view xmp) {
         std::vector<uint8_t> candidate;
         auto status = encode_image(input, width, height, channels, type, stride, options, xmp, [&](std::span<const uint8_t> bytes) -> Status {
@@ -880,11 +875,6 @@ namespace lfs::core::image_codecs {
         if (status)
             output = std::move(candidate);
         return status;
-    }
-
-    Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,
-                     int channels, SampleType type, size_t stride, const JxlEncodeOptions& options, const AtomicFileOptions& publication) {
-        return write_jxl(path, input, width, height, channels, type, stride, options, publication, {});
     }
 
     Status write_jxl(const std::filesystem::path& path, std::span<const uint8_t> input, int width, int height,

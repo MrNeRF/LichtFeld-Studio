@@ -707,11 +707,13 @@ The packet carries the retained static source catalog and output geometry,
 applied rotation and source-frame timing. Static GPS and container creation
 facts remain source observations rather than per-frame measurements.
 
-The existing core `encode_jxl_memory`/`write_jxl` and `ImageOutput::writeJxl`
-overloads retain their behavior. Explicit synchronous XMP overloads accept a
-borrowed UTF-8 XML packet of at most 32 MiB, rejecting embedded NUL. Native
-callers provide valid XML; extraction constructs the packet itself. An empty
-packet keeps the previous codestream/container selection. The provider copies
+The core `encode_jxl_memory`/`write_jxl` and `ImageOutput::writeJxl`
+entry points accept an optional synchronous XMP argument, defaulting to an empty
+packet. Existing source calls may omit it; compiled C++ consumers must be rebuilt
+with the updated libraries. The borrowed UTF-8 XML packet may contain at most
+32 MiB and must not contain NUL. Native callers provide valid XML; extraction
+constructs the packet itself. An empty packet keeps the previous
+codestream/container selection. The provider copies
 the packet through the stock `JxlEncoderAddBox` API; no provider overlay is
 required. This copy counts against the existing encoder-memory budget, while
 prepared source properties and the assembled caller packet are separate.
