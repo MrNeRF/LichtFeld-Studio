@@ -618,9 +618,9 @@ set_target_properties(lichtfeld_format_tests PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
-if(COMMAND lfs_enable_fast_cxx_compile)
-    lfs_enable_fast_cxx_compile(lichtfeld_format_tests)
-endif()
+# Release format tests enforce wall-clock performance budgets. Keep the
+# configuration's optimization flags even when the app uses FAST_COMPILE;
+# /Od would disable optimization without clearing Release's NDEBUG.
 add_test(NAME lichtfeld_format_tests
     COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
 )
