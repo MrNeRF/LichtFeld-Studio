@@ -7832,9 +7832,9 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         ASSERT_TRUE(lfs::io::save_ply(*lfs::test::licht::make_splat(1000000), {.output_path = large_path, .binary = true, .async = false}));
         viewer.getSceneManager()->addSplatFile(large_path);
         const auto uuid = viewer.getScene().getNode("provisional-large")->uuid;
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        size_t free_before, total;
-        ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+        auto& cuda = core::internal::backend_ops(core::GpuBackend::CUDA);
+        cuda.synchronize_device();
+        const size_t free_before = cuda.stats().free_bytes;
         viewport.frameBufferSize = {0, 0};
         viewport.windowSize = {0, 0};
         const RenderingManager::RenderContext validation{
@@ -7860,9 +7860,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         const auto after = capture->cpu();
         ASSERT_EQ(after.numel(), frozen.numel());
         EXPECT_EQ(std::memcmp(after.data_ptr(), frozen.data_ptr(), after.numel() * sizeof(float)), 0);
-        size_t free_after;
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+        cuda.synchronize_device();
+        const size_t free_after = cuda.stats().free_bytes;
         // Driver pipeline bookkeeping may remain; model-sized render scratch must not.
         EXPECT_LE(free_before > free_after ? free_before - free_after : 0, 16u * 1024 * 1024);
         static_cast<void>(rendering->renderFrame(validation));
