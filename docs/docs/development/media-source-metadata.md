@@ -732,3 +732,42 @@ UInt8, UInt16 and Float32 encoding, lossless/lossy selection, declared color,
 alpha conversion and precision policy continue through the existing encoder.
 Embedding preserves private source information, including identifiers, GPS and
 locator bytes, under the existing opt-in preservation policy.
+
+
+### AVIF frame metadata
+
+AVIF extraction accepts `embed_source_metadata` through the existing C++,
+Python and CLI file-extraction APIs. The writer adds one uncompressed MIME item
+with content type `application/rdf+xml`, associated with the primary image by
+a `cdsc` reference. The packet uses policy `avif-static-source-xmp-v1` and carries
+the retained static source catalog alongside output geometry, applied rotation
+and source-frame timing. Source GPS/creation facts remain static observations.
+
+The core `encode_avif_memory`/`write_avif` and `ImageOutput::writeAvif` entry points
+accept an optional synchronous XMP argument defaulting to an empty packet.
+Existing source calls can omit it; compiled C++ consumers must be rebuilt with
+the updated libraries. Native callers supply valid UTF-8 XML, at most 32 MiB
+without NUL. Extraction builds its packet through the existing shared helper.
+The encoded primary-image handle is retained only for the metadata write and
+released before its owning context. libheif copies metadata into its context;
+serialization and codec allocations are separate from the caller packet and
+prepared source properties. The packet ceiling and encoded-output byte budget
+do not impose an aggregate RAM ceiling on libheif/libaom working buffers.
+
+Static source properties are prepared once per session and shared with recovery
+writers. The writer assembles one bounded contiguous packet per synchronous
+frame, preserving the existing atomic publication, overwrite and cancellation
+contracts. Encoding remains synchronous inside libaom; cancellation is checked
+at the existing row/provider/serialization/publication boundaries. Resume binds
+metadata policy, source digest/locator and timestamp origin before adopting
+existing output. Source-metadata readback reuses the existing bounded HEIF MIME
+collector and `heif_mime` provenance. A packet larger than the requested read
+budget produces a limited observation rather than raising that budget.
+
+Empty XMP keeps the existing encoding path. Existing 8/10/12-bit SDR conversion,
+primaries, alpha, lossless/lossy and AOM provider policy continue through the
+same encoder. The generic byte-image writer keeps its existing metadata-string
+contract; the explicit XMP API handles this packet. Embedding preserves private
+source information, including GPS, identifiers and locator bytes, under the
+existing opt-in preservation policy. No additional encoder or provider overlay
+is required for metadata insertion.

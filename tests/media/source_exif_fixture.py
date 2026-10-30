@@ -635,3 +635,119 @@ def read_export_jxl(data):
         offset += size
     assert codestream
     return other, b"".join(codestream), packets
+
+
+def read_export_avif(data):
+    """Independent AVIF item extents, image properties and XMP associations."""
+    def integer(buf, pos, size):
+        assert size in (0, 1, 2, 4, 8) and 0 <= pos <= len(buf) - size
+        return int.from_bytes(buf[pos:pos + size], "big"), pos + size
+
+    def boxes(buf, start=0, positions=None):
+        while start < len(buf):
+            size, cursor = integer(buf, start, 4)
+            assert len(buf) - cursor >= 4
+            kind = buf[cursor:cursor + 4]
+            cursor += 4
+            if size == 1:
+                size, cursor = integer(buf, cursor, 8)
+            elif size == 0:
+                size = len(buf) - start
+            assert cursor - start <= size <= len(buf) - start
+            if positions is not None:
+                positions.append((kind, cursor, start + size))
+            yield kind, buf[cursor:start + size]
+            start += size
+
+    def unique(buf, start=0, positions=None):
+        result = {}
+        for kind, payload in boxes(buf, start, positions):
+            assert kind not in result
+            result[kind] = payload
+        return result
+
+    def cstring(buf, cursor):
+        end = buf.index(b"\0", cursor)
+        return buf[cursor:end], end + 1
+
+    positions = []
+    top = unique(data, positions=positions)
+    mdat = [(start, end) for kind, start, end in positions if kind == b"mdat"]
+    brands = [top[b"ftyp"][:4]] + [top[b"ftyp"][i:i + 4] for i in range(8, len(top[b"ftyp"]), 4)]
+    assert b"avif" in brands and top[b"meta"][:4] == bytes(4)
+    meta = unique(top[b"meta"], 4)
+    pitm = meta[b"pitm"]
+    assert pitm[0] in (0, 1)
+    primary, cursor = integer(pitm, 4, 2 if pitm[0] == 0 else 4)
+    assert cursor == len(pitm)
+    info = meta[b"iinf"]
+    assert info[0] in (0, 1)
+    count, cursor = integer(info, 4, 2 if info[0] == 0 else 4)
+    items = {}
+    for kind, item in boxes(info, cursor):
+        assert kind == b"infe" and item[0] in (2, 3)
+        id_, pos = integer(item, 4, 2 if item[0] == 2 else 4)
+        protection, pos = integer(item, pos, 2)
+        assert protection == 0 and id_ not in items and len(item) - pos >= 4
+        type_ = item[pos:pos + 4]
+        name, pos = cstring(item, pos + 4)
+        content, encoding = b"", b""
+        if type_ == b"mime":
+            content, pos = cstring(item, pos)
+            if pos < len(item):
+                encoding, pos = cstring(item, pos)
+            assert pos == len(item)
+        items[id_] = (type_, content, encoding, item)
+    assert len(items) == count and primary in items
+    locations = meta[b"iloc"]
+    assert locations[0] in (0, 1, 2) and len(locations) >= 6
+    offset_size, length_size = locations[4] >> 4, locations[4] & 15
+    base_size = locations[5] >> 4
+    index_size = locations[5] & 15 if locations[0] else 0
+    count, cursor = integer(locations, 6, 4 if locations[0] == 2 else 2)
+    payloads = {}
+    for _ in range(count):
+        id_, cursor = integer(locations, cursor, 4 if locations[0] == 2 else 2)
+        if locations[0]:
+            method, cursor = integer(locations, cursor, 2)
+            assert method == 0  # Writer stores file-relative extents.
+        reference, cursor = integer(locations, cursor, 2)
+        assert reference == 0 and id_ in items and id_ not in payloads
+        base, cursor = integer(locations, cursor, base_size)
+        extents, cursor = integer(locations, cursor, 2)
+        parts = []
+        for _ in range(extents):
+            index, cursor = integer(locations, cursor, index_size)
+            assert index == 0
+            offset, cursor = integer(locations, cursor, offset_size)
+            size, cursor = integer(locations, cursor, length_size)
+            start = base + offset
+            assert size > 0 and any(lo <= start <= hi - size for lo, hi in mdat)
+            parts.append(data[start:start + size])
+        payloads[id_] = b"".join(parts)
+    assert cursor == len(locations) and set(items) == set(payloads)
+    references = {}
+    iref = meta.get(b"iref", bytes(4))
+    assert iref[0] in (0, 1)
+    for kind, value in boxes(iref, 4):
+        width = 2 if iref[0] == 0 else 4
+        from_, cursor = integer(value, 0, width)
+        assert from_ in items
+        count, cursor = integer(value, cursor, 2)
+        to = []
+        for _ in range(count):
+            id_, cursor = integer(value, cursor, width)
+            assert id_ in items
+            to.append(id_)
+        assert cursor == len(value) and (kind, from_) not in references
+        references[kind, from_] = tuple(to)
+    packets = []
+    images = {}
+    for id_, (kind, content, encoding, descriptor) in items.items():
+        if kind == b"mime" and content == b"application/rdf+xml":
+            assert encoding == b"" and references.get((b"cdsc", id_)) == (primary,)
+            packets.append(payloads[id_])
+        else:
+            images[id_] = (descriptor, payloads[id_])
+    image_refs = {key: value for key, value in references.items() if key[1] in images}
+    return (primary, top[b"ftyp"], meta[b"iprp"], image_refs), images, packets

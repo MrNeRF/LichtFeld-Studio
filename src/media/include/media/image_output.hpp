@@ -63,6 +63,6 @@ namespace lfs::media {
         // Relative linear float is clamped, sRGB-transferred and rounded to the
         // selected 8/10/12-bit codes. Lossless applies to those integer codes.
         // RGB8 requires declared sRGB BT709 and bit_depth=8. Straight alpha.
-        [[nodiscard]] static SinkResult writeAvif(const std::filesystem::path&, const FrameView&, const AvifOutputOptions& = {});
+        [[nodiscard]] static SinkResult writeAvif(const std::filesystem::path&, const FrameView&, const AvifOutputOptions& = {}, std::string_view xmp = {});
     };
 } // namespace lfs::media

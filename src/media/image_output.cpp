@@ -110,11 +110,13 @@ namespace lfs::media {
             return SinkResult::failure(outputError(ErrorCode::Unavailable, "Built-in AOM AVIF encoder unavailable", 0, "AVIF", "ImageOutput.writeAvif"));
         return {};
     }
-    SinkResult ImageOutput::writeAvif(const std::filesystem::path& path, const FrameView& frame, const AvifOutputOptions& options) {
+    SinkResult ImageOutput::writeAvif(const std::filesystem::path& path, const FrameView& frame, const AvifOutputOptions& options, std::string_view xmp) {
         return outputBoundary([&]() -> SinkResult {
             const auto fail = [](ErrorCode code, std::string message) { return SinkResult::failure(outputError(code, std::move(message), 0, "AVIF", "ImageOutput.writeAvif")); };
             if (auto valid = validateAvifOutputOptions(options); !valid)
                 return valid;
+            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                return fail(ErrorCode::InvalidArgument, "Invalid AVIF XMP packet");
             if (auto required = frame.requiredBytes(); !required)
                 return SinkResult::failure(required.error());
             const auto& layout = frame.layout;
@@ -153,7 +155,7 @@ namespace lfs::media {
                 stride = size_t(layout.width) * channels * (options.bit_depth == 8 ? 1 : 2);
             }
             return codecs::write_avif(path, pixels, layout.width, layout.height, int(channels), stride, encoding,
-                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled});
+                                      {.overwrite = options.overwrite, .durable = false, .create_directories = false, .cancelled = options.cancelled}, xmp);
         },
                               "ImageOutput.writeAvif");
     }

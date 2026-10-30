@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/image_avif.hpp"
 #include "core/image_heif.hpp"
+#include "core/source_metadata.hpp"
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -63,6 +64,158 @@ namespace {
             return result;
         }
     };
+    std::string primary_xmp(std::span<const uint8_t> data) {
+        std::unique_ptr<heif_context, decltype(&heif_context_free)> context(heif_context_alloc(), heif_context_free);
+        if (!context || heif_context_read_from_memory_without_copy(context.get(), data.data(), data.size(), nullptr).code != heif_error_Ok)
+            throw std::runtime_error("cannot read encoded AVIF");
+        heif_image_handle* raw = nullptr;
+        if (heif_context_get_primary_image_handle(context.get(), &raw).code != heif_error_Ok)
+            throw std::runtime_error("missing AVIF primary image");
+        std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> image(raw, heif_image_handle_release);
+        heif_item_id id = 0;
+        if (heif_image_handle_get_number_of_metadata_blocks(image.get(), "mime") != 1 ||
+            heif_image_handle_get_list_of_metadata_block_IDs(image.get(), "mime", &id, 1) != 1)
+            throw std::runtime_error("missing unique primary XMP MIME item");
+        const char* content = heif_image_handle_get_metadata_content_type(image.get(), id);
+        if (!content || std::string_view(content) != "application/rdf+xml")
+            throw std::runtime_error("unexpected primary metadata MIME type");
+        std::string packet(heif_image_handle_get_metadata_size(image.get(), id), '\0');
+        if (heif_image_handle_get_metadata(image.get(), id, packet.data()).code != heif_error_Ok)
+            throw std::runtime_error("cannot read primary XMP packet");
+        return packet;
+    }
+
+    TEST_F(AvifEncode, ExplicitXmpPreservesSamplesAndEmptyPacketDefaults) {
+        const std::string packet = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\"/></r:RDF>";
+        for (int depth : {8, 10, 12})
+            for (int channels : {1, 2, 3, 4})
+                for (bool lossless : {false, true}) {
+                    SCOPED_TRACE(testing::Message() << depth << "/" << channels << "/" << lossless);
+                    c::AvifEncodeOptions options;
+                    options.bit_depth = depth;
+                    options.lossless = lossless;
+                    const size_t sample = depth == 8 ? 1 : 2;
+                    std::vector<uint8_t> pixels(6 * channels * sample);
+                    for (size_t i = 0; i < 6 * channels; ++i) {
+                        const uint16_t value = uint16_t((i * 71 + depth) % (size_t{1} << depth));
+                        if (sample == 1)
+                            pixels[i] = uint8_t(value);
+                        else
+                            std::memcpy(pixels.data() + i * sample, &value, sample);
+                    }
+                    const auto original = pixels;
+                    std::vector<uint8_t> plain, empty, embedded;
+                    ASSERT_TRUE(c::encode_avif_memory(pixels, 3, 2, channels, 3 * channels * sample, plain, options));
+                    ASSERT_TRUE(c::encode_avif_memory(pixels, 3, 2, channels, 3 * channels * sample, empty, options, {}));
+                    EXPECT_EQ(empty, plain);
+                    ASSERT_TRUE(c::encode_avif_memory(pixels, 3, 2, channels, 3 * channels * sample, embedded, options, packet));
+                    EXPECT_EQ(primary_xmp(embedded), packet);
+                    EXPECT_EQ(independent(embedded, depth, channels).data, independent(plain, depth, channels).data);
+                    if (lossless)
+                        EXPECT_EQ(independent(embedded, depth, channels).data, pixels);
+                    EXPECT_EQ(pixels, original);
+                    const auto path = directory / (std::to_string(depth) + "-" + std::to_string(channels) + "-" + std::to_string(lossless) + ".avif");
+                    ASSERT_TRUE(c::write_avif(path, pixels, 3, 2, channels, 3 * channels * sample, options, {}, packet));
+                    EXPECT_EQ(bytes(path), embedded);
+                }
+    }
+
+    TEST_F(AvifEncode, ConcurrentXmpPacketsStayWithTheirOwnImage) {
+        std::vector<std::future<std::pair<std::vector<uint8_t>, std::string>>> calls;
+        for (int index = 0; index < 4; ++index)
+            calls.push_back(std::async(std::launch::async, [index] {
+                const std::array<uint8_t, 3> pixels{uint8_t(index * 41), 73, 191};
+                std::string packet = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\" xmlns:t=\"urn:lfs:test\"><t:Source>" +
+                                     std::to_string(index) + std::string(65536, char('a' + index)) + "</t:Source></r:Description></r:RDF>";
+                const auto expected = packet;
+                std::vector<uint8_t> output;
+                if (!c::encode_avif_memory(pixels, 1, 1, 3, 3, output, {}, packet))
+                    throw std::runtime_error("concurrent XMP encoding failed");
+                packet.assign("caller buffer reused");
+                return std::pair{std::move(output), expected};
+            }));
+        for (size_t index = 0; index < calls.size(); ++index) {
+            const auto [output, expected] = calls[index].get();
+            EXPECT_EQ(primary_xmp(output), expected);
+            EXPECT_EQ(independent(output, 8, 3).data, (std::vector<uint8_t>{uint8_t(index * 41), 73, 191}));
+        }
+    }
+
+    TEST_F(AvifEncode, ExplicitXmpBoundaryRefusalCancellationAndReuseAreAtomic) {
+        const std::array<uint8_t, 18> pixels{3, 17, 251, 9, 64, 128, 0, 255, 7, 33, 42, 81, 120, 4, 199, 23, 88, 161};
+        std::string packet = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\" xmlns:t=\"urn:lfs:test\"><t:value>";
+        const std::string_view suffix = "</t:value></r:Description></r:RDF>";
+        packet.append(32 * 1024 * 1024 - packet.size() - suffix.size(), 'a');
+        packet += suffix;
+        c::AvifEncodeOptions options;
+        size_t polls = 0;
+        options.cancelled = [&] { ++polls; return false; };
+        std::vector<uint8_t> encoded;
+        ASSERT_TRUE(c::encode_avif_memory(pixels, 3, 2, 3, 9, encoded, options, packet));
+        ASSERT_GT(polls, 1u);
+        EXPECT_EQ(primary_xmp(encoded), packet);
+        EXPECT_EQ(independent(encoded, 8, 3).data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+        options.cancelled = {};
+        const auto path = directory / "boundary.avif";
+        ASSERT_TRUE(c::write_avif(path, pixels, 3, 2, 3, 9, options, {}, packet));
+        const auto original = encoded;
+        EXPECT_EQ(bytes(path), original);
+        EXPECT_EQ(c::read_source_metadata(path).xmp.status, c::MetadataStatus::Limited);
+        for (const auto& bad : {packet + "a", std::string("x\0mp", 4)}) {
+            const auto refused = c::encode_avif_memory(pixels, 3, 2, 3, 9, encoded, options, bad);
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(encoded, original);
+            const auto file = c::write_avif(path, pixels, 3, 2, 3, 9, options, {.overwrite = true}, bad);
+            ASSERT_FALSE(file);
+            EXPECT_EQ(file.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_EQ(bytes(path), original);
+        }
+        for (int failure = 0; failure < 4; ++failure) {
+            auto limited = options;
+            if (failure == 0)
+                limited.max_output_bytes = 64;
+            if (failure == 1)
+                limited.cancelled = [] { return true; };
+            if (failure == 2)
+                limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
+            // Entry, six plane rows and provider submission precede the
+            // cancellation boundary immediately before metadata insertion.
+            size_t before_metadata = 0;
+            if (failure == 3)
+                limited.cancelled = [&] { return ++before_metadata == 9; };
+            const auto memory = c::encode_avif_memory(pixels, 3, 2, 3, 9, encoded, limited, packet);
+            if (failure == 3)
+                EXPECT_EQ(before_metadata, 9u);
+            ASSERT_FALSE(memory);
+            if (failure == 3)
+                EXPECT_EQ(memory.error().detail(), "AVIF: cancelled before metadata insertion");
+            EXPECT_EQ(memory.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(encoded, original);
+            // Reset the stateful cancellation callback for the independent file call.
+            if (failure == 2)
+                limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
+            if (failure == 3) {
+                // Reset for the independent publication call, whose atomic
+                // writer can also poll cancellation before invoking the codec.
+                before_metadata = 0;
+                limited.cancelled = [&] { return ++before_metadata == 9; };
+            }
+            const auto file = c::write_avif(path, pixels, 3, 2, 3, 9, limited, {.overwrite = true}, packet);
+            ASSERT_FALSE(file);
+            EXPECT_EQ(file.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);
+            EXPECT_EQ(bytes(path), original);
+            for (const auto& entry : fs::directory_iterator(directory))
+                EXPECT_EQ(entry.path(), path);
+        }
+        const std::string_view small = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\"/></r:RDF>";
+        ASSERT_TRUE(c::write_avif(path, pixels, 3, 2, 3, 9, options, {.overwrite = true}, small));
+        EXPECT_EQ(primary_xmp(bytes(path)), small);
+        std::vector<uint8_t> alias(pixels.begin(), pixels.end());
+        ASSERT_TRUE(c::encode_avif_memory(alias, 3, 2, 3, 9, alias, options, small));
+        EXPECT_EQ(independent(alias, 8, 3).data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+    }
+
     TEST_F(AvifEncode, ProviderPolicyKeepsHevcUnavailable) {
         EXPECT_FALSE(c::avif_encoder_version().empty());
         EXPECT_FALSE(heif_have_encoder_for_format(heif_compression_HEVC));

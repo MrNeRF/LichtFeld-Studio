@@ -95,19 +95,21 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
-    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG, FrameFileFormat::TIFF16, FrameFileFormat::EXR, FrameFileFormat::JXL}) {
+    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG, FrameFileFormat::TIFF16, FrameFileFormat::EXR, FrameFileFormat::JXL, FrameFileFormat::AVIF}) {
         const bool tiff = format == FrameFileFormat::TIFF16;
         const bool exr = format == FrameFileFormat::EXR;
         const bool jxl = format == FrameFileFormat::JXL;
-        const std::string name = jxl ? "jxl-metadata" : exr                           ? "exr-metadata"
-                                                    : tiff                            ? "tiff-metadata"
-                                                    : format == FrameFileFormat::JPEG ? "jpeg-metadata"
-                                                                                      : "png-metadata";
+        const bool avif = format == FrameFileFormat::AVIF;
+        const std::string name = avif ? "avif-metadata" : jxl                           ? "jxl-metadata"
+                                                      : exr                             ? "exr-metadata"
+                                                      : tiff                            ? "tiff-metadata"
+                                                      : format == FrameFileFormat::JPEG ? "jpeg-metadata"
+                                                                                        : "png-metadata";
         const std::array<float, 6> linear{0.f, .1f, .2f, .3f, .4f, 1.f};
         const FrameView float_view{{1, 2, 3 * sizeof(float), FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None, ColorUnits::Relative}},
                                    file_view.info,
                                    {reinterpret_cast<const uint8_t*>(linear.data()), sizeof(linear)}};
-        const auto& metadata_view = (tiff || exr || jxl) ? float_view : file_view;
+        const auto& metadata_view = (tiff || exr || jxl || avif) ? float_view : file_view;
         FileFrameSinkOptions options;
         options.output_directory = directory / name;
         options.format = format;
@@ -127,10 +129,11 @@ int runFrameSinkUnitContracts() {
         session = {};
         require(writer.write(metadata_view).has_value(), "embedded image owns source snapshot after begin");
         require(writer.complete({SinkOutcome::Completed, 1, {}}).has_value(), "embedded image session completes");
-        const auto path = options.output_directory / (jxl ? "frame_1.jxl" : exr                           ? "frame_1.exr"
-                                                                        : tiff                            ? "frame_1.tif"
-                                                                        : format == FrameFileFormat::JPEG ? "frame_1.jpg"
-                                                                                                          : "frame_1.png");
+        const auto path = options.output_directory / (avif ? "frame_1.avif" : jxl                           ? "frame_1.jxl"
+                                                                          : exr                             ? "frame_1.exr"
+                                                                          : tiff                            ? "frame_1.tif"
+                                                                          : format == FrameFileFormat::JPEG ? "frame_1.jpg"
+                                                                                                            : "frame_1.png");
         require(lfs::core::image_codecs::decode(path, decoded, error) && decoded.width == 1 && decoded.height == 2,
                 "embedded metadata leaves the image independently decodable");
         const auto original_size = std::filesystem::file_size(path);
@@ -150,10 +153,12 @@ int runFrameSinkUnitContracts() {
         options.tiff16.overwrite = true;
         options.exr.overwrite = true;
         options.jxl.overwrite = true;
+        options.avif.overwrite = true;
         options.image_output.cancelled = [] { return true; };
         options.tiff16.cancelled = options.image_output.cancelled;
         options.exr.cancelled = options.image_output.cancelled;
         options.jxl.cancelled = options.image_output.cancelled;
+        options.avif.cancelled = options.image_output.cancelled;
         FileFrameSink cancelled(options);
         require(cancelled.begin(session).has_value() && !cancelled.write(metadata_view),
                 "embedded image observes cancellation at atomic publication");
@@ -172,6 +177,7 @@ int runFrameSinkUnitContracts() {
         options.tiff16.cancelled = {};
         options.exr.cancelled = {};
         options.jxl.cancelled = {};
+        options.avif.cancelled = {};
         FileFrameSink bounded(options);
         require(bounded.begin(session).has_value(),
                 "CPU metadata preparation waits for a CPU frame");
@@ -270,6 +276,23 @@ int runFrameSinkUnitContracts() {
     require(!std::filesystem::exists(directory / "old_3.exr") && std::filesystem::exists(directory / "photo.png") &&
                 std::filesystem::exists(directory / "other_9.exr") && std::filesystem::exists(directory / "extraction_metadata.json"),
             "EXR cleans prior listed frames, keeps unrelated files and new metadata");
+    {
+        AvifOutputOptions options;
+        size_t conversions = 0;
+        options.cancelled = [&] { ++conversions; return false; };
+        const auto path = directory / "invalid-xmp.avif";
+        const std::array<float, 3> pixel{0.1f, 0.2f, 0.3f};
+        const FrameView frame{{1, 1, sizeof(pixel), FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None, ColorUnits::Relative}},
+                              {},
+                              {reinterpret_cast<const uint8_t*>(pixel.data()), sizeof(pixel)}};
+        for (const auto& packet : {std::string("x\0mp", 4), std::string(32 * 1024 * 1024 + 1, 'a')}) {
+            const auto result = ImageOutput::writeAvif(path, frame, options, packet);
+            require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
+                    "invalid AVIF metadata rejected before conversion");
+            require(conversions == 0 && !std::filesystem::exists(path),
+                    "invalid AVIF metadata neither converts nor publishes");
+        }
+    }
     std::filesystem::remove_all(directory);
     return 0;
 }

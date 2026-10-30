@@ -1957,9 +1957,6 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual(manifest["embedded_metadata_policy"], "jpeg-static-source-xmp-v1")
         self.assertTrue(list(directory.glob("*.jpg")))
         self.assertIn(b"Exif\0\0", next(directory.glob("*.jpg")).read_bytes())
-        result, _ = self.invoke("extract", self.source(), "--output", self.root / "embedded-avif-invalid",
-                                "--format", "avif", "--embed-source-metadata", code=2)
-        self.assertEqual(result["error"]["code"], "InvalidArgument")
 
     def test_embedded_jxl_metadata_cli(self):
         import xml.etree.ElementTree as ET
@@ -1977,6 +1974,28 @@ class IngestCLI(unittest.TestCase):
         self.assertTrue(paths)
         for path in paths:
             _, _, packets = source_exif_fixture.read_export_jxl(path.read_bytes())
+            self.assertEqual(len(packets), 1)
+            self.assertGreater(len(packets[0]), 65535)
+            facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packets[0]).iter()
+                     if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
+            self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+
+    def test_embedded_avif_metadata_cli(self):
+        import xml.etree.ElementTree as ET
+        directory = self.root / "embedded-avif"
+        source = self.root / "avif-source-tags.mkv"
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(self.source()), "-map", "0:v:0",
+                        "-c:v", "copy", "-metadata", "comment=" + 'A<&"' * 4000,
+                        "-write_crc32", "0", str(source)], check=True, capture_output=True, timeout=30)
+        result, _ = self.invoke("extract", source, "--output", directory,
+                                "--format", "avif", "--input-transfer", "linear", "--input-primaries", "bt709", "--interval", "1", "--end", "0.2", "--embed-source-metadata")
+        self.assertTrue(result["success"])
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["embedded_metadata_policy"], "avif-static-source-xmp-v1")
+        paths = list(directory.glob("*.avif"))
+        self.assertTrue(paths)
+        for path in paths:
+            _, _, packets = source_exif_fixture.read_export_avif(path.read_bytes())
             self.assertEqual(len(packets), 1)
             self.assertGreater(len(packets[0]), 65535)
             facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packets[0]).iter()

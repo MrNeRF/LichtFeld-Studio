@@ -29,6 +29,12 @@ if(NOT TARGET WebP::webp)
 endif()
 
 if(NOT TARGET lfs_image_codecs)
+    if(NOT TARGET lfs_backend_configuration)
+        include("${LFS_CODEC_ROOT}/cmake/GpuBackendRegistry.cmake")
+        lfs_generate_backend_registry()
+        add_library(lfs_backend_configuration INTERFACE)
+        target_include_directories(lfs_backend_configuration INTERFACE "${CMAKE_BINARY_DIR}/include")
+    endif()
     # The EXR writer uses the same typed-error provider as the root build.
     find_package(nlohmann_json CONFIG REQUIRED)
     find_package(spdlog CONFIG REQUIRED)
