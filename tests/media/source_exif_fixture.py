@@ -732,6 +732,7 @@ def read_export_avif(data):
     for kind, value in boxes(iref, 4):
         width = 2 if iref[0] == 0 else 4
         from_, cursor = integer(value, 0, width)
+        assert from_ in items
         count, cursor = integer(value, cursor, 2)
         to = []
         for _ in range(count):

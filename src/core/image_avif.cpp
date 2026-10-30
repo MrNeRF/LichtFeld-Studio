@@ -122,6 +122,8 @@ namespace lfs::core::image_codecs {
                 if (auto status = check(encoded); !status)
                     return status;
                 if (!xmp.empty()) {
+                    if (cancelled())
+                        return failure(ErrorCode::Cancelled, "cancelled before metadata insertion");
                     if (!handle)
                         return failure(ErrorCode::Internal, "provider returned no encoded image handle");
                     if (auto status = check(heif_context_add_XMP_metadata(context.get(), handle.get(), xmp.data(), int(xmp.size()))); !status)

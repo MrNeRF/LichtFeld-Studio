@@ -276,6 +276,23 @@ int runFrameSinkUnitContracts() {
     require(!std::filesystem::exists(directory / "old_3.exr") && std::filesystem::exists(directory / "photo.png") &&
                 std::filesystem::exists(directory / "other_9.exr") && std::filesystem::exists(directory / "extraction_metadata.json"),
             "EXR cleans prior listed frames, keeps unrelated files and new metadata");
+    {
+        AvifOutputOptions options;
+        size_t conversions = 0;
+        options.cancelled = [&] { ++conversions; return false; };
+        const auto path = directory / "invalid-xmp.avif";
+        const std::array<float, 3> pixel{0.1f, 0.2f, 0.3f};
+        const FrameView frame{{1, 1, sizeof(pixel), FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None, ColorUnits::Relative}},
+                              {},
+                              {reinterpret_cast<const uint8_t*>(pixel.data()), sizeof(pixel)}};
+        for (const auto& packet : {std::string("x\0mp", 4), std::string(32 * 1024 * 1024 + 1, 'a')}) {
+            const auto result = ImageOutput::writeAvif(path, frame, options, packet);
+            require(!result && result.error().code() == lfs::ErrorCode::InvalidArgument,
+                    "invalid AVIF metadata rejected before conversion");
+            require(conversions == 0 && !std::filesystem::exists(path),
+                    "invalid AVIF metadata neither converts nor publishes");
+        }
+    }
     std::filesystem::remove_all(directory);
     return 0;
 }

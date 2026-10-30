@@ -171,7 +171,7 @@ namespace {
             EXPECT_EQ(file.error().code(), lfs::ErrorCode::InvalidArgument);
             EXPECT_EQ(bytes(path), original);
         }
-        for (int failure = 0; failure < 3; ++failure) {
+        for (int failure = 0; failure < 4; ++failure) {
             auto limited = options;
             if (failure == 0)
                 limited.max_output_bytes = 64;
@@ -179,13 +179,28 @@ namespace {
                 limited.cancelled = [] { return true; };
             if (failure == 2)
                 limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
+            // Entry, six plane rows and provider submission precede the
+            // cancellation boundary immediately before metadata insertion.
+            size_t before_metadata = 0;
+            if (failure == 3)
+                limited.cancelled = [&] { return ++before_metadata == 9; };
             const auto memory = c::encode_avif_memory(pixels, 3, 2, 3, 9, encoded, limited, packet);
+            if (failure == 3)
+                EXPECT_EQ(before_metadata, 9u);
             ASSERT_FALSE(memory);
+            if (failure == 3)
+                EXPECT_EQ(memory.error().detail(), "AVIF: cancelled before metadata insertion");
             EXPECT_EQ(memory.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);
             EXPECT_EQ(encoded, original);
             // Reset the stateful cancellation callback for the independent file call.
             if (failure == 2)
                 limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
+            if (failure == 3) {
+                // Reset for the independent publication call, whose atomic
+                // writer can also poll cancellation before invoking the codec.
+                before_metadata = 0;
+                limited.cancelled = [&] { return ++before_metadata == 9; };
+            }
             const auto file = c::write_avif(path, pixels, 3, 2, 3, 9, limited, {.overwrite = true}, packet);
             ASSERT_FALSE(file);
             EXPECT_EQ(file.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);

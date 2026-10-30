@@ -115,6 +115,8 @@ namespace lfs::media {
             const auto fail = [](ErrorCode code, std::string message) { return SinkResult::failure(outputError(code, std::move(message), 0, "AVIF", "ImageOutput.writeAvif")); };
             if (auto valid = validateAvifOutputOptions(options); !valid)
                 return valid;
+            if (xmp.size() > 32 * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                return fail(ErrorCode::InvalidArgument, "Invalid AVIF XMP packet");
             if (auto required = frame.requiredBytes(); !required)
                 return SinkResult::failure(required.error());
             const auto& layout = frame.layout;

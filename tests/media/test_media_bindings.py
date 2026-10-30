@@ -1407,6 +1407,28 @@ class MediaBindings(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         source_exif_fixture.read_export_avif(data[:12])
 
+    def test_avif_item_oracle_rejects_undeclared_reference_origin(self):
+        def box(kind, payload):
+            return struct.pack(">I", len(payload) + 8) + kind + payload
+
+        def fixture(origin):
+            ftyp = box(b"ftyp", b"avif" + bytes(4) + b"avif")
+            pitm = box(b"pitm", bytes(4) + struct.pack(">H", 1))
+            infe = box(b"infe", b"\x02" + bytes(3) + struct.pack(">HH", 1, 0) + b"av01\0")
+            iinf = box(b"iinf", bytes(4) + struct.pack(">H", 1) + infe)
+            iref = box(b"iref", bytes(4) + box(b"test", struct.pack(">HHH", origin, 1, 1)))
+            def header(offset):
+                iloc = box(b"iloc", bytes(4) + b"\x44\0" + struct.pack(">HHHHII", 1, 1, 0, 1, offset, 1))
+                return ftyp + box(b"meta", bytes(4) + pitm + iinf + iloc + box(b"iprp", b"") + iref)
+            prefix = header(0)
+            return header(len(prefix) + 8) + box(b"mdat", b"x")
+
+        # Both variants retain valid item extents and a valid reference target;
+        # only the origin changes to an item absent from iinf.
+        source_exif_fixture.read_export_avif(fixture(1))
+        with self.assertRaises(AssertionError):
+            source_exif_fixture.read_export_avif(fixture(0))
+
     def test_avif_embedded_metadata_resume_policy_and_replay(self):
         self._check_embedded_metadata_resume(media.FrameFileFormat.AVIF, ".avif")
 
