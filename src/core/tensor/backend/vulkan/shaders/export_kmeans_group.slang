@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // One task is 256 swizzled SH3 points that share a super-cluster. Each point
 // is scored only against that super's four nearest member lists.
 static const uint LFS_LOCAL_SIZE_X = 256;
@@ -30,8 +31,8 @@ groupshared float tileNorm[32];
 groupshared int tileId[32];
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> sh = (Ptr<float, Access.Read>)p.sh;
     Ptr<float, Access.Read> centroids = (Ptr<float, Access.Read>)p.centroids;
     Ptr<float, Access.Read> norms = (Ptr<float, Access.Read>)p.norms;

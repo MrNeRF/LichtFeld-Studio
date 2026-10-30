@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Keep intermediate arithmetic rounded independently at geometric boundaries.
+__target_intrinsic(cuda, "lfs_rounded_add")
 float roundedAdd(float a, float b) {
     return spirv_asm {
         % value : $$float = OpFAdd $a $b;
@@ -11,6 +12,7 @@ result:
     };
 }
 
+__target_intrinsic(cuda, "lfs_rounded_sub")
 float roundedSub(float a, float b) {
     return spirv_asm {
         % value : $$float = OpFSub $a $b;
@@ -20,6 +22,7 @@ result:
     };
 }
 
+__target_intrinsic(cuda, "lfs_rounded_mul")
 float roundedMul(float a, float b) {
     return spirv_asm {
         % value : $$float = OpFMul $a $b;
@@ -29,6 +32,7 @@ result:
     };
 }
 
+__target_intrinsic(cuda, "lfs_rounded_div")
 float roundedDiv(float a, float b) {
     return spirv_asm {
         % value : $$float = OpFDiv $a $b;

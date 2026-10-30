@@ -3,11 +3,11 @@
 
 #pragma once
 
+#include "core/device/portability.cuh"
 #include <cstdint>
-#include <cuda_runtime.h>
 
 namespace lfs::core::cuda {
-    __host__ __device__ __forceinline__ float normalize_mask_byte(const std::uint8_t value) {
+    LFS_HOST_DEVICE LFS_FORCEINLINE float normalize_mask_byte(const std::uint8_t value) {
 #if defined(__CUDA_ARCH__)
         return __fdiv_rn(static_cast<float>(value), 255.0f);
 #else
@@ -15,7 +15,7 @@ namespace lfs::core::cuda {
 #endif
     }
 
-    __host__ __device__ __forceinline__ float normalize_mask_u16_value(const std::uint16_t value) {
+    LFS_HOST_DEVICE LFS_FORCEINLINE float normalize_mask_u16_value(const std::uint16_t value) {
 #if defined(__CUDA_ARCH__)
         return __fdiv_rn(static_cast<float>(value), 65535.0f);
 #else
@@ -23,7 +23,7 @@ namespace lfs::core::cuda {
 #endif
     }
 
-#if defined(__CUDACC__)
+#if LFS_DEVICE_COMPILER
     // Explicit non-FTZ comparison: a positive subnormal cutoff excludes zero.
     __device__ __forceinline__ bool mask_value_at_least(const float value, const float threshold) {
 #if defined(__CUDA_ARCH__)

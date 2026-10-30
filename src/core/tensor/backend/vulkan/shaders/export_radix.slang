@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // Stable 4-bit LSD radix over uint64 keys with int32 payloads.
 // Phase 0 writes per-block digit counts. Phase 1 scatters using an exclusive
 // prefix of those counts in digit-major order (digit * blocks + block).
@@ -5,8 +6,10 @@ static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 static const uint kElems = 8;
 
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant]
 const uint kPhase = 0;
+#endif
 
 struct Parameters {
     uint64_t keysIn;
@@ -25,8 +28,8 @@ groupshared uint scanIn[256];
 groupshared uint scanOut[256];
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     // Exclusive prefix of the digit-major block counts. One workgroup carries
     // the total between chunks, matching the main Vulkan radix sort.
     if (kPhase == 2) {

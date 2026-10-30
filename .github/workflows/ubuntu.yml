@@ -44,7 +44,7 @@ jobs:
     needs: hip-native-changes
     if: needs.hip-native-changes.outputs.changed == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
@@ -66,10 +66,21 @@ jobs:
         run: |
           python -m pip install --index-url https://pypi.org/simple 'cmake==4.4.0'
           sudo apt-get update
-          sudo apt-get install -y g++ ninja-build
+          sudo apt-get install -y g++ ninja-build curl unzip
 
       - name: Install pinned ROCm development SDK
         run: python -m pip install -r cmake/hip-native/ci-requirements.txt
+
+      - name: Install pinned Slang source-generation compiler
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/shader-slang/slang/releases/download/v2026.5/slang-2026.5-linux-x86_64.zip \
+            -o "$RUNNER_TEMP/hip-slang.zip"
+          printf '%s  %s\n' 11d3327ced3f18aacd94e062acb23848e5aca4c52f80306133ecf09f4a49a75659266475a19fc5efb81b90889d6c82d18d53367338e714f5c66accbe089f9498 "$RUNNER_TEMP/hip-slang.zip" | sha512sum --check -
+          mkdir -p "$RUNNER_TEMP/hip-slang"
+          unzip -q "$RUNNER_TEMP/hip-slang.zip" -d "$RUNNER_TEMP/hip-slang"
+          chmod +x "$RUNNER_TEMP/hip-slang/bin/slangc"
+          echo "$RUNNER_TEMP/hip-slang/bin" >> "$GITHUB_PATH"
 
       - name: Compile native HIP module for all declared targets
         run: |
@@ -88,8 +99,18 @@ jobs:
           ctest --test-dir "$RUNNER_TEMP/hip-native-build" \
             --output-on-failure --no-tests=error -L cpu
 
+      - name: Compile SDK-free host loader and check native exports
+        run: |
+          cmake -S cmake/hip-host -B "$RUNNER_TEMP/hip-host-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLFS_HIP_HOST_TEST_MODULE="$RUNNER_TEMP/hip-native-build/runtime/liblfs_hip_runtime.so"
+          cmake --build "$RUNNER_TEMP/hip-host-build" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/hip-host-build" \
+            --output-on-failure --no-tests=error -L cpu
+
   build-ubuntu:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    needs: hip-native-changes
+    if: ${{ !cancelled() && (github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio') }}
     runs-on: ubuntu-24.04
     container:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
@@ -347,6 +368,44 @@ jobs:
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+
+      # Reuse the Release job's dependencies; this is the real Core adapter,
+      # not the isolated SDK-only module. No GPU execution is requested.
+      - name: Cache HIP adapter SDK downloads
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: hip-adapter-sdk-${{ runner.os }}-${{ hashFiles('cmake/hip-native/ci-requirements.txt') }}
+
+      - name: Install pinned SDK for the HIP Tensor adapter
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hip-adapter-sdk"
+          "$RUNNER_TEMP/hip-adapter-sdk/bin/python" -m pip install -r cmake/hip-native/ci-requirements.txt
+          sdk_root="$("$RUNNER_TEMP/hip-adapter-sdk/bin/rocm-sdk" path --root)"
+          echo "LFS_CI_HIP_ROOT=$sdk_root" >> "$GITHUB_ENV"
+
+      - name: Compile HIP Tensor facade and run CPU contracts
+        if: matrix.build_type == 'Release' && needs.hip-native-changes.outputs.changed == 'true'
+        env:
+          HIP_VISIBLE_DEVICES: '-1'
+          ROCR_VISIBLE_DEVICES: '-1'
+          CUDA_VISIBLE_DEVICES: ''
+        run: |
+          python3 tools/ci_retry_configure.py -- cmake -S . -B build-hip-adapter -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVCPKG_INSTALLED_DIR="$PWD/build/vcpkg_installed" \
+            -DVCPKG_MANIFEST_INSTALL=OFF \
+            -DLFS_ENABLE_CUDA=OFF -DLFS_TENSOR_HIP=ON -DLFS_BUILD_TRAINER=OFF \
+            -DBUILD_FORMAT_TESTS=OFF -DBUILD_VISUALIZER_TESTS=ON \
+            -DBUILD_SELECTION_OUTLINE_TESTS=OFF -DBUILD_SPLAT_TRANSFER_TESTS=OFF \
+            -DLFS_HIP_ROOT="$LFS_CI_HIP_ROOT" -DLFS_HIP_ARCHITECTURE=gfx1150 \
+            -DBUILD_PYTHON_STUBS=OFF \
+            -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF
+          cmake --build build-hip-adapter --target tensor_operation_contracts tensor_binding_contracts --parallel 2
+          ctest --test-dir build-hip-adapter --output-on-failure --no-tests=error \
+            -R '^(TensorOperationContracts[.](CPU|Runner)|TensorPythonBindings[.]CPU)$'
 
   idle-e2e:
     name: GPU idle E2E (optional)

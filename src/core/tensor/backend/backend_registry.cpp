@@ -65,8 +65,8 @@ namespace lfs::core::internal {
                 // the first registry lookup, including standalone Python teardown.
                 static auto* const unavailable = new std::array{
                     UnavailableDriver{GpuBackend::CUDA, "CUDA"}, UnavailableDriver{GpuBackend::Vulkan, "Vulkan"},
-                    UnavailableDriver{GpuBackend::Metal, "Metal"}};
-                BackendRegistry result{&(*unavailable)[0], &(*unavailable)[1], &(*unavailable)[2]};
+                    UnavailableDriver{GpuBackend::Metal, "Metal"}, UnavailableDriver{GpuBackend::HIP, "HIP"}};
+                BackendRegistry result{&(*unavailable)[0], &(*unavailable)[1], &(*unavailable)[2], &(*unavailable)[3]};
                 register_compiled_backends(result);
                 return result;
             }();

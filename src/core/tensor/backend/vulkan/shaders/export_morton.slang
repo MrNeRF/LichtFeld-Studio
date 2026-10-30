@@ -1,8 +1,11 @@
+#include "native_entry.slangh"
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant]
 const uint kPhase = 0;
+#endif
 
 struct Parameters {
     uint64_t positions;
@@ -34,8 +37,8 @@ uint64_t spread(uint x) {
 groupshared float red[256 * 6];
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)p.positions;
     if (kPhase == 0) {
         const float inf = asfloat(0x7f800000u);

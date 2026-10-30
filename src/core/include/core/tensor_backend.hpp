@@ -20,6 +20,7 @@ namespace lfs::core {
     struct TensorBackendOptions {
         std::string vulkan_device;           // Empty selects automatically; otherwise index or UUID.
         std::string rendering_vulkan_device; // Empty follows the tensor GPU for compatibility.
+        std::string hip_device;              // Empty selects automatically; otherwise a native device index.
         std::string cuda_device;             // Empty keeps the existing default; otherwise CUDA index or UUID.
         int vulkan_validation = 0;           // 0: off, 1: API validation, 2: synchronization validation.
         bool force_fp32_half = false;

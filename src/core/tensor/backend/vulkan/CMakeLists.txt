@@ -48,7 +48,7 @@ target_link_libraries(lfs_tensor_spirv_finalize PRIVATE lfs_tensor_spirv)
 file(GLOB LFS_TENSOR_SLANG_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/*.slangh")
 list(APPEND LFS_TENSOR_SLANG_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tensor/internal/point_filter.hpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/core/device/point_filter_flags.hpp")
 
 set(LFS_TENSOR_SHADER_OUTPUTS)
 function(_tensor_add_slang_kernel name src)

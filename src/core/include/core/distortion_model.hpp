@@ -2,12 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/device/portability.cuh"
 
 #include "core/camera_types.h"
 
 #include <cmath>
 
-#if defined(__CUDACC__) || defined(__HIPCC__)
+#if LFS_DEVICE_COMPILER
 #define LFS_DISTORTION_HD __host__ __device__
 #else
 #define LFS_DISTORTION_HD

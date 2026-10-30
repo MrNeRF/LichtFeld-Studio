@@ -4,20 +4,13 @@
 #pragma once
 
 #include "core/gpu_backend_fwd.hpp"
+#include "core/normal_prior_transform.hpp"
 #include "core/tensor_fwd.hpp"
 #include "core/tensor_image.hpp"
 #include <cstddef>
 #include <cstdint>
 
 namespace lfs::gpu_ops {
-
-    // Decode-side transform parameters for normal priors (v = n*0.5 + 0.5 file encoding).
-    struct NormalPriorTransform {
-        bool srgb = false;
-        bool flip_yz = false;
-        bool world_to_camera = false;
-        float w2c[9] = {};
-    };
 
     enum class ImageConversion {
         U8HWCToF32CHW,

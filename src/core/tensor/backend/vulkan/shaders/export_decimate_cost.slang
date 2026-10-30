@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // Float-float edge costs. The final value is rounded to float32, which is the
 // precision the decimator sorts; the double host oracle is the reference.
 #include "df64.slangh"
@@ -228,12 +229,14 @@ void load_cache(Ptr<float, Access.ReadWrite> cache, uint i, out GCache c) {
     c.selfLog.hi = o[29]; c.selfLog.lo = o[30];
 }
 
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant]
 const uint kPhase = 0;
+#endif
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)p.pos;
     Ptr<float, Access.Read> rot = (Ptr<float, Access.Read>)p.rot;
     Ptr<float, Access.Read> scale = (Ptr<float, Access.Read>)p.scale;

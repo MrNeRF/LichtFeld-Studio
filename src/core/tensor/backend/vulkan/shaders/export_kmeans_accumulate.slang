@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // Float-atomic accumulation for the export k-means; loaded only when the device adds floats atomically.
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 80;
@@ -8,8 +9,8 @@ const uint kPhase = 3;
 #include "export_kmeans_common.slangh"
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<float, Access.Read> sh = (Ptr<float, Access.Read>)p.sh;
     Ptr<int, Access.ReadWrite> labels = (Ptr<int, Access.ReadWrite>)p.labels;
     Ptr<float, Access.ReadWrite> sums = (Ptr<float, Access.ReadWrite>)p.sums;

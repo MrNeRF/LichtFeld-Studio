@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -8,7 +9,9 @@
 // the points at that depth. kPhase 0 clears and kPhase 3 writes the image.
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 128;
+#ifndef LFS_DYNAMIC_PHASE
 [SpecializationConstant] const uint kPhase = 0;
+#endif
 
 static const uint kCropBox = 1u, kCropEllipsoid = 2u, kCropInverse = 4u, kCropDesaturate = 8u;
 static const uint kEquirectangular = 16u, kOrthographic = 32u, kTransparent = 64u, kPreviewAdditive = 128u;
@@ -121,7 +124,7 @@ bool splatOf(Parameters p, uint i, out Splat splat) {
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
-void main(uint3 tid : SV_DispatchThreadID, uniform Parameters p) {
+void LFS_KERNEL_ENTRY(uint3 tid : SV_DispatchThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
     const uint i = tid.x;
     const uint pixels = p.width * p.height;
     Ptr<uint, Access.ReadWrite> scratch = (Ptr<uint, Access.ReadWrite>)p.scratch;

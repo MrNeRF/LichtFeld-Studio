@@ -483,7 +483,8 @@ namespace lfs::core {
         CudaExternal,
         VulkanOwned,
         VulkanExternal,
-        MetalOwned,
+        BackendOwned,
+        MetalOwned = BackendOwned,
     };
 
     struct GpuStorageDescriptor {

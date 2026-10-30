@@ -1,3 +1,4 @@
+#include "native_entry.slangh"
 // Moment match for one kept row. Groups hold at most four members.
 // Float-float sums track the double host merge; stored channels are float32.
 #include "df64.slangh"
@@ -270,8 +271,8 @@ void merge_one(Ptr<float, Access.Read> pos, Ptr<float, Access.Read> rot, Ptr<flo
 }
 
 [numthreads(256, 1, 1)]
-void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
-    const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+void LFS_KERNEL_ENTRY(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p LFS_PHASE_ARGUMENT) {
+    const uint3 groups = dispatchGroups();
     Ptr<uint64_t, Access.Read> table = (Ptr<uint64_t, Access.Read>)p.table;
     Ptr<float, Access.Read> pos = (Ptr<float, Access.Read>)table[0];
     Ptr<float, Access.Read> rot = (Ptr<float, Access.Read>)table[1];

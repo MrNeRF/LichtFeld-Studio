@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include "hip_pointwise_functors.hpp"
+#include "pointwise_catalog.hpp"
 #include "runtime_common.hpp"
 namespace {
     template <unsigned Mode, class In, class Out, class Op>
@@ -44,6 +44,17 @@ namespace {
         auto* output = reinterpret_cast<Out*>(static_cast<char*>(out.buffer->data) + out.offset);
         hipLaunchKernelGGL((pointwise_kernel<Mode, In, Out, Op>), dim3(blocks(count)), dim3(256), 0, context->stream, lhs, rhs, output, count, scalar, op);
         check(hipGetLastError());
+    }
+
+    template <unsigned Id, class F, class Storage>
+    void dispatch_pointwise(LfsHipContext* context, LfsHipView lhs, LfsHipView rhs,
+                            LfsHipView output, size_t count, float scalar) {
+        using L = hip_pointwise::Lowering<F>;
+        using Out = std::conditional_t<L::predicate, uint8_t, Storage>;
+        if constexpr (std::is_same_v<Storage, float> || hip_pointwise::half_supported(Id))
+            launch_pointwise<L::mode, Out, Storage>(context, lhs, rhs, output, count, scalar, L::make(scalar));
+        else
+            throw std::invalid_argument("Unknown HIP pointwise operation");
     }
 
 } // namespace

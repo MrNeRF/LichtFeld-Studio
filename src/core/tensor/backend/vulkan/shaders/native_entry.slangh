@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+#ifndef LFS_KERNEL_ENTRY
+#define LFS_KERNEL_ENTRY main
+#endif
+#ifdef LFS_DYNAMIC_PHASE
+#define LFS_PHASE_ARGUMENT , uniform uint kPhase
+#else
+#define LFS_PHASE_ARGUMENT
+#endif
+
+__target_intrinsic(cuda, "lfs_dispatch_groups")
+uint3 dispatchGroups() {
+    return spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+}

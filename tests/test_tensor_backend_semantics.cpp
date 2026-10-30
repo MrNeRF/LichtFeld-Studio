@@ -437,6 +437,11 @@ namespace {
             EXPECT_FALSE(empty.owner);
             EXPECT_STREQ(empty.external_kind, "");
         }
+        EXPECT_STREQ(gpu_backend_name(GpuBackend::HIP), "HIP");
+        if constexpr (!gpu_backend_compiled(GpuBackend::HIP)) {
+            EXPECT_THROW((void)internal::backend_driver(GpuBackend::HIP).selected_device(), std::runtime_error);
+            EXPECT_FALSE(gpu_backend_live(GpuBackend::HIP));
+        }
         if constexpr (!gpu_backend_compiled(GpuBackend::CUDA))
             EXPECT_EQ(selected_cuda_device(), 0);
     }

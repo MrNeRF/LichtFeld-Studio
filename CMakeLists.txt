@@ -37,6 +37,7 @@ if(CMAKE_HOST_APPLE AND LFS_GRAPHICS_BACKEND STREQUAL "Metal")
 else()
     set(_lfs_default_tensor_vulkan ON)
 endif()
+option(LFS_TENSOR_HIP "Build the native HIP tensor backend" OFF)
 option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" "${_lfs_default_tensor_vulkan}")
 # Metal tensor backend, Metal trainer kernels and the native Metal viewer.
 # Apple only. OFF with Vulkan graphics gives the pure-MoltenVK build.

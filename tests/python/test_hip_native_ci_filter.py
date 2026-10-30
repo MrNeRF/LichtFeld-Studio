@@ -45,15 +45,24 @@ class HipCiFilter(unittest.TestCase):
         self.assertFalse(selector.needs_compile(self.repo, "pull_request", self.base, self.commit()))
 
     def test_direct_and_supporting_changes_require_sdk(self):
-        for path in ("src/core/tensor/backend/hip/runtime.hip", "cmake/hip-native/ci-requirements.txt",
+        for path in ("src/core/tensor/tensor_upload.cpp", "src/core/tensor/expression_program.cpp",
+                     "src/core/include/core/tensor.hpp", "src/core/CMakeLists.txt",
+                     "src/python/lfs/py_tensor.cpp", "tests/TensorOperationContracts.cmake",
+                     "src/core/tensor/backend/hip/runtime.hip", "cmake/hip-native/ci-requirements.txt",
                      "tests/hip/test_native_runtime.py", "cmake/HipArchitectures.cmake",
-                     "cmake/HipOffloadCompression.cmake", ".github/workflows/ubuntu.yml",
+                     "cmake/HipOffloadCompression.cmake", "cmake/GpuBackendRegistry.cmake",
+                     ".github/workflows/ubuntu.yml",
                      "tools/hip_native_ci_filter.py", "tests/python/test_hip_native_ci_filter.py",
                      "tests/python/test_hip_runtime_configuration.py",
-                     "tests/python/test_hip_pointwise_generation.py",
+                     "tests/python/test_hip_pointwise_catalog.py",
+                     "cmake/hip-host/CMakeLists.txt", "tests/python/test_hip_host_contracts.py",
                      "src/core/include/core/detail/pointwise_ops.def",
                      "src/core/include/core/detail/pointwise_lowering.hpp",
-                     "src/core/include/core/detail/tensor_functors.hpp"):
+                     "src/core/include/core/detail/tensor_functors.hpp",
+                     "src/core/tensor/backend/vulkan/shaders/inference.slang",
+                     "src/core/cuda/undistort/distortion_model.cuh",
+                     "src/core/tensor/backend/metal/expression_msl.cpp",
+                     "src/io/cuda/image_format_kernels.cu"):
             with self.subTest(path=path):
                 self.write(path)
                 head = self.commit()
