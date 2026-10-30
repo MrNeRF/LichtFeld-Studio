@@ -512,6 +512,47 @@ namespace {
         }
     }
 
+    // macOS fails a single pread or pwrite of more than INT_MAX bytes with
+    // EINVAL, so NativeFile has to split such requests itself.
+    TEST(ProjectFileNativeFile, ReadsAndWritesMoreThanTwoGiBInOneCall) {
+        constexpr std::size_t kBytes = (std::size_t{1} << 31) + 8 * 1024;
+        constexpr std::size_t kMarkBytes = 4096;
+        TemporaryDirectory temporary;
+        std::error_code space_error;
+        const auto space = fs::space(temporary.path, space_error);
+        if (space_error || space.available < 2 * kBytes) {
+            GTEST_SKIP() << "needs " << 2 * kBytes << " bytes of free disk space";
+        }
+        const fs::path path = temporary.path / "native-file-over-2gib.licht";
+
+        const std::array<std::size_t, 3> marks{0, std::size_t{1} << 31, kBytes - kMarkBytes};
+        const auto mark = [](const std::size_t at) {
+            std::vector<std::byte> result(kMarkBytes);
+            for (std::size_t index = 0; index < result.size(); ++index) {
+                result[index] = static_cast<std::byte>((index * 131u + at / kMarkBytes + 17u) & 0xffu);
+            }
+            return result;
+        };
+        std::vector<std::byte> bytes(kBytes);
+        for (const auto at : marks) {
+            std::ranges::copy(mark(at), bytes.begin() + static_cast<std::ptrdiff_t>(at));
+        }
+
+        auto file = require_result(detail::NativeFile::create_new(path));
+        require_status(file->write_exact(0, bytes));
+        EXPECT_EQ(require_result(file->size()), kBytes);
+
+        std::memset(bytes.data(), 0xab, bytes.size());
+        require_status(file->read_exact(0, bytes));
+        for (const auto at : marks) {
+            EXPECT_TRUE(std::ranges::equal(std::span(bytes).subspan(at, kMarkBytes), mark(at)))
+                << "mark at " << at;
+        }
+        for (const std::size_t at : {kMarkBytes, std::size_t{1} << 30, (std::size_t{1} << 31) - 1}) {
+            EXPECT_EQ(bytes[at], std::byte{0}) << "offset " << at;
+        }
+    }
+
     TEST(ProjectContainerReader, ThreeGenerationOpenSelectsNewestHead) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "three-generations.licht";

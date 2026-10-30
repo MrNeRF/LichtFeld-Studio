@@ -70,6 +70,37 @@ namespace {
         EXPECT_TRUE(std::ranges::equal(
             mapped->subspan(OFFSET, source.size()), source));
     }
+
+    // macOS fails a single pwrite of more than INT_MAX bytes with EINVAL, so
+    // the spool has to split such writes itself.
+    TEST(TrainingSnapshotStorage,
+         FileBackedSpoolTakesOneWriteOfMoreThanTwoGiB) {
+        constexpr std::size_t BYTES = 2048ull * MIB + 8192;
+        std::error_code space_error;
+        const auto space = std::filesystem::space(
+            std::filesystem::temp_directory_path(), space_error);
+        if (space_error || space.available < 2 * BYTES) {
+            GTEST_SKIP() << "needs " << 2 * BYTES
+                         << " bytes of free disk space";
+        }
+        lfs::training::TrainingSnapshotBytes storage(BYTES, true);
+        ASSERT_TRUE(storage.file_backed());
+        constexpr std::size_t marks[] = {
+            0, 2048ull * MIB, BYTES - 1};
+        std::vector<std::byte> source(BYTES);
+        for (const auto at : marks) {
+            source[at] = std::byte{0x5a};
+        }
+        storage.write_at(0, source);
+        const auto mapped = storage.mapped_data();
+        ASSERT_TRUE(mapped);
+        ASSERT_EQ(mapped->size(), BYTES);
+        for (const auto at : marks) {
+            EXPECT_EQ((*mapped)[at], std::byte{0x5a})
+                << "offset " << at;
+        }
+        EXPECT_EQ((*mapped)[1024ull * MIB], std::byte{0});
+    }
 #endif
 
     std::unique_ptr<lfs::core::SplatData>

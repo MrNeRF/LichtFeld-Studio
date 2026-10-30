@@ -366,6 +366,11 @@ namespace lfs::io::project::detail {
             }
             return transferred;
         }
+#else
+        // macOS fails a single pread or pwrite of more than INT_MAX bytes with
+        // EINVAL, so the positional loops below hand the kernel at most 1 GiB
+        // at a time. They already continue after a short transfer.
+        constexpr std::size_t MAX_POSITIONAL_IO_BYTES = std::size_t{1} << 30;
 #endif
 
     } // namespace
@@ -623,7 +628,8 @@ namespace lfs::io::project::detail {
             completed += transferred;
 #else
             const ssize_t count =
-                ::pread(fd_, destination.data() + completed, remaining,
+                ::pread(fd_, destination.data() + completed,
+                        std::min(remaining, MAX_POSITIONAL_IO_BYTES),
                         static_cast<off_t>(offset + completed));
             if (count < 0) {
                 if (errno == EINTR) {
@@ -679,7 +685,8 @@ namespace lfs::io::project::detail {
             completed += transferred;
 #else
             const ssize_t count =
-                ::pwrite(fd_, source.data() + completed, remaining,
+                ::pwrite(fd_, source.data() + completed,
+                         std::min(remaining, MAX_POSITIONAL_IO_BYTES),
                          static_cast<off_t>(offset + completed));
             if (count < 0) {
                 if (errno == EINTR) {
