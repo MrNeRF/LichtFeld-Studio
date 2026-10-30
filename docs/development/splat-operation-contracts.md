@@ -342,8 +342,8 @@ Integration decisions:
   the crop persistence test.
 - Preserve current master stubs, adding only the new crop declarations and
   avoiding duplicate gamepad signatures.
-- Keep all new master locale keys. The crop strings use English fallbacks in
-  DE/ES/FR/JA/KO/NL/PL/ZH pending translations; EN/IT retain their texts.
+- Keep all new master locale keys. Crop controls, confirmations and the renamed
+  Finish Crop Editing action are translated in all ten shipped locales.
 - vcpkg manifest/baseline did not change between the branch base and this master.
   The existing installation already provides shader-slang 2026.5; no unrelated
   dependency upgrade was introduced.
@@ -425,3 +425,18 @@ the final visual capture uses a solid background in its isolated copy.
 Validation artifacts: `work/scene-organization/pr01-integrated/`, especially
 `gui-native-crop-results.json`, `gui-ctest-details.log`, `gui-retest-routes-final.log`,
 `gui-final-expected.json` and `gui-followup-results.json`.
+
+
+### Crop localization completion — 30 October 2026
+
+Translated all 15 crop inspector/container strings in DE/ES/FR/JA/KO/NL/PL/ZH
+and updated the existing Finish Crop Editing action in the same eight languages.
+Italian confirmations now explicitly identify the original splat geometry and
+undoing the whole action. No locale keys were removed. All ten languages have
+the same 3,542 keys and compatible placeholders; the eight completed languages
+have no English fallback among the new crop strings. The Italian label Crop is
+retained as the existing tool term.
+
+Validation: locale completeness, all 21 headless localization contracts, the
+hardcoded-UI audit, UTF-8/JSON layout and whitespace checks pass. This change is
+limited to localized resources and documentation.
