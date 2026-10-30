@@ -14509,7 +14509,8 @@ assert lf.ui.ops.invoke("crop_polygon.set", node="{}", enabled=False).finished
         lfs::vis::clearProjectLocationPreference();
         const auto paths = lfs::core::UserPaths::resolve();
         ASSERT_TRUE(paths);
-        const auto root_tmp = (paths->rootDir() / "tmp").lexically_normal();
+        // The scratch root is resolved like the product does; macOS temp folders sit behind /var -> /private/var.
+        const auto root_tmp = std::filesystem::weakly_canonical(paths->rootDir() / "tmp");
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         VisualizerImpl viewer(options);
