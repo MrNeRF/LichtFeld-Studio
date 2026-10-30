@@ -912,22 +912,21 @@ namespace lfs::vis::gui {
         }
     }
 
-    void GizmoManager::deleteCropVolumeAfterApply(const core::NodeId volume_node_id) {
+    bool GizmoManager::deleteCropVolumeAfterApply(const core::NodeId volume_node_id) {
         auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!sm || volume_node_id == core::NULL_NODE) {
             leaveCropTool(false, true, true);
-            return;
+            return false;
         }
 
         const auto* const node = sm->getScene().getNodeById(volume_node_id);
         if (!node || (node->type != core::NodeType::CROPBOX && node->type != core::NodeType::ELLIPSOID &&
                       node->type != core::NodeType::CROP_POLYGON)) {
             leaveCropTool(false, true, true);
-            return;
+            return false;
         }
 
         const core::NodeId parent_node_id = node->parent_id;
-        const std::string node_name = node->name;
         crop_tool_initialized_ = false;
         crop_tool_target_node_id_ = core::NULL_NODE;
         clearCropToolOverlayState();
@@ -936,10 +935,16 @@ namespace lfs::vis::gui {
             viewer_->getEditorContext().clearActiveOperator();
         UnifiedToolRegistry::instance().setActiveTool("");
 
-        sm->removePLY(node_name);
+        // The crop snapshot also records sibling order. Restore that order on
+        // undo before replaying the geometry snapshot in the enclosing bake.
+        if (auto result = sm->removeNodesByIdsWithResult({volume_node_id}, false); !result) {
+            LOG_WARN("Failed to remove crop volume: {}", result.error());
+            return false;
+        }
         if (parent_node_id != core::NULL_NODE && sm->getScene().getNodeById(parent_node_id)) {
             sm->selectNode(parent_node_id);
         }
+        return true;
     }
 
     void GizmoManager::clearSelectionVolumeState() {
@@ -1318,8 +1323,8 @@ namespace lfs::vis::gui {
                 .emit();
         }
         triggerCropFlash();
-        deleteCropVolumeAfterApply(applied_volume_node_id);
-        transaction.commit();
+        if (deleteCropVolumeAfterApply(applied_volume_node_id))
+            transaction.commit();
     }
 
     void GizmoManager::deleteActiveCropToolVolume() {
@@ -1755,6 +1760,7 @@ namespace lfs::vis::gui {
             if (!sm->canApplyCropToNode(cropbox_node->parent_id))
                 return;
 
+            op::TransactionGuard transaction("Crop Box");
             cap::CropBoxUpdate update;
             update.has_use = true;
             update.use = true;
@@ -1780,7 +1786,8 @@ namespace lfs::vis::gui {
             crop_box.setworld2BBox(glm::inverse(scene_coords::nodeDataWorldTransform(sm->getScene(), cropbox_id)));
             cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse, .target_node_id = cropbox_node->parent_id}.emit();
             triggerCropFlash();
-            deleteCropVolumeAfterApply(cropbox_id);
+            if (deleteCropVolumeAfterApply(cropbox_id))
+                transaction.commit();
         });
 
         cmd::ApplyEllipsoid::when([this](const auto&) {
@@ -1804,6 +1811,7 @@ namespace lfs::vis::gui {
             if (!sm->canApplyCropToNode(ellipsoid_node->parent_id))
                 return;
 
+            op::TransactionGuard transaction("Crop Ellipsoid");
             cap::EllipsoidUpdate update;
             update.has_use = true;
             update.use = true;
@@ -1831,7 +1839,8 @@ namespace lfs::vis::gui {
                 .target_node_id = ellipsoid_node->parent_id}
                 .emit();
             triggerCropFlash();
-            deleteCropVolumeAfterApply(ellipsoid_id);
+            if (deleteCropVolumeAfterApply(ellipsoid_id))
+                transaction.commit();
         });
 
         cmd::ApplyCropPolygon::when([this](const auto&) {
@@ -1849,8 +1858,8 @@ namespace lfs::vis::gui {
             op::TransactionGuard transaction("Crop Polygon");
             emitCropPolygon(sm->getScene(), *polygon_node);
             triggerCropFlash();
-            deleteCropVolumeAfterApply(polygon_id);
-            transaction.commit();
+            if (deleteCropVolumeAfterApply(polygon_id))
+                transaction.commit();
         });
 
         cmd::ToggleCropInverse::when([this](const auto&) { toggleSelectedCropInverse(); });

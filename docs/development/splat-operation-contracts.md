@@ -370,3 +370,58 @@ closing the test preview, the full suite passes without relaxing any budget.
 The final focused suite also checks that enabling the gate removes its optional
 JSON override. Final large-stack GPU validation is recorded in the external
 scene-organization validation register.
+
+
+## GUI follow-up and single-bake undo fix — 30 October 2026
+
+The deeper GUI pass exposed a blocking case not covered by the earlier focused
+suite: baking one crop while sibling crops remained restored the deleted volume
+at the end of the child list. The geometry snapshot rejected that changed
+ordering, so undo could fail to restore the splat. Single-volume removal now uses
+the existing ordered batch graph patch, with payload capture scoped to the
+removed volume. The bake transaction commits only after successful removal.
+Legacy box and ellipsoid commands now group parameter changes, bake and removal
+into the same undo transaction, matching the polygon and active-tool paths.
+
+The native bake regression now includes repeated sibling crops, all three
+shapes, active-tool and legacy-command paths, and locked target/ancestor cases.
+It verifies one undo step, exact child order, restored geometry, sibling retention
+and redo. Older tests were aligned with explicit editing and preservation of
+sibling crop instances. Windows-only test build issues were fixed without
+exporting private implementation methods; the persistence fixture uses positive
+ellipsoid radii rather than a degenerate flat ellipsoid.
+
+Completed follow-up checks:
+
+- Native GUI crop/persistence filter: 21 passed.
+- General GUI suite: 614 passed; RmlUI: 82 passed; sidebar input: 7 passed.
+- Final focused workflow/packing/CUDA suite: 34 passed, clipboard GPU opt-in on.
+- Python controller/toolbar tests: 162 passed; real-app numeric gesture history:
+  12 passed, covering single/multiple selections, local/world space and all
+  three transform operations.
+- Actual mounted toolbar controller: 34 phases, including creation, type changes
+  during creation, locked type on reopen, selection without editing, repeated
+  instances, numeric transforms and single deletion with undo/redo.
+- Fit, percentile fit, reset and invert on every shape; actual polygon modal
+  drawing through native mouse events; single and collective bake, collective
+  deletion, disabled gate, disabled siblings and undo/redo.
+- Native registry and Python polls reject normal groups and mixed group/splat
+  selections, while an individual splat inside a normal group remains editable.
+  The native poll is queried through `ui_tool_describe`; the older Python
+  `is_tool_available` mapping does not expose Crop and is not a Crop poll oracle.
+- Real project reopen preserves six crop UUIDs, child order, individual enabled
+  flags, collective gate and all 64 fixture Gaussians. GUI screenshots inspected.
+- Final normal application build uses sccache and FAST_COMPILE, with the temporary
+  `BUILD_VISUALIZER_TESTS` configuration restored to OFF. The isolated application
+  was saved and closed through File > Exit. No push or PR metadata changes.
+
+Physical desktop mouse automation remains unavailable in this Windows session:
+`GetCursorPos` returns access denied. Native input events, retained-tree event
+coverage, real controller callbacks and MCP window captures were exercised;
+physical mouse drag/double-click/context-menu interaction is not claimed as
+verified. The portable fixture also references an unavailable environment asset;
+the final visual capture uses a solid background in its isolated copy.
+
+Validation artifacts: `work/scene-organization/pr01-integrated/`, especially
+`gui-native-crop-results.json`, `gui-ctest-details.log`, `gui-retest-routes-final.log`,
+`gui-final-expected.json` and `gui-followup-results.json`.

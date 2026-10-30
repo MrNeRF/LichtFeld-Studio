@@ -1231,6 +1231,7 @@ namespace {
         const auto owner = scene.addSplat("Stack", make_splat(3));
         const auto box = scene.addCropBox("Box", owner);
         const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
+        scene.getMutableNode("Ellipsoid")->ellipsoid->radii = glm::vec3(1.0f);
         lfs::core::CropPolygonData polygon_data;
         polygon_data.vertices = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
         const auto polygon = scene.addCropPolygon("Polygon", owner, polygon_data);
@@ -1238,7 +1239,7 @@ namespace {
         for (const auto id : {box, ellipsoid, polygon}) {
             const auto copy_name = scene.duplicateNode(scene.getNodeById(id)->name);
             ASSERT_FALSE(copy_name.empty());
-            auto* child = scene.getNode(copy_name);
+            auto* child = scene.getMutableNode(copy_name);
             ASSERT_NE(child, nullptr);
             child->visible.setQuiet(false);
             if (child->cropbox) {
@@ -1258,7 +1259,7 @@ namespace {
         const auto owner_uuid = scene.getNodeById(owner)->uuid;
         const ScenePayloadBindings bindings{{owner_uuid, PayloadBinding{.fourcc = "DSRC", .instance_uuid = owner_uuid, .reference_uuid = std::nullopt, .source_kind = "ply"}}};
         const auto chapter = capture_scene_graph(scene, bindings);
-        ASSERT_TRUE(chapter);
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
         const auto decoded = SceneGraphChapter::from_bytes(chapter->to_bytes());
         ASSERT_TRUE(decoded);
         Scene restored;

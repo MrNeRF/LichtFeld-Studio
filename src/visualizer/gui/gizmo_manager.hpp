@@ -297,7 +297,7 @@ namespace lfs::vis {
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
             void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);
-            void deleteCropVolumeAfterApply(core::NodeId volume_node_id);
+            bool deleteCropVolumeAfterApply(core::NodeId volume_node_id);
             void clearSelectionVolumeState();
             void captureSelectionVolumeBase(uint64_t source_generation);
             [[nodiscard]] bool applySelectionVolumeFromGizmo(bool push_undo);
