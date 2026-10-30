@@ -184,6 +184,13 @@ jobs:
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
             ctest --test-dir build --output-on-failure --no-tests=error -R '^(selection_outline_contract|splat_drag_axes_contract|splat_transfer_contract|wayland_drag_contract|x11_drag_contract|file_transfer_progress_contract|native_modal_frame_contract)$'
 
+      - name: Run CPU-only splat operation tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^lichtfeld\.splat_operations$'
+
       - name: Build and run CPU-only format tests
         run: |
           cmake --build build --target lichtfeld_format_tests -j $(nproc)

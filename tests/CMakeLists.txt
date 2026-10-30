@@ -37,7 +37,9 @@ find_package(GTest CONFIG REQUIRED)
 add_executable(lichtfeld_splat_operation_tests test_splat_operations.cpp)
 target_compile_features(lichtfeld_splat_operation_tests PRIVATE cxx_std_23)
 target_compile_definitions(lichtfeld_splat_operation_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
-target_link_libraries(lichtfeld_splat_operation_tests PRIVATE lfs_core GTest::gtest_main)
+# lfs_core imports the CUDA driver privately. Link it explicitly so Linux
+# toolkit-only builds resolve its driver symbols without a system NVIDIA driver.
+target_link_libraries(lichtfeld_splat_operation_tests PRIVATE lfs_core GTest::gtest_main CUDA::cuda_driver)
 add_test(NAME lichtfeld.splat_operations COMMAND lichtfeld_splat_operation_tests)
 set_tests_properties(lichtfeld.splat_operations PROPERTIES LABELS "cpu;scene" TIMEOUT 30)
 
