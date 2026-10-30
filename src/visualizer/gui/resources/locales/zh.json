@@ -1861,7 +1861,7 @@
     "action.select_mode_color": "选择：颜色",
     "action.select_mode_box": "选择：框",
     "action.select_mode_sphere": "选择：球",
-    "action.apply_crop_box": "应用裁剪框",
+    "action.apply_crop_box": "完成裁剪编辑",
     "action.remove_last_point": "删除上一个点",
     "action.apply_alignment": "应用对齐",
     "action.insert_crop_polygon_vertex": "插入裁剪多边形顶点",
@@ -3747,5 +3747,22 @@
   "shader.untitled": "未命名着色器",
   "editor.documents": "Python 和着色器文档",
   "shader.restore_warning": "部分着色器状态无法恢复：\n{}",
-  "shader.publication_omitted": "发布时将省略用户着色器和自定义显现片段。发布的场景使用原始 splat。"
+  "shader.publication_omitted": "发布时将省略用户着色器和自定义显现片段。发布的场景使用原始 splat。",
+  "splat_inspector": {
+    "enabled": "启用裁剪",
+    "edit": "在视口中编辑",
+    "duplicate": "复制裁剪",
+    "finish": "完成裁剪编辑",
+    "bake": "应用到几何体...",
+    "bake_note": "仅将此裁剪应用到原始 Splat 几何体并移除对应的裁剪体积吗？其他裁剪仍可编辑。此操作可以撤销。",
+    "disable": "禁用裁剪",
+    "group": "裁剪",
+    "group_enable": "启用裁剪组",
+    "group_disable": "禁用裁剪组",
+    "group_bake": "将启用的裁剪应用到几何体...",
+    "group_delete": "删除所有裁剪...",
+    "group_bake_note": "将已启用裁剪的交集应用到 Splat 几何体吗？应用后的裁剪体积将被移除，已禁用的裁剪仍可编辑。整个操作可以一次撤销。",
+    "group_delete_note": "删除此组中的所有裁剪体积，包括已禁用的裁剪吗？Splat 几何体保持不变。整个操作可以一次撤销。",
+    "group_changed": "确认期间场景发生了变化。请重新打开裁剪组菜单并重试。"
+  }
 }

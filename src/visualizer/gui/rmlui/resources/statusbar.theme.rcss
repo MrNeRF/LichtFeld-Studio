@@ -43,23 +43,6 @@ body,
     color: @{error};
 }
 
-.mcp-switch-track {
-    border-color: @{border};
-    background-color: @{surface_bright};
-}
-
-.mcp-switch-knob {
-    background-color: @{text_dim};
-}
-
-#mcp-toggle.is-on .mcp-switch-track {
-    border-color: @{success};
-}
-
-#mcp-toggle.is-on .mcp-switch-knob {
-    background-color: @{success};
-}
-
 .mcp-edit-button {
     color: @{text};
     background-color: @{blend(surface,primary,button.tint_normal)};

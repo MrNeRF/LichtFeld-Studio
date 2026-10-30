@@ -1861,7 +1861,7 @@
     "action.select_mode_color": "선택: 색상",
     "action.select_mode_box": "선택: 박스",
     "action.select_mode_sphere": "선택: 구",
-    "action.apply_crop_box": "자르기 상자 적용",
+    "action.apply_crop_box": "자르기 편집 완료",
     "action.remove_last_point": "마지막 점 삭제",
     "action.apply_alignment": "정렬 적용",
     "action.insert_crop_polygon_vertex": "자르기 다각형 꼭짓점 삽입",
@@ -3747,5 +3747,22 @@
   "shader.untitled": "제목 없는 셰이더",
   "editor.documents": "Python 및 셰이더 문서",
   "shader.restore_warning": "일부 셰이더 상태를 복원하지 못했습니다:\n{}",
-  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다."
+  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다.",
+  "splat_inspector": {
+    "enabled": "자르기 활성화",
+    "edit": "뷰포트에서 편집",
+    "duplicate": "자르기 복제",
+    "finish": "자르기 편집 완료",
+    "bake": "지오메트리에 적용...",
+    "bake_note": "이 자르기만 원본 스플랫 지오메트리에 적용하고 해당 자르기 볼륨을 삭제할까요? 다른 자르기는 계속 편집할 수 있습니다. 이 작업은 실행 취소할 수 있습니다.",
+    "disable": "자르기 비활성화",
+    "group": "자르기",
+    "group_enable": "자르기 그룹 활성화",
+    "group_disable": "자르기 그룹 비활성화",
+    "group_bake": "활성 자르기를 지오메트리에 적용...",
+    "group_delete": "모든 자르기 삭제...",
+    "group_bake_note": "활성화된 자르기의 교집합을 스플랫 지오메트리에 적용할까요? 적용된 자르기 볼륨은 삭제되며 비활성화된 자르기는 계속 편집할 수 있습니다. 전체 작업을 한 번에 실행 취소할 수 있습니다.",
+    "group_delete_note": "비활성화된 항목을 포함하여 이 그룹의 모든 자르기 볼륨을 삭제할까요? 스플랫 지오메트리는 변경되지 않습니다. 전체 작업을 한 번에 실행 취소할 수 있습니다.",
+    "group_changed": "확인하는 동안 장면이 변경되었습니다. 자르기 그룹 메뉴를 다시 열고 시도하세요."
+  }
 }

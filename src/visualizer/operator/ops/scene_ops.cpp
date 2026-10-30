@@ -6,6 +6,7 @@
 
 #include "core/property_registry.hpp"
 #include "core/services.hpp"
+#include "core/splat_operations.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -34,6 +35,13 @@ namespace lfs::vis::op {
 
         std::expected<core::NodeId, std::string> resolve_cropbox_id_from_props(const OperatorContext& ctx,
                                                                                const OperatorProperties* props) {
+            if (props && props->has("node_uuid")) {
+                const auto uuid = core::Uuid::from_string(props->get_or<std::string>("node_uuid", ""));
+                const auto* node = uuid ? ctx.scene().getScene().getNodeByUuid(*uuid) : nullptr;
+                if (!node || node->type != core::NodeType::CROPBOX || !node->cropbox)
+                    return std::unexpected("Invalid explicit volume UUID");
+                return node->id;
+            }
             return cap::resolveCropBoxId(ctx.scene(), optional_node_prop(props));
         }
 
@@ -45,6 +53,13 @@ namespace lfs::vis::op {
 
         std::expected<core::NodeId, std::string> resolve_ellipsoid_id_from_props(const OperatorContext& ctx,
                                                                                  const OperatorProperties* props) {
+            if (props && props->has("node_uuid")) {
+                const auto uuid = core::Uuid::from_string(props->get_or<std::string>("node_uuid", ""));
+                const auto* node = uuid ? ctx.scene().getScene().getNodeByUuid(*uuid) : nullptr;
+                if (!node || node->type != core::NodeType::ELLIPSOID || !node->ellipsoid)
+                    return std::unexpected("Invalid explicit volume UUID");
+                return node->id;
+            }
             return cap::resolveEllipsoidId(ctx.scene(), optional_node_prop(props));
         }
 
@@ -88,6 +103,7 @@ namespace lfs::vis::op {
             properties.register_operator_args(
                 CropBoxSetOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
                     core::prop::arg_float_vector("min", "Optional local minimum bounds", 3),
                     core::prop::arg_float_vector("max", "Optional local maximum bounds", 3),
@@ -102,12 +118,14 @@ namespace lfs::vis::op {
             properties.register_operator_args(
                 CropBoxFitOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
                     core::prop::arg_bool("use_percentile", "Use percentile bounds instead of strict min/max"),
                 });
             properties.register_operator_args(
                 CropBoxResetOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
                 });
             properties.register_operator_args(
@@ -118,6 +136,7 @@ namespace lfs::vis::op {
             properties.register_operator_args(
                 EllipsoidSetOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
                     core::prop::arg_float_vector("radii", "Optional ellipsoid radii", 3),
                     core::prop::arg_float_vector("translation", "Optional local XYZ translation", 3),
@@ -131,12 +150,14 @@ namespace lfs::vis::op {
             properties.register_operator_args(
                 EllipsoidFitOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
                     core::prop::arg_bool("use_percentile", "Use percentile bounds instead of strict min/max"),
                 });
             properties.register_operator_args(
                 EllipsoidResetOperator::DESCRIPTOR.id(),
                 {
+                    core::prop::arg_string("node_uuid", "Exact volume UUID; takes precedence over node name and selection"),
                     core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
                 });
         }
@@ -519,8 +540,43 @@ namespace lfs::vis::op {
         return OperatorResult::FINISHED;
     }
 
+    const OperatorDescriptor CropVolumeDuplicateOperator::DESCRIPTOR = {
+        .builtin_id = BuiltinOp::CropVolumeDuplicate,
+        .python_class_id = {},
+        .label = "Duplicate Crop Volume",
+        .description = "Add an independent instance of a splat crop volume",
+        .icon = "",
+        .shortcut = "",
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
+        .source = OperatorSource::CPP,
+        .poll_deps = PollDependency::SCENE | PollDependency::SELECTION,
+    };
+    bool CropVolumeDuplicateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        const auto uuid = props ? core::Uuid::from_string(props->get_or<std::string>("node_uuid", "")) : std::nullopt;
+        const auto* node = uuid ? ctx.scene().getScene().getNodeByUuid(*uuid) : nullptr;
+        const auto* owner = node ? ctx.scene().getScene().getNodeById(node->parent_id) : nullptr;
+        const auto* descriptor = node ? core::splatOperationDescriptor(node->type) : nullptr;
+        return owner && descriptor && !descriptor->duplicate_operator.empty() && core::readSplatOperation(*owner, *node);
+    }
+    OperatorResult CropVolumeDuplicateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
+        const auto uuid = core::Uuid::from_string(props.get_or<std::string>("node_uuid", ""));
+        if (!uuid)
+            return OperatorResult::CANCELLED;
+        const auto id = cap::duplicateSplatCrop(ctx.scene(), services().renderingOrNull(), *uuid);
+        if (!id) {
+            props.set("error_message", std::string(id.error().user_message()));
+            return OperatorResult::CANCELLED;
+        }
+        props.set("resolved_node_id", *id);
+        ctx.scene().selectNode(*id);
+        return OperatorResult::FINISHED;
+    }
+
     void registerSceneOperators() {
         register_scene_schemas();
+        core::prop::PropertyRegistry::instance().register_operator_args(CropVolumeDuplicateOperator::DESCRIPTOR.id(), {core::prop::arg_string("node_uuid", "Exact source crop UUID; no selection fallback")});
+        operators().registerOperator(BuiltinOp::CropVolumeDuplicate, CropVolumeDuplicateOperator::DESCRIPTOR,
+                                     [] { return std::make_unique<CropVolumeDuplicateOperator>(); });
         operators().registerOperator(BuiltinOp::SelectionClear, SelectionClearOperator::DESCRIPTOR,
                                      [] { return std::make_unique<SelectionClearOperator>(); });
         operators().registerOperator(BuiltinOp::SceneSelectNode, SceneSelectNodeOperator::DESCRIPTOR,
@@ -554,6 +610,8 @@ namespace lfs::vis::op {
         operators().unregisterOperator(BuiltinOp::EllipsoidSet);
         operators().unregisterOperator(BuiltinOp::EllipsoidFit);
         operators().unregisterOperator(BuiltinOp::EllipsoidReset);
+        operators().unregisterOperator(BuiltinOp::CropVolumeDuplicate);
+        core::prop::PropertyRegistry::instance().unregister_operator_args(CropVolumeDuplicateOperator::DESCRIPTOR.id());
         unregister_scene_schemas();
     }
 

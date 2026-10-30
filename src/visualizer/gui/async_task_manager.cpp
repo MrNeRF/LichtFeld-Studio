@@ -540,8 +540,7 @@ namespace lfs::vis::gui {
             });
         }
 
-        if (snapshot.active_ellipsoid) {
-            const auto& el = *snapshot.active_ellipsoid;
+        const auto append_ellipsoid = [&](const VideoExportEllipsoidSnapshot& el) {
             state.ellipsoids.push_back(lfs::core::Scene::RenderableEllipsoid{
                 .node_id = el.node_id,
                 .parent_splat_id = el.parent_splat_id,
@@ -551,7 +550,11 @@ namespace lfs::vis::gui {
                 .local_transform = glm::mat4(1.0f),
                 .effectively_visible = true,
             });
-        }
+        };
+        for (const auto& el : snapshot.ellipsoids)
+            append_ellipsoid(el);
+        if (snapshot.ellipsoids.empty() && snapshot.active_ellipsoid)
+            append_ellipsoid(*snapshot.active_ellipsoid);
 
         state.crop_polygons.reserve(snapshot.crop_polygons.size());
         for (const auto& polygon : snapshot.crop_polygons) {

@@ -1226,6 +1226,74 @@ namespace {
         EXPECT_NE(live.getNode("Existing"), nullptr);
     }
 
+    TEST(SceneChapterAdapterTest, RepeatedCropInstancesRoundTripWithDistinctIdentities) {
+        Scene scene;
+        const auto owner = scene.addSplat("Stack", make_splat(3));
+        const auto box = scene.addCropBox("Box", owner);
+        const auto ellipsoid = scene.addEllipsoid("Ellipsoid", owner);
+        scene.getMutableNode("Ellipsoid")->ellipsoid->radii = glm::vec3(1.0f);
+        lfs::core::CropPolygonData polygon_data;
+        polygon_data.vertices = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        const auto polygon = scene.addCropPolygon("Polygon", owner, polygon_data);
+        ASSERT_NE(polygon, lfs::core::NULL_NODE);
+        for (const auto id : {box, ellipsoid, polygon}) {
+            const auto copy_name = scene.duplicateNode(scene.getNodeById(id)->name);
+            ASSERT_FALSE(copy_name.empty());
+            auto* child = scene.getMutableNode(copy_name);
+            ASSERT_NE(child, nullptr);
+            child->visible.setQuiet(false);
+            if (child->cropbox) {
+                child->cropbox->enabled = false;
+                child->cropbox->inverse = true;
+            }
+            if (child->ellipsoid) {
+                child->ellipsoid->radii = {2, 3, 4};
+                child->ellipsoid->enabled = true;
+            }
+            if (child->crop_polygon) {
+                child->crop_polygon->half_depth = 4;
+                child->crop_polygon->inverse = true;
+            }
+        }
+        ASSERT_EQ(scene.getNodeById(owner)->children.size(), 6);
+        const auto owner_uuid = scene.getNodeById(owner)->uuid;
+        const ScenePayloadBindings bindings{{owner_uuid, PayloadBinding{.fourcc = "DSRC", .instance_uuid = owner_uuid, .reference_uuid = std::nullopt, .source_kind = "ply"}}};
+        const auto chapter = capture_scene_graph(scene, bindings);
+        ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+        const auto decoded = SceneGraphChapter::from_bytes(chapter->to_bytes());
+        ASSERT_TRUE(decoded);
+        Scene restored;
+        const ScenePayloadResolver resolver{.splat = [](const PayloadBinding&) -> lfs::Result<std::unique_ptr<lfs::core::SplatData>> { return make_splat(3); }};
+        ASSERT_TRUE(hydrate_scene_graph(*decoded, restored, resolver));
+        const auto* restored_owner = restored.getNodeByUuid(owner_uuid);
+        ASSERT_NE(restored_owner, nullptr);
+        EXPECT_EQ(restored_owner->children.size(), 6);
+        for (const auto id : scene.getNodeById(owner)->children) {
+            const auto* source = scene.getNodeById(id);
+            const auto* copy = restored.getNodeByUuid(source->uuid);
+            ASSERT_NE(copy, nullptr);
+            EXPECT_EQ(copy->type, source->type);
+            EXPECT_EQ(copy->parent_id, restored_owner->id);
+            EXPECT_EQ(copy->local_transform.get(), source->local_transform.get());
+            EXPECT_EQ(static_cast<bool>(copy->visible), static_cast<bool>(source->visible));
+            if (source->cropbox) {
+                ASSERT_TRUE(copy->cropbox);
+                EXPECT_EQ(copy->cropbox->enabled, source->cropbox->enabled);
+                EXPECT_EQ(copy->cropbox->inverse, source->cropbox->inverse);
+            }
+            if (source->ellipsoid) {
+                ASSERT_TRUE(copy->ellipsoid);
+                EXPECT_EQ(copy->ellipsoid->radii, source->ellipsoid->radii);
+                EXPECT_EQ(copy->ellipsoid->enabled, source->ellipsoid->enabled);
+            }
+            if (source->crop_polygon) {
+                ASSERT_TRUE(copy->crop_polygon);
+                EXPECT_EQ(copy->crop_polygon->vertices, source->crop_polygon->vertices);
+                EXPECT_EQ(copy->crop_polygon->half_depth, source->crop_polygon->half_depth);
+            }
+        }
+    }
+
     TEST(SceneChapterAdapterTest, CropPolygonSurvivesCaptureAndHydrationUnderItsSplat) {
         Scene scene;
         const auto splat = scene.addSplat("Model", make_splat(3));

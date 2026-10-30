@@ -2353,6 +2353,18 @@ def set_crop_tool_operation(operation: str) -> None:
 def get_crop_tool_operation() -> str:
     """Get the active crop or selection-volume gizmo operation"""
 
+def finish_crop_tool() -> None:
+    """Finish editing and retain the editable crop and original geometry."""
+
+def change_crop_tool_shape(shape: str) -> bool:
+    """Convert only the crop being edited, retaining identity, flags and siblings."""
+
+def edit_crop_tool(uuid: str) -> None:
+    """Edit an existing crop volume without creating another."""
+
+def new_crop_tool(shape: str) -> None:
+    """Create another independent box, ellipsoid or polygon crop on the selected splat."""
+
 def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
@@ -3220,3 +3232,13 @@ def unregister_property_group(group_id: str) -> None:
 
 def property_group_info(group_id: str) -> dict:
     """Get registered property metadata for a property group"""
+
+def is_crop_tool_shape_locked() -> bool:
+    """Whether editing an existing crop keeps its saved shape type."""
+    ...
+
+
+def crop_group_enabled(owner_uuid: str) -> bool: ...
+def set_crop_group_enabled(owner_uuid: str, enabled: bool) -> bool: ...
+def bake_crop_group(owner_uuid: str) -> bool: ...
+def delete_crop_group(owner_uuid: str) -> bool: ...

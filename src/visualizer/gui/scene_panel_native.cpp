@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/scene_panel_native.hpp"
+#include "core/editor_context.hpp"
+#include "operator/operator_registry.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/number_format.hpp"
@@ -470,6 +472,9 @@ namespace lfs::vis::gui {
 
     NativeScenePanel::SyncStamp NativeScenePanel::makeSyncStamp() const {
         SyncStamp stamp;
+        stamp.modal_operator = op::operators().hasModalOperator();
+        if (const auto* editor = services().editorOrNull())
+            stamp.tools_disabled = editor->isToolsDisabled();
         stamp.scene_graph_selection_markers = loadSceneGraphSelectionMarkersPreference();
         auto& store = app_store();
         stamp.language_generation = store.language_generation.get();
@@ -530,6 +535,7 @@ namespace lfs::vis::gui {
         if (!visible)
             return changed;
 
+        changed |= setCachedProperty(selection_visibility_el_, "display", state.has_crop_volume ? "none" : "inline-block");
         changed |= setCachedText(selection_action_count_el_,
                                  LOCF(lichtfeld::Strings::Scene::SELECTED_COUNT, lfs::core::format_count(state.count)));
         changed |= setCachedAttribute(selection_visibility_el_, "data-tooltip",

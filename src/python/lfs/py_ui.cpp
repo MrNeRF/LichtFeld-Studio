@@ -4444,10 +4444,11 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_shape",
             [](const std::string& shape) {
-                if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().setCropToolShape(shape);
-                }
-                markProjectSessionChapterCommitted("VIEW");
+                invoke_on_viewer([shape] {
+                    if (auto* const gui = lfs::python::get_gui_manager())
+                        gui->gizmo().setCropToolShape(shape);
+                    markProjectSessionChapterCommitted("VIEW");
+                });
             },
             nb::arg("shape"),
             "Set the active crop tool shape: box, ellipsoid, or polygon");
@@ -4465,10 +4466,11 @@ namespace lfs::python {
         m.def(
             "set_crop_tool_operation",
             [](const std::string& operation) {
-                if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().setCropToolOperation(operation);
-                }
-                markProjectSessionChapterCommitted("VIEW");
+                invoke_on_viewer([operation] {
+                    if (auto* const gui = lfs::python::get_gui_manager())
+                        gui->gizmo().setCropToolOperation(operation);
+                    markProjectSessionChapterCommitted("VIEW");
+                });
             },
             nb::arg("operation"),
             "Set the active crop or selection-volume gizmo operation: translate, rotate, or scale");
@@ -4482,6 +4484,74 @@ namespace lfs::python {
                 return "translate";
             },
             "Get the active crop or selection-volume gizmo operation");
+
+        m.def("crop_group_enabled", [](const std::string& uuid) {
+            const auto parsed=lfs::core::Uuid::from_string(uuid);
+            if (!parsed) return false;
+            return invoke_on_viewer([uuid=*parsed] {
+                auto* sm=lfs::vis::services().sceneOrNull();
+                const auto* owner=sm ? sm->getScene().getNodeByUuid(uuid) : nullptr;
+                return owner && owner->type==lfs::core::NodeType::SPLAT && owner->crop_effects_enabled;
+            },false); }, nb::arg("owner_uuid"), "Read the collective crop gate on an exact splat owner");
+        m.def("set_crop_group_enabled", [](const std::string& uuid, bool enabled) {
+            const auto parsed=lfs::core::Uuid::from_string(uuid);
+            if (!parsed) return false;
+            return invoke_on_viewer([uuid=*parsed,enabled] {
+                auto* sm=lfs::vis::services().sceneOrNull();
+                return sm && static_cast<bool>(sm->setSplatCropGroupEnabled(uuid,enabled));
+            },false); }, nb::arg("owner_uuid"), nb::arg("enabled"), "Toggle the collective crop gate without changing individual flags");
+        for (const bool bake : {false, true}) {
+            m.def(bake ? "bake_crop_group" : "delete_crop_group", [bake](const std::string& uuid) {
+                const auto parsed=lfs::core::Uuid::from_string(uuid);
+                if (!parsed) return false;
+                return invoke_on_viewer([uuid=*parsed,bake] {
+                    auto* sm=lfs::vis::services().sceneOrNull();
+                    return sm && static_cast<bool>(bake ? sm->bakeSplatCropGroup(uuid) : sm->deleteSplatCropGroup(uuid));
+                },false); }, nb::arg("owner_uuid"), bake ? "Apply enabled crop volumes as one undoable action" : "Remove all crop volumes as one undoable action");
+        }
+
+        m.def(
+            "finish_crop_tool", []() {
+                invoke_on_viewer([] {
+                    if (auto* gui = lfs::python::get_gui_manager())
+                        gui->gizmo().finishCropTool();
+                });
+            },
+            "Finish crop editing while retaining the editable volume and original geometry");
+        m.def(
+            "is_crop_tool_shape_locked", [] {
+                auto* gui = lfs::python::get_gui_manager();
+                return gui && gui->gizmo().isCropToolShapeLocked();
+            },
+            "Whether editing an existing crop keeps its saved shape type");
+        m.def(
+            "change_crop_tool_shape", [](const std::string& shape) {
+                return invoke_on_viewer([shape] {
+                    auto* gui = lfs::python::get_gui_manager();
+                    return gui && gui->gizmo().changeCropToolShape(shape);
+                },
+                                        false);
+            },
+            nb::arg("shape"), "Change only the crop being edited, preserving its identity and siblings");
+        m.def(
+            "edit_crop_tool", [](const std::string& uuid) {
+                const auto parsed = lfs::core::Uuid::from_string(uuid);
+                if (!parsed)
+                    return;
+                invoke_on_viewer([uuid = *parsed] {
+                    if (auto* gui = lfs::python::get_gui_manager())
+                        gui->gizmo().editCropTool(uuid);
+                });
+            },
+            nb::arg("uuid"), "Edit an existing crop volume without creating another");
+        m.def(
+            "new_crop_tool", [](const std::string& shape) {
+                invoke_on_viewer([shape] {
+                    if (auto* gui = lfs::python::get_gui_manager())
+                        gui->gizmo().newCropTool(shape);
+                });
+            },
+            nb::arg("shape"), "Create another independent crop on the selected splat");
 
         m.def(
             "apply_crop_tool",

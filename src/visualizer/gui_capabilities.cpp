@@ -8,6 +8,7 @@
 
 #include "core/crop_polygon.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/editor_context.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -15,10 +16,12 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/splat_operations.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -73,6 +76,18 @@ namespace lfs::vis::cap {
         constexpr float kTransformEpsilon = 1e-6f;
         constexpr float kCropVolumeMinExtent = 1e-4f;
 
+        bool hasSplatCropStack(const core::Scene& scene, const core::SceneNode& owner) {
+            if (owner.type != core::NodeType::SPLAT)
+                return false;
+            size_t count = 0;
+            for (const auto id : owner.children) {
+                const auto* child = scene.getNodeById(id);
+                if (child && (child->type == core::NodeType::CROPBOX || child->type == core::NodeType::ELLIPSOID || child->type == core::NodeType::CROP_POLYGON))
+                    ++count;
+            }
+            return count > 1;
+        }
+
         enum class CropVolumeShape {
             Box,
             Ellipsoid,
@@ -111,14 +126,6 @@ namespace lfs::vis::cap {
             return false;
         }
 
-        [[nodiscard]] std::string crop_volume_shape_label(const CropVolumeShape shape) {
-            return shape == CropVolumeShape::Box ? "Crop Box" : "Ellipsoid";
-        }
-
-        [[nodiscard]] std::string crop_volume_conversion_label(const CropVolumeShape shape) {
-            return "Convert to " + crop_volume_shape_label(shape);
-        }
-
         [[nodiscard]] vis::op::SceneGraphCaptureOptions crop_volume_history_options() {
             return vis::op::SceneGraphCaptureOptions{
                 .mode = vis::op::SceneGraphCaptureMode::FULL,
@@ -153,78 +160,16 @@ namespace lfs::vis::cap {
             RenderingManager* rendering_manager,
             const core::NodeId node_id,
             const CropVolumeShape target_shape) {
-            auto& scene = scene_manager.getScene();
-            auto* node = scene.getNodeById(node_id);
+            const auto* node = scene_manager.getScene().getNodeById(node_id);
             if (!node)
                 return std::unexpected("Crop volume node not found");
-
-            if (target_shape == CropVolumeShape::Box && node->type == core::NodeType::CROPBOX && node->cropbox) {
-                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
-                return node_id;
-            }
-            if (target_shape == CropVolumeShape::Ellipsoid && node->type == core::NodeType::ELLIPSOID && node->ellipsoid) {
-                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
-                return node_id;
-            }
-
-            if (target_shape == CropVolumeShape::Box && (!node->ellipsoid || node->type != core::NodeType::ELLIPSOID))
-                return std::unexpected("Invalid ellipsoid target");
-            if (target_shape == CropVolumeShape::Ellipsoid && (!node->cropbox || node->type != core::NodeType::CROPBOX))
-                return std::unexpected("Invalid crop box target");
-
-            const auto node_name = node->name;
-            const auto history_options = crop_volume_history_options();
-            auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options);
-
-            if (target_shape == CropVolumeShape::Box) {
-                const auto source = *node->ellipsoid;
-                auto data = std::make_unique<core::CropBoxData>();
-                const glm::vec3 radii = glm::max(source.radii, glm::vec3(kCropVolumeMinExtent));
-                data->min = -radii;
-                data->max = radii;
-                data->inverse = source.inverse;
-                data->enabled = source.enabled;
-                data->color = source.color;
-                data->line_width = source.line_width;
-                data->flash_intensity = source.flash_intensity;
-                node->type = core::NodeType::CROPBOX;
-                node->ellipsoid.reset();
-                node->cropbox = std::move(data);
-            } else {
-                const auto source = *node->cropbox;
-                auto data = std::make_unique<core::EllipsoidData>();
-                const glm::vec3 local_center = (source.min + source.max) * 0.5f;
-                const glm::vec3 half_extents = glm::max((source.max - source.min) * 0.5f, glm::vec3(kCropVolumeMinExtent));
-                if (glm::length(local_center) > kCropVolumeMinExtent) {
-                    scene.setNodeTransform(node_name, scene.getNodeTransform(node_name) * glm::translate(glm::mat4(1.0f), local_center));
-                    node = scene.getNodeById(node_id);
-                    if (!node)
-                        return std::unexpected("Crop volume node not found after normalization");
-                }
-                data->radii = half_extents;
-                data->inverse = source.inverse;
-                data->enabled = source.enabled;
-                data->color = source.color;
-                data->line_width = source.line_width;
-                data->flash_intensity = source.flash_intensity;
-                node->type = core::NodeType::ELLIPSOID;
-                node->cropbox.reset();
-                node->ellipsoid = std::move(data);
-            }
-
-            // The volume is replaced by one of the other shape; no Gaussian changes.
-            scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
-            if (rendering_manager)
-                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, lfs::vis::FrameReason::SceneChange);
-            sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
-
-            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
-                scene_manager,
-                crop_volume_conversion_label(target_shape),
-                std::move(history_before),
-                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options)));
-
-            return node_id;
+            const auto result = convertSplatCrop(scene_manager, rendering_manager, node->uuid,
+                                                 target_shape == CropVolumeShape::Box ? core::NodeType::CROPBOX : core::NodeType::ELLIPSOID);
+            if (!result)
+                return std::unexpected(std::string(result.error().user_message()));
+            if (const auto* converted = scene_manager.getScene().getNodeById(*result))
+                sync_crop_volume_render_settings(rendering_manager, *converted, target_shape);
+            return *result;
         }
 
         void remove_opposite_crop_volume_if_present(SceneManager& scene_manager,
@@ -1493,6 +1438,211 @@ namespace lfs::vis::cap {
         return cropbox_id;
     }
 
+    lfs::Result<core::NodeId> convertSplatCrop(SceneManager& scene_manager,
+                                               RenderingManager* rendering_manager,
+                                               const core::Uuid& volume_uuid, const core::NodeType target_type) {
+        auto& scene = scene_manager.getScene();
+        const auto fail = [](lfs::ErrorCode code, std::string message) {
+            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        auto* node = scene.getNodeByUuid(volume_uuid);
+        const auto* owner = node ? scene.getNodeById(node->parent_id) : nullptr;
+        const auto* source = node ? core::splatOperationDescriptor(node->type) : nullptr;
+        const auto* target = core::splatOperationDescriptor(target_type);
+        if (!node || !owner || !source || !target ||
+            source->category != core::SplatOperationCategory::CropVolume || target->category != core::SplatOperationCategory::CropVolume ||
+            (owner->type != core::NodeType::SPLAT && owner->type != core::NodeType::POINTCLOUD))
+            return fail(lfs::ErrorCode::InvalidArgument, "Invalid crop conversion target.");
+        const auto* editor = services().editorOrNull();
+        if (scene.isNodeEffectivelyLocked(node->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
+            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+        if (std::find(owner->children.begin(), owner->children.end(), node->id) == owner->children.end())
+            return fail(lfs::ErrorCode::InvalidArgument, "The crop is not attached to its owner.");
+        if (node->type == target_type)
+            return node->id;
+        glm::vec3 minimum(0.0f), maximum(0.0f), color(1.0f);
+        bool enabled = false, inverse = false;
+        float line_width = 2.0f, flash_intensity = 0.0f;
+        const auto style = [&](const auto& data) {
+            enabled = data.enabled;
+            inverse = data.inverse;
+            color = data.color;
+            line_width = data.line_width;
+            flash_intensity = data.flash_intensity;
+        };
+        if (node->type == core::NodeType::CROPBOX && node->cropbox) {
+            minimum = node->cropbox->min;
+            maximum = node->cropbox->max;
+            style(*node->cropbox);
+        } else if (node->type == core::NodeType::ELLIPSOID && node->ellipsoid) {
+            minimum = -node->ellipsoid->radii;
+            maximum = node->ellipsoid->radii;
+            style(*node->ellipsoid);
+        } else if (node->type == core::NodeType::CROP_POLYGON && node->crop_polygon &&
+                   core::crop_polygon::isValidOutline(node->crop_polygon->vertices) &&
+                   core::crop_polygon::isValidHalfDepth(node->crop_polygon->half_depth)) {
+            glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+            for (const auto& vertex : node->crop_polygon->vertices) {
+                lo = glm::min(lo, vertex);
+                hi = glm::max(hi, vertex);
+            }
+            minimum = glm::vec3(lo, -node->crop_polygon->half_depth);
+            maximum = glm::vec3(hi, node->crop_polygon->half_depth);
+            style(*node->crop_polygon);
+        } else {
+            return fail(lfs::ErrorCode::InvalidArgument, "The crop's shape data is invalid.");
+        }
+        if (!std::isfinite(minimum.x) || !std::isfinite(minimum.y) || !std::isfinite(minimum.z) ||
+            !std::isfinite(maximum.x) || !std::isfinite(maximum.y) || !std::isfinite(maximum.z) ||
+            glm::any(glm::lessThanEqual(maximum, minimum)))
+            return fail(lfs::ErrorCode::InvalidArgument, "The crop's bounds are invalid.");
+        const auto center = (minimum + maximum) * 0.5f;
+        const auto half = glm::max((maximum - minimum) * 0.5f, glm::vec3(kCropVolumeMinExtent));
+        const auto copy_style = [&](auto& data) {
+            data.enabled = enabled;
+            data.inverse = inverse;
+            data.color = color;
+            data.line_width = line_width;
+            data.flash_intensity = flash_intensity;
+        };
+        auto box = target_type == core::NodeType::CROPBOX ? std::make_unique<core::CropBoxData>() : nullptr;
+        auto ellipsoid = target_type == core::NodeType::ELLIPSOID ? std::make_unique<core::EllipsoidData>() : nullptr;
+        auto polygon = target_type == core::NodeType::CROP_POLYGON ? std::make_unique<core::CropPolygonData>() : nullptr;
+        if (box) {
+            box->min = -half;
+            box->max = half;
+            copy_style(*box);
+        }
+        if (ellipsoid) {
+            ellipsoid->radii = half;
+            copy_style(*ellipsoid);
+        }
+        if (polygon) {
+            polygon->vertices = {{-half.x, -half.y}, {half.x, -half.y}, {half.x, half.y}, {-half.x, half.y}};
+            polygon->half_depth = half.z;
+            copy_style(*polygon);
+        }
+        const auto name = node->name;
+        const auto id = node->id;
+        const auto options = crop_volume_history_options();
+        auto before = op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options);
+        const glm::mat4 transform = node->local_transform.get() * glm::translate(glm::mat4(1.0f), center);
+        node->type = target_type;
+        node->cropbox = std::move(box);
+        node->ellipsoid = std::move(ellipsoid);
+        node->crop_polygon = std::move(polygon);
+        scene.setNodeTransform(name, transform);
+        scene.notifyMutation(core::Scene::MutationType::NODE_ADDED);
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Change Crop Shape", std::move(before),
+                                                                          op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
+        scene_manager.syncCropBoxToRenderSettings();
+        if (rendering_manager)
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        return id;
+    }
+
+    lfs::Result<core::NodeId> createSplatCrop(SceneManager& scene_manager,
+                                              RenderingManager* rendering_manager,
+                                              const core::Uuid& owner_uuid, const core::NodeType type) {
+        auto& scene = scene_manager.getScene();
+        const auto fail = [](lfs::ErrorCode code, std::string message) {
+            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        const auto* owner = scene.getNodeByUuid(owner_uuid);
+        if (!owner || owner->type != core::NodeType::SPLAT)
+            return fail(lfs::ErrorCode::InvalidArgument, "Select a single splat to add a crop.");
+        if (type != core::NodeType::CROPBOX && type != core::NodeType::ELLIPSOID)
+            return fail(lfs::ErrorCode::InvalidArgument, "Unsupported crop shape.");
+        const auto* editor = services().editorOrNull();
+        if (scene.isNodeEffectivelyLocked(owner->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
+            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+        const auto base = owner->name + (type == core::NodeType::CROPBOX ? "_cropbox" : "_ellipsoid");
+        std::string name = base;
+        for (size_t suffix = 2; scene.getNode(name); ++suffix)
+            name = base + "_" + std::to_string(suffix);
+        core::Scene::RestoreNodeDesc desc;
+        desc.uuid = core::generate_uuid_v4();
+        desc.type = type;
+        desc.name = name;
+        desc.parent = owner->id;
+        desc.visible = true;
+        glm::vec3 minimum(-1.0f), maximum(1.0f);
+        (void)scene.getNodeBounds(owner->id, minimum, maximum);
+        const auto half = glm::max((maximum - minimum) * 0.5f, glm::vec3(1e-4f));
+        desc.local_transform = glm::translate(glm::mat4(1.0f), (minimum + maximum) * 0.5f);
+        if (type == core::NodeType::CROPBOX) {
+            desc.cropbox = std::make_unique<core::CropBoxData>();
+            desc.cropbox->min = -half;
+            desc.cropbox->max = half;
+            desc.cropbox->enabled = true;
+        } else {
+            desc.ellipsoid = std::make_unique<core::EllipsoidData>();
+            desc.ellipsoid->radii = half;
+            desc.ellipsoid->enabled = true;
+        }
+        const op::SceneGraphCaptureOptions options{.mode = op::SceneGraphCaptureMode::FULL, .include_selected_nodes = false, .include_scene_context = false};
+        auto before = op::SceneGraphPatchEntry::captureState(scene_manager, {}, options);
+        const auto id = scene.restoreNodeWithUuid(std::move(desc));
+        const auto* created = scene.getNodeById(id);
+        if (!created)
+            return fail(lfs::ErrorCode::Internal, "Cannot create crop volume.");
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Add Crop Volume", std::move(before), op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
+        core::events::state::PLYAdded{.name = name, .uuid = created->uuid, .node_gaussians = 0, .total_gaussians = scene.getTotalGaussianCount(), .is_visible = true, .parent_name = owner->name, .is_group = false, .node_type = static_cast<int>(type)}.emit();
+        if (rendering_manager)
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        return id;
+    }
+
+    lfs::Result<core::NodeId> duplicateSplatCrop(SceneManager& scene_manager,
+                                                 RenderingManager* rendering_manager,
+                                                 const core::Uuid& source_uuid) {
+        auto& scene = scene_manager.getScene();
+        const auto fail = [](lfs::ErrorCode code, std::string message) {
+            return lfs::make_error({.code = code, .domain = lfs::ErrorDomain::Core, .user_message = message, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
+        };
+        const auto* source = scene.getNodeByUuid(source_uuid);
+        const auto* owner = source ? scene.getNodeById(source->parent_id) : nullptr;
+        if (!source || !owner)
+            return fail(lfs::ErrorCode::NotFound, "Crop or owner no longer exists.");
+        auto snapshot = core::readSplatOperation(*owner, *source);
+        if (!snapshot)
+            return snapshot.error();
+        const auto* descriptor = core::splatOperationDescriptor(source->type);
+        if (!descriptor || descriptor->category != core::SplatOperationCategory::CropVolume)
+            return fail(lfs::ErrorCode::Unsupported, "Only splat crop volumes can be repeated.");
+        const auto* editor = services().editorOrNull();
+        if (scene.isNodeEffectivelyLocked(source->id) || (editor && editor->isToolsDisabled()) || op::operators().hasModalOperator())
+            return fail(lfs::ErrorCode::PermissionDenied, "Crop editing is unavailable.");
+        std::string name = source->name + "_copy";
+        for (size_t suffix = 2; scene.getNode(name); ++suffix)
+            name = source->name + "_copy_" + std::to_string(suffix);
+        core::Scene::RestoreNodeDesc copy;
+        copy.uuid = core::generate_uuid_v4();
+        copy.type = source->type;
+        copy.name = name;
+        copy.parent = owner->id;
+        copy.local_transform = snapshot->local_transform;
+        copy.visible = snapshot->node_visible;
+        if (source->cropbox && source->type == core::NodeType::CROPBOX)
+            copy.cropbox = std::make_unique<core::CropBoxData>(*source->cropbox);
+        if (source->ellipsoid && source->type == core::NodeType::ELLIPSOID)
+            copy.ellipsoid = std::make_unique<core::EllipsoidData>(*source->ellipsoid);
+        if (source->crop_polygon && source->type == core::NodeType::CROP_POLYGON)
+            copy.crop_polygon = std::make_unique<core::CropPolygonData>(*source->crop_polygon);
+        const op::SceneGraphCaptureOptions options{.mode = op::SceneGraphCaptureMode::FULL, .include_selected_nodes = false, .include_scene_context = false};
+        auto before = op::SceneGraphPatchEntry::captureState(scene_manager, {}, options);
+        const auto id = scene.restoreNodeWithUuid(std::move(copy));
+        const auto* node = scene.getNodeById(id);
+        if (!node)
+            return fail(lfs::ErrorCode::Internal, "Cannot create crop instance.");
+        op::undoHistory().push(std::make_unique<op::SceneGraphPatchEntry>(scene_manager, "Duplicate Crop Volume", std::move(before),
+                                                                          op::SceneGraphPatchEntry::captureState(scene_manager, {name}, options)));
+        core::events::state::PLYAdded{.name = name, .uuid = node->uuid, .node_gaussians = 0, .total_gaussians = scene.getTotalGaussianCount(), .is_visible = node->visible, .parent_name = owner->name, .is_group = false, .node_type = static_cast<int>(node->type)}.emit();
+        if (rendering_manager)
+            rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY, FrameReason::SceneChange);
+        return id;
+    }
+
     std::expected<core::NodeId, std::string> ensureCropBox(SceneManager& scene_manager,
                                                            RenderingManager* rendering_manager,
                                                            const core::NodeId parent_id) {
@@ -1503,6 +1653,21 @@ namespace lfs::vis::cap {
 
         if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
             return std::unexpected("Crop boxes can only be attached to splat or pointcloud nodes");
+
+        if (hasSplatCropStack(scene, *parent)) {
+            const auto selected = scene_manager.getSelectedNodeIds();
+            const auto* volume = selected.size() == 1 ? scene.getNodeById(selected[0]) : nullptr;
+            if (volume && volume->parent_id == parent_id &&
+                (volume->type == core::NodeType::CROPBOX || volume->type == core::NodeType::ELLIPSOID)) {
+                if (volume->type == core::NodeType::CROPBOX)
+                    return volume->id;
+                return convert_crop_volume_in_place(scene_manager, rendering_manager, volume->id, CropVolumeShape::Box);
+            }
+            const auto existing = scene.getCropBoxForSplat(parent_id);
+            if (existing != core::NULL_NODE)
+                return existing;
+            return std::unexpected("Select the box or ellipsoid instance to change its shape without replacing other crops");
+        }
 
         if (const core::NodeId existing = scene.getCropBoxForSplat(parent_id); existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
@@ -1854,6 +2019,21 @@ namespace lfs::vis::cap {
 
         if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
             return std::unexpected("Ellipsoids can only be attached to splat or pointcloud nodes");
+
+        if (hasSplatCropStack(scene, *parent)) {
+            const auto selected = scene_manager.getSelectedNodeIds();
+            const auto* volume = selected.size() == 1 ? scene.getNodeById(selected[0]) : nullptr;
+            if (volume && volume->parent_id == parent_id &&
+                (volume->type == core::NodeType::CROPBOX || volume->type == core::NodeType::ELLIPSOID)) {
+                if (volume->type == core::NodeType::ELLIPSOID)
+                    return volume->id;
+                return convert_crop_volume_in_place(scene_manager, rendering_manager, volume->id, CropVolumeShape::Ellipsoid);
+            }
+            const auto existing = scene.getEllipsoidForSplat(parent_id);
+            if (existing != core::NULL_NODE)
+                return existing;
+            return std::unexpected("Select the box or ellipsoid instance to change its shape without replacing other crops");
+        }
 
         if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
             remove_opposite_crop_volume_if_present(
@@ -2214,7 +2394,7 @@ namespace lfs::vis::cap {
                                                 RenderingManager* rendering_manager,
                                                 const core::NodeId parent_id,
                                                 core::CropPolygonData data,
-                                                const glm::mat4& local_transform) {
+                                                const glm::mat4& local_transform, const bool new_instance) {
         auto& scene = scene_manager.getScene();
         const auto* const parent = scene.getNodeById(parent_id);
         if (!parent)
@@ -2227,12 +2407,16 @@ namespace lfs::vis::cap {
             return crop_polygon_error(lfs::ErrorCode::InvalidArgument,
                                       "The crop polygon outline or depth is degenerate");
 
+        if (scene.isNodeEffectivelyLocked(parent_id))
+            return crop_polygon_error(lfs::ErrorCode::PermissionDenied, "The crop owner is locked");
+        const bool preserve_stack = new_instance || hasSplatCropStack(scene, *parent);
+        if (!new_instance && preserve_stack && scene.getCropPolygonForSplat(parent_id) != core::NULL_NODE)
+            return crop_polygon_error(lfs::ErrorCode::FailedPrecondition, "Select an existing polygon instance or duplicate it before editing");
         std::vector<std::string> replaced;
-        for (const core::NodeId volume_id : {scene.getCropBoxForSplat(parent_id),
-                                             scene.getEllipsoidForSplat(parent_id),
-                                             scene.getCropPolygonForSplat(parent_id)}) {
-            if (const auto* const volume = scene.getNodeById(volume_id))
-                replaced.push_back(volume->name);
+        if (!preserve_stack) {
+            for (const core::NodeId volume_id : {scene.getCropBoxForSplat(parent_id), scene.getEllipsoidForSplat(parent_id), scene.getCropPolygonForSplat(parent_id)})
+                if (const auto* volume = scene.getNodeById(volume_id))
+                    replaced.push_back(volume->name);
         }
 
         const vis::op::SceneGraphCaptureOptions history_options{
@@ -2245,8 +2429,24 @@ namespace lfs::vis::cap {
 
         const std::string parent_name = parent->name;
         data.enabled = true;
-        const core::NodeId polygon_id =
-            scene.addCropPolygon(parent_name + "_crop_polygon", parent_id, std::move(data), local_transform);
+        core::NodeId polygon_id = core::NULL_NODE;
+        if (new_instance) {
+            const auto base = parent_name + "_crop_polygon";
+            std::string name = base;
+            for (size_t suffix = 2; scene.getNode(name); ++suffix)
+                name = base + "_" + std::to_string(suffix);
+            core::Scene::RestoreNodeDesc desc;
+            desc.uuid = core::generate_uuid_v4();
+            desc.type = core::NodeType::CROP_POLYGON;
+            desc.name = name;
+            desc.parent = parent_id;
+            desc.local_transform = local_transform;
+            desc.visible = true;
+            desc.crop_polygon = std::make_unique<core::CropPolygonData>(std::move(data));
+            polygon_id = scene.restoreNodeWithUuid(std::move(desc));
+        } else {
+            polygon_id = scene.addCropPolygon(parent_name + "_crop_polygon", parent_id, std::move(data), local_transform);
+        }
         const auto* const polygon_node = scene.getNodeById(polygon_id);
         if (!polygon_node)
             return crop_polygon_error(lfs::ErrorCode::Internal, "Failed to create crop polygon for node: " + parent_name);

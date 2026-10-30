@@ -1861,7 +1861,7 @@
     "action.select_mode_color": "Zaznaczenie: Kolor",
     "action.select_mode_box": "Zaznaczenie: Ramka",
     "action.select_mode_sphere": "Zaznaczenie: Kula",
-    "action.apply_crop_box": "Zastosuj pudełko przycinania",
+    "action.apply_crop_box": "Zakończ edycję przycięcia",
     "action.remove_last_point": "Usuń ostatni punkt",
     "action.apply_alignment": "Zastosuj wyrównanie",
     "action.insert_crop_polygon_vertex": "Wstaw wierzchołek wielokąta przycinania",
@@ -3747,5 +3747,22 @@
   "shader.untitled": "Shader bez nazwy",
   "editor.documents": "Dokumenty Pythona i shaderów",
   "shader.restore_warning": "Nie udało się przywrócić części stanu shaderów:\n{}",
-  "shader.publication_omitted": "Shadery użytkownika i niestandardowe klipy odsłaniania są pomijane podczas publikacji. Opublikowana scena używa oryginalnych splatów."
+  "shader.publication_omitted": "Shadery użytkownika i niestandardowe klipy odsłaniania są pomijane podczas publikacji. Opublikowana scena używa oryginalnych splatów.",
+  "splat_inspector": {
+    "enabled": "Włącz przycięcie",
+    "edit": "Edytuj w widoku",
+    "duplicate": "Duplikuj przycięcie",
+    "finish": "Zakończ edycję przycięcia",
+    "bake": "Zastosuj do geometrii...",
+    "bake_note": "Zastosować tylko to przycięcie do oryginalnej geometrii splata i usunąć odpowiadający mu obszar przycinania? Pozostałe przycięcia nadal będzie można edytować. Tę operację można cofnąć.",
+    "disable": "Wyłącz przycięcie",
+    "group": "Przycięcia",
+    "group_enable": "Włącz grupę przycięć",
+    "group_disable": "Wyłącz grupę przycięć",
+    "group_bake": "Zastosuj aktywne przycięcia do geometrii...",
+    "group_delete": "Usuń wszystkie przycięcia...",
+    "group_bake_note": "Zastosować część wspólną włączonych przycięć do geometrii splata? Zastosowane obszary przycinania zostaną usunięte, a wyłączone przycięcia nadal będzie można edytować. Całą operację można cofnąć jednym krokiem.",
+    "group_delete_note": "Usunąć wszystkie obszary przycinania w tej grupie, również te wyłączone? Geometria splata pozostanie bez zmian. Całą operację można cofnąć jednym krokiem.",
+    "group_changed": "Scena zmieniła się podczas potwierdzania. Otwórz ponownie menu grupy przycięć i spróbuj jeszcze raz."
+  }
 }

@@ -1518,10 +1518,49 @@ namespace lfs::vis {
             const bool preview_enabled,
             const bool transform_indices_enabled,
             const std::size_t node_mask_count,
-            const bool node_visibility_cull) {
+            const bool node_visibility_cull,
+            const std::span<const float> custom_tail) {
             try {
-                std::vector<float> cpu(static_cast<std::size_t>(ParamCount) * 4u, 0.0f);
+                struct CropBucket {
+                    std::vector<const lfs::rendering::GaussianScopedBoxFilter*> boxes;
+                    std::vector<const lfs::rendering::GaussianScopedEllipsoidFilter*> ellipsoids;
+                    std::vector<const lfs::rendering::GaussianScopedCropPolygonFilter*> polygons;
+                };
+                std::map<int, CropBucket> buckets;
+                for (const auto& crop : request.filters.crop_regions)
+                    buckets[std::max(crop.parent_node_index, -1)].boxes.push_back(&crop);
+                for (const auto& crop : request.filters.ellipsoid_regions)
+                    buckets[std::max(crop.parent_node_index, -1)].ellipsoids.push_back(&crop);
+                for (const auto& crop : request.filters.crop_polygon_regions) {
+                    if (crop.bounds.vertices.size() >= lfs::core::crop_polygon::kMinVertices &&
+                        crop.bounds.vertices.size() <= lfs::core::crop_polygon::kMaxVertices)
+                        buckets[std::max(crop.parent_node_index, -1)].polygons.push_back(&crop);
+                }
+                // Slot offsets/counts travel as exact numeric float values. Reject an
+                // unrepresentable table before allocating or writing any payload.
+                constexpr std::size_t max_exact_slot = 1u << 24;
+                if (custom_tail.size() % 4u != 0u || custom_tail.size() / 4u > max_exact_slot - ParamCount)
+                    throw std::length_error("Invalid custom shader parameter span");
+                // User shaders address their tail at the fixed prefix. Keep it
+                // there and relocate the crop directory after it.
+                const std::size_t directory_base = ParamCount + custom_tail.size() / 4u;
+                std::size_t slots = directory_base;
+                const auto reserve_slots = [&](std::size_t count, std::size_t stride) {
+                    if (count > (max_exact_slot - slots) / stride)
+                        throw std::length_error("Crop parameter table exceeds exact GPU address range");
+                    slots += count * stride;
+                };
+                reserve_slots(buckets.size(), CropDirectoryStride);
+                for (const auto& [parent, bucket] : buckets) {
+                    if (parent > static_cast<int>(max_exact_slot))
+                        throw std::length_error("Crop owner index exceeds exact GPU address range");
+                    reserve_slots(bucket.boxes.size(), CropParamStride);
+                    reserve_slots(bucket.ellipsoids.size(), EllipsoidParamStride);
+                    reserve_slots(bucket.polygons.size(), CropPolygonParamStride);
+                }
+                std::vector<float> cpu(slots * 4u, 0.0f);
                 float* const dst = cpu.data();
+                std::copy(custom_tail.begin(), custom_tail.end(), cpu.begin() + ParamCount * 4u);
 
                 if (request.reveal) {
                     const auto& reveal = *request.reveal;
@@ -1553,50 +1592,45 @@ namespace lfs::vis {
                     writeMat4AffineRows(dst, flags_index + 2, ellipsoid.bounds.transform);
                 };
 
-                const auto& crop_regions = request.filters.crop_regions;
-                if (!crop_regions.empty()) {
-                    write_crop(crop_regions.front(), CropFlags);
-                    const std::size_t extra_count = std::min<std::size_t>(crop_regions.size() - 1u, CropExtraCount);
-                    for (std::size_t i = 0; i < extra_count; ++i) {
-                        write_crop(crop_regions[i + 1u], CropExtraBase + i * CropParamStride);
-                    }
-                } else if (request.filters.crop_region) {
+                // Legacy single/global filters retain their existing dedicated slots.
+                if (request.filters.crop_regions.empty() && request.filters.crop_region)
                     write_crop(*request.filters.crop_region, CropFlags);
-                }
-
-                const auto& ellipsoid_regions = request.filters.ellipsoid_regions;
-                if (!ellipsoid_regions.empty()) {
-                    write_ellipsoid(ellipsoid_regions.front(), EllipsoidFlags);
-                    const std::size_t extra_count = std::min<std::size_t>(ellipsoid_regions.size() - 1u, EllipsoidExtraCount);
-                    for (std::size_t i = 0; i < extra_count; ++i) {
-                        write_ellipsoid(ellipsoid_regions[i + 1u], EllipsoidExtraBase + i * EllipsoidParamStride);
-                    }
-                } else if (request.filters.ellipsoid_region) {
+                if (request.filters.ellipsoid_regions.empty() && request.filters.ellipsoid_region)
                     write_ellipsoid(*request.filters.ellipsoid_region, EllipsoidFlags);
-                }
 
-                std::size_t polygon_slot = 0;
-                for (const auto& polygon : request.filters.crop_polygon_regions) {
-                    const auto& vertices = polygon.bounds.vertices;
-                    if (polygon_slot >= CropPolygonCount ||
-                        vertices.size() < lfs::core::crop_polygon::kMinVertices ||
-                        vertices.size() > lfs::core::crop_polygon::kMaxVertices) {
-                        continue;
+                writeVec4(dst, CropDirectory, glm::vec4(static_cast<float>(directory_base), static_cast<float>(buckets.size()), 0.0f, 0.0f));
+                std::size_t directory = directory_base;
+                std::size_t payload = directory_base + buckets.size() * CropDirectoryStride;
+                for (const auto& [parent, bucket] : buckets) {
+                    const auto box_base = payload;
+                    for (const auto* crop : bucket.boxes) {
+                        write_crop(*crop, payload);
+                        payload += CropParamStride;
                     }
-                    const std::size_t flags_index = CropPolygonBase + polygon_slot++ * CropPolygonParamStride;
-                    writeVec4(dst,
-                              flags_index,
-                              glm::vec4(1.0f,
-                                        polygon.inverse ? 1.0f : 0.0f,
-                                        polygon.desaturate ? 1.0f : 0.0f,
-                                        static_cast<float>(polygon.parent_node_index)));
-                    writeVec4(dst, flags_index + CropPolygonParams,
-                              glm::vec4(polygon.bounds.half_depth, static_cast<float>(vertices.size()), 0.0f, 0.0f));
-                    writeMat4Rows(dst, flags_index + CropPolygonTransform, polygon.bounds.transform);
-                    for (std::size_t i = 0; i < vertices.size(); i += 2) {
-                        const glm::vec2 next = i + 1 < vertices.size() ? vertices[i + 1] : glm::vec2(0.0f);
-                        writeVec4(dst, flags_index + CropPolygonVertices + i / 2, glm::vec4(vertices[i], next));
+                    const auto ellipsoid_base = payload;
+                    for (const auto* crop : bucket.ellipsoids) {
+                        write_ellipsoid(*crop, payload);
+                        payload += EllipsoidParamStride;
                     }
+                    const auto polygon_base = payload;
+                    for (const auto* crop : bucket.polygons) {
+                        const auto& polygon = *crop;
+                        const auto& vertices = polygon.bounds.vertices;
+                        writeVec4(dst, payload, glm::vec4(1.0f, polygon.inverse ? 1.0f : 0.0f, polygon.desaturate ? 1.0f : 0.0f, static_cast<float>(parent)));
+                        writeVec4(dst, payload + CropPolygonParams,
+                                  glm::vec4(polygon.bounds.half_depth, static_cast<float>(vertices.size()), 0.0f, 0.0f));
+                        writeMat4Rows(dst, payload + CropPolygonTransform, polygon.bounds.transform);
+                        for (std::size_t i = 0; i < vertices.size(); i += 2) {
+                            const glm::vec2 next = i + 1 < vertices.size() ? vertices[i + 1] : glm::vec2(0.0f);
+                            writeVec4(dst, payload + CropPolygonVertices + i / 2, glm::vec4(vertices[i], next));
+                        }
+                        payload += CropPolygonParamStride;
+                    }
+                    // Two rows per owner: parent, box offset/count, ellipsoid offset;
+                    // then ellipsoid count, polygon offset/count, reserved.
+                    writeVec4(dst, directory, glm::vec4(static_cast<float>(parent), static_cast<float>(box_base), static_cast<float>(bucket.boxes.size()), static_cast<float>(ellipsoid_base)));
+                    writeVec4(dst, directory + 1, glm::vec4(static_cast<float>(bucket.ellipsoids.size()), static_cast<float>(polygon_base), static_cast<float>(bucket.polygons.size()), 0.0f));
+                    directory += CropDirectoryStride;
                 }
 
                 if (request.filters.view_volume) {
@@ -4684,8 +4718,17 @@ namespace lfs::vis {
                                   sizeof(std::int32_t));
         const std::size_t node_mask_region_bytes =
             alignUp(std::max<std::size_t>(node_mask_count, 1), 4);
-        const std::size_t overlay_params_region_bytes =
-            (static_cast<std::size_t>(ParamCount) * 4 + custom_tail.size()) * sizeof(float);
+        auto overlay_params_cpu = buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled,
+                                                              transform_indices_enabled, node_mask_count, node_visibility_restricts, custom_tail);
+        if (!overlay_params_cpu)
+            return std::unexpected(overlay_params_cpu.error());
+        const std::size_t overlay_params_region_bytes = overlay_params_cpu->size() * sizeof(float);
+        if (overlay_params_region_bytes > (128u << 20)) {
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(context.physicalDevice(), &properties);
+            if (overlay_params_region_bytes > properties.limits.maxStorageBufferRange)
+                return std::unexpected("Crop parameter buffer exceeds the GPU storage-buffer range");
+        }
         const std::size_t model_transforms_region_bytes =
             modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
         std::array<std::size_t, kOverlayRegionCount> region_bytes{};
@@ -4819,20 +4862,7 @@ namespace lfs::vis {
                 slot.node_mask_uploaded = false;
             }
             {
-                // Output-bytes fingerprint cache. The CPU build is sub-µs; the
-                // former ~6 ms cost was entirely the .to(Device::CUDA) sync.
-                LOG_TIMER("uploadOverlayBindings.prepare_sources.overlay_params");
-                auto overlay_params_cpu = buildOverlayParamsCpuFloats(
-                    request,
-                    selection_enabled,
-                    preview_enabled,
-                    transform_indices_enabled,
-                    node_mask_count,
-                    node_visibility_restricts);
-                if (!overlay_params_cpu) {
-                    return std::unexpected(overlay_params_cpu.error());
-                }
-                overlay_params_cpu->insert(overlay_params_cpu->end(), custom_tail.begin(), custom_tail.end());
+                // Cache only the exact initialized payload bytes, including the dynamic directory.
                 const bool overlay_params_cache_hit =
                     slot.cached_overlay_params_cpu == *overlay_params_cpu;
                 if (!overlay_params_cache_hit) {
@@ -9996,9 +10026,10 @@ namespace lfs::vis {
                                                     const bool preview_enabled,
                                                     const bool transform_indices_enabled,
                                                     const std::size_t node_mask_count,
-                                                    const bool node_visibility_cull) {
+                                                    const bool node_visibility_cull,
+                                                    const std::span<const float> custom_tail) {
         return buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, transform_indices_enabled,
-                                           node_mask_count, node_visibility_cull)
+                                           node_mask_count, node_visibility_cull, custom_tail)
             .value_or(std::vector<float>{});
     }
 

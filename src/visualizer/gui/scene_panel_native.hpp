@@ -12,6 +12,7 @@
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -77,6 +78,8 @@ namespace lfs::vis::gui {
             int dp_ratio_milli = 1000;
             bool invert_masks = false;
             bool scene_graph_selection_markers = false;
+            bool tools_disabled = false;
+            bool modal_operator = false;
 
             bool operator==(const SyncStamp&) const = default;
         };

@@ -1861,7 +1861,7 @@
     "action.select_mode_color": "選択: 色",
     "action.select_mode_box": "選択: ボックス",
     "action.select_mode_sphere": "選択: 球",
-    "action.apply_crop_box": "クロップボックスを適用",
+    "action.apply_crop_box": "クロップの編集を終了",
     "action.remove_last_point": "最後の点を削除",
     "action.apply_alignment": "整列を適用",
     "action.insert_crop_polygon_vertex": "クロップポリゴンの頂点を挿入",
@@ -3747,5 +3747,22 @@
   "shader.untitled": "無題のシェーダー",
   "editor.documents": "Python とシェーダーのドキュメント",
   "shader.restore_warning": "一部のシェーダー状態を復元できませんでした：\n{}",
-  "shader.publication_omitted": "ユーザーシェーダーとカスタム表示クリップは公開対象外です。公開されたシーンには元のスプラットが使用されます。"
+  "shader.publication_omitted": "ユーザーシェーダーとカスタム表示クリップは公開対象外です。公開されたシーンには元のスプラットが使用されます。",
+  "splat_inspector": {
+    "enabled": "クロップを有効にする",
+    "edit": "ビューポートで編集",
+    "duplicate": "クロップを複製",
+    "finish": "クロップの編集を終了",
+    "bake": "ジオメトリに適用...",
+    "bake_note": "このクロップのみを元のスプラットのジオメトリに適用し、対応するクロップボリュームを削除しますか？ 他のクロップは引き続き編集できます。この操作は元に戻せます。",
+    "disable": "クロップを無効にする",
+    "group": "クロップ",
+    "group_enable": "クロップグループを有効にする",
+    "group_disable": "クロップグループを無効にする",
+    "group_bake": "有効なクロップをジオメトリに適用...",
+    "group_delete": "すべてのクロップを削除...",
+    "group_bake_note": "有効なクロップの共通部分をスプラットのジオメトリに適用しますか？ 適用したクロップボリュームは削除されます。無効なクロップは引き続き編集できます。この操作全体は1回で元に戻せます。",
+    "group_delete_note": "無効なものも含め、このグループ内のすべてのクロップボリュームを削除しますか？ スプラットのジオメトリは変更されません。この操作全体は1回で元に戻せます。",
+    "group_changed": "確認中にシーンが変更されました。クロップグループのメニューを開き直して、もう一度お試しください。"
+  }
 }

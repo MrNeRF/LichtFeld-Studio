@@ -27,13 +27,22 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_VISUALIZER_TESTS AND NOT BUILD_SPLAT_WORKFLOW_TESTS)
         return()
     endif()
 endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+add_executable(lichtfeld_splat_operation_tests test_splat_operations.cpp)
+target_compile_features(lichtfeld_splat_operation_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_splat_operation_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+# lfs_core imports the CUDA driver privately. Link it explicitly so Linux
+# toolkit-only builds resolve its driver symbols without a system NVIDIA driver.
+target_link_libraries(lichtfeld_splat_operation_tests PRIVATE lfs_core GTest::gtest_main CUDA::cuda_driver)
+add_test(NAME lichtfeld.splat_operations COMMAND lichtfeld_splat_operation_tests)
+set_tests_properties(lichtfeld.splat_operations PROPERTIES LABELS "cpu;scene" TIMEOUT 30)
+
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
@@ -103,6 +112,23 @@ target_link_libraries(lichtfeld_batch_process_tests PRIVATE GTest::gtest_main)
 add_test(NAME lichtfeld.batch_process COMMAND lichtfeld_batch_process_tests)
 set_tests_properties(lichtfeld.batch_process PROPERTIES LABELS "cpu;batch" TIMEOUT 60)
 
+# Focused real-registry and retained-DOM consumer tests; no window or GPU renderer.
+if(TARGET lfs_visualizer AND (BUILD_TESTS OR BUILD_VISUALIZER_TESTS OR BUILD_SPLAT_WORKFLOW_TESTS))
+    add_executable(lichtfeld_splat_crop_workflow_tests test_splat_crop_workflow.cpp)
+    target_compile_features(lichtfeld_splat_crop_workflow_tests PRIVATE cxx_std_23)
+    target_compile_definitions(lichtfeld_splat_crop_workflow_tests PRIVATE PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+    target_include_directories(lichtfeld_splat_crop_workflow_tests PRIVATE
+        $<TARGET_PROPERTY:lfs_visualizer,INCLUDE_DIRECTORIES>)
+    target_link_libraries(lichtfeld_splat_crop_workflow_tests PRIVATE
+        lfs_visualizer lfs_core lfs_io lfs_python_runtime GTest::gtest_main Zep::Zep SDL3::SDL3)
+    if(MSVC)
+        target_link_options(lichtfeld_splat_crop_workflow_tests PRIVATE "/DELAYLOAD:nvcuda.dll")
+        target_link_libraries(lichtfeld_splat_crop_workflow_tests PRIVATE delayimp)
+    endif()
+    add_test(NAME lichtfeld.splat_crop_workflow COMMAND lichtfeld_splat_crop_workflow_tests)
+    set_tests_properties(lichtfeld.splat_crop_workflow PROPERTIES LABELS "cpu;scene;ui" TIMEOUT 60)
+endif()
+
 add_executable(lichtfeld_collision_tests test_collision.cpp
     ../src/app/converter.cpp ../src/app/converter_overwrite.cpp ../src/app/converter_output_paths.cpp)
 target_compile_features(lichtfeld_collision_tests PRIVATE cxx_std_23)
@@ -116,7 +142,7 @@ set_tests_properties(lichtfeld.collision_gpu PROPERTIES LABELS "gpu;collision" T
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently
 # of the user's/runner's LongPathsEnabled registry policy.
-if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS))
+if(WIN32 AND (BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS OR BUILD_SPLAT_WORKFLOW_TESTS))
     add_executable(lichtfeld_native_filesystem_tests
         test_native_filesystem.cpp test_native_logging.cpp native_filesystem_test.manifest)
     target_compile_features(lichtfeld_native_filesystem_tests PRIVATE cxx_std_23)
@@ -281,6 +307,8 @@ if(BUILD_VISUALIZER_TESTS)
     add_executable(lichtfeld_visualizer_tests
         test_main.cpp
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
+        # Exercise the internal font adapter without exporting its DLL symbols.
+        ../src/visualizer/gui/editor/zep_rml_display.cpp
     )
     # Focused RmlUi migration contracts for the retained master interface.
     add_executable(lichtfeld_rmlui_tests
@@ -380,7 +408,7 @@ if(BUILD_PANEL_LAYOUT_TESTS)
         $<TARGET_PROPERTY:${PROJECT_NAME},LINK_LIBRARIES>
         GTest::gtest_main
     )
-    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS)
+    if(NOT BUILD_TESTS AND NOT BUILD_FORMAT_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_VISUALIZER_TESTS AND NOT BUILD_SPLAT_WORKFLOW_TESTS)
         return()
     endif()
 endif()
@@ -590,9 +618,9 @@ set_target_properties(lichtfeld_format_tests PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
-if(COMMAND lfs_enable_fast_cxx_compile)
-    lfs_enable_fast_cxx_compile(lichtfeld_format_tests)
-endif()
+# Release format tests enforce wall-clock performance budgets. Keep the
+# configuration's optimization flags even when the app uses FAST_COMPILE;
+# /Od would disable optimization without clearing Release's NDEBUG.
 add_test(NAME lichtfeld_format_tests
     COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
 )

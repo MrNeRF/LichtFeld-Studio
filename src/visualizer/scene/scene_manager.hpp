@@ -267,6 +267,9 @@ namespace lfs::vis {
         // upload background-decoded frames into render-ready storage.
         [[nodiscard]] lfs::io::SplatTensorAllocator makeExternalSplatAllocator() const;
 
+        lfs::Result<void> setSplatCropGroupEnabled(const core::Uuid& owner, bool enabled);
+        lfs::Result<void> deleteSplatCropGroup(const core::Uuid& owner);
+        lfs::Result<void> bakeSplatCropGroup(const core::Uuid& owner);
         std::string duplicateNodeTree(core::NodeId id);
         std::string duplicateNodeTree(std::string name);
         std::string mergeGroupNode(core::NodeId group_id);
@@ -427,6 +430,7 @@ namespace lfs::vis {
                 core::NodeType type = core::NodeType::SPLAT;
                 glm::mat4 local_transform{1.0f};
                 bool visible = true;
+                bool crop_effects_enabled = true;
                 bool locked = false;
                 bool point_cloud_source = false;
                 std::unique_ptr<lfs::core::SplatData> data;
@@ -434,6 +438,7 @@ namespace lfs::vis {
                 std::shared_ptr<const core::CollisionVolume> collision{};
                 std::unique_ptr<core::CropBoxData> cropbox;
                 std::unique_ptr<core::EllipsoidData> ellipsoid;
+                std::unique_ptr<core::CropPolygonData> crop_polygon;
                 std::vector<HierarchyNode> children;
             };
             std::optional<HierarchyNode> hierarchy;
@@ -452,6 +457,7 @@ namespace lfs::vis {
 
         ClipboardEntry::HierarchyNode copyNodeHierarchy(const core::SceneNode* node);
         void pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, core::NodeId parent_id);
+        core::NodeId pasteCropVolume(const ClipboardEntry::HierarchyNode& src, core::NodeId parent_id);
 
         bool appearance_training_viewport_ = false;
         std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
