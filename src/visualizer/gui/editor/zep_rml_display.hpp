@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <RmlUi/Core/Element.h>
 #include <zep/display.h>
 
 namespace lfs::vis::editor {
 
-    class ZepDisplay_Rml final : public Zep::ZepDisplay {
+    class LFS_VIS_API ZepDisplay_Rml final : public Zep::ZepDisplay {
     public:
         ZepDisplay_Rml();
 

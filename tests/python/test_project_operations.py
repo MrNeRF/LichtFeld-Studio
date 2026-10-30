@@ -17,6 +17,14 @@ def isolate_project_operations_home(tmp_path, monkeypatch):
     monkeypatch.setenv("LFS_HOME", str(tmp_path / "home"))
 
 
+def test_default_store_follows_the_asset_manager_directory(isolate_asset_manager_catalog):
+    # The Projects panel opens the default store on mount; it must land where
+    # the Asset Manager keeps its catalog, including a test's redirected one.
+    from lfs_plugins.project_operations import ProjectOperations
+
+    assert ProjectOperations(object()).root == isolate_asset_manager_catalog.resolve()
+
+
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target)
