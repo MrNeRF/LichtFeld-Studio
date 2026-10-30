@@ -319,3 +319,54 @@ Verifica: 106 test Python di toolbar, definizioni e registro strumenti passati,
 compresi i nuovi casi GROUP e selezioni miste. Build con cache e FAST_COMPILE.
 
 Verifica runtime finale: scena utente ripristinata con 2.997.954 Gaussiane; sul gruppo reale poll Python, poll nativo e record del pulsante Crop risultano disabilitati. Passati anche i 33 test C++ workflow. Preview aggiornata lasciata aperta sulla copia salvata prima della build.
+
+
+## Local master alignment — 30 October 2026
+
+Integrated upstream/master `b47363a6b9ecd2573dbc2030e5712fab2386afc3`
+(31 upstream commits) using a merge, preserving the published branch history.
+Local checkpoint before integration: `d321c45eb`; recovery branch:
+`backup/splat-crops-before-master-20261030`. Merge commit: `6278a5072`.
+No push and no PR metadata changes.
+
+Integration decisions:
+
+- Keep master's shader-aware, per-frame video-export pipeline and retain the
+  complete list of repeated ellipsoid crops in its snapshots.
+- Custom shader parameters keep their fixed address immediately after the
+  overlay prefix. The dynamic crop directory/payload moves after that tail;
+  both count toward the exact-address and GPU descriptor-range checks.
+- Use master's shared full/incremental SCNG writer. Persist the crop gate only
+  when false; true is the backward-compatible default, so camera-only records
+  do not acquire an extra key. Upsert and sparse-update paths are covered by
+  the crop persistence test.
+- Preserve current master stubs, adding only the new crop declarations and
+  avoiding duplicate gamepad signatures.
+- Keep all new master locale keys. The crop strings use English fallbacks in
+  DE/ES/FR/JA/KO/NL/PL/ZH pending translations; EN/IT retain their texts.
+- vcpkg manifest/baseline did not change between the branch base and this master.
+  The existing installation already provides shader-slang 2026.5; no unrelated
+  dependency upgrade was introduced.
+
+Completed checks so far: complete Windows build with sccache and FAST_COMPILE;
+290 Python tests; 34 native crop workflow/packing/CUDA tests and 11 core tests.
+The new custom-tail packing regression and full/upsert/sparse gate round-trip
+pass. Real GPU comparisons cover box, ellipsoid and polygon with an active
+parameterized custom shader in 3dgs and 3dgut. Switching the backend can compile
+its shader variant asynchronously: image references are taken only after that
+variant demonstrably affects pixels. Every crop then restores the reference
+exactly when suspended. Shader and disabled-gate state survive project reopen.
+Four 4-frame video exports verify both renderers with crop on/off and a scene-
+time callback, exercising per-frame snapshot capture; decoded output changes
+with the collective gate.
+
+
+The complete format suite passes: 137 passed, 3 skipped (UNC share and opt-in
+large scale simulation), plus one disabled test. Both collision suites pass
+(4 preview-upload and 5 volume-validation tests). The 20k-camera budget is kept
+unchanged. Its first runs under other validation activity exceeded 5 seconds;
+the isolated test passed in 1.8 seconds. After omitting the default crop key and
+closing the test preview, the full suite passes without relaxing any budget.
+The final focused suite also checks that enabling the gate removes its optional
+JSON override. Final large-stack GPU validation is recorded in the external
+scene-organization validation register.

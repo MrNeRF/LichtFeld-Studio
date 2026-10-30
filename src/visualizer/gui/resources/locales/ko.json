@@ -3747,5 +3747,22 @@
   "shader.untitled": "제목 없는 셰이더",
   "editor.documents": "Python 및 셰이더 문서",
   "shader.restore_warning": "일부 셰이더 상태를 복원하지 못했습니다:\n{}",
-  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다."
+  "shader.publication_omitted": "사용자 셰이더와 사용자 지정 표시 클립은 게시에서 제외됩니다. 게시된 장면은 원본 스플랫을 사용합니다.",
+  "splat_inspector": {
+    "enabled": "Enable crop",
+    "edit": "Edit in viewport",
+    "duplicate": "Duplicate crop",
+    "finish": "Finish crop editing",
+    "bake": "Apply to geometry...",
+    "bake_note": "Apply only this crop to the original splat geometry and remove this crop volume? Other crops remain editable. Undo is available.",
+    "disable": "Disable crop",
+    "group": "Crop",
+    "group_enable": "Enable crop group",
+    "group_disable": "Disable crop group",
+    "group_bake": "Apply active crops to geometry...",
+    "group_delete": "Delete all crops...",
+    "group_bake_note": "Apply the intersection of enabled crops to the splat geometry? Applied crop volumes will be removed; disabled crops remain editable. This is one undoable action.",
+    "group_delete_note": "Delete every crop volume in this group, including disabled ones? Splat geometry is unchanged. This is one undoable action.",
+    "group_changed": "The scene changed while confirming. Reopen the crop group menu and try again."
+  }
 }

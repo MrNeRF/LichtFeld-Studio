@@ -2934,7 +2934,7 @@ namespace lfs::vis {
         const auto snapshot = gui::captureVideoExportSceneSnapshot(manager, gui::VideoExportCapture::ImmediateRender);
         ASSERT_TRUE(snapshot);
         ASSERT_EQ(snapshot->ellipsoids.size(), 2u);
-        const auto state = gui::makeVideoExportGaussianSceneState(*snapshot);
+        const auto state = gui::makeVideoExportGaussianSceneState(*snapshot, std::nullopt, nullptr, 0.0f);
         ASSERT_EQ(state.ellipsoids.size(), 2u);
         EXPECT_NE(state.ellipsoids[0].node_id, state.ellipsoids[1].node_id);
     }

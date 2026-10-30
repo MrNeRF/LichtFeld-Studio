@@ -286,13 +286,13 @@ namespace {
     TEST_F(SplatCropWorkflowTest, VideoStateKeepsAllEllipsoidsAndAcceptsLegacySnapshots) {
         gui::VideoExportSceneSnapshot snapshot;
         snapshot.ellipsoids = {{.node_id = 4, .parent_node_index = 0}, {.node_id = 5, .parent_node_index = 0}};
-        const auto state = gui::makeVideoExportGaussianSceneState(snapshot);
+        const auto state = gui::makeVideoExportGaussianSceneState(snapshot, std::nullopt, nullptr, 0.0f);
         ASSERT_EQ(state.ellipsoids.size(), 2);
         EXPECT_EQ(state.ellipsoids[0].node_id, 4);
         EXPECT_EQ(state.ellipsoids[1].node_id, 5);
         snapshot.active_ellipsoid = snapshot.ellipsoids[0];
         snapshot.ellipsoids.clear();
-        EXPECT_EQ(gui::makeVideoExportGaussianSceneState(snapshot).ellipsoids.size(), 1);
+        EXPECT_EQ(gui::makeVideoExportGaussianSceneState(snapshot, std::nullopt, nullptr, 0.0f).ellipsoids.size(), 1);
     }
 
     TEST_F(SplatCropWorkflowTest, SelectedCropCannotRenderOrHitTestHandlesWithoutExplicitEditing) {
@@ -953,6 +953,33 @@ namespace {
         ASSERT_TRUE(pj::hydrate_scene_graph(*decoded, restored, resolver));
         ASSERT_NE(restored.getNodeByUuid(uuid), nullptr);
         EXPECT_FALSE(restored.getNodeByUuid(uuid)->crop_effects_enabled);
+        // Master shares this writer between full capture, upsert and sparse autosave.
+        auto incremental = pj::SceneGraphChapter::from_bytes(bytes);
+        ASSERT_TRUE(incremental);
+        auto records = incremental->nodes();
+        ASSERT_TRUE(records);
+        records->front().crop_effects_enabled = true;
+        ASSERT_TRUE(incremental->upsert_node(records->front()));
+        EXPECT_TRUE(incremental->nodes()->front().crop_effects_enabled);
+        const auto enabled_bytes = incremental->to_bytes();
+        const std::string enabled_json(reinterpret_cast<const char*>(enabled_bytes.data()), enabled_bytes.size());
+        EXPECT_EQ(enabled_json.find("crop_effects_enabled"), std::string::npos);
+        for (int i = 0; i < 20; ++i) {
+            pj::SceneNodeRecord group;
+            group.uuid = core::generate_uuid_v4();
+            group.type = "group";
+            group.name = "Sparse sibling " + std::to_string(i);
+            group.child_order = static_cast<uint32_t>(i + 1);
+            group.local_transform = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            records->push_back(group);
+        }
+        ASSERT_TRUE(incremental->replace_nodes(*records));
+        records->front().crop_effects_enabled = false;
+        ASSERT_TRUE(incremental->update_nodes(*records));
+        const auto sparse = pj::SceneGraphChapter::from_bytes(incremental->to_bytes());
+        ASSERT_TRUE(sparse);
+        ASSERT_TRUE(sparse->nodes());
+        EXPECT_FALSE(sparse->nodes()->front().crop_effects_enabled);
         std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
         const std::regex field(R"("crop_effects_enabled"\s*:\s*false\s*,)");
         std::smatch match;

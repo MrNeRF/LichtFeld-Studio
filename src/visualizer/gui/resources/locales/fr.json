@@ -3747,5 +3747,22 @@
   "shader.untitled": "Shader sans titre",
   "editor.documents": "Documents Python et shaders",
   "shader.restore_warning": "Certains éléments des shaders n’ont pas pu être restaurés :\n{}",
-  "shader.publication_omitted": "Les shaders utilisateur et les clips de révélation personnalisés sont exclus de la publication. La scène publiée utilise les splats d’origine."
+  "shader.publication_omitted": "Les shaders utilisateur et les clips de révélation personnalisés sont exclus de la publication. La scène publiée utilise les splats d’origine.",
+  "splat_inspector": {
+    "enabled": "Enable crop",
+    "edit": "Edit in viewport",
+    "duplicate": "Duplicate crop",
+    "finish": "Finish crop editing",
+    "bake": "Apply to geometry...",
+    "bake_note": "Apply only this crop to the original splat geometry and remove this crop volume? Other crops remain editable. Undo is available.",
+    "disable": "Disable crop",
+    "group": "Crop",
+    "group_enable": "Enable crop group",
+    "group_disable": "Disable crop group",
+    "group_bake": "Apply active crops to geometry...",
+    "group_delete": "Delete all crops...",
+    "group_bake_note": "Apply the intersection of enabled crops to the splat geometry? Applied crop volumes will be removed; disabled crops remain editable. This is one undoable action.",
+    "group_delete_note": "Delete every crop volume in this group, including disabled ones? Splat geometry is unchanged. This is one undoable action.",
+    "group_changed": "The scene changed while confirming. Reopen the crop group menu and try again."
+  }
 }
