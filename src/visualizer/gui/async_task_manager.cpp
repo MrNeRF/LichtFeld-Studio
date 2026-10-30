@@ -1755,7 +1755,8 @@ namespace lfs::vis::gui {
             auto output_path = cmd.output_path;
             if (output_path.empty()) {
                 if (auto info = viewer_->projectGetInfo(); info && info->path) {
-                    output_path = info->path->parent_path();
+                    output_path = *info->path;
+                    output_path.replace_extension(".output");
                 } else {
                     output_path = lfs::core::param::default_dataset_output_path(cmd.path);
                 }
