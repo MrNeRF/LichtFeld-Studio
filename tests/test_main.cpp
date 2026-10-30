@@ -9,6 +9,7 @@
 #include "tensor_backend_trace_listener.hpp"
 #include <gtest/gtest.h>
 #include <iostream>
+#include <optional>
 #include <string>
 
 int main(int argc, char** argv) {
@@ -34,11 +35,12 @@ int main(int argc, char** argv) {
                                   user_dir ? std::string(*user_dir) : std::string{});
 
     lfs::core::TensorBackendOptions options;
-    auto backend = lfs::core::GpuBackend::CUDA;
+    // Without --tensor-backend the library picks CUDA when built, else Metal or Vulkan.
+    std::optional<lfs::core::GpuBackend> backend;
     std::string trace_path;
     // Keep our flags in argv: InitGoogleTest snapshots it for threadsafe
     // death-test re-execution. Stripping them makes the child lose its backend
-    // and options (and select the default CUDA even in a non-CUDA build).
+    // and options.
     // GoogleTest leaves non-GoogleTest flags alone.
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -69,7 +71,8 @@ int main(int argc, char** argv) {
             trace_path = arg.substr(22);
         }
     }
-    if (!lfs::core::set_tensor_backend_options(options) || !lfs::core::set_default_gpu_backend(backend))
+    if (!lfs::core::set_tensor_backend_options(options) ||
+        (backend && !lfs::core::set_default_gpu_backend(*backend)))
         return 2;
     ::testing::InitGoogleTest(&argc, argv);
     if (!trace_path.empty()) {

@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Testing module - comprehensive tests for all components
+
+# Every runner built from test_main.cpp installs the tensor backend trace listener,
+# including the visualizer-only configuration that never reaches the full suite.
+set_property(SOURCE test_main.cpp APPEND PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
+
 if(LFS_HAS_CUDA AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Independent of the full/visualizer suites: CPU CI enables only format tests.
     # This executable supplies fake CUDART lookup functions and needs no driver.
@@ -1043,7 +1048,7 @@ set_source_files_properties(test_tensor_expression_cuda.cu PROPERTIES
 # private include fails to compile.
 function(lfs_tensor_private_access)
     set(_prefixes
-        test_main test_tensor_ tensor_ bench_tensor_ test_allocator_ test_cuda_ test_stale_stream_
+        test_tensor_ tensor_ bench_tensor_ test_allocator_ test_cuda_ test_stale_stream_
         test_zero_stride_ test_strided_reduce_ expression_reference cuda_backend_test test_alloc_counter)
     foreach(_src IN LISTS ARGN)
         get_filename_component(_name "${_src}" NAME)

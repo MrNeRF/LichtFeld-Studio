@@ -1012,6 +1012,9 @@ namespace {
     // A scene graph of tens of thousands of cameras is captured on the GUI thread
     // before every save, so building it must stay linear in the node count.
     TEST(SceneGraphChapterScaleTest, ReplaceNodesBuildsTwentyThousandCamerasQuickly) {
+#if !defined(NDEBUG)
+        GTEST_SKIP() << "The time budget applies to optimized builds; Release CI enforces it.";
+#endif
         const auto records = scene_records_with_cameras(20000);
         const auto started = std::chrono::steady_clock::now();
         SceneGraphChapter chapter;

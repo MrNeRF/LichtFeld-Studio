@@ -58,8 +58,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <cuda_runtime.h>
-
 #if defined(__linux__)
 #include <csignal>
 #include <fcntl.h>
