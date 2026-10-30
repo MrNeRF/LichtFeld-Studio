@@ -614,7 +614,8 @@ namespace lfs::training {
             const lfs::core::param::OptimizationParameters& opt_params,
             const lfs::core::Tensor& raw_rendered,
             const lfs::core::Tensor& structure_map = {},
-            int iteration = 0);
+            int iteration = 0,
+            const lfs::core::Camera* structure_camera = nullptr);
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -1019,6 +1020,25 @@ namespace lfs::training {
             bool operator==(const ThinStructureMapKey&) const = default;
         };
         std::optional<ThinStructureMapKey> thin_structure_map_key_;
+        // What a camera's base photometric weight, and so its thin-structure denominator, is made from: its mask,
+        // the mask settings and, while the camera is outside the crop box, the crop box and its loss weight. Inside
+        // the box the crop box weight follows the rendered surface, so those steps are not cached.
+        struct StructureWeightInputs {
+            std::uint64_t mask_revision = 0;
+            std::uint64_t calibration_revision = 0;
+            bool undistorted = false;
+            bool masked = false;
+            lfs::core::param::MaskMode mask_mode{};
+            bool use_alpha_as_mask = false;
+            float mask_threshold = 0.0f;
+            bool invert_masks = false;
+            bool require_float = false;
+            std::optional<float> region_weight;
+            std::optional<TrainingCropBoxGeometry> cropbox;
+            bool operator==(const StructureWeightInputs&) const = default;
+        };
+        kernels::StructureDenominatorCache<StructureWeightInputs> structure_denominators_;
+        kernels::StructureDenominatorCache<StructureWeightInputs> report_structure_denominators_;
         kernels::RidgeWorkspace thin_structure_workspace_;
         kernels::GradientResidualWorkspace gradient_residual_workspace_;
         core::Tensor thin_structure_map_buffer_;
@@ -1137,7 +1157,13 @@ namespace lfs::training {
                                               const core::Tensor& target, const core::Tensor& mask,
                                               const core::Tensor& region, const core::Tensor& structure_map,
                                               const core::param::OptimizationParameters& params, int iteration,
-                                              const core::Tensor& mask_regularization_loss = {});
+                                              const core::Tensor& mask_regularization_loss = {},
+                                              const core::Camera* structure_camera = nullptr);
+        // What camera's base photometric weight is made from, for the thin-structure denominator caches.
+        [[nodiscard]] StructureWeightInputs structure_weight_inputs(const core::Camera& camera, bool masked,
+                                                                    std::optional<float> region_weight,
+                                                                    bool require_float,
+                                                                    const core::param::OptimizationParameters& params) const;
         void submitLossReadback(const lfs::core::Tensor& total_loss, int iter,
                                 const lfs::core::Tensor& region_weight = {});
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);

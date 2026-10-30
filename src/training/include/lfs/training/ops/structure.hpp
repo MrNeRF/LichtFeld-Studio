@@ -5,6 +5,8 @@
 #include "lfs/training/ops/domain_types.hpp"
 #include "lfs/training/ops/types.hpp"
 
+#include <unordered_map>
+
 namespace lfs::training::kernels {
 
     using MaskPhotoMode = lfs::gpu_ops::MaskPhotoMode;
@@ -19,6 +21,36 @@ namespace lfs::training::kernels {
     };
 
     float structure_base_denominator(const lfs::core::Tensor& base_weight, int height, int width, bool valid_padding);
+
+    // structure_base_denominator reads its base weight's sum back from the GPU. A camera's base weight is made from
+    // its mask and crop box weight, which rarely change, so this keeps each camera's denominator together with what
+    // its weight was made from, Key, and reads it back again only when that changed.
+    template <typename Key>
+    class StructureDenominatorCache {
+    public:
+        float get(const int camera, const Key& inputs, const lfs::core::Tensor& base_weight, const int height,
+                  const int width, const bool valid_padding) {
+            const auto found = entries_.find(camera);
+            if (found != entries_.end() && found->second.inputs == inputs && found->second.height == height &&
+                found->second.width == width && found->second.valid_padding == valid_padding)
+                return found->second.denominator;
+            const float denominator = structure_base_denominator(base_weight, height, width, valid_padding);
+            entries_.insert_or_assign(camera, Entry{inputs, height, width, valid_padding, denominator});
+            return denominator;
+        }
+
+        void clear() { entries_.clear(); }
+
+    private:
+        struct Entry {
+            Key inputs;
+            int height;
+            int width;
+            bool valid_padding;
+            float denominator;
+        };
+        std::unordered_map<int, Entry> entries_;
+    };
 
     void ridge_structure_map(const lfs::core::Tensor& image,
                              lfs::core::Tensor& output,

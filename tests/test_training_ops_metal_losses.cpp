@@ -13,6 +13,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "lfs/training/ops/structure.hpp"
 
 #include <gtest/gtest.h>
 
@@ -1188,6 +1189,25 @@ namespace {
             EXPECT_EQ(got[i].x, want[i].first) << i;
             EXPECT_NEAR(got[i].y, want[i].second, 1e-6) << i;
         }
+    }
+
+    // The thin-structure denominator is read back once per camera and kept while what its weight was made from
+    // stays the same; new inputs, another size or a cleared cache read the weight again.
+    TEST_P(PortableLosses, StructureDenominatorCacheReadsEachCameraOnce) {
+        const Tensor half = Tensor::full({8, 8}, 0.5f, Device::GPU);
+        const Tensor ones = Tensor::ones({8, 8}, Device::GPU);
+        const float half_sum = k::structure_base_denominator(half, 8, 8, false);
+        const float ones_sum = k::structure_base_denominator(ones, 8, 8, false);
+        ASSERT_NE(half_sum, ones_sum);
+        k::StructureDenominatorCache<int> cache;
+        EXPECT_EQ(cache.get(3, 7, half, 8, 8, false), half_sum);
+        EXPECT_EQ(cache.get(3, 7, ones, 8, 8, false), half_sum) << "same camera and inputs: not read again";
+        EXPECT_EQ(cache.get(4, 7, ones, 8, 8, false), ones_sum) << "another camera";
+        EXPECT_EQ(cache.get(3, 8, ones, 8, 8, false), ones_sum) << "new inputs";
+        EXPECT_EQ(cache.get(3, 8, half, 8, 8, true), half_sum) << "another padding";
+        EXPECT_EQ(cache.get(3, 8, ones, 8, 8, true), half_sum);
+        cache.clear();
+        EXPECT_EQ(cache.get(3, 8, ones, 8, 8, true), ones_sum) << "cleared";
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, PortableLosses, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),

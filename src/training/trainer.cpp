@@ -1455,6 +1455,24 @@ namespace lfs::training {
         loss = loss + term;
     }
 
+    Trainer::StructureWeightInputs Trainer::structure_weight_inputs(
+        const core::Camera& camera, const bool masked, const std::optional<float> region_weight,
+        const bool require_float, const core::param::OptimizationParameters& params) const {
+        return {
+            .mask_revision = camera.mask_revision(),
+            .calibration_revision = camera.calibration_revision(),
+            .undistorted = camera.is_undistort_prepared(),
+            .masked = masked,
+            .mask_mode = params.mask_mode,
+            .use_alpha_as_mask = masked && params.use_alpha_as_mask,
+            .mask_threshold = masked ? params.mask_threshold : 0.0f,
+            .invert_masks = masked && params.invert_masks,
+            .require_float = require_float,
+            .region_weight = region_weight,
+            .cropbox = region_weight ? cropbox_ : std::nullopt,
+        };
+    }
+
     // The training image terms over the crop box region only, for the reported loss. The pixel
     // weights follow compute_photometric_loss_with_mask with the region in place of the ROI weights:
     // user masks, thin-structure emphasis, decoupled appearance SSIM and the gradient residual.
@@ -1465,7 +1483,7 @@ namespace lfs::training {
         const core::Tensor& corrected, const core::Tensor& raw, const core::Tensor& target,
         const core::Tensor& mask, const core::Tensor& region, const core::Tensor& structure_map,
         const core::param::OptimizationParameters& params, const int iteration,
-        const core::Tensor& mask_regularization_loss) {
+        const core::Tensor& mask_regularization_loss, const core::Camera* const structure_camera) {
         using core::param::MaskMode;
         if (training_ops_ == nullptr || training_ops_->photometric == nullptr)
             throw std::runtime_error(unavailable_training_family(core::default_gpu_backend(), Family::Photometric)
@@ -1484,9 +1502,17 @@ namespace lfs::training {
             kernels::structure_photometric_weight(structure_map, base_weight, roi_report_structure_weight_,
                                                   params.thin_structure_weight, false);
             weight = roi_report_structure_weight_;
-            denominator = kernels::structure_base_denominator(
-                base_weight, static_cast<int>(target.shape()[1]), static_cast<int>(target.shape()[2]),
-                params.lambda_dssim > 0.0f);
+            const int height = static_cast<int>(target.shape()[1]);
+            const int width = static_cast<int>(target.shape()[2]);
+            denominator = structure_camera != nullptr
+                              ? report_structure_denominators_.get(
+                                    structure_camera->uid(),
+                                    structure_weight_inputs(*structure_camera, user_masks_photometric,
+                                                            region.is_valid() ? std::optional<float>(0.0f) : std::nullopt,
+                                                            false, params),
+                                    base_weight, height, width, params.lambda_dssim > 0.0f)
+                              : kernels::structure_base_denominator(base_weight, height, width,
+                                                                    params.lambda_dssim > 0.0f);
         }
         const bool decoupled = raw.is_valid() && raw.numel() > 0 && params.lambda_dssim > 0.0f;
         if (!roi_report_photo_.backend)
@@ -1629,7 +1655,7 @@ namespace lfs::training {
         const lfs::core::Tensor& alpha,
         const lfs::core::param::OptimizationParameters& opt_params,
         const lfs::core::Tensor& raw_rendered,
-        const lfs::core::Tensor& structure_map, const int iteration) {
+        const lfs::core::Tensor& structure_map, const int iteration, const lfs::core::Camera* const structure_camera) {
 
         using namespace lfs::core;
         constexpr float ALPHA_CONSISTENCY_WEIGHT = 10.0f;
@@ -1673,9 +1699,18 @@ namespace lfs::training {
                 opt_params.thin_structure_weight,
                 !base_photometric_weight.is_valid() && opt_params.lambda_dssim > 0.0f);
             photometric_weight = thin_structure_weight_buffer_;
-            base_denominator = kernels::structure_base_denominator(
-                base_photometric_weight, static_cast<int>(gt_image.shape()[1]),
-                static_cast<int>(gt_image.shape()[2]), opt_params.lambda_dssim > 0.0f);
+            const int height = static_cast<int>(gt_image.shape()[1]);
+            const int width = static_cast<int>(gt_image.shape()[2]);
+            base_denominator =
+                structure_camera != nullptr
+                    ? structure_denominators_.get(
+                          structure_camera->uid(),
+                          structure_weight_inputs(*structure_camera, user_masks_photometric,
+                                                  has_roi_weight ? std::optional<float>(opt_params.cropbox_loss_weight) : std::nullopt,
+                                                  user_masks_photometric && normal_terms_on, opt_params),
+                          base_photometric_weight, height, width, opt_params.lambda_dssim > 0.0f)
+                    : kernels::structure_base_denominator(base_photometric_weight, height, width,
+                                                          opt_params.lambda_dssim > 0.0f);
         }
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha, mask_regularization_loss;
@@ -5643,6 +5678,8 @@ namespace lfs::training {
 
     void Trainer::clear_thin_structure_cache() {
         thin_structure_map_key_.reset();
+        structure_denominators_.clear();
+        report_structure_denominators_.clear();
         thin_structure_workspace_ = {};
         thin_structure_map_buffer_ = {};
         thin_structure_weight_buffer_ = {};
@@ -6716,6 +6753,8 @@ namespace lfs::training {
 
                     lfs::core::Tensor roi_weight;
                     lfs::core::Tensor roi_report_weight;
+                    // Whether the crop box weights follow the rendered surface, which makes them change every step.
+                    bool roi_from_render = false;
                     if (strategy_)
                         install_cropbox_view_damping(strategy_->get_model(), gaussian_optimizer, *cam);
                     const bool roi_loss_weighting = cropbox_ && step_params.cropbox_loss_weight < 1.0f;
@@ -6744,6 +6783,7 @@ namespace lfs::training {
                                                  output.alpha.is_valid() &&
                                                  output.depth.numel() == roi_shape.elements() &&
                                                  output.alpha.numel() == roi_shape.elements();
+                        roi_from_render = roi_surface;
                         lfs::core::Tensor roi_surface_depth, roi_surface_alpha;
                         if (roi_surface) {
                             roi_surface_depth = output.depth.contiguous();
@@ -6859,7 +6899,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    step_params, raw_loss_input, structure_map, iter);
+                                    step_params, raw_loss_input, structure_map, iter, roi_from_render ? nullptr : cam);
                                 if (!result) {
                                     lfs::core::pop_gpu_range();
                                     lfs::core::pop_gpu_range();
@@ -6900,7 +6940,7 @@ namespace lfs::training {
                             if (roi_report_weight.is_valid()) {
                                 region_image_loss = report_region_image_loss(
                                     corrected_image, raw_loss_input, gt_tile, mask, roi_report_weight, structure_map,
-                                    step_params, iter, tile_mask_regularization_loss);
+                                    step_params, iter, tile_mask_regularization_loss, roi_from_render ? nullptr : cam);
                                 reported_image_loss = tile_loss;
                             }
                         }
@@ -7125,7 +7165,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    step_params, raw_loss_input, structure_map, iter);
+                                    step_params, raw_loss_input, structure_map, iter, roi_from_render ? nullptr : cam);
                                 if (!result) {
                                     lfs::core::pop_gpu_range();
                                     lfs::core::pop_gpu_range();
@@ -7170,7 +7210,8 @@ namespace lfs::training {
                             if (roi_report_weight.is_valid()) {
                                 region_image_loss = report_region_image_loss(
                                     corrected_image, raw_loss_input, gt_tile, mask_tile, roi_report_weight,
-                                    structure_map, step_params, iter, tile_mask_regularization_loss);
+                                    structure_map, step_params, iter, tile_mask_regularization_loss,
+                                    roi_from_render ? nullptr : cam);
                                 reported_image_loss = tile_loss;
                             }
                         }
