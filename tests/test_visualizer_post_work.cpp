@@ -21701,7 +21701,9 @@ namespace lfs::vis {
         (void)viewer.frame_state_.on_fault(FrameFault::DeviceLost);
         int ran = 0, cancelled = 0;
         viewer.render_work_queue_.push_back({.run = [&] { ++ran; }, .cancel = [&] { ++cancelled; }});
-        // No initialized window or Vulkan device: touching a GPU frame would fail.
+        // No initialized window or Vulkan device: touching a GPU frame would fail,
+        // and polling input needs a window, so leave out the uninitialized manager.
+        viewer.window_manager_.reset();
         EXPECT_NO_THROW(viewer.render());
         EXPECT_EQ(ran, 0);
         EXPECT_EQ(cancelled, 1);
