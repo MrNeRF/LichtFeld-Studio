@@ -7,8 +7,6 @@
 
 include("${CMAKE_SOURCE_DIR}/cmake/GpuBackendRegistry.cmake")
 lfs_generate_backend_registry()
-add_library(lfs_backend_configuration INTERFACE)
-target_include_directories(lfs_backend_configuration INTERFACE "${CMAKE_BINARY_DIR}/include")
 # Core leaf libraries also compile public backend descriptors, before lfs_core
 # exists. Propagate generated inventories without introducing a dependency cycle.
 link_libraries(lfs_backend_configuration)

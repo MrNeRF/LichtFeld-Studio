@@ -160,7 +160,7 @@ namespace lfs::core::image_codecs {
                     return encode_error(ErrorCode::Cancelled, "cancelled before encoding");
                 if (auto valid = validate_jxl_encode_options(options, type); !valid)
                     return valid;
-                if (xmp.size() > 32u * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                if (!valid_xmp_packet(xmp))
                     return encode_error(ErrorCode::InvalidArgument, "XMP exceeds 32 MiB or contains NUL");
                 const bool floating = type == SampleType::Float32;
                 const bool alpha = channels == 2 || channels == 4;

@@ -171,7 +171,7 @@ namespace {
             EXPECT_EQ(file.error().code(), lfs::ErrorCode::InvalidArgument);
             EXPECT_EQ(bytes(path), original);
         }
-        for (int failure = 0; failure < 4; ++failure) {
+        for (int failure = 0; failure < 3; ++failure) {
             auto limited = options;
             if (failure == 0)
                 limited.max_output_bytes = 64;
@@ -179,28 +179,13 @@ namespace {
                 limited.cancelled = [] { return true; };
             if (failure == 2)
                 limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
-            // Entry, six plane rows and provider submission precede the
-            // cancellation boundary immediately before metadata insertion.
-            size_t before_metadata = 0;
-            if (failure == 3)
-                limited.cancelled = [&] { return ++before_metadata == 9; };
             const auto memory = c::encode_avif_memory(pixels, 3, 2, 3, 9, encoded, limited, packet);
-            if (failure == 3)
-                EXPECT_EQ(before_metadata, 9u);
             ASSERT_FALSE(memory);
-            if (failure == 3)
-                EXPECT_EQ(memory.error().detail(), "AVIF: cancelled before metadata insertion");
             EXPECT_EQ(memory.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);
             EXPECT_EQ(encoded, original);
             // Reset the stateful cancellation callback for the independent file call.
             if (failure == 2)
                 limited.cancelled = [count = size_t{0}, polls]() mutable { return ++count >= polls; };
-            if (failure == 3) {
-                // Reset for the independent publication call, whose atomic
-                // writer can also poll cancellation before invoking the codec.
-                before_metadata = 0;
-                limited.cancelled = [&] { return ++before_metadata == 9; };
-            }
             const auto file = c::write_avif(path, pixels, 3, 2, 3, 9, limited, {.overwrite = true}, packet);
             ASSERT_FALSE(file);
             EXPECT_EQ(file.error().code(), failure == 0 ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Cancelled);
@@ -214,6 +199,41 @@ namespace {
         std::vector<uint8_t> alias(pixels.begin(), pixels.end());
         ASSERT_TRUE(c::encode_avif_memory(alias, 3, 2, 3, 9, alias, options, small));
         EXPECT_EQ(independent(alias, 8, 3).data, (std::vector<uint8_t>(pixels.begin(), pixels.end())));
+    }
+
+    TEST_F(AvifEncode, CancellationAtEveryObservedPollPreservesOutputs) {
+        const std::array<uint8_t, 3> pixels{17, 73, 191};
+        const std::string_view packet = "<r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><r:Description r:about=\"\"/></r:RDF>";
+        const auto path = directory / "cancel.avif";
+        for (bool file : {false, true}) {
+            SCOPED_TRACE(file ? "file" : "memory");
+            size_t polls = 0;
+            c::AvifEncodeOptions options;
+            options.cancelled = [&] { ++polls; return false; };
+            std::vector<uint8_t> output;
+            const auto write = [&]() {
+                return file ? c::write_avif(path, pixels, 1, 1, 3, 3, options, {.overwrite = true}, packet)
+                            : c::encode_avif_memory(pixels, 1, 1, 3, 3, output, options, packet);
+            };
+            ASSERT_TRUE(write());
+            const auto observed = polls;
+            ASSERT_GT(observed, 0u);
+            const auto original = file ? bytes(path) : output;
+            for (size_t cutoff = 1; cutoff <= observed; ++cutoff) {
+                SCOPED_TRACE(cutoff);
+                polls = 0;
+                options.cancelled = [&] { return ++polls >= cutoff; };
+                const auto result = write();
+                ASSERT_FALSE(result);
+                EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
+                EXPECT_EQ(file ? bytes(path) : output, original);
+                for (const auto& entry : fs::directory_iterator(directory))
+                    EXPECT_EQ(entry.path(), path);
+            }
+            options.cancelled = {};
+            ASSERT_TRUE(write());
+            EXPECT_EQ(file ? bytes(path) : output, original);
+        }
     }
 
     TEST_F(AvifEncode, ProviderPolicyKeepsHevcUnavailable) {

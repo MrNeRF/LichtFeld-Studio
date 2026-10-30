@@ -28,7 +28,7 @@ namespace lfs::core::image_codecs {
                     return failure(ErrorCode::Cancelled, "cancelled before encoding");
                 if (auto valid = validate_avif_encode_options(options); !valid)
                     return valid;
-                if (xmp.size() > 32u * 1024 * 1024 || xmp.find('\0') != std::string_view::npos)
+                if (!valid_xmp_packet(xmp))
                     return failure(ErrorCode::InvalidArgument, "XMP exceeds 32 MiB or contains NUL");
                 if (width <= 0 || height <= 0 || channels < 1 || channels > 4)
                     return failure(ErrorCode::InvalidArgument, "invalid dimensions or channel count");

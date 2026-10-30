@@ -59,6 +59,18 @@ namespace lfs::io {
         // Extraction runs off the UI thread and benefits from more parallel
         // HEVC decoding than the latency-sensitive preview path.
         constexpr int MAX_SW_DECODE_THREADS = 8;
+        std::string_view embeddedMetadataPolicy(ImageFormat format) {
+            switch (format) {
+            case ImageFormat::PNG: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::PNG);
+            case ImageFormat::JPG: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::JPEG);
+            case ImageFormat::EXR: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::EXR);
+            case ImageFormat::TIFF16: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::TIFF16);
+            case ImageFormat::JXL: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::JXL);
+            case ImageFormat::AVIF: return media::detail::embeddedMetadataPolicy(media::FrameFileFormat::AVIF);
+            }
+            return {};
+        }
+
         template <size_t Bytes, int Rotation>
         void rotatePackedPixels(const uint8_t* input, std::vector<uint8_t>& output, int width, int height) {
             output.resize(static_cast<size_t>(width) * height * Bytes);
@@ -1028,7 +1040,7 @@ namespace lfs::io {
                 error = std::string(failure_->detail());
                 return false;
             }
-            if (params.embed_source_metadata && (!params.preserve_source_metadata || (params.format != ImageFormat::JPG && params.format != ImageFormat::PNG && params.format != ImageFormat::TIFF16 && params.format != ImageFormat::EXR && params.format != ImageFormat::JXL && params.format != ImageFormat::AVIF))) {
+            if (params.embed_source_metadata && (!params.preserve_source_metadata || embeddedMetadataPolicy(params.format).empty())) {
                 failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF file extraction with preservation enabled", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
@@ -2672,11 +2684,7 @@ namespace lfs::io {
                         nlohmann::json root;
                         root["schema_version"] = 2;
                         if (params.embed_source_metadata)
-                            root["embedded_metadata_policy"] = media::detail::embeddedMetadataPolicy(params.format == ImageFormat::AVIF ? media::FrameFileFormat::AVIF : params.format == ImageFormat::JXL  ? media::FrameFileFormat::JXL
-                                                                                                                                                                     : params.format == ImageFormat::EXR    ? media::FrameFileFormat::EXR
-                                                                                                                                                                     : params.format == ImageFormat::TIFF16 ? media::FrameFileFormat::TIFF16
-                                                                                                                                                                     : params.format == ImageFormat::PNG    ? media::FrameFileFormat::PNG
-                                                                                                                                                                                                            : media::FrameFileFormat::JPEG);
+                            root["embedded_metadata_policy"] = embeddedMetadataPolicy(params.format);
                         if (params.preserve_source_metadata) {
                             root["source_metadata_policy"] = media::detail::source_metadata_preservation_policy;
                             root["source_metadata"] = std::move(source_metadata);
