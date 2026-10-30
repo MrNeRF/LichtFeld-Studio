@@ -33,6 +33,8 @@
 
 namespace lfs::core {
 
+    struct TileSpec;
+
     using NodeId = int32_t;
     constexpr NodeId NULL_NODE = -1;
 
@@ -393,6 +395,8 @@ namespace lfs::core {
         [[nodiscard]] std::optional<CollisionSourceIdentity> collisionSourceIdentity(NodeId id) const;
         [[nodiscard]] struct CollisionSource captureCollisionSource(NodeId id, CollisionSourceIdentity* identity = nullptr) const;
         NodeId addCropBox(const std::string& name, NodeId parent_id);
+        // Adds visible, inactive crop boxes for preview without changing the training ROI.
+        NodeId createTileCropBoxes(const std::vector<TileSpec>& tiles);
         NodeId addEllipsoid(const std::string& name, NodeId parent_id);
         // Returns the existing polygon of parent_id, or NULL_NODE for an invalid outline.
         NodeId addCropPolygon(const std::string& name, NodeId parent_id, CropPolygonData data,

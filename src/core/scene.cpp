@@ -15,6 +15,7 @@
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene_merge.hpp"
+#include "core/scene_partitioner.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data_transform.hpp"
@@ -32,6 +33,7 @@
 #include <format>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 #include <numeric>
 #include <ranges>
@@ -4333,7 +4335,7 @@ namespace lfs::core {
     }
 
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {
-        assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
+        assert(parent_id != NULL_NODE && "CropBox must have a parent node");
 
         const auto* parent = getNodeById(parent_id);
         if (!parent) {
@@ -4344,10 +4346,12 @@ namespace lfs::core {
             LOG_WARN("Cannot add cropbox '{}': parent is incompatible", name);
             return NULL_NODE;
         }
-        for (const NodeId child_id : parent->children) {
-            const auto* child = getNodeById(child_id);
-            if (child && child->type == NodeType::CROPBOX) {
-                return child_id;
+        if (parent->type != NodeType::GROUP) {
+            for (const NodeId child_id : parent->children) {
+                const auto* child = getNodeById(child_id);
+                if (child && child->type == NodeType::CROPBOX) {
+                    return child_id;
+                }
             }
         }
 
@@ -4372,6 +4376,32 @@ namespace lfs::core {
         if (id != NULL_NODE)
             LOG_DEBUG("Added cropbox node '{}' (id={}) as child of node id={}", unique_name, id, parent_id);
         return id;
+    }
+
+    NodeId Scene::createTileCropBoxes(const std::vector<TileSpec>& tiles) {
+        if (tiles.empty()) return NULL_NODE;
+        const NodeId group = addGroup("AutoTiles");
+        if (group == NULL_NODE) return NULL_NODE;
+        for (size_t index = 0; index < tiles.size(); ++index) {
+            const auto& tile = tiles[index];
+            const NodeId box = addCropBox(tile.name, group);
+            if (box == NULL_NODE) return group;
+            CropBoxData data;
+            data.min = -(tile.max - tile.min) * 0.5f;
+            data.max = -data.min;
+            data.enabled = false;
+            const float hue = static_cast<float>(index % 7) / 7.0f;
+            data.color = {0.35f + 0.55f * std::abs(std::sin(6.2831853f * hue)),
+                          0.35f + 0.55f * std::abs(std::sin(6.2831853f * (hue + 0.33f))),
+                          0.35f + 0.55f * std::abs(std::sin(6.2831853f * (hue + 0.66f)))};
+            setCropBoxData(box, data);
+            const auto center = (tile.min + tile.max) * 0.5f;
+            const auto transform = glm::translate(glm::mat4{1.0f}, center) *
+                                   glm::rotate(glm::mat4{1.0f}, glm::radians(tile.rotation_degrees.z),
+                                               glm::vec3{0.0f, 0.0f, 1.0f});
+            setNodeTransform(box, transform);
+        }
+        return group;
     }
 
     NodeId Scene::addEllipsoid(const std::string& name, const NodeId parent_id) {

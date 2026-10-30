@@ -3,6 +3,7 @@
 """Training Panel - RmlUI with native data binding."""
 
 import os
+import subprocess
 import threading
 import time
 
@@ -240,6 +241,16 @@ class TrainingPanel(Panel):
         self._auto_scale_steps_locked = True
         self._auto_scale_user_override = False
         self._auto_scale_dataset_path = ""
+        self._auto_tile_columns = "2"
+        self._auto_tile_rows = "2"
+        self._auto_tile_overlap = "0.15"
+        self._auto_tile_align = True
+        self._auto_tile_process = None
+        self._auto_tile_status = ""
+        self._auto_tile_output = ""
+        self._auto_tile_preview_group = -1
+        self._auto_tile_preview_settings = None
+        self._auto_tile_preview_dataset = ""
         self._last_state = ""
         self._last_session = None
         self._last_save_steps = None
@@ -325,6 +336,16 @@ class TrainingPanel(Panel):
         d = lf.dataset_params
 
         self._bind_labels(model)
+        model.bind("auto_tile_columns", lambda: self._auto_tile_columns,
+                   lambda value: setattr(self, "_auto_tile_columns", str(value)))
+        model.bind("auto_tile_rows", lambda: self._auto_tile_rows,
+                   lambda value: setattr(self, "_auto_tile_rows", str(value)))
+        model.bind("auto_tile_overlap", lambda: self._auto_tile_overlap,
+                   lambda value: setattr(self, "_auto_tile_overlap", str(value)))
+        model.bind("auto_tile_align", lambda: self._auto_tile_align,
+                   lambda value: setattr(self, "_auto_tile_align", bool(value)))
+        model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
+        model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
         self._bind_property_search(model)
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
@@ -1614,6 +1635,21 @@ class TrainingPanel(Panel):
     def on_update(self, doc):
         if not self._handle:
             return False
+        auto_tile_finished = False
+        if self._auto_tile_process is not None:
+            exit_code = self._auto_tile_process.poll()
+            if exit_code is not None:
+                self._auto_tile_process = None
+                self._auto_tile_status = (
+                    tr("auto_tiles.completed").format(self._auto_tile_output)
+                    if exit_code == 0 else
+                    tr("auto_tiles.failed").format(self._auto_tile_output)
+                )
+                self._handle.dirty("auto_tile_status")
+                self._handle.dirty("auto_tile_running")
+                auto_tile_finished = True
+            else:
+                self._schedule_deferred_update(0.25)
         self._sync_auto_scale_markers()
 
         params_changed = self._params_refresh_pending
@@ -1622,7 +1658,7 @@ class TrainingPanel(Panel):
             changed, self._params_changed = self._params_changed, set()
             self._sync_text_bufs(changed)
             self._handle.dirty_all()
-        dirty = self._flush_pv_publish() or params_changed
+        dirty = self._flush_pv_publish() or params_changed or auto_tile_finished
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -2652,6 +2688,13 @@ class TrainingPanel(Panel):
 
         if action == "start":
             self._action_start()
+        elif action == "auto_tile_preview":
+            self._auto_tile_preview()
+        elif action == "auto_tile_train":
+            self._auto_tile_train()
+        elif action == "auto_tile_cancel":
+            if self._auto_tile_process is not None:
+                self._auto_tile_process.terminate()
         elif action == "pause":
             lf.pause_training()
         elif action == "resume":
@@ -2768,6 +2811,89 @@ class TrainingPanel(Panel):
                     self._add_save_steps_to_eval_steps(params)
                 self._refresh_save_steps_model(params)
 
+    def _auto_tile_settings(self):
+        try:
+            columns = int(self._auto_tile_columns)
+            rows = int(self._auto_tile_rows)
+            overlap = float(self._auto_tile_overlap)
+        except (TypeError, ValueError):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        if not (1 <= columns <= 100 and 1 <= rows <= 100 and
+                columns * rows <= 1000 and 0.0 <= overlap <= 0.3):
+            raise ValueError(tr("auto_tiles.invalid_grid"))
+        return columns, rows, overlap
+
+    def _set_auto_tile_status(self, status):
+        self._auto_tile_status = status
+        if self._handle:
+            self._handle.dirty("auto_tile_status")
+
+    def _auto_tile_preview(self):
+        try:
+            columns, rows, overlap = self._auto_tile_settings()
+            dataset = lf.dataset_params()
+            if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
+                raise ValueError(tr("auto_tiles.dataset_required"))
+            if dataset.centralize_dataset != "off":
+                raise ValueError(tr("auto_tiles.centralize_off"))
+            self._auto_tile_preview_group = lf.preview_auto_tiles(
+                columns, rows, overlap, self._auto_tile_align,
+                self._auto_tile_preview_group)
+            self._auto_tile_preview_settings = (columns, rows, overlap, self._auto_tile_align)
+            self._auto_tile_preview_dataset = dataset.data_path if dataset and dataset.has_params() else ""
+            self._set_auto_tile_status(tr("auto_tiles.previewed").format(columns * rows))
+        except (RuntimeError, ValueError) as error:
+            self._set_auto_tile_status(str(error))
+
+    def _auto_tile_train(self):
+        if self._auto_tile_process is not None:
+            return
+        if RuntimeState.trainer_state.value != "ready":
+            self._set_auto_tile_status(tr("auto_tiles.training_active"))
+            return
+        try:
+            columns, rows, overlap = self._auto_tile_settings()
+            dataset = lf.dataset_params()
+            if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
+                raise ValueError(tr("auto_tiles.dataset_required"))
+            if dataset.centralize_dataset != "off":
+                raise ValueError(tr("auto_tiles.centralize_off"))
+            dataset_path = os.path.abspath(dataset.data_path)
+            output = os.path.abspath(dataset.output_path or
+                                     os.path.join(dataset_path, "output"))
+            command = [lf.studio_executable_path(), "-d", dataset_path,
+                       "-o", output, "--auto-tile", f"{columns}x{rows}",
+                       "--tile-overlap", str(overlap)]
+            if (self._auto_tile_preview_group >= 0 and
+                    self._auto_tile_preview_dataset == dataset.data_path and
+                    self._auto_tile_preview_settings ==
+                    (columns, rows, overlap, self._auto_tile_align)):
+                tile_plan = os.path.join(output, "auto_tile_plan.json")
+                count = lf.save_auto_tile_plan(self._auto_tile_preview_group, columns, tile_plan)
+                if count != columns * rows:
+                    raise ValueError(tr("auto_tiles.invalid_preview"))
+                command.extend(["--tile-plan", tile_plan])
+            if not self._auto_tile_align:
+                command.append("--no-tile-pca")
+            if dataset.images != "images":
+                command.extend(["--images", dataset.images])
+            params = lf.optimization_params()
+            if params and params.has_params():
+                command.extend(["--strategy", params.strategy,
+                                "--iter", str(params.iterations),
+                                "--sh-degree", str(params.sh_degree)])
+            os.makedirs(output, exist_ok=True)
+            self._auto_tile_output = output
+            with open(os.path.join(output, "auto_tiles.log"), "w", encoding="utf-8") as log:
+                self._auto_tile_process = subprocess.Popen(
+                    command, stdout=log, stderr=subprocess.STDOUT)
+            self._set_auto_tile_status(tr("auto_tiles.running").format(columns * rows))
+            self._schedule_deferred_update(0.25)
+            if self._handle:
+                self._handle.dirty("auto_tile_running")
+        except (OSError, RuntimeError, ValueError) as error:
+            self._set_auto_tile_status(str(error))
+
     def _action_reset(self):
         def _reset(_stop_training):
             _restore_stored_session_if_needed()
@@ -2780,6 +2906,9 @@ class TrainingPanel(Panel):
         )
 
     def _action_start(self):
+        if self._auto_tile_process is not None:
+            self._set_auto_tile_status(tr("auto_tiles.training_active"))
+            return
         if _training_session_state().get("restoring"):
             return
         if _restore_stored_session_if_needed(then_start=True):

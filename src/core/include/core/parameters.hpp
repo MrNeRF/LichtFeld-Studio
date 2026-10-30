@@ -605,6 +605,14 @@ namespace lfs::core {
             // Unset keeps the box axis-aligned with its corners stored as given.
             std::optional<std::array<float, 3>> cropbox_rotation = std::nullopt;
 
+            // CLI auto-tiling is orchestrated by the parent process; each tile is a fresh headless run.
+            std::optional<std::pair<int, int>> auto_tile_grid = std::nullopt;
+            float auto_tile_size = 0.0f;
+            float tile_overlap = 0.15f;
+            bool auto_tile_align_pca = true;
+            bool auto_tile_merge = true;
+            std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
+
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;

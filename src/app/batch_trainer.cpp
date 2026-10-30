@@ -10,12 +10,20 @@
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/path_utils.hpp"
+#include "core/point_cloud.hpp"
+#include "core/scene.hpp"
+#include "core/scene_partitioner.hpp"
+#include "core/camera.hpp"
+#include "io/exporter.hpp"
 #include "io/loader.hpp"
+#include "io/ply_stream_merge.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -1260,6 +1268,225 @@ namespace lfs::app {
         const bool reports_written = write_summary_files(params, results, total_duration_seconds, timestamp);
 
         return (failed_count > 0 || cancelled_count > 0 || !reports_written) ? 1 : 0;
+    }
+
+    int run_auto_tile_training(const lfs::core::param::TrainingParameters& params,
+                               const std::vector<std::string>& command_line) {
+        using lfs::core::path_to_utf8;
+        const auto& dataset = params.dataset.data_path;
+        const auto& output = params.dataset.output_path;
+        if (dataset.empty() || output.empty() || !lfs::io::Loader::isDatasetPath(dataset)) {
+            LOG_ERROR("Auto-tiling needs a dataset folder and an output directory");
+            return 1;
+        }
+        if (params.dataset.centralize_dataset != "off") {
+            LOG_ERROR("Auto-tiling currently requires --centralize off so crop boxes and exports share dataset coordinates");
+            return 1;
+        }
+        if (params.resume_checkpoint || params.resume_project || params.dataset_project || params.cropbox ||
+            !params.add_splat_paths.empty()) {
+            LOG_ERROR("Auto-tiling requires fresh dataset training without a manual crop box or added splats");
+            return 1;
+        }
+
+        // Preserve ordinary training options, including --config, without forwarding the
+        // parent's dataset/output and tiling options to the tile processes.
+        std::vector<std::string> shared;
+        for (size_t n = 1; n < command_line.size();) {
+            const auto* flag = lfs::core::args::training_flag(command_line[n]);
+            if (!flag) {
+                LOG_ERROR("Cannot forward auto-tiling option: {}", command_line[n]);
+                return 1;
+            }
+            const bool separate_value = flag->takes_value &&
+                                        command_line[n] == flag->name && n + 1 < command_line.size();
+            const size_t count = separate_value ? 2 : 1;
+            const std::string_view name = flag->name;
+            const bool parent_only = name == "-d" || name == "--data-path" || name == "-o" ||
+                                     name == "--output-path" || name == "--output-name" ||
+                                     name == "--export" || name == "--headless" ||
+                                     name == "--auto-tile" || name == "--tile-size" ||
+                                     name == "--tile-overlap" || name == "--no-tile-pca" ||
+                                     name == "--no-tile-merge" || name == "--tile-plan" ||
+                                     name == "--train";
+            if (!parent_only)
+                shared.insert(shared.end(), command_line.begin() + n, command_line.begin() + n + count);
+            n += count;
+        }
+
+        std::vector<lfs::core::TileSpec> tiles;
+        try {
+            if (params.tile_plan_path) {
+                std::ifstream input(lfs::core::native_fs::native_path(*params.tile_plan_path));
+                if (!input) throw std::runtime_error("Cannot open tile plan");
+                const auto plan = json::parse(input);
+                if (!plan.contains("tiles") || !plan["tiles"].is_array())
+                    throw std::runtime_error("Tile plan needs a tiles array");
+                if (plan["tiles"].size() == 0 || plan["tiles"].size() > 1000)
+                    throw std::runtime_error("Tile plan must have 1 to 1000 boxes");
+                std::unordered_set<std::string> tile_names;
+                for (const auto& item : plan["tiles"]) {
+                    const auto lo = item.at("min").get<std::array<float, 3>>();
+                    const auto hi = item.at("max").get<std::array<float, 3>>();
+                    const auto rotation = item.at("rotation_degrees").get<std::array<float, 3>>();
+                    lfs::core::TileSpec tile;
+                    tile.i = item.at("i").get<int>();
+                    tile.j = item.at("j").get<int>();
+                    tile.name = std::format("tile_{}_{}", tile.i, tile.j);
+                    tile.min = {lo[0], lo[1], lo[2]};
+                    tile.max = {hi[0], hi[1], hi[2]};
+                    tile.rotation_degrees = {rotation[0], rotation[1], rotation[2]};
+                    for (int axis = 0; axis < 3; ++axis) {
+                        if (!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) ||
+                            !std::isfinite(rotation[axis]) || lo[axis] >= hi[axis])
+                            throw std::runtime_error("Tile plan contains invalid bounds or angles");
+                    }
+                    if (tile.i < 0 || tile.j < 0 || tile.i > 99 || tile.j > 99 ||
+                        (params.auto_tile_grid &&
+                         (tile.i >= params.auto_tile_grid->first ||
+                          tile.j >= params.auto_tile_grid->second)))
+                        throw std::runtime_error("Tile plan contains an invalid grid index");
+                    if (!tile_names.insert(tile.name).second)
+                        throw std::runtime_error("Tile plan contains duplicate grid indices");
+                    tiles.push_back(tile);
+                }
+                if (params.auto_tile_grid &&
+                    tiles.size() != static_cast<size_t>(params.auto_tile_grid->first * params.auto_tile_grid->second))
+                    throw std::runtime_error("Tile plan count differs from --auto-tile grid");
+            } else {
+            lfs::io::LoadOptions load_options;
+            load_options.images_folder = params.dataset.images;
+            load_options.min_track_length = params.dataset.min_track_length;
+            auto loaded = lfs::io::Loader::create()->load(dataset, load_options);
+            if (!loaded)
+                throw std::runtime_error(std::format("Cannot inspect dataset: {}", loaded.error().format()));
+            auto* scene = std::get_if<lfs::io::LoadedScene>(&loaded->data);
+            if (!scene)
+                throw std::runtime_error("Auto-tiling expects a dataset with cameras and optional sparse points");
+            std::vector<glm::vec3> centers;
+            centers.reserve(scene->cameras.size());
+            for (const auto& camera : scene->cameras) {
+                if (!camera) continue;
+                const auto position = camera->cam_position().cpu().contiguous();
+                if (position.numel() >= 3) {
+                    const auto* p = position.ptr<float>();
+                    centers.emplace_back(p[0], p[1], p[2]);
+                }
+            }
+            const lfs::core::PointCloud empty_points;
+            const auto& points = scene->point_cloud ? *scene->point_cloud : empty_points;
+            float angle = 0.0f;
+            if (params.auto_tile_align_pca) {
+                if (points.size() > 1) {
+                    angle = lfs::core::compute_dominant_orientation_pca(points);
+                } else if (centers.size() > 1) {
+                    std::vector<float> coordinates;
+                    coordinates.reserve(centers.size() * 3);
+                    for (const auto& center : centers)
+                        coordinates.insert(coordinates.end(), {center.x, center.y, center.z});
+                    const lfs::core::PointCloud cameras{
+                        lfs::core::Tensor::from_vector(coordinates, {centers.size(), 3}, lfs::core::Device::CPU),
+                        lfs::core::Tensor{}};
+                    angle = lfs::core::compute_dominant_orientation_pca(cameras);
+                }
+            }
+            auto bounds = lfs::core::compute_robust_scene_bounds(points, centers, 0.02f, angle);
+            const auto extent = bounds.max - bounds.min;
+            // Keep legitimate edge geometry and the full vertical range just beyond the quantiles.
+            const glm::vec3 padding = glm::max(extent * 0.02f, glm::vec3(0.01f));
+            bounds.min -= padding;
+            bounds.max += padding;
+            lfs::core::TileGridConfig grid;
+            if (params.auto_tile_grid) {
+                grid.columns = params.auto_tile_grid->first;
+                grid.rows = params.auto_tile_grid->second;
+            }
+            grid.target_size = params.auto_tile_size;
+            grid.overlap_ratio = params.tile_overlap;
+            grid.align_pca = params.auto_tile_align_pca;
+            tiles = lfs::core::generate_tile_grid(bounds, grid);
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Cannot partition dataset: {}", error.what());
+            return 1;
+        }
+
+        json manifest;
+        manifest["dataset"] = path_to_utf8(dataset);
+        manifest["overlap_ratio"] = params.tile_overlap;
+        manifest["tiles"] = json::array();
+        for (const auto& tile : tiles) {
+            manifest["tiles"].push_back({{"name", tile.name}, {"i", tile.i}, {"j", tile.j},
+                                          {"min", {tile.min.x, tile.min.y, tile.min.z}},
+                                          {"max", {tile.max.x, tile.max.y, tile.max.z}},
+                                          {"rotation_degrees", {tile.rotation_degrees.x,
+                                                                 tile.rotation_degrees.y,
+                                                                 tile.rotation_degrees.z}}});
+        }
+        if (!write_batch_report(output / "tiles.json", manifest.dump(2) + "\n"))
+            return 1;
+
+        lfs::core::param::BatchTrainingParameters batch;
+        batch.output_dir = output;
+        batch.shared_args = std::move(shared);
+        batch.continue_on_failure = false;
+        std::filesystem::path executable;
+        try { executable = lfs::core::getExecutablePath(); }
+        catch (const std::exception& error) { LOG_ERROR("{}", error.what()); return 1; }
+        ScopedSignalHandler signal_handler;
+        std::vector<path> exports;
+        exports.reserve(tiles.size());
+        for (const auto& tile : tiles) {
+            lfs::core::param::BatchJobItem job;
+            job.dataset_path = dataset;
+            job.name = tile.name;
+            job.output_path = output / "tiles" / tile.name;
+            const auto box = std::format("{},{},{},{},{},{}", tile.min.x, tile.min.y, tile.min.z,
+                                         tile.max.x, tile.max.y, tile.max.z);
+            job.extra_args = {"--cropbox=" + box, "--cropbox-loss-weight", "0", "--crop",
+                              "--output-name", tile.name, "--export", "ply"};
+            if (tile.rotation_degrees.x != 0.0f || tile.rotation_degrees.y != 0.0f ||
+                tile.rotation_degrees.z != 0.0f) {
+                job.extra_args.push_back(std::format("--cropbox-rotation={},{},{}",
+                                                     tile.rotation_degrees.x,
+                                                     tile.rotation_degrees.y,
+                                                     tile.rotation_degrees.z));
+            }
+            std::string error;
+            if (!validate_job_arguments(job, batch, error)) {
+                LOG_ERROR("Invalid tile {}: {}", tile.name, error);
+                return 1;
+            }
+            if (g_interrupt_count.load() > 0) {
+                LOG_WARN("Auto-tiling interrupted before {}", tile.name);
+                return 1;
+            }
+            std::println("[Auto-tile {}/{}] Training {}", exports.size() + 1, tiles.size(), tile.name);
+            const auto result = execute_job(job, batch, executable);
+            if (!result.success) {
+                LOG_ERROR("Tile {} failed: {}", tile.name, result.error_message);
+                return 1;
+            }
+            const path exported = job.output_path / (tile.name + ".ply");
+            if (!lfs::core::native_fs::exists(exported)) {
+                LOG_ERROR("Tile {} completed without its expected PLY export: {}", tile.name, path_to_utf8(exported));
+                return 1;
+            }
+            exports.push_back(exported);
+        }
+        if (!params.auto_tile_merge) return 0;
+        if (g_interrupt_count.load() > 0) return 1;
+
+        // Tile PLYs already use the same dataset coordinates. Streaming their
+        // identical vertex records avoids holding every trained model in RAM.
+        const path destination = output / "merged.ply";
+        if (const auto merged = lfs::io::merge_binary_ply_streaming(
+                exports, destination, [] { return g_interrupt_count.load() > 0; }); !merged) {
+            LOG_ERROR("Cannot merge tile splats: {}", merged.error().format());
+            return 1;
+        }
+        std::println("[Auto-tile] Merged {} tiles into {}", tiles.size(), path_to_utf8(destination));
+        return 0;
     }
 
 } // namespace lfs::app

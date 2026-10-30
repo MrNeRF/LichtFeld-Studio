@@ -137,8 +137,8 @@ namespace {
         p.captureCudaDeviceBaseline();
     }
 
-    int run_mode(lfs::core::args::ParsedArgs args) {
-        return std::visit([](auto&& mode) -> int {
+    int run_mode(lfs::core::args::ParsedArgs args, const std::vector<std::string>& command_line) {
+        return std::visit([&command_line](auto&& mode) -> int {
             using T = std::decay_t<decltype(mode)>;
 
             if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
@@ -181,6 +181,8 @@ namespace {
                 }
                 return lfs::app::run_batch_training(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                if (mode.params->auto_tile_grid || mode.params->auto_tile_size > 0.0f)
+                    return lfs::app::run_auto_tile_training(*mode.params, command_line);
 #ifdef __GLIBC__
                 // Training workers create many short-lived glibc arenas. Limit their
                 // retained heap without overriding an explicit user setting.
@@ -257,5 +259,7 @@ int main(int argc, char* argv[]) {
     publishResolvedUserPaths();
 
     return lfs::core::run_with_exception_firewall(
-        [&result] { return run_mode(std::move(*result)); });
+        [&result, argc, argv] {
+            return run_mode(std::move(*result), std::vector<std::string>(argv, argv + argc));
+        });
 }

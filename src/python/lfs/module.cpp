@@ -57,6 +57,7 @@
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/error.hpp"
+#include "core/executable_path.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -67,6 +68,8 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
+#include "core/scene_partitioner.hpp"
+#include "core/point_cloud.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_owner_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -3584,6 +3587,121 @@ NB_MODULE(lichtfeld, m) {
             return lfs::python::PyScene(scene);
         },
         "Get the current scene (None if not available)");
+
+    m.def("studio_executable_path", [] {
+        return lfs::core::path_to_utf8(lfs::core::getExecutablePath());
+    }, "Path to the running LichtFeld Studio executable");
+
+    m.def("preview_auto_tiles", [](int columns, int rows, float overlap, bool align_pca,
+                                    int replace_group_id) {
+        auto* scene = get_scene_internal();
+        if (!scene) throw std::runtime_error("No scene is loaded");
+        auto point_cloud = scene->getInitialPointCloud();
+        if (!point_cloud) {
+            for (const auto* node : scene->getNodes()) {
+                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
+                    point_cloud = node->point_cloud;
+                    break;
+                }
+            }
+        }
+        const lfs::core::PointCloud empty_points;
+        const auto& points = point_cloud ? *point_cloud : empty_points;
+        std::vector<glm::vec3> centers;
+        for (const auto* node : scene->getNodes()) {
+            if (node->type != lfs::core::NodeType::CAMERA || !node->camera) continue;
+            const auto position = node->camera->cam_position().cpu().contiguous();
+            if (position.numel() < 3) continue;
+            const auto* p = position.ptr<float>();
+            centers.emplace_back(p[0], p[1], p[2]);
+        }
+        float angle = 0.0f;
+        if (align_pca) {
+            if (points.size() > 1) {
+                angle = lfs::core::compute_dominant_orientation_pca(points);
+            } else if (centers.size() > 1) {
+                std::vector<float> values;
+                values.reserve(centers.size() * 3);
+                for (const auto& center : centers)
+                    values.insert(values.end(), {center.x, center.y, center.z});
+                const lfs::core::PointCloud camera_points{
+                    lfs::core::Tensor::from_vector(values, {centers.size(), 3}, lfs::core::Device::CPU),
+                    lfs::core::Tensor{}};
+                angle = lfs::core::compute_dominant_orientation_pca(camera_points);
+            }
+        }
+        auto bounds = lfs::core::compute_robust_scene_bounds(points, centers, 0.02f, angle);
+        const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
+        bounds.min -= padding;
+        bounds.max += padding;
+        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca});
+        if (const auto* old = scene->getNodeById(replace_group_id);
+            old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
+            scene->removeNode(old->name);
+        }
+        const auto group_id = scene->createTileCropBoxes(tiles);
+        if (group_id == lfs::core::NULL_NODE)
+            throw std::runtime_error("Could not create tile preview boxes");
+        return group_id;
+    }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
+       nb::arg("align_pca") = true, nb::arg("replace_group_id") = -1,
+       "Preview auto-tile boxes in the current scene");
+
+    m.def("save_auto_tile_plan", [](int group_id, int columns, const std::string& destination) {
+        auto* scene = get_scene_internal();
+        if (!scene || columns < 1 || columns > 100)
+            throw std::runtime_error("Cannot save tile preview from this scene");
+        const auto* group = scene->getNodeById(group_id);
+        if (!group || group->type != lfs::core::NodeType::GROUP ||
+            !group->name.starts_with("AutoTiles") || group->children.empty())
+            throw std::runtime_error("Preview tile boxes before training");
+        nlohmann::json plan;
+        plan["tiles"] = nlohmann::json::array();
+        int index = 0;
+        for (const auto child_id : group->children) {
+            const auto* box = scene->getNodeById(child_id);
+            if (!box || box->type != lfs::core::NodeType::CROPBOX || !box->cropbox)
+                throw std::runtime_error("Tile preview contains an invalid node");
+            const glm::mat4 world = scene->getWorldTransform(child_id);
+            const glm::vec3 scale{glm::length(glm::vec3(world[0])),
+                                  glm::length(glm::vec3(world[1])),
+                                  glm::length(glm::vec3(world[2]))};
+            if (!std::isfinite(scale.x) || !std::isfinite(scale.y) || !std::isfinite(scale.z) ||
+                scale.x <= 0.0f || scale.y <= 0.0f || scale.z <= 0.0f)
+                throw std::runtime_error("Tile preview contains a zero-size box");
+            glm::mat4 rotation{1.0f};
+            for (int axis = 0; axis < 3; ++axis)
+                rotation[axis] = world[axis] / scale[axis];
+            if (glm::determinant(glm::mat3(rotation)) < 0.99f)
+                throw std::runtime_error("Tile preview contains a mirrored or sheared box");
+            float rx = 0.0f, ry = 0.0f, rz = 0.0f;
+            glm::extractEulerAngleXYZ(rotation, rx, ry, rz);
+            if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz))
+                throw std::runtime_error("Tile preview contains invalid rotation");
+            const glm::vec3 local_center = (box->cropbox->min + box->cropbox->max) * 0.5f;
+            const glm::vec3 center = glm::vec3(world * glm::vec4(local_center, 1.0f));
+            const glm::vec3 half = (box->cropbox->max - box->cropbox->min) * 0.5f * scale;
+            const glm::vec3 lo = center - half, hi = center + half;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(lo[axis]) || !std::isfinite(hi[axis]) || lo[axis] >= hi[axis])
+                    throw std::runtime_error("Tile preview contains invalid bounds");
+            }
+            plan["tiles"].push_back({{"i", index % columns}, {"j", index / columns},
+                                      {"min", {lo.x, lo.y, lo.z}},
+                                      {"max", {hi.x, hi.y, hi.z}},
+                                      {"rotation_degrees", {glm::degrees(rx), glm::degrees(ry), glm::degrees(rz)}}});
+            ++index;
+        }
+        const auto path = lfs::core::utf8_to_path(destination);
+        lfs::core::native_fs::create_directories(path.parent_path());
+        std::ofstream output(lfs::core::native_fs::native_path(path));
+        if (!output) throw std::runtime_error("Could not open tile plan destination");
+        output << plan.dump(2) << '\n';
+        output.close();
+        if (!output) throw std::runtime_error("Could not write tile plan");
+        return index;
+    }, nb::arg("group_id"), nb::arg("columns"), nb::arg("destination"),
+       "Save edited preview boxes for a headless auto-tile run");
 
     // Get scene generation counter for validity checking
     m.def(
