@@ -14,6 +14,7 @@ namespace lfs::media::detail {
     inline constexpr char png_metadata_policy[] = "png-static-source-xmp-v1";
     inline constexpr char tiff_metadata_policy[] = "tiff16-static-source-xmp-v1";
     inline constexpr char exr_metadata_policy[] = "exr-static-source-xmp-v1";
+    inline constexpr char jxl_metadata_policy[] = "jxl-static-source-xmp-v1";
     [[nodiscard]] std::string_view embeddedMetadataPolicy(FrameFileFormat);
     // One prepared static observation per writer session. JPEG alone needs
     // Extended XMP markers when its Standard APP1 packet cannot hold the source.
@@ -27,7 +28,7 @@ namespace lfs::media::detail {
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat);
     [[nodiscard]] std::string_view imageXmpSuffix();
     [[nodiscard]] Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&);
-    // Contiguous representation required by TIFF/OpenEXR tag setters.
+    // Contiguous representation required by TIFF/OpenEXR setters and libjxl boxes.
     [[nodiscard]] Result<std::string> imageXmpPacket(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&);
     // Encoded bytes are produced by our JPEG encoders. Inserts metadata without
     // recompression into the atomic writer's borrowed stream; never closes it.

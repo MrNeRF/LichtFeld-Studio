@@ -696,3 +696,37 @@ malformed XML, NUL and invalid UTF-8 from external files, with no normalization 
 XML entity resolution during collection. XML interpretation remains in the shared
 bounded interpreter. Standalone EXIF collection keeps its existing unsupported
 result for EXR; the paired XMP observation has its own scope and status.
+
+
+### JPEG XL frame metadata
+
+JPEG XL extraction accepts `embed_source_metadata` through the existing C++,
+Python and CLI file-extraction APIs. The writer places one uncompressed standard
+`xml ` box in the JPEG XL container, with policy `jxl-static-source-xmp-v1`.
+The packet carries the retained static source catalog and output geometry,
+applied rotation and source-frame timing. Static GPS and container creation
+facts remain source observations rather than per-frame measurements.
+
+The existing core `encode_jxl_memory`/`write_jxl` and `ImageOutput::writeJxl`
+overloads retain their behavior. Explicit synchronous XMP overloads accept a
+borrowed UTF-8 XML packet of at most 32 MiB, rejecting embedded NUL. Native
+callers provide valid XML; extraction constructs the packet itself. An empty
+packet keeps the previous codestream/container selection. The provider copies
+the packet through the stock `JxlEncoderAddBox` API; no provider overlay is
+required. This copy counts against the existing encoder-memory budget, while
+prepared source properties and the assembled caller packet are separate.
+The encoded-output budget includes the box and container overhead.
+
+Static source properties are prepared once per session and shared by recovery
+writers. One bounded contiguous packet is assembled for each synchronous frame
+write. Allocation failures return `ResourceExhausted`; atomic publication,
+overwrite and cancellation follow the existing file service. Metadata policy,
+source digest/locator and timestamp origin participate in resume validation.
+The source metadata readback APIs reuse the existing bounded JPEG XL XML-box
+collector. Writer and reader budgets are separate: a packet exceeding the
+requested observation budget is reported as limited.
+
+UInt8, UInt16 and Float32 encoding, lossless/lossy selection, declared color,
+alpha conversion and precision policy continue through the existing encoder.
+Embedding preserves private source information, including identifiers, GPS and
+locator bytes, under the existing opt-in preservation policy.

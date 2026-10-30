@@ -95,17 +95,19 @@ int runFrameSinkUnitContracts() {
     require(!files.write(file_view).has_value(), "duplicate filenames rejected");
     files.abort({SinkOutcome::Failed, 1, {}});
     std::filesystem::remove(directory / "frame_1.png");
-    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG, FrameFileFormat::TIFF16, FrameFileFormat::EXR}) {
+    for (const auto format : {FrameFileFormat::JPEG, FrameFileFormat::PNG, FrameFileFormat::TIFF16, FrameFileFormat::EXR, FrameFileFormat::JXL}) {
         const bool tiff = format == FrameFileFormat::TIFF16;
         const bool exr = format == FrameFileFormat::EXR;
-        const std::string name = exr ? "exr-metadata" : tiff                          ? "tiff-metadata"
+        const bool jxl = format == FrameFileFormat::JXL;
+        const std::string name = jxl ? "jxl-metadata" : exr                           ? "exr-metadata"
+                                                    : tiff                            ? "tiff-metadata"
                                                     : format == FrameFileFormat::JPEG ? "jpeg-metadata"
                                                                                       : "png-metadata";
         const std::array<float, 6> linear{0.f, .1f, .2f, .3f, .4f, 1.f};
         const FrameView float_view{{1, 2, 3 * sizeof(float), FramePixelFormat::RGBFloat32, {ColorTransfer::Linear, ColorPrimaries::Bt709, AlphaMode::None, ColorUnits::Relative}},
                                    file_view.info,
                                    {reinterpret_cast<const uint8_t*>(linear.data()), sizeof(linear)}};
-        const auto& metadata_view = (tiff || exr) ? float_view : file_view;
+        const auto& metadata_view = (tiff || exr || jxl) ? float_view : file_view;
         FileFrameSinkOptions options;
         options.output_directory = directory / name;
         options.format = format;
@@ -125,7 +127,8 @@ int runFrameSinkUnitContracts() {
         session = {};
         require(writer.write(metadata_view).has_value(), "embedded image owns source snapshot after begin");
         require(writer.complete({SinkOutcome::Completed, 1, {}}).has_value(), "embedded image session completes");
-        const auto path = options.output_directory / (exr ? "frame_1.exr" : tiff                          ? "frame_1.tif"
+        const auto path = options.output_directory / (jxl ? "frame_1.jxl" : exr                           ? "frame_1.exr"
+                                                                        : tiff                            ? "frame_1.tif"
                                                                         : format == FrameFileFormat::JPEG ? "frame_1.jpg"
                                                                                                           : "frame_1.png");
         require(lfs::core::image_codecs::decode(path, decoded, error) && decoded.width == 1 && decoded.height == 2,
@@ -146,9 +149,11 @@ int runFrameSinkUnitContracts() {
         options.image_output.overwrite = true;
         options.tiff16.overwrite = true;
         options.exr.overwrite = true;
+        options.jxl.overwrite = true;
         options.image_output.cancelled = [] { return true; };
         options.tiff16.cancelled = options.image_output.cancelled;
         options.exr.cancelled = options.image_output.cancelled;
+        options.jxl.cancelled = options.image_output.cancelled;
         FileFrameSink cancelled(options);
         require(cancelled.begin(session).has_value() && !cancelled.write(metadata_view),
                 "embedded image observes cancellation at atomic publication");
@@ -166,6 +171,7 @@ int runFrameSinkUnitContracts() {
         options.image_output.cancelled = {};
         options.tiff16.cancelled = {};
         options.exr.cancelled = {};
+        options.jxl.cancelled = {};
         FileFrameSink bounded(options);
         require(bounded.begin(session).has_value(),
                 "CPU metadata preparation waits for a CPU frame");
