@@ -26,12 +26,12 @@ namespace lfs::training::vulkan {
             float scale_normalizer, erank_weight, dc_weight, sh_weight;
             uint64_t impact_sum, impact_peak;
         };
-        static_assert(sizeof(BackPush) == 552);
-        static_assert(offsetof(BackPush, impact_sum) == 536);
-        static_assert(offsetof(BackPush, image_gradient) == 320);
-        static_assert(offsetof(BackPush, densify) == 440);
-        static_assert(offsetof(BackPush, scale_weight) == 452);
-        static_assert(offsetof(BackPush, opacity_elements) == 468);
+        static_assert(sizeof(BackPush) == 568);
+        static_assert(offsetof(BackPush, impact_sum) == 552);
+        static_assert(offsetof(BackPush, image_gradient) == 336);
+        static_assert(offsetof(BackPush, densify) == 456);
+        static_assert(offsetof(BackPush, scale_weight) == 468);
+        static_assert(offsetof(BackPush, opacity_elements) == 484);
     } // namespace
     void fast_pop_scores(const FastSaved& saved, In bg_color, In bg_image, Out scores) {
         LFS_ASSERT_MSG(saved.backend != nullptr, "Fast POP scores require a created state");
@@ -296,6 +296,11 @@ namespace lfs::training {
             record_vram_tensor(scope, "forward.counts", s.counts);
             record_vram_tensor(scope, "forward.keys_a", s.keys_a);
             record_vram_tensor(scope, "forward.keys_b", s.keys_b);
+            record_vram_tensor(scope, "forward.depth_keys_a", s.depth_keys_a);
+            record_vram_tensor(scope, "forward.depth_keys_b", s.depth_keys_b);
+            record_vram_tensor(scope, "forward.depth_values_a", s.depth_values_a);
+            record_vram_tensor(scope, "forward.depth_values_b", s.depth_values_b);
+            record_vram_tensor(scope, "forward.ordered_counts", s.ordered_counts);
             record_vram_tensor(scope, "output.depth", s.depth);
             record_vram_tensor(scope, "output.normal", s.normal);
             record_vram_current(scope, "backward.screen_gradient", backward ? size_t(s.push.visible) * 16 * 4 : 0, true);

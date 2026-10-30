@@ -257,6 +257,8 @@ result:
                 if (touched != 0)
                     ((Ptr<Projected, Access.ReadWrite>)p.projected)[i] = o;
                 ((Ptr<uint64_t, Access.ReadWrite>)p.counts)[i] = touched;
+                if (p.orderedCounts != 0)
+                    ((Ptr<uint64_t, Access.ReadWrite>)p.orderedCounts)[i] = touched != 0 ? 1 : 0;
                 if (touched != 0 && p.screenShare != 0) {
                     float3 s = load3(p.scales, original);
                     float radius = exp(max(s.x, max(s.y, s.z))) * sqrt(2 * log(max(255 / (1 + exp(-loadFloat(p.opacities, original))), 1.0f)));
@@ -272,12 +274,32 @@ result:
             storeUint(p.originalToWork, i, rank);
             if (visible)
                 storeUint(p.workToOriginal, rank, i);
+        } else if (p.stage == 9) {
+            // Stable compaction preserves original work-id order for depth ties.
+            uint64_t rank = ((Ptr<uint64_t, Access.Read>)p.offsets)[i];
+            if (((Ptr<uint64_t, Access.Read>)p.counts)[i] != 0) {
+                storeUint(p.keys, uint(rank - 1), projectedAt(p, i).depthKey);
+                storeUint(p.values, uint(rank - 1), i);
+            }
+            if (i == p.visible - 1) {
+                Ptr<uint, Access.ReadWrite> args = (Ptr<uint, Access.ReadWrite>)p.visibility;
+                args[0] = uint(rank);
+                args[8] = (uint(rank) + 2047) / 2048; args[9] = 1; args[10] = 1;
+                args[16] = rank != 0 ? 256 : 0; args[17] = 1; args[18] = 1;
+                args[28] = rank != 0 ? 1 : 0; args[29] = 1; args[30] = 1;
+            }
+        } else if (p.stage == 10) {
+            uint64_t touched = 0;
+            if (i < loadUint(p.visibility, 0))
+                touched = ((Ptr<uint64_t, Access.Read>)p.counts)[loadUint(p.depthOrder, i)];
+            ((Ptr<uint64_t, Access.ReadWrite>)p.orderedCounts)[i] = touched;
         } else if (p.stage == 3) {
             uint64_t end = ((Ptr<uint64_t, Access.Read>)p.offsets)[i];
             uint64_t at = i == 0 ? 0 : ((Ptr<uint64_t, Access.Read>)p.offsets)[i - 1];
             if (end == at)
                 continue;
-            Projected o = projectedAt(p, i);
+            uint workId = p.depthOrder != 0 ? loadUint(p.depthOrder, i) : i;
+            Projected o = projectedAt(p, workId);
             bool alongX = (o.ymax - o.ymin) <= (o.xmax - o.xmin);
             uint first = alongX ? o.ymin : o.xmin, last = alongX ? o.ymax : o.xmax;
             for (uint scan = first; scan < last; ++scan) {
@@ -288,23 +310,26 @@ result:
                         tileFault(p, uint(at), p.instances, 1u);
                         continue;
                     }
-                    ((Ptr<uint64_t, Access.ReadWrite>)p.keys)[at] = (uint64_t(tile) << 32) | uint64_t(o.depthKey);
-                    storeUint(p.values, uint(at), i);
+                    if (p.depthOrder != 0)
+                        storeUint(p.keys, uint(at), tile);
+                    else
+                        ((Ptr<uint64_t, Access.ReadWrite>)p.keys)[at] = (uint64_t(tile) << 32) | uint64_t(o.depthKey);
+                    storeUint(p.values, uint(at), workId);
                     ++at;
                 }
             }
             if (at != end)
                 tileFault(p, uint(at), uint(end), 2u);
         } else if (p.stage == 4) {
-            uint tile = uint(((Ptr<uint64_t, Access.Read>)p.keys)[i] >> 32);
+            uint tile = instanceTile(p, i);
             if (tile >= p.gridWidth * p.gridHeight || loadUint(p.values, i) >= p.visible) {
                 tileFault(p, tile >= p.gridWidth * p.gridHeight ? tile : loadUint(p.values, i),
                           tile >= p.gridWidth * p.gridHeight ? p.gridWidth * p.gridHeight : p.visible, 4u);
                 continue;
             }
-            if (i == 0 || (uint(((Ptr<uint64_t, Access.Read>)p.keys)[i - 1] >> 32)) != tile)
+            if (i == 0 || instanceTile(p, i - 1) != tile)
                 storeUint(p.ranges, 2 * tile, i);
-            if (i + 1 == p.instances || (uint(((Ptr<uint64_t, Access.Read>)p.keys)[i + 1] >> 32)) != tile)
+            if (i + 1 == p.instances || instanceTile(p, i + 1) != tile)
                 storeUint(p.ranges, 2 * tile + 1, i + 1);
         } else if (p.stage == 5) {
             uint tile = i / 256, rank = i % 256, pixel = pixelIndex(p, tile, rank);

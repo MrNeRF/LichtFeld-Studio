@@ -19,6 +19,7 @@ namespace lfs::training::vulkan {
                 result.push_back(ref(t));
         for (const auto* t : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work, &s.work_to_original,
                               &s.counts, &s.keys_a, &s.keys_b, &s.values_a, &s.values_b, &s.ranges, &s.transmittance, &s.last,
+                              &s.depth_keys_a, &s.depth_keys_b, &s.depth_values_a, &s.depth_values_b, &s.ordered_counts,
                               &s.image, &s.alpha, &s.depth, &s.normal})
             if (t->is_valid() && t->numel())
                 result.push_back(ref(*t));
@@ -67,10 +68,16 @@ namespace lfs::training::vulkan {
                     append(reads, {&s.inputs[i]});
                 append(reads, {&s.inputs[11]});
                 append(writes, {&s.projected, &s.counts, &s.original_to_work,
-                                &s.work_to_original, &s.inputs[11]});
+                                &s.work_to_original, &s.inputs[11], &s.ordered_counts});
             } else if (stage == 3) {
-                append(reads, {&s.projected, &s.offsets});
+                append(reads, {&s.projected, &s.offsets, &s.depth_values_a, &s.depth_values_b});
                 append(writes, {&s.keys_a, &s.values_a});
+            } else if (stage == 9) {
+                append(reads, {&s.projected, &s.counts, &s.offsets});
+                append(writes, {&s.depth_keys_a, &s.depth_values_a, &s.visibility});
+            } else if (stage == 10) {
+                append(reads, {&s.counts, &s.depth_values_a, &s.depth_values_b, &s.visibility});
+                append(writes, {&s.ordered_counts});
             } else if (stage == 4) {
                 append(reads, {&s.keys_a, &s.keys_b, &s.values_a, &s.values_b});
                 append(writes, {&s.ranges});
@@ -131,7 +138,8 @@ namespace lfs::training::vulkan {
         for (auto* tensor : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work,
                              &s.work_to_original, &s.counts, &s.keys_a, &s.keys_b,
                              &s.values_a, &s.values_b, &s.ranges, &s.transmittance,
-                             &s.last})
+                             &s.last, &s.depth_keys_a, &s.depth_keys_b,
+                             &s.depth_values_a, &s.depth_values_b, &s.ordered_counts})
             *tensor = Tensor{};
         auto& p = s.push;
         p = {};
@@ -143,7 +151,11 @@ namespace lfs::training::vulkan {
         const uint64_t tiles = uint64_t(p.grid_width) * p.grid_height;
         LFS_ASSERT_MSG(p.grid_width <= 65535 && p.grid_height <= 65535 && tiles <= INT_MAX / 256, "Fast tile grid exceeds indexing capacity");
         const uint32_t tile_bits = std::bit_width(static_cast<uint32_t>(tiles - 1));
-        p.depth_bits = 32;
+        // Small frames do not amortize visibility compaction and the extra scan.
+        const bool depth_ordered = count >= 131072;
+        const auto key_type = depth_ordered ? DataType::UInt32 : DataType::Int64;
+        p.depth_bits = depth_ordered ? 0 : 32;
+        const uint32_t sort_bits = tile_bits + p.depth_bits;
         p.active_bases = params.sh.active_bases;
         p.rest = params.sh.layout_bases - 1;
         // Keep the push block within its existing size: low bit is mip, remaining bits encode dilation.
@@ -213,13 +225,39 @@ namespace lfs::training::vulkan {
             p.projected = address(s.projected);
             s.counts = s.temporary(7, count, DataType::Int64);
             p.counts = address(s.counts);
+            if (depth_ordered) {
+                s.ordered_counts = s.temporary(27, count, DataType::Int64);
+                p.ordered_counts = address(s.ordered_counts);
+            }
             launch(s, 2, count);
             s.mark(1);
             s.mark(2);
             if (p.visible) {
                 s.mark(3);
                 s.mark(4);
-                s.offsets = inclusive_counts(s, s.counts);
+                if (depth_ordered) {
+                    // Compact only the sort inputs; projection and backward keep
+                    // their original work ids. Reuse the indirect control buffer
+                    // for visible depth keys before it describes tile instances.
+                    s.depth_keys_a = s.temporary(28, count, DataType::UInt32);
+                    s.depth_keys_b = s.temporary(29, count, DataType::UInt32);
+                    s.depth_values_a = s.temporary(30, count, DataType::UInt32);
+                    s.depth_values_b = s.temporary(31, count, DataType::UInt32);
+                    s.visibility = s.temporary(3, 32, DataType::UInt32);
+                    p.visibility = address(s.visibility);
+                    s.offsets = inclusive_counts(s, s.ordered_counts);
+                    p.offsets = address(s.offsets);
+                    p.keys = address(s.depth_keys_a);
+                    p.values = address(s.depth_values_a);
+                    launch(s, 9, count);
+                    const bool in_a = vulkan_pair_sort({&s.depth_keys_a, &s.depth_keys_b, &s.depth_values_a, &s.depth_values_b},
+                                                       count, 0, 32, false, nullptr, &s.visibility);
+                    p.depth_order = address(in_a ? s.depth_values_a : s.depth_values_b);
+                    launch(s, 10, count);
+                }
+                // Zero counts after the visible prefix keep the total at count-1,
+                // preserving the existing status readback and capacity retry.
+                s.offsets = inclusive_counts(s, depth_ordered ? s.ordered_counts : s.counts);
                 p.offsets = address(s.offsets);
                 s.mark(5);
                 if (s.indirect) {
@@ -231,8 +269,9 @@ namespace lfs::training::vulkan {
                     for (;;) {
                         // Retained buffers already include bounded growth headroom.
                         for (size_t slot = 8; slot < 12; ++slot) {
-                            if (!s.scratch[slot].is_valid() || s.scratch[slot].numel() < capacity)
-                                s.scratch[slot] = Tensor::empty({capacity}, Device::GPU, slot < 10 ? DataType::Int64 : DataType::UInt32);
+                            const auto dtype = slot < 10 ? key_type : DataType::UInt32;
+                            if (!s.scratch[slot].is_valid() || s.scratch[slot].dtype() != dtype || s.scratch[slot].numel() < capacity)
+                                s.scratch[slot] = Tensor::empty({capacity}, Device::GPU, dtype);
                         }
                         s.keys_a = Tensor(s.scratch[8]);
                         s.keys_b = Tensor(s.scratch[9]);
@@ -248,7 +287,7 @@ namespace lfs::training::vulkan {
                         s.scalar_readback.enqueue_range(s.visibility, 4, 8);
                         s.mark(6);
                         launch(s, 3, p.visible);
-                        const bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, true, nullptr, &s.visibility);
+                        const bool in_a = sort_bits == 0 || vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, sort_bits, !depth_ordered, nullptr, &s.visibility);
                         p.keys = address(in_a ? s.keys_a : s.keys_b);
                         p.values = address(in_a ? s.values_a : s.values_b);
                         launch(s, 4, p.instances);
@@ -290,14 +329,14 @@ namespace lfs::training::vulkan {
                         return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
                     p.instances = static_cast<uint32_t>(instances);
                     s.mark(6);
-                    s.keys_a = s.temporary(8, p.instances, DataType::Int64);
-                    s.keys_b = s.temporary(9, p.instances, DataType::Int64);
+                    s.keys_a = s.temporary(8, p.instances, key_type);
+                    s.keys_b = s.temporary(9, p.instances, key_type);
                     s.values_a = s.temporary(10, p.instances, DataType::UInt32);
                     s.values_b = s.temporary(11, p.instances, DataType::UInt32);
                     p.keys = address(s.keys_a);
                     p.values = address(s.values_a);
                     launch(s, 3, p.visible);
-                    bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, true);
+                    const bool in_a = sort_bits == 0 || vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, sort_bits, !depth_ordered);
                     p.keys = address(in_a ? s.keys_a : s.keys_b);
                     p.values = address(in_a ? s.values_a : s.values_b);
                     launch(s, 4, p.instances);

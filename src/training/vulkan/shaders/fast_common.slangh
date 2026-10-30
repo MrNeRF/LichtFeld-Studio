@@ -12,6 +12,7 @@ struct FastPush {
     float fx, fy, cx, cy, clipLeft, clipRight, clipTop, clipBottom;
     uint64_t shBounds;
     uint shFormat, padding;
+    uint64_t depthOrder, orderedCounts;
 };
 void specializeFast(inout FastPush p, uint bits) {
     p.stage = bits & 15;
@@ -83,6 +84,9 @@ void store3(uint64_t a, uint i, float3 v) {
 }
 uint loadUint(uint64_t a, uint i) { return ((Ptr<uint, Access.Read>)a)[i]; }
 void storeUint(uint64_t a, uint i, uint v) { ((Ptr<uint, Access.ReadWrite>)a)[i] = v; }
+uint instanceTile(FastPush p, uint i) {
+    return p.depthOrder != 0 ? loadUint(p.keys, i) : uint(((Ptr<uint64_t, Access.Read>)p.keys)[i] >> 32);
+}
 // Bit test, immune to fast-math NaN folding.
 bool finiteValue(float x) { return (asuint(x) & 0x7fffffffu) < 0x7f800000u; }
 float minNumber(float a, float b) { return isnan(a) ? b : isnan(b) ? a

@@ -716,6 +716,46 @@ namespace {
             check_forward(fc);
     }
 
+    TEST_P(PortableFastRaster, DepthTiesAndVisibilityChangesPreserveOrder) {
+        // Cross depth-sort blocks with equal keys and interspersed culled primitives. The
+        // count takes both the Metal (>= 65536) and Vulkan (>= 131072) depth-ordered path.
+        Scene s = make_scene(131073, 0, 65, 37, 91u, -4.5f, -3.0f);
+        s.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 4, 0, 0, 0, 1};
+        s.camera = {0, 0, -4};
+        for (int i = 0; i < s.count; ++i) {
+            s.means[3 * i + 2] = 0;
+            if (i % 3 == 0)
+                s.opacities[i] = -100;
+        }
+        Gpu g = upload_scene(s, ops::ShStorage::Float32);
+        const Rendered expected = render(s, Params(s), make_view(s, false), nullptr);
+        Frame frame;
+        for (const bool visible : {true, false, true}) {
+            g.opacities = upload(visible ? s.opacities : std::vector<float>(s.count, -100),
+                                 {static_cast<size_t>(s.count), 1});
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            if (visible) {
+                expect_close(download(frame.image), expected.image, 2e-4, "depth ties image");
+                expect_close(download(frame.alpha), expected.alpha, 2e-4, "depth ties alpha");
+            } else {
+                EXPECT_EQ(download(frame.alpha), std::vector<float>(s.width * s.height, 0));
+            }
+        }
+        const auto& table = fast_ops();
+        if (table.set_instance_capacity_for_testing && table.set_deferred_count && table.resolve_deferred_count) {
+            table.set_instance_capacity_for_testing(frame.saved, 1);
+            table.set_deferred_count(frame.saved, true);
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success);
+            EXPECT_EQ(table.resolve_deferred_count(frame.saved, true).code, ops::RasterResult::Code::CapacityOverflow);
+            table.set_instance_capacity_for_testing(frame.saved, 0);
+            forward(frame, s, g, {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success);
+            expect_close(download(frame.image), expected.image, 2e-4, "replayed depth ties image");
+        }
+    }
+
     TEST_P(PortableFastRaster, GrowingSortCapacityPreservesRender) {
         const auto& table = fast_ops();
         if (table.set_instance_capacity_for_testing == nullptr)
@@ -999,6 +1039,57 @@ namespace {
         check_gradients(2, true);
         check_gradients(3, false, ops::ShStorage::IeeeFloat16);
         check_gradients(1, true, ops::ShStorage::Float32, true);
+    }
+
+    TEST_P(PortableFastRaster, ContributorBatchesMatchReference) {
+        // Interleave splats below every pixel's alpha cutoff with contributors
+        // across several 128-entry batches, then exercise early stop and no kept entries.
+        Scene s = make_scene(513, 0, 17, 13, 97u);
+        s.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 4, 0, 0, 0, 1};
+        s.camera = {0, 0, -4};
+        Frame frame;
+        for (const float opacity : {-4.2f, 2.0f, -5.4f, -4.2f}) {
+            SCOPED_TRACE(opacity);
+            for (int i = 0; i < s.count; ++i) {
+                const bool missed = i % 3 == 0 || opacity == -5.4f;
+                s.means[3 * i] = s.means[3 * i + 1] = 0;
+                s.means[3 * i + 2] = 0.001f * i;
+                s.opacities[i] = missed ? -5.4f : opacity;
+                for (int c = 0; c < 3; ++c)
+                    s.scales[3 * i + c] = missed ? -8.0f : -0.4f;
+            }
+            const auto expected = render(s, Params(s), make_view(s, false), nullptr);
+            if (opacity == -4.2f) {
+                size_t longest = 0;
+                for (const auto& list : expected.lists)
+                    longest = std::max(longest, list.size());
+                EXPECT_GT(longest, 128u);
+            }
+            for (int i = 0; i < s.count; i += 3)
+                EXPECT_EQ(expected.weight[i], 0.0);
+            Gpu g = upload_scene(s, ops::ShStorage::Float32);
+            forward(frame, s, g, {.normals = true});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            expect_close(download(frame.image), expected.image, 2e-4, "compacted image");
+            expect_close(download(frame.alpha), expected.alpha, 2e-4, "compacted alpha");
+            expect_close(download(frame.depth), expected.depth, 1e-3, "compacted depth");
+            expect_close(download(frame.normal), expected.normal, 2e-4, "compacted normal");
+
+            AdamState state;
+            auto adam = make_adam(g, state, s.count, {});
+            for (auto& group : adam.groups)
+                group.enabled = false;
+            adam.groups[4].gradient = Tensor::zeros_like(g.sh0);
+            const auto grad = Tensor::ones_like(frame.image);
+            Tensor none;
+            fast_ops().backward(frame.saved, {grad, none, none, none}, none, none, none, none, adam,
+                                DensificationType::None);
+            std::vector<double> sh0(s.count * 3);
+            for (int i = 0; i < s.count; ++i)
+                for (int c = 0; c < 3; ++c)
+                    sh0[3 * i + c] = 0.28209479177387814 * expected.weight[i];
+            expect_close(download(adam.groups[4].gradient), sh0, 2e-4, "compacted SH gradient");
+        }
     }
 
     // With the trainer's Adam settings a first step from zero moments moves every
@@ -1495,10 +1586,10 @@ namespace {
 
     // Timing on a synthetic scene: ./lichtfeld_tests --tensor-backend=metal
     // --gtest_also_run_disabled_tests --gtest_filter='*PortableFastRaster.DISABLED_Benchmark*'
-    TEST_P(PortableFastRaster, DISABLED_Benchmark) {
+    void benchmark_fast_raster(const ops::ShStorage storage) {
         constexpr int count = 1'000'000;
         Scene s = make_scene(count, 3, 1000, 700, 77u, -4.5f, -3.0f);
-        Gpu g = upload_scene(s, ops::ShStorage::Q16);
+        Gpu g = upload_scene(s, storage);
         const LossWeights w = random_weights(s.width, s.height, 1u, false);
         const Tensor grad_image = plane(w.image, 3, s.height, s.width);
         AdamState state;
@@ -1523,9 +1614,19 @@ namespace {
                 backward_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
             }
         }
-        std::printf("Metal fast raster, %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n", count, s.width,
+        std::printf("Metal fast raster (%s), %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n",
+                    storage == ops::ShStorage::Q16 ? "Q16" : "Float32", count, s.width,
                     s.height, forward_ms / runs, backward_ms / runs);
     }
+
+    TEST_P(PortableFastRaster, DISABLED_Benchmark) {
+        benchmark_fast_raster(ops::ShStorage::Q16);
+    }
+
+    TEST_P(PortableFastRaster, DISABLED_BenchmarkFloat32) {
+        benchmark_fast_raster(ops::ShStorage::Float32);
+    }
+
     // A primitive with NaN/Inf geometry or opacity has no footprint on any backend.
     // Vulkan used to turn NaN tile bounds into tile 0 while Metal's clamp emptied
     // them, so a NaN model trained on (or failed) depending on the backend.
