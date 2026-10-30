@@ -110,9 +110,18 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
         require(context, "Missing HIP context");
         require(context->readbacks.empty(), "Destroy HIP readback staging before its context");
         DeviceScope device(context->device);
+        for (;;) {
+            const auto retired = std::find_if(context->timings.begin(), context->timings.end(), [](const auto* pool) { return pool->retired; });
+            if (retired == context->timings.end())
+                break;
+            check(lfs_hip_release_timing_internal(context, *retired));
+        }
+        require(context->timings.empty(), "Destroy HIP timing pools before their context");
         // On a runtime failure, retain the handle and unfreed allocations
         // for explicit recovery; never claim that queued work was drained.
         synchronize_context(context);
+        while (!context->expressions.empty())
+            check(lfs_hip_release_expression_internal(context, *context->expressions.begin()));
         while (!context->buffers.empty()) {
             auto* buffer = *context->buffers.begin();
             release_buffer_resources(buffer);
@@ -140,6 +149,10 @@ int lfs_hip_context_destroy(LfsHipContext* context, LfsHipError* error) {
         if (context->index_error_host) {
             check(hipHostFree(context->index_error_host));
             context->index_error_host = nullptr;
+        }
+        if (context->scalar_readback_host) {
+            check(hipHostFree(context->scalar_readback_host));
+            context->scalar_readback_host = nullptr;
         }
         check(hipStreamDestroy(context->stream));
         delete context;
@@ -471,6 +484,44 @@ int lfs_hip_memset(LfsHipContext* context, LfsHipView dst, size_t bytes, uint8_t
         DeviceScope device(context->device);
         if (bytes)
             check(hipMemsetAsync(static_cast<char*>(dst.buffer->data) + dst.offset, value, bytes, context->stream));
+    });
+}
+
+int lfs_hip_context_queue(LfsHipContext* context, uint64_t* queue, int32_t* device, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(context && queue && device, "Missing HIP queue descriptor");
+        *queue = reinterpret_cast<uintptr_t>(context->stream);
+        *device = context->device;
+    });
+}
+
+int lfs_hip_context_ready(LfsHipContext* context, int32_t* ready, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(context && ready, "Missing HIP queue readiness output");
+        *ready = 0;
+        DeviceScope device(context->device);
+        const auto status = hipStreamQuery(context->stream);
+        if (status == hipErrorNotReady)
+            return;
+        check(status);
+        *ready = 1;
+    });
+}
+
+int lfs_hip_host_callback(LfsHipContext* context, void (*callback)(void*), void* user, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(context && callback, "Missing HIP queue callback");
+        DeviceScope device(context->device);
+        check(hipLaunchHostFunc(context->stream, callback, user));
+    });
+}
+
+int lfs_hip_buffer_address(LfsHipContext* context, const LfsHipBuffer* buffer, uint64_t* address, LfsHipError* error) {
+    return boundary(error, [&] {
+        require(address, "Missing HIP address output");
+        *address = 0;
+        validate(context, buffer, 0, 0);
+        *address = reinterpret_cast<uintptr_t>(buffer->data);
     });
 }
 

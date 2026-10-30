@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "gemm_api.h"
+#include "matrix_product_runtime.hpp"
 namespace hip_gemm {
     // Depthwise filters and vector products have very few output rows. A full
     // matrix tile would spend most of its arithmetic on padded zero rows.
@@ -11,10 +12,9 @@ namespace hip_gemm {
         const size_t column = size_t(blockIdx.x) * blockDim.x + threadIdx.x, row = blockIdx.y;
         if (column >= n)
             return;
-        float value = 0;
         const size_t ao = (size_t(blockIdx.z) * m + row) * k, bo = size_t(blockIdx.z) * k * n;
-        for (size_t t = 0; t < k; ++t)
-            value = fmaf(a[ao + t], b[bo + (Transpose ? column * k + t : t * n + column)], value);
+        const float value_product = hip_matrix::dot<Transpose>(k ? a + ao : a, k ? b + bo : b, column, n, k);
+        float value = value_product;
         value += bias ? bias[column] : 0.f;
         out[(size_t(blockIdx.z) * m + row) * n + column] = Relu ? fmaxf(value, 0.f) : value;
     }
@@ -22,7 +22,7 @@ namespace hip_gemm {
     __global__ void tiled(const float* a, const float* b, const float* bias, float* out,
                           size_t m, size_t n, size_t k) {
         __shared__ float aa[16][64], bb[16][64];
-        const auto tx = threadIdx.x, ty = threadIdx.y, lane = ty * 16 + tx;
+        const auto tx = threadIdx.x, ty = threadIdx.y;
         const size_t row = size_t(blockIdx.y) * 64, col = size_t(blockIdx.x) * 64;
         if (k) {
             a += size_t(blockIdx.z) * m * k;
@@ -30,25 +30,7 @@ namespace hip_gemm {
         }
         out += size_t(blockIdx.z) * m * n;
         float sum[4][4]{};
-        for (size_t first = 0; first < k; first += 16) {
-            for (unsigned i = lane; i < 1024; i += 256) {
-                const size_t inner = i / 64, outer = i % 64;
-                aa[inner][outer] = row + outer < m && first + inner < k ? a[(row + outer) * k + first + inner] : 0;
-                bb[inner][outer] = col + outer < n && first + inner < k ? (Transpose ? b[(col + outer) * k + first + inner] : b[(first + inner) * n + col + outer]) : 0;
-            }
-            __syncthreads();
-            for (unsigned inner = 0; inner < 16; ++inner) {
-                float av[4], bv[4];
-                for (unsigned i = 0; i < 4; ++i) {
-                    av[i] = aa[inner][ty + i * 16];
-                    bv[i] = bb[inner][tx + i * 16];
-                }
-                for (unsigned i = 0; i < 4; ++i)
-                    for (unsigned j = 0; j < 4; ++j)
-                        sum[i][j] = fmaf(av[i], bv[j], sum[i][j]);
-            }
-            __syncthreads();
-        }
+        hip_matrix::tile<Transpose>(a, b, m, n, k, row, col, aa, bb, sum);
         for (unsigned i = 0; i < 4; ++i)
             for (unsigned j = 0; j < 4; ++j) {
                 const size_t r = row + ty + i * 16, c = col + tx + j * 16;

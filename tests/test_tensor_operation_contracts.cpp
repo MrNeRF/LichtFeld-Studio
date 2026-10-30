@@ -49,7 +49,9 @@ namespace {
     static_assert(static_cast<unsigned>(GpuBackend::CUDA) == 0);
     static_assert(static_cast<unsigned>(GpuBackend::Vulkan) == 1);
     static_assert(static_cast<unsigned>(GpuBackend::Metal) == 2);
-    static_assert(kGpuBackendCount == 3);
+    static_assert(static_cast<unsigned>(GpuBackend::HIP) == 3);
+    static_assert(kGpuBackendCount == 4);
+    static_assert(kGpuBackends[3] == GpuBackend::HIP);
 
     TEST_P(TensorOperationContracts, ElapsedTimerUsesTheSameOptionalContractOnEveryBackend) {
         if (!GetParam().backend) {
@@ -195,7 +197,7 @@ namespace {
         // domains must not depend on a working NVIDIA runtime or device.
         if constexpr (gpu_backend_compiled(GpuBackend::CUDA))
             (void)latch_cuda_unavailable(static_cast<cudaError_t>(3));
-        for (const auto domain : {MemoryDomain::VulkanDevice, MemoryDomain::MetalDevice}) {
+        for (const auto domain : {MemoryDomain::VulkanDevice, MemoryDomain::MetalDevice, MemoryDomain::HipDevice}) {
             coordinator.reset_for_testing();
             size_t free = 0;
             bool wrong_domain = false;
@@ -410,6 +412,110 @@ namespace {
         EXPECT_EQ(destination, (std::array<float, 2>{-7, -8}));
     }
 
+#ifdef LFS_TENSOR_HIP
+    class HipReadbackSnapshots : public lfs::test::TensorBackendContract {};
+
+    TEST_P(HipReadbackSnapshots, QueueDestructionReleasesUnconsumedExecutionFaults) {
+        for (const int mode : {0, 1, 2}) {
+            SCOPED_TRACE(mode);
+            {
+                const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+                const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+                Tensor invalid;
+                TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+                if (mode)
+                    (void)queue.execute([&] { invalid = input.index_select(0, indices); });
+                else
+                    invalid = input.index_select(0, indices);
+                // Mode 2 consumes the context fault, leaving only last.wait() to fail.
+                if (mode == 2)
+                    EXPECT_ANY_THROW(queue.wait());
+            }
+            EXPECT_TRUE(tensor_backend_selftest(*GetParam().backend));
+        }
+    }
+
+    TEST_P(HipReadbackSnapshots, EmptyBufferedReadbackRetainsExecutionFault) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        const auto invalid = input.index_select(0, indices);
+        TensorReadback download;
+        download.enqueue_range(invalid, 0, 0);
+        EXPECT_ANY_THROW(download.wait(std::span<std::byte>{}));
+        EXPECT_TRUE(download.pending());
+        EXPECT_ANY_THROW(queue.wait());
+        EXPECT_ANY_THROW(download.wait(std::span<std::byte>{}));
+        TensorReadback valid;
+        valid.enqueue_range(input, 0, 0);
+        EXPECT_NO_THROW(valid.wait(std::span<std::byte>{}));
+        EXPECT_FALSE(valid.pending());
+    }
+
+    TEST_P(HipReadbackSnapshots, RepeatedReadinessQueriesDoNotDiscardFaults) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        TensorFence fence(*GetParam().backend);
+        const auto invalid = input.index_select(0, indices);
+        const std::array<const Tensor*, 1> inputs{&invalid};
+        TensorCompletion completion(inputs);
+        fence.record(static_cast<void*>(nullptr));
+        EXPECT_ANY_THROW(queue.wait());
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            EXPECT_ANY_THROW((void)fence.ready());
+            EXPECT_ANY_THROW((void)completion.ready());
+        }
+        EXPECT_ANY_THROW(fence.wait());
+        EXPECT_ANY_THROW(completion.wait());
+    }
+
+    TEST_P(HipReadbackSnapshots, FailedUploadsRetainTheirErrorAndRetireOwnedStorage) {
+        for (const bool poll_first : {false, true}) {
+            SCOPED_TRACE(poll_first);
+            {
+                const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+                const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+                auto destination = Tensor::zeros({3}, device());
+                const auto source = Tensor::from_vector(std::vector<float>{4, 5, 6}, {3}, Device::CPU);
+                TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+                const auto invalid = input.index_select(0, indices);
+                TensorUpload upload;
+                upload.enqueue(destination, source);
+                EXPECT_ANY_THROW(queue.wait());
+                if (poll_first) {
+                    EXPECT_ANY_THROW((void)upload.poll());
+                    EXPECT_ANY_THROW((void)upload.poll());
+                }
+                EXPECT_ANY_THROW(upload.wait());
+            }
+            // No transfer, Tensor or queue lease may be stranded by a failed
+            // upload destructor, even when the runtime defers native cleanup.
+            EXPECT_TRUE(tensor_backend_selftest(*GetParam().backend));
+        }
+    }
+
+    TEST_P(HipReadbackSnapshots, PackedFaultSurvivesContextConsumption) {
+        const auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, device());
+        const auto indices = Tensor::from_vector(std::vector<int>{-1, 3}, {2}, device());
+        const auto invalid = input.index_select(0, indices);
+        TensorWorkQueue queue(*GetParam().backend, static_cast<void*>(nullptr));
+        TensorReadbackRing ring(*GetParam().backend, 1, 2 * sizeof(float), queue);
+        ring.enqueue(invalid, 0, 2 * sizeof(float), 0, 0);
+        EXPECT_ANY_THROW(queue.wait());
+        // The marker is recorded after the context fault has been consumed;
+        // only the packed slot still owns the failed snapshot.
+        EXPECT_NO_THROW(ring.seal(0).wait());
+        EXPECT_ANY_THROW((void)ring.poll(0));
+        EXPECT_ANY_THROW(ring.wait(0));
+        EXPECT_ANY_THROW((void)ring.slot_bytes(0));
+        EXPECT_ANY_THROW(ring.release(0));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, HipReadbackSnapshots,
+                             testing::Values(lfs::test::TensorBackendTarget{"HIP", GpuBackend::HIP}),
+                             lfs::test::tensor_backend_parameter_name);
+#endif
     TEST_P(TensorOperationContracts, CompiledExpressionsUseHostParametersAndTerminalFolds) {
         if (!GetParam().backend)
             GTEST_SKIP() << "Compiled expression kernels target GPU backends";

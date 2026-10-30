@@ -46,7 +46,7 @@ typedef struct LfsHipDevice {
 } LfsHipDevice;
 
 /* Exact private ABI revision; check before binding any revision-specific exports. */
-#define LFS_HIP_RUNTIME_ABI_VERSION 5u
+#define LFS_HIP_RUNTIME_ABI_VERSION 6u
 LFS_HIP_API uint32_t lfs_hip_runtime_abi(void);
 LFS_HIP_API int lfs_hip_device_count(int32_t* count, LfsHipError* error);
 LFS_HIP_API int lfs_hip_device_info(int32_t ordinal, LfsHipDevice* info, LfsHipError* error);
@@ -169,7 +169,8 @@ enum LfsHipRandomKind { LFS_HIP_RANDOM_UNIFORM,
                         LFS_HIP_RANDOM_BERNOULLI,
                         LFS_HIP_RANDOM_INTEGER,
                         LFS_HIP_RANDOM_NORMAL };
-enum { LFS_HIP_ERROR_INVALID_INDEX = -2 };
+enum { LFS_HIP_ERROR_INVALID_INDEX = -2,
+       LFS_HIP_ERROR_MASK_COUNT = -3 };
 /* Invalid device indices are skipped and reported by context synchronization or
  * blocking host reads. Valid lanes may complete before that asynchronous error. */
 LFS_HIP_API int lfs_hip_clamp_i32(LfsHipContext*, LfsHipView data, size_t count, int32_t minimum, int32_t maximum, LfsHipError*);
@@ -227,6 +228,63 @@ LFS_HIP_API int lfs_hip_arg_extreme_f32(LfsHipContext*, LfsHipView input, LfsHip
                                         LfsHipError*);
 LFS_HIP_API int lfs_hip_cdist_f32(LfsHipContext*, LfsHipView lhs, LfsHipView rhs, LfsHipView output,
                                   size_t lhs_rows, size_t rhs_rows, size_t columns, float p, LfsHipError*);
+
+typedef struct LfsHipSharedImage {
+    uint32_t struct_bytes, operation, seed;
+    uint32_t srgb, flip_yz, world_to_camera;
+    size_t height, width, channels;
+    float threshold, w2c[9];
+} LfsHipSharedImage;
+typedef struct LfsHipSharedResize {
+    uint32_t struct_bytes, mode, dtype, channels, kernel_size, stride_x, stride_y;
+    int32_t source_h, source_w, destination_h, destination_w;
+} LfsHipSharedResize;
+typedef struct LfsHipLens {
+    float src_fx, src_fy, src_cx, src_cy;
+    float dst_fx, dst_fy, dst_cx, dst_cy;
+    int32_t src_width, src_height, dst_width, dst_height;
+    int32_t model_type;
+    float distortion[12];
+    int32_t num_distortion;
+} LfsHipLens;
+typedef struct LfsHipPool {
+    size_t count;
+    int32_t height, width, out_height, out_width, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w;
+    uint32_t average, include_pad;
+} LfsHipPool;
+typedef struct LfsHipEnvironment {
+    float rotation[9];
+    int32_t full_width, full_height, band_width, band_height, y_offset;
+    float focal_x, focal_y, center_x, center_y;
+    int32_t equirect_view;
+    float exposure_factor, env_rotation_radians;
+    int32_t env_width, env_height;
+} LfsHipEnvironment;
+LFS_HIP_API int lfs_hip_context_queue(LfsHipContext*, uint64_t* queue, int32_t* device, LfsHipError*);
+LFS_HIP_API int lfs_hip_context_ready(LfsHipContext*, int32_t* ready, LfsHipError*);
+LFS_HIP_API int lfs_hip_host_callback(LfsHipContext*, void (*callback)(void*), void* user, LfsHipError*);
+LFS_HIP_API int lfs_hip_shared_image(LfsHipContext*, const LfsHipSharedImage*, LfsHipView source,
+                                     LfsHipView destination, LfsHipView auxiliary, LfsHipError*);
+LFS_HIP_API int lfs_hip_shared_resize(LfsHipContext*, const LfsHipSharedResize*, LfsHipView source,
+                                      LfsHipView destination, LfsHipView coefficients_x, LfsHipView coefficients_y, LfsHipError*);
+LFS_HIP_API int lfs_hip_inverse_lens(LfsHipContext*, LfsHipView output, const LfsHipLens*, LfsHipError*);
+LFS_HIP_API int lfs_hip_warp_rgb(LfsHipContext*, LfsHipView input, uint32_t dtype,
+                                 LfsHipView output, const LfsHipLens*, LfsHipError*);
+LFS_HIP_API int lfs_hip_shared_warp(LfsHipContext*, LfsHipView input, uint32_t dtype, uint32_t channels,
+                                    uint32_t mode, LfsHipView output, const LfsHipLens*, LfsHipError*);
+LFS_HIP_API int lfs_hip_buffer_address(LfsHipContext*, const LfsHipBuffer*, uint64_t* address, LfsHipError*);
+LFS_HIP_API int lfs_hip_pool_typed(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipPool*, uint32_t dtype, LfsHipError*);
+LFS_HIP_API int lfs_hip_pool_f32(LfsHipContext*, LfsHipView input, LfsHipView output, const LfsHipPool*, LfsHipError*);
+LFS_HIP_API int lfs_hip_where_scalar(LfsHipContext*, LfsHipView mask, LfsHipView source, LfsHipView output, size_t count, uint32_t dtype, float value, LfsHipError*);
+LFS_HIP_API int lfs_hip_environment_composite(LfsHipContext*, LfsHipView rgb, LfsHipView alpha,
+                                              LfsHipView environment, LfsHipView output,
+                                              const LfsHipEnvironment*, LfsHipError*);
+LFS_HIP_API int lfs_hip_proximity(LfsHipContext*, const LfsHipView* inputs, LfsHipView output,
+                                  size_t queries, size_t targets, size_t buckets, float parameter,
+                                  uint32_t coverage, LfsHipError*);
+LFS_HIP_API int lfs_hip_radius_query(LfsHipContext*, const LfsHipView* inputs, LfsHipView output,
+                                     size_t count, size_t buckets, float radius, uint32_t mode,
+                                     int32_t maximum, uint32_t exclude_self, LfsHipError*);
 
 #ifdef __cplusplus
 }

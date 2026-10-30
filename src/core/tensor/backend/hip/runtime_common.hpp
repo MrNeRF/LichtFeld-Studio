@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "architecture_runtime.hpp"
+#include "expression_api.h"
 #include "runtime_api.h"
+#include "timing_api.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -33,13 +35,23 @@ struct LfsHipReadback {
     bool execution_error_initialized = false, execution_snapshot = false;
 };
 
+struct LfsHipTiming {
+    std::vector<hipEvent_t> events;
+    std::vector<uint64_t> sequence;
+    uint64_t next_sequence = 0;
+    bool retired = false;
+};
+
 struct LfsHipContext {
     int device = 0;
     uint32_t* index_error = nullptr;
     uint32_t* index_error_host = nullptr;
+    void* scalar_readback_host = nullptr;
     bool index_work_pending = false, index_error_initialized = false;
     hipStream_t stream = nullptr;
     std::unordered_set<LfsHipBuffer*> buffers;
+    std::unordered_set<LfsHipExpression*> expressions;
+    std::unordered_set<LfsHipTiming*> timings;
     std::unordered_set<LfsHipReadback*> readbacks;
     float* reduction_workspace = nullptr;
     void* scan_workspace = nullptr;
@@ -47,6 +59,9 @@ struct LfsHipContext {
     void* sort_workspace = nullptr;
     size_t sort_workspace_bytes = 0;
 };
+
+hipError_t lfs_hip_release_expression_internal(LfsHipContext*, LfsHipExpression*);
+hipError_t lfs_hip_release_timing_internal(LfsHipContext*, LfsHipTiming*);
 
 hipError_t lfs_hip_fill_internal(LfsHipContext*, float*, size_t, float);
 
@@ -58,6 +73,9 @@ namespace {
     };
 
     struct InvalidIndex : std::invalid_argument {
+        using std::invalid_argument::invalid_argument;
+    };
+    struct InvalidMaskCount : std::invalid_argument {
         using std::invalid_argument::invalid_argument;
     };
 
@@ -88,7 +106,7 @@ namespace {
     }
     void check_execution_error(uint32_t invalid) {
         if (invalid & 2u)
-            throw std::invalid_argument("HIP masked scatter source count does not match mask");
+            throw InvalidMaskCount("HIP masked scatter source count does not match mask");
         if (invalid & 1u)
             throw InvalidIndex("HIP index is negative or outside its extent");
     }
@@ -129,6 +147,12 @@ namespace {
         } catch (const HipFailure& failure) {
             if (error) {
                 error->native_code = static_cast<int32_t>(failure.code);
+                std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
+            }
+            return 1;
+        } catch (const InvalidMaskCount& failure) {
+            if (error) {
+                error->native_code = LFS_HIP_ERROR_MASK_COUNT;
                 std::snprintf(error->message, sizeof(error->message), "%s", failure.what());
             }
             return 1;

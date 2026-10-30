@@ -66,6 +66,9 @@ static hipError_t lfs_hip_test_event_create(hipEvent_t* event, unsigned flags) {
         ++lfs_hip_test::events;
     return result;
 }
+static hipError_t lfs_hip_test_plain_event_create(hipEvent_t* event) {
+    return lfs_hip_test_event_create(event, hipEventDefault);
+}
 static hipError_t lfs_hip_test_copy(void* destination, const void* source, size_t bytes, hipMemcpyKind kind, hipStream_t stream) {
     if (lfs_hip_test::fail(6))
         return hipErrorUnknown;
@@ -82,6 +85,7 @@ static hipError_t lfs_hip_test_stream_synchronize(hipStream_t stream) {
 #define hipEventRecord          lfs_hip_test_event_record
 #define hipEventDestroy         lfs_hip_test_event_destroy
 #define hipEventCreateWithFlags lfs_hip_test_event_create
+#define hipEventCreate          lfs_hip_test_plain_event_create
 #define hipMemcpyAsync          lfs_hip_test_copy
 #define hipStreamSynchronize    lfs_hip_test_stream_synchronize
 

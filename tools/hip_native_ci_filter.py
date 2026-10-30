@@ -7,16 +7,37 @@ import re
 import subprocess
 
 
-PREFIXES = ("cmake/hip-native/", "src/core/tensor/backend/hip/", "tests/hip/")
+PREFIXES = ("cmake/hip-native/", "cmake/hip-host/", "src/core/tensor/", "src/core/nn/", "src/core/include/core/", "tests/hip/",
+            "src/core/tensor/backend/vulkan/shaders/", "src/core/cuda/undistort/",
+            "src/core/cuda/lanczos_resize/")
 FILES = {
-    "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
+    "CMakeLists.txt", "src/core/CMakeLists.txt", "src/core/error.cpp",
+    "src/core/memory_domain.cpp", "src/core/memory_pressure.cpp",
+    "tests/TensorOperationContracts.cmake", "tests/python_tensor_contracts.cpp", "tests/test_tensor_operation_contracts.cpp",
+    "tests/test_tensor_backend_semantics.cpp", "tests/tensor_test_support.hpp",
+    "src/python/lfs/py_tensor.cpp", "vcpkg.json", "vcpkg-configuration.json",
+    "cmake/GpuBackendRegistry.cmake", "cmake/HipArchitectures.cmake", "cmake/HipOffloadCompression.cmake",
     ".github/workflows/ubuntu.yml", "tools/hip_native_ci_filter.py",
     "tests/python/test_hip_native_ci_filter.py",
     "tests/python/test_hip_runtime_configuration.py",
     "tests/python/test_hip_pointwise_generation.py",
+    "tests/python/test_hip_host_contracts.py",
     "src/core/include/core/detail/pointwise_ops.def",
     "src/core/include/core/detail/pointwise_lowering.hpp",
     "src/core/include/core/detail/tensor_functors.hpp",
+    "src/core/include/core/detail/descriptors.hpp", "src/core/include/core/environment_math.hpp",
+    "src/core/include/core/morton.hpp", "src/core/include/core/tensor_ppisp.hpp",
+    "src/core/include/core/tensor_spatial.hpp", "src/core/include/core/rounded_math.slangh",
+    "src/core/tensor/internal/ppisp.hpp", "src/core/tensor/internal/point_filter.hpp",
+    "src/core/tensor/internal/point_math.hpp", "src/core/tensor/internal/point_spatial.hpp",
+    "src/core/tensor/internal/nearest_point.hpp", "src/core/tensor/internal/point_tree.hpp",
+    "src/core/tensor/internal/triangle_tree.hpp", "src/core/tensor/internal/point_labels.hpp",
+    "src/core/tensor/internal/point_projection.hpp", "src/core/tensor/internal/point_region.hpp",
+    "src/core/tensor/backend/cuda/kernels/simplify_merge.cu",
+    "src/core/tensor/backend/cuda/kernels/tensor_spatial.cu",
+    "src/core/tensor/backend/metal/expression_msl.cpp",
+    "src/core/cuda/kernels/splat_transform.cu", "src/core/cuda/kernels/mask_normalization.cu",
+    "src/io/cuda/image_format_kernels.cu",
 }
 
 

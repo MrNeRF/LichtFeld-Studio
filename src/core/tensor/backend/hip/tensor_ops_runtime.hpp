@@ -5,15 +5,26 @@
 #include <hipcub/hipcub.hpp>
 
 namespace {
-    // Workspace data are disposable once prior users have drained. Release
-    // before growing so even a failed free cannot orphan a new allocation.
-    // Drain before a blocking host read: no queued write may outlive a caller's
-    // stack storage if stream synchronization fails.
-    void read_device_scalar(LfsHipContext* context, void* output, const void* input, size_t bytes) {
+    // Queue scalar copies into owned staging: failed synchronization must not
+    // leave a write targeting a caller's stack or expose an incomplete result.
+    void read_device_scalar(LfsHipContext* context, void* output, const void* input, size_t bytes,
+                            void* second_output = nullptr, const void* second_input = nullptr, size_t second_bytes = 0) {
+        require(output && input && bytes && bytes <= 16 && second_bytes <= 16 - bytes &&
+                    (!second_bytes || (second_output && second_input)),
+                "Invalid HIP scalar readback size");
+        if (!context->scalar_readback_host)
+            check(hipHostMalloc(&context->scalar_readback_host, 16, hipHostMallocDefault));
+        check(hipMemcpyAsync(context->scalar_readback_host, input, bytes, hipMemcpyDeviceToHost, context->stream));
+        if (second_bytes)
+            check(hipMemcpyAsync(static_cast<char*>(context->scalar_readback_host) + bytes, second_input, second_bytes, hipMemcpyDeviceToHost, context->stream));
         synchronize_context(context);
-        check(hipMemcpy(output, input, bytes, hipMemcpyDeviceToHost));
+        std::memcpy(output, context->scalar_readback_host, bytes);
+        if (second_bytes)
+            std::memcpy(second_output, static_cast<const char*>(context->scalar_readback_host) + bytes, second_bytes);
     }
 
+    // Workspace data are disposable once prior users have drained. Release
+    // before growing so even a failed free cannot orphan a new allocation.
     void ensure_workspace(LfsHipContext* context, void*& memory, size_t& capacity, size_t required) {
         if (required <= capacity)
             return;
