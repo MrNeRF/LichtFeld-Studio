@@ -8,6 +8,8 @@
 // central differences of the reference with its contribution lists frozen, so
 // both sides differentiate the same piecewise-smooth function.
 
+#include "components/bilateral_grid.hpp"
+#include "components/ppisp.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -818,7 +820,85 @@ namespace {
         EXPECT_EQ(codes_before, download_bytes(g.shN));
     }
 
-    TEST_P(PortableFastRaster, CapacityOverflowIsNoOpAndReplayMatchesLargeCapacity) {
+    std::vector<float> wave(const size_t count, const float seed, const float amplitude) {
+        std::vector<float> values(count);
+        for (size_t i = 0; i < count; ++i)
+            values[i] = amplitude * std::sin(seed * 0.31f * static_cast<float>(i + 3));
+        return values;
+    }
+
+    // PPISP in front of the exposure-chroma bilateral grid, as the trainer chains them with exposure correction on.
+    // The step trains the first of two PPISP frames, so that the projection to a zero mean leaves it an exposure and
+    // a color. Both start away from the identity so that every parameter gets a gradient.
+    struct ExposureCorrection {
+        static lfs::training::PPISPConfig ppisp_config() {
+            lfs::training::PPISPConfig config;
+            config.train_crf = false;
+            config.exposure_mean = 0.0f;
+            config.color_mean = 0.0f;
+            config.crf_channel = 0.0f;
+            config.vig_center = 0.02f;
+            config.vig_non_pos = 0.01f;
+            config.vig_channel = 0.1f;
+            return config;
+        }
+
+        lfs::training::PPISP ppisp{100, ppisp_config()};
+        lfs::training::BilateralGrid grid{1, 16, 16, 8, 100, {}, lfs::training::BilateralGridParameterization::ExposureChroma};
+        Tensor target;
+
+        explicit ExposureCorrection(const Tensor& target_image) : target(target_image) {
+            ppisp.register_frame(0, 0);
+            ppisp.register_frame(1, 0);
+            ppisp.finalize();
+            float seed = 3.0f;
+            for (Tensor params : {ppisp.exposure_params(), ppisp.vignetting_params(), ppisp.color_params()}) {
+                params.add_(upload(wave(params.numel(), seed, 0.05f), params.shape()));
+                seed += 2.0f;
+            }
+            Tensor& host_grid = grid.grids();
+            float* const cells = host_grid.ptr<float>();
+            for (size_t i = 0; i < host_grid.numel(); ++i)
+                cells[i] += 0.08f * std::sin(0.17f * static_cast<float>(i + 1));
+        }
+
+        // The trainer's exposure correction of the raster image, the gradient of half its squared error to the
+        // target, and that gradient back through the grid and PPISP in place.
+        Tensor raster_gradient(const Tensor& image) {
+            Tensor grad = ppisp.apply(image, 0, 0);
+            grid.apply_in_place(grad, 0);
+            grad.clamp_(0.0f, 1.0f);
+            grad.sub_(target);
+            grid.backward_in_place(ppisp.apply(image, 0, 0), grad, 0);
+            ppisp.backward_in_place(image, grad, 0, 0);
+            return grad;
+        }
+
+        // The appearance updates the trainer makes after the count has resolved.
+        void commit() {
+            grid.step_image(0, 1.0f);
+            ppisp.reg_backward();
+            ppisp.optimizer_step();
+            ppisp.project_mean();
+            ppisp.zero_grad();
+            ppisp.scheduler_step();
+        }
+
+        std::vector<std::vector<float>> gradients() const {
+            return {download(grid.grad_slice()), download(ppisp.exposure_grad()), download(ppisp.vignetting_grad()),
+                    download(ppisp.color_grad()), download(ppisp.crf_grad())};
+        }
+
+        std::vector<std::vector<float>> parameters() const {
+            return {download(grid.grids()), download(ppisp.exposure_params()), download(ppisp.vignetting_params()),
+                    download(ppisp.color_params()), download(ppisp.crf_params())};
+        }
+    };
+
+    // With exposure correction on, PPISP and the bilateral grid sit between the raster image and the loss, as in the
+    // trainer. The overflowed attempt's gradients through them are discarded (PPISP's by zeroing them, the grid's by
+    // being overwritten), and their updates only run once the count has resolved.
+    void check_capacity_overflow_replay(const bool exposure_correction) {
         const auto& table = fast_ops();
         if (table.set_deferred_count == nullptr || table.resolve_deferred_count == nullptr ||
             table.set_instance_capacity_for_testing == nullptr)
@@ -833,9 +913,16 @@ namespace {
         const Tensor error_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
         const Tensor edge_map = upload(map, {static_cast<size_t>(s.height), static_cast<size_t>(s.width)});
         Tensor none;
+        std::optional<ExposureCorrection> replay_appearance, baseline_appearance;
+        if (exposure_correction) {
+            const Tensor target = plane(random_image(s.width, s.height, 29u), 3, s.height, s.width);
+            replay_appearance.emplace(target);
+            baseline_appearance.emplace(target);
+        }
 
         auto run_backward = [&](Frame& frame, Gpu& g, AdamState& state, Tensor& densification,
-                                Tensor& edge_scores) {
+                                Tensor& edge_scores, std::optional<ExposureCorrection>& appearance) {
+            const Tensor image_grad = appearance ? appearance->raster_gradient(frame.image) : grad_image;
             ops::BackwardAdam adam = make_adam(g, state, s.count, {});
             state.scale_loss = Tensor::zeros({1}, Device::GPU);
             state.opacity_loss = Tensor::zeros({1}, Device::GPU);
@@ -843,7 +930,7 @@ namespace {
             adam.opacity_reg_loss = state.opacity_loss;
             adam.scale_reg_weight = 0.2f;
             adam.opacity_reg_weight = 0.3f;
-            table.backward(frame.saved, {.image = grad_image, .alpha = none, .depth = none, .normal = none},
+            table.backward(frame.saved, {.image = image_grad, .alpha = none, .depth = none, .normal = none},
                            densification, error_map, edge_map, edge_scores, adam, DensificationType::MRNF);
         };
 
@@ -858,9 +945,15 @@ namespace {
         AdamState replay_state;
         Tensor replay_densification = Tensor::zeros({2, n}, Device::GPU);
         Tensor replay_edges = Tensor::zeros({n}, Device::GPU);
-        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges, replay_appearance);
         const ops::RasterResult overflow = table.resolve_deferred_count(replay.saved, true);
         ASSERT_EQ(overflow.code, ops::RasterResult::Code::CapacityOverflow) << overflow.message;
+        if (replay_appearance) {
+            // What the trainer discards before it replays the step.
+            const auto exposure_grad = download(replay_appearance->ppisp.exposure_grad());
+            EXPECT_TRUE(std::ranges::any_of(exposure_grad, [](const float g) { return g != 0.0f; }));
+            replay_appearance->ppisp.zero_grad();
+        }
 
         const HostParams after_overflow = read_params(replay_gpu);
         EXPECT_EQ(original.means, after_overflow.means);
@@ -884,7 +977,7 @@ namespace {
         table.set_deferred_count(replay.saved, true);
         forward(replay, s, replay_gpu, {});
         ASSERT_EQ(replay.result.code, ops::RasterResult::Code::Success) << replay.result.message;
-        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges);
+        run_backward(replay, replay_gpu, replay_state, replay_densification, replay_edges, replay_appearance);
         const ops::RasterResult replay_result = table.resolve_deferred_count(replay.saved, true);
         ASSERT_EQ(replay_result.code, ops::RasterResult::Code::Success) << replay_result.message;
 
@@ -898,7 +991,8 @@ namespace {
         AdamState baseline_state;
         Tensor baseline_densification = Tensor::zeros({2, n}, Device::GPU);
         Tensor baseline_edges = Tensor::zeros({n}, Device::GPU);
-        run_backward(baseline, baseline_gpu, baseline_state, baseline_densification, baseline_edges);
+        run_backward(baseline, baseline_gpu, baseline_state, baseline_densification, baseline_edges,
+                     baseline_appearance);
         const ops::RasterResult baseline_result = table.resolve_deferred_count(baseline.saved, true);
         ASSERT_EQ(baseline_result.code, ops::RasterResult::Code::Success) << baseline_result.message;
 
@@ -919,6 +1013,38 @@ namespace {
         expect_same(download(replay_edges), download(baseline_edges), "edge scores");
         expect_same(download(replay_state.scale_loss), download(baseline_state.scale_loss), "scale loss");
         expect_same(download(replay_state.opacity_loss), download(baseline_state.opacity_loss), "opacity loss");
+        if (!exposure_correction)
+            return;
+
+        // The appearance gradients, then the parameters after their updates. A first Adam step moves each parameter
+        // by about the learning rate whatever its gradient's size, so the gradients are compared as well. They are
+        // sums over pixels, so the tolerance follows each group's largest value.
+        constexpr std::array names{"bilateral grid", "PPISP exposure", "PPISP vignetting", "PPISP color", "PPISP CRF"};
+        auto expect_matching = [&](const std::vector<std::vector<float>>& a, const std::vector<std::vector<float>>& b,
+                                   const char* what) {
+            ASSERT_EQ(a.size(), names.size());
+            ASSERT_EQ(b.size(), names.size());
+            for (size_t k = 0; k < names.size(); ++k) {
+                ASSERT_EQ(a[k].size(), b[k].size()) << names[k] << what;
+                float scale = 0.0f;
+                for (const float value : b[k])
+                    scale = std::max(scale, std::abs(value));
+                for (size_t i = 0; i < a[k].size(); ++i)
+                    EXPECT_NEAR(a[k][i], b[k][i], 1e-6f + 1e-5f * scale) << names[k] << what << " at " << i;
+            }
+        };
+        expect_matching(replay_appearance->gradients(), baseline_appearance->gradients(), " gradient");
+        replay_appearance->commit();
+        baseline_appearance->commit();
+        expect_matching(replay_appearance->parameters(), baseline_appearance->parameters(), " parameters");
+    }
+
+    TEST_P(PortableFastRaster, CapacityOverflowIsNoOpAndReplayMatchesLargeCapacity) {
+        check_capacity_overflow_replay(false);
+    }
+
+    TEST_P(PortableFastRaster, CapacityOverflowWithExposureCorrectionReplayMatchesLargeCapacity) {
+        check_capacity_overflow_replay(true);
     }
 
     // Reference gradient of every parameter by central differences.
