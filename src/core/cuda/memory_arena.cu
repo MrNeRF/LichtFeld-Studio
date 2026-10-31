@@ -6,6 +6,8 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
@@ -16,6 +18,18 @@
 #include <thread>
 
 namespace lfs::core {
+
+    namespace {
+        std::atomic<size_t> g_measured_frame_headroom{0};
+    } // namespace
+
+    void set_measured_frame_headroom_bytes(const size_t bytes) noexcept {
+        g_measured_frame_headroom.store(bytes, std::memory_order_relaxed);
+    }
+
+    size_t measured_frame_headroom_bytes() noexcept {
+        return g_measured_frame_headroom.load(std::memory_order_relaxed);
+    }
 
     // Default constructor implementation
     RasterizerMemoryArena::RasterizerMemoryArena()
@@ -1007,6 +1021,9 @@ namespace lfs::core {
                         break;
                     }
                 }
+                if (it->second->committed_size >= it->second->pressure_need) {
+                    it->second->pressure_need = 0;
+                }
 
                 // Update period peak (for logging)
                 size_t period_peak = it->second->peak_usage_period.load(std::memory_order_relaxed);
@@ -1219,6 +1236,11 @@ namespace lfs::core {
                 sync_status, "cudaDeviceSynchronize(arena cache trim)", {},
                 LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return;
+        }
+
+        // Cached tensor-pool blocks count as used to cudaMemGetInfo.
+        if (CudaMemoryPool* pool = try_live_cuda_memory_pool()) {
+            pool->trim_cached_memory();
         }
 
         // Allocate and immediately free a small buffer to trigger cleanup
@@ -1751,7 +1773,7 @@ namespace lfs::core {
         }
 
         // Need substantial buffer for VMM and other operations
-        size_t buffer_needed = std::min(size_t(1) << 30, total_memory / 10); // 1GB or 10% of total
+        size_t buffer_needed = growth_headroom_bytes(total_memory);
 
         if (free_memory < commit_size + buffer_needed) {
             // Try cleanup
@@ -1781,113 +1803,53 @@ namespace lfs::core {
         prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         prop.location.id = arena.device;
 
-        CUmemGenericAllocationHandle handle;
-        CUresult result = cuMemCreate(&handle, commit_size, &prop, 0);
-
-        // If large allocation fails, try splitting into smaller chunks
-        if (result != CUDA_SUCCESS && commit_size > arena.granularity * 4) {
-            LOG_DEBUG("Large allocation of %zu MB failed, trying smaller chunks", commit_size >> 20);
-
-            // Try 4 smaller chunks (each 1/4 of requested size)
-            size_t chunk_size = (commit_size / 4);
-            chunk_size = (chunk_size / arena.granularity) * arena.granularity; // Round to granularity
-
-            size_t total_allocated = 0;
-            for (int i = 0; i < 4 && total_allocated < commit_size; ++i) {
-                CUmemGenericAllocationHandle chunk_handle;
-                result = cuMemCreate(&chunk_handle, chunk_size, &prop, 0);
-                if (result == CUDA_SUCCESS) {
-                    // Map this chunk
-                    const size_t map_offset = align_up(
-                        arena.committed_size + total_allocated, arena.granularity);
-
-                    result = cuMemMap(arena.d_ptr + map_offset, chunk_size, 0, chunk_handle, 0);
-                    if (result == CUDA_SUCCESS) {
-                        CUmemAccessDesc access_desc = {};
-                        access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-                        access_desc.location.id = arena.device;
-                        access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
-                        result = cuMemSetAccess(arena.d_ptr + map_offset, chunk_size, &access_desc, 1);
-                        if (result == CUDA_SUCCESS) {
-                            {
-                                std::lock_guard<std::mutex> lock(arena.chunks_mutex);
-                                arena.chunks.push_back({chunk_handle, map_offset, chunk_size, true});
-                            }
-                            alloc_counter::record_site(alloc_counter::Site::Arena);
-                            lfs::diagnostics::VramProfiler::instance().recordAllocation(
-                                reinterpret_cast<void*>(arena.d_ptr + map_offset),
-                                chunk_size,
-                                lfs::diagnostics::VramAllocationMethod::Arena,
-                                "rasterizer.arena.vmm_chunk");
-                            total_allocated += chunk_size;
-                            LOG_TRACE("VMM chunk %d: %zu MB", i, chunk_size >> 20);
-                        } else {
-                            cuMemUnmap(arena.d_ptr + map_offset, chunk_size);
-                            cuMemRelease(chunk_handle);
-                        }
-                    } else {
-                        cuMemRelease(chunk_handle);
-                    }
-                }
-            }
-
-            if (total_allocated > 0) {
-                arena.committed_size += total_allocated;
-                arena.capacity = arena.committed_size;
-                arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
-                LOG_DEBUG("Committed %zu MB via chunks (total: %zu MB)", total_allocated >> 20, arena.committed_size >> 20);
-                arena.boundaries_since_growth = 0;
-                return true;
-            }
-
-            return false;
-        }
-
-        if (result != CUDA_SUCCESS) {
-            return false;
-        }
-
-        LOG_TRACE("VMM commit: %zu MB (total: %zu MB)", commit_size >> 20, (arena.committed_size + commit_size) >> 20);
-
-        // Map with proper alignment
-        const size_t map_offset = align_up(arena.committed_size, arena.granularity);
-
-        result = cuMemMap(arena.d_ptr + map_offset, commit_size, 0, handle, 0);
-        if (result != CUDA_SUCCESS) {
-            cuMemRelease(handle);
-            return false;
-        }
-
         CUmemAccessDesc access_desc = {};
         access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         access_desc.location.id = arena.device;
         access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
 
-        result = cuMemSetAccess(arena.d_ptr + map_offset, commit_size, &access_desc, 1);
-        if (result != CUDA_SUCCESS) {
-            cuMemUnmap(arena.d_ptr + map_offset, commit_size);
-            cuMemRelease(handle);
+        // Map in bounded pieces. Decommit releases whole chunks above the
+        // retained peak, so one chunk per growth would stay committed until
+        // the peak fell below its start.
+        const size_t piece_limit = std::max(arena.granularity,
+                                            (kCommitPieceBytes / arena.granularity) * arena.granularity);
+        const size_t base = align_up(arena.committed_size, arena.granularity);
+        size_t committed = 0;
+        while (committed < commit_size) {
+            const size_t piece = std::min(piece_limit, commit_size - committed);
+            const CUdeviceptr ptr = arena.d_ptr + base + committed;
+            CUmemGenericAllocationHandle handle;
+            if (cuMemCreate(&handle, piece, &prop, 0) != CUDA_SUCCESS) {
+                break;
+            }
+            if (cuMemMap(ptr, piece, 0, handle, 0) != CUDA_SUCCESS) {
+                cuMemRelease(handle);
+                break;
+            }
+            if (cuMemSetAccess(ptr, piece, &access_desc, 1) != CUDA_SUCCESS) {
+                cuMemUnmap(ptr, piece);
+                cuMemRelease(handle);
+                break;
+            }
+            {
+                std::lock_guard<std::mutex> lock(arena.chunks_mutex);
+                arena.chunks.push_back({handle, base + committed, piece, true});
+            }
+            alloc_counter::record_site(alloc_counter::Site::Arena);
+            lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                reinterpret_cast<void*>(ptr), piece,
+                lfs::diagnostics::VramAllocationMethod::Arena, "rasterizer.arena.vmm");
+            committed += piece;
+        }
+        if (committed == 0) {
             return false;
         }
 
-        // Track the chunk
-        {
-            std::lock_guard<std::mutex> lock(arena.chunks_mutex);
-            arena.chunks.push_back({handle, map_offset, commit_size, true});
-        }
-        alloc_counter::record_site(alloc_counter::Site::Arena);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            reinterpret_cast<void*>(arena.d_ptr + map_offset),
-            commit_size,
-            lfs::diagnostics::VramAllocationMethod::Arena,
-            "rasterizer.arena.vmm");
-
-        arena.committed_size = map_offset + commit_size;
+        arena.committed_size = base + committed;
         arena.capacity = arena.committed_size;
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
-        LOG_DEBUG("Committed %zu MB (total: %zu MB)", commit_size >> 20, arena.committed_size >> 20);
+        LOG_DEBUG("Committed %zu MB (total: %zu MB)", committed >> 20, arena.committed_size >> 20);
 
         arena.boundaries_since_growth = 0;
         return true;
@@ -2109,6 +2071,51 @@ namespace lfs::core {
 
     bool RasterizerMemoryArena::release_at_boundary() {
         return shrink_at_boundary(true);
+    }
+
+    size_t RasterizerMemoryArena::release_idle_for_pressure() {
+        // Runs inside an allocation's OOM path, possibly under a caller's
+        // arena locks: never wait, never allocate.
+        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
+        if (!sync_lock.owns_lock() || active_frames_ != 0) {
+            return 0;
+        }
+        std::unique_lock<std::mutex> arena_lock(arena_mutex_, std::try_to_lock);
+        if (!arena_lock.owns_lock()) {
+            return 0;
+        }
+        int previous_device = -1;
+        if (cudaGetDevice(&previous_device) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return 0;
+        }
+        size_t released = 0;
+        for (auto& [device, arena_ptr] : device_arenas_) {
+            if (!arena_ptr || arena_ptr->external_backing || arena_ptr->committed_size == 0 ||
+                cudaSetDevice(device) != cudaSuccess || cudaDeviceSynchronize() != cudaSuccess) {
+                (void)cudaGetLastError();
+                continue;
+            }
+            const size_t before = arena_ptr->committed_size;
+            const size_t need = std::max(before, arena_ptr->peak_usage.load(std::memory_order_relaxed));
+            arena_ptr->offset.store(0, std::memory_order_release);
+            decommit_unused_memory(*arena_ptr, true, true);
+            if (arena_ptr->committed_size < before) {
+                released += before - arena_ptr->committed_size;
+                // Owed until a frame commits it again; the high-water of the
+                // views seen so far still describes what frames need.
+                arena_ptr->pressure_need = std::max(arena_ptr->pressure_need, need);
+                arena_ptr->peak_usage.store(need, std::memory_order_release);
+            }
+        }
+        if (cudaSetDevice(previous_device) != cudaSuccess) {
+            (void)cudaGetLastError();
+        }
+        if (released > 0) {
+            std::lock_guard<std::mutex> frame_lock(frame_mutex_);
+            frame_contexts_.clear();
+        }
+        return released;
     }
 
     char* RasterizerMemoryArena::allocate_internal(
@@ -2550,6 +2557,9 @@ namespace lfs::core {
                 info.required_bytes = align_up(
                     info.peak_usage, std::max<size_t>(arena.granularity, 1));
                 info.num_reallocations = arena.realloc_count.load(std::memory_order_relaxed);
+                info.recommit_bytes = arena.pressure_need > arena.committed_size
+                                          ? arena.pressure_need - arena.committed_size
+                                          : 0;
                 info.utilization_percent = info.arena_capacity > 0 ? (100.0f * info.peak_usage / info.arena_capacity) : 0.0f;
             }
         } else {
@@ -2608,6 +2618,22 @@ namespace lfs::core {
             config.log_interval = 1000;      // Log every 1000 frames
 
             arena_ = std::make_unique<RasterizerMemoryArena>(config);
+            // Between frames the arena holds memory nothing uses; a refine or
+            // reorder short of VRAM takes it instead of failing.
+            MemoryPressureCoordinator::instance().register_client(PressureClient{
+                .name = "idle-rasterizer-arena",
+                .priority = 20,
+                .domain = MemoryDomain::CudaDevice,
+                .affinity = PressureAffinity::ImmediateThreadSafe,
+                .estimate = nullptr,
+                .shrink = [this](const PressureRequest&) {
+                    std::unique_lock<std::mutex> lock(init_mutex_, std::try_to_lock);
+                    if (!lock.owns_lock() || shutdown_ || !arena_) {
+                        return ReclaimResult{};
+                    }
+                    return ReclaimResult{.logical_bytes_released = arena_->release_idle_for_pressure()};
+                },
+            });
         }
         return *arena_;
     }

@@ -9,8 +9,11 @@
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace lfs::core;
@@ -198,6 +201,90 @@ TEST(ImprovedGSPlusTest, RefineWithoutEdgeScoresSkipsDensification) {
     EXPECT_EQ(splat_data.size(), 8u);
 }
 
+// MCMC and IGS+ read only the error row, so they keep densification_info as
+// [N]; a two-row tensor from an older checkpoint is folded down on the next step.
+TEST(ImprovedGSPlusTest, ErrorRowStrategiesKeepOneDensificationRow) {
+    constexpr size_t n = 8;
+    const auto check = [n](auto& strategy, SplatData& splat_data, param::OptimizationParameters opt_params) {
+        opt_params.iterations = 1000;
+        opt_params.start_refine = 500;
+        opt_params.stop_refine = 800;
+        opt_params.max_cap = 16;
+        strategy.initialize(opt_params);
+        splat_data._densification_info = Tensor::ones({2, n}, Device::CUDA);
+        lfs::training::RenderOutput render_output;
+        strategy.pre_step(1, render_output);
+        strategy.post_backward(1, render_output);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto& info = splat_data._densification_info;
+        ASSERT_EQ(info.ndim(), 1u);
+        ASSERT_EQ(info.shape()[0], n);
+        EXPECT_EQ(info.abs().max().item<float>(), 0.f) << "the fold clears the error row";
+    };
+    {
+        SCOPED_TRACE("MCMC");
+        auto splat_data = create_test_splat_data(n);
+        MCMC strategy(splat_data);
+        check(strategy, splat_data, param::OptimizationParameters::mcmc_defaults());
+    }
+    {
+        SCOPED_TRACE("IGS+");
+        auto splat_data = create_test_splat_data(n);
+        ImprovedGSPlus strategy(splat_data);
+        check(strategy, splat_data, param::OptimizationParameters::igs_plus_defaults());
+    }
+}
+
+// The split stages children in bounded chunks. A budget past one chunk must
+// still give every parent exactly one child carrying the parent's colour.
+TEST(ImprovedGSPlusTest, ChunkedSplitGivesEachParentOneChild) {
+    constexpr size_t n = 1'200'000; // more SH3 children than one 256 MiB chunk holds
+    // sh0 holds the exact parent id; shN holds values within q16 range of it.
+    const auto low_tag = [](const size_t i) { return static_cast<float>(i % 1024) / 1024.0f; };
+    const auto high_tag = [](const size_t i) { return -static_cast<float>((i / 1024) % 1024) / 1024.0f; };
+    std::vector<float> means(n * 3, 0.0f), sh0(n * 3, 0.0f), shN(n * 45, 0.0f);
+    std::vector<float> scaling(n * 3), rotation(n * 4, 0.0f), opacity(n, 0.5f);
+    for (size_t i = 0; i < n; ++i) {
+        sh0[i * 3] = static_cast<float>(i);
+        shN[i * 45] = low_tag(i);
+        shN[i * 45 + 44] = high_tag(i);
+        scaling[i * 3] = -1.0f;
+        scaling[i * 3 + 1] = -2.0f;
+        scaling[i * 3 + 2] = -3.0f;
+        rotation[i * 4] = 1.0f;
+    }
+    SplatData splat_data(3,
+                         Tensor::from_vector(means, TensorShape({n, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({n, 1, 3}), Device::CUDA),
+                         Tensor::from_vector(shN, TensorShape({n, 15, 3}), Device::CUDA),
+                         Tensor::from_vector(scaling, TensorShape({n, 3}), Device::CUDA),
+                         Tensor::from_vector(rotation, TensorShape({n, 4}), Device::CUDA),
+                         Tensor::from_vector(opacity, TensorShape({n, 1}), Device::CUDA),
+                         1.0f);
+    ImprovedGSPlus strategy(splat_data);
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 100;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 80;
+    opt_params.refine_every = 10;
+    opt_params.max_cap = static_cast<int>(2 * n);
+    strategy.initialize(opt_params);
+
+    strategy.densify_for_test(Tensor::ones({n}, Device::CUDA), static_cast<int64_t>(n));
+
+    ASSERT_EQ(splat_data.size(), 2 * n);
+    const auto sh0_out = splat_data.sh0().cpu().to_vector();
+    const auto shN_out = splat_data.shN_canonical_cpu().to_vector();
+    std::vector<std::uint8_t> split(n, 0);
+    for (size_t row = n; row < 2 * n; ++row) {
+        const auto parent = static_cast<size_t>(sh0_out[row * 3]);
+        ASSERT_LT(parent, n);
+        ASSERT_EQ(split[parent]++, 0) << "parent " << parent << " split twice";
+        ASSERT_NEAR(shN_out[row * 45], low_tag(parent), 1e-4f) << "row " << row;
+        ASSERT_NEAR(shN_out[row * 45 + 44], high_tag(parent), 1e-4f) << "row " << row;
+    }
+}
+
 TEST(ImprovedGSPlusTest, FinalIterationPreservesOpacityAtResetBoundary) {
     for (const int iterations : {3000, 6000, 9000, 12000}) {
         SCOPED_TRACE(iterations);
@@ -304,6 +391,49 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     EXPECT_TRUE(means_state->is_joint());
     EXPECT_TRUE(means_state->exp_avg.is_valid());
     EXPECT_TRUE(means_state->joint_bounds.is_valid());
+}
+
+// Relocation runs on the full model at the VRAM limit, so its temporaries
+// must stay a small fraction of the model: no per-row index lists sized for
+// every Gaussian, no extra copies of the sampling weights.
+TEST(MCMCTest, RelocateTransientStaysSmall) {
+    constexpr int n = 2'000'000;
+    auto splat_data = create_test_splat_data(n);
+    MCMC strategy(splat_data);
+
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 100;
+    opt_params.max_cap = n;
+    strategy.initialize(opt_params);
+
+    // Every fourth row dead, spread over the model.
+    std::vector<float> opacity(n, 0.5f);
+    for (int i = 0; i < n; i += 4) {
+        opacity[i] = -20.0f;
+    }
+    strategy.get_model().opacity_raw().copy_from(
+        Tensor::from_vector(opacity, TensorShape({static_cast<size_t>(n), 1}), Device::CUDA));
+
+    int device = 0;
+    cudaMemPool_t pool = nullptr;
+    ASSERT_EQ(cudaGetDevice(&device), cudaSuccess);
+    ASSERT_EQ(cudaDeviceGetDefaultMemPool(&pool, device), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    std::uint64_t used_before = 0;
+    std::uint64_t reset = 0;
+    ASSERT_EQ(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &reset), cudaSuccess);
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used_before), cudaSuccess);
+
+    EXPECT_EQ(strategy.relocate_gs_test(), n / 4);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::uint64_t used_high = 0;
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &used_high), cudaSuccess);
+    // SH rows are staged in fixed-size chunks; everything else scales with N.
+    const size_t transient = used_high - used_before;
+    RecordProperty("relocate_transient_bytes", std::to_string(transient));
+    // Sampling holds the dead mask, weights, CDF and two index lists (~13 B/G).
+    EXPECT_LT(transient, size_t{16} * n + (size_t{96} << 20));
 }
 
 TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {

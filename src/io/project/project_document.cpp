@@ -573,6 +573,10 @@ namespace lfs::io::project {
         std::optional<ChunkInfo> source;
         std::optional<CleanProof> proof;
         std::shared_ptr<const std::vector<std::byte>> owned;
+        // A checkpoint compressed from a consumed payload, and its first
+        // bytes for header peeks.
+        std::shared_ptr<const PreparedChunk> prepared;
+        std::vector<std::byte> prefix;
         // Cache of container-decompressed logical bytes for Zstd /
         // ByteShuffleZstd sources. visit_stream prefers a bounded decode
         // stream and does not populate this. read_at still materializes
@@ -584,10 +588,17 @@ namespace lfs::io::project {
             if (owned) {
                 return owned->size();
             }
+            if (prepared) {
+                return prepared->logical_bytes();
+            }
             if (inflated) {
                 return inflated->size();
             }
             return source ? source->uncompressed_bytes : 0;
+        }
+
+        [[nodiscard]] bool has_bytes() const noexcept {
+            return owned || prepared || (reader && source);
         }
 
         [[nodiscard]] lfs::Result<std::span<const std::byte>>
@@ -597,6 +608,16 @@ namespace lfs::io::project {
                                                   owned->size());
             }
             if (inflated) {
+                return std::span<const std::byte>(inflated->data(),
+                                                  inflated->size());
+            }
+            if (prepared) {
+                auto decoded = prepared->decode();
+                if (!decoded) {
+                    return std::move(decoded).error();
+                }
+                inflated = std::make_shared<const std::vector<std::byte>>(
+                    std::move(*decoded));
                 return std::span<const std::byte>(inflated->data(),
                                                   inflated->size());
             }
@@ -666,8 +687,41 @@ namespace lfs::io::project {
             snapshot_uuid);
     }
 
+    lfs::Result<LazyChunkValue>
+    LazyChunkValue::from_owned_checkpoint(
+        SegmentedPayload bytes,
+        const lfs::core::Uuid& snapshot_uuid) {
+        if (bytes.size() == 0) {
+            return fail<LazyChunkValue>(
+                lfs::ErrorCode::InvalidArgument,
+                "The staged checkpoint is empty.",
+                "LazyChunkValue requires a non-empty CKPT payload",
+                "lazy_chunk.bytes");
+        }
+        if (snapshot_uuid.is_nil()) {
+            return fail<LazyChunkValue>(
+                lfs::ErrorCode::InvalidArgument,
+                "The snapshot UUID cannot be null.",
+                "Every owned training snapshot piece must carry one UUID",
+                "lazy_chunk.snapshot_uuid");
+        }
+        constexpr std::size_t PREFIX_BYTES = 4096;
+        static_assert(sizeof(lfs::core::CheckpointHeader) <= PREFIX_BYTES);
+        auto impl = std::make_unique<Impl>();
+        impl->prefix.resize(std::min(bytes.size(), PREFIX_BYTES));
+        bytes.read(0, impl->prefix);
+        const auto options = lazy_binary_options(FOURCC_CKPT, bytes.size());
+        auto prepared = ProjectWriter::prepare_chunk(std::move(bytes), options);
+        if (!prepared) {
+            return std::move(prepared).error();
+        }
+        impl->prepared = std::make_shared<const PreparedChunk>(std::move(*prepared));
+        impl->snapshot_uuid = snapshot_uuid;
+        return LazyChunkValue(std::move(impl));
+    }
+
     lfs::Result<LazyChunkValue> LazyChunkValue::share() const {
-        if (!impl_ || (!impl_->owned && !(impl_->reader && impl_->source))) {
+        if (!impl_ || !impl_->has_bytes()) {
             return fail<LazyChunkValue>(
                 lfs::ErrorCode::FailedPrecondition,
                 "The lazy chapter has no byte source.",
@@ -679,6 +733,8 @@ namespace lfs::io::project {
         clone->source = impl_->source;
         clone->proof = impl_->proof;
         clone->owned = impl_->owned;
+        clone->prepared = impl_->prepared;
+        clone->prefix = impl_->prefix;
         clone->snapshot_uuid = impl_->snapshot_uuid;
         return LazyChunkValue(std::move(clone));
     }
@@ -694,7 +750,7 @@ namespace lfs::io::project {
 
     bool LazyChunkValue::is_clean_reference() const noexcept {
         return impl_->reader && impl_->source && impl_->proof &&
-               !impl_->owned;
+               !impl_->owned && !impl_->prepared;
     }
 
     void LazyChunkValue::drop_clean_proof_for_testing() noexcept {
@@ -724,6 +780,20 @@ namespace lfs::io::project {
                 destination.data(),
                 impl_->owned->data() + offset,
                 destination.size());
+            return {};
+        }
+        if (impl_->prepared) {
+            if (offset + destination.size() <= impl_->prefix.size()) {
+                std::memcpy(destination.data(), impl_->prefix.data() + offset,
+                            destination.size());
+                return {};
+            }
+            auto logical = impl_->logical_owned_or_inflated();
+            if (!logical) {
+                return lfs::Result<void>::failure(std::move(logical).error());
+            }
+            std::memcpy(destination.data(), logical->data() + offset,
+                        destination.size());
             return {};
         }
         if (!impl_->reader || !impl_->source) {
@@ -763,6 +833,15 @@ namespace lfs::io::project {
                 impl_->owned->data(), impl_->owned->size()));
             std::istream stream(&buffer);
             return visitor(stream, impl_->owned->size());
+        }
+        if (impl_->prepared) {
+            auto logical = impl_->logical_owned_or_inflated();
+            if (!logical) {
+                return lfs::Result<void>::failure(std::move(logical).error());
+            }
+            SpanStreambuf buffer(*logical);
+            std::istream stream(&buffer);
+            return visitor(stream, logical->size());
         }
         if (!impl_->reader || !impl_->source) {
             return fail<void>(
@@ -851,6 +930,18 @@ namespace lfs::io::project {
         if (impl_->owned) {
             std::memcpy(
                 destination.data(), impl_->owned->data(), destination.size());
+            return {};
+        }
+        if (impl_->prepared) {
+            if (destination.size() <= impl_->prefix.size()) {
+                std::memcpy(destination.data(), impl_->prefix.data(), destination.size());
+                return {};
+            }
+            auto logical = impl_->logical_owned_or_inflated();
+            if (!logical) {
+                return lfs::Result<void>::failure(std::move(logical).error());
+            }
+            std::memcpy(destination.data(), logical->data(), destination.size());
             return {};
         }
         if (impl_->inflated) {
@@ -4562,7 +4653,7 @@ namespace lfs::io::project {
         bool rewrite = missing_source;
         std::uint64_t resulting_live = 0;
         std::uint64_t superseded_bytes = 0;
-        std::map<ChunkKey, PreparedChunk, ChunkKeyLess> prepared;
+        std::map<ChunkKey, std::shared_ptr<const PreparedChunk>, ChunkKeyLess> prepared;
         if (!is_autosave && !keep_all && impl_->source_reader) {
             // Prepare once, then publish these exact compressed bytes in either
             // mode. Counting logical tensor bytes would choose the wrong mode.
@@ -4570,18 +4661,22 @@ namespace lfs::io::project {
                 auto value = ProjectWriter::prepare_chunk(chunk.bytes, chunk.options);
                 if (!value)
                     return std::move(value).error();
-                prepared.emplace(key, std::move(*value));
+                prepared.emplace(key, std::make_shared<const PreparedChunk>(std::move(*value)));
             }
             const auto prepare_lazy = [&](Fourcc fourcc, const auto& payloads) -> lfs::Result<void> {
                 for (const auto& [uuid, payload] : payloads) {
                     const ChunkKey key{fourcc, uuid};
-                    if (!desired.contains(key) || !payload.impl_->owned)
+                    if (!desired.contains(key) || !(payload.impl_->owned || payload.impl_->prepared))
                         continue;
+                    if (payload.impl_->prepared) {
+                        prepared.emplace(key, payload.impl_->prepared);
+                        continue;
+                    }
                     auto value = ProjectWriter::prepare_chunk(*payload.impl_->owned,
                                                               lazy_binary_options(fourcc, payload.size()));
                     if (!value)
                         return lfs::Result<void>::failure(std::move(value).error());
-                    prepared.emplace(key, std::move(*value));
+                    prepared.emplace(key, std::make_shared<const PreparedChunk>(std::move(*value)));
                 }
                 return {};
             };
@@ -4623,7 +4718,7 @@ namespace lfs::io::project {
             }
             for (const auto& [key, value] : prepared) {
                 (void)key;
-                if (auto r = count(value.occupied_bytes() + INDEX_ROW_BYTES); !r)
+                if (auto r = count(value->occupied_bytes() + INDEX_ROW_BYTES); !r)
                     return std::move(r).error();
             }
             if (!preview_png.empty()) {
@@ -5137,12 +5232,14 @@ namespace lfs::io::project {
                 // and chunk_version; those are correct for an unchanged
                 // payload. Counted as rewritten_chunks because stored bytes
                 // are physically rewritten.
-                if (payload.impl_->owned) {
+                if (payload.impl_->owned || payload.impl_->prepared) {
                     const auto options =
                         lazy_binary_options(fourcc, payload.size());
-                    if (auto written = prepared.contains(key)
-                                           ? writer->write_prepared_chunk(key, prepared.at(key))
-                                           : writer->write_chunk(key, *payload.impl_->owned, options);
+                    const PreparedChunk* ready = prepared.contains(key)
+                                                     ? prepared.at(key).get()
+                                                     : payload.impl_->prepared.get();
+                    if (auto written = ready ? writer->write_prepared_chunk(key, *ready)
+                                             : writer->write_chunk(key, *payload.impl_->owned, options);
                         !written) {
                         return written;
                     }
@@ -5201,7 +5298,7 @@ namespace lfs::io::project {
         }
         for (const auto& [key, chunk] : encoded) {
             if (auto result =
-                    prepared.contains(key) ? writer->write_prepared_chunk(key, prepared.at(key))
+                    prepared.contains(key) ? writer->write_prepared_chunk(key, *prepared.at(key))
                                            : writer->write_chunk(key, chunk.bytes, chunk.options);
                 !result) {
                 return std::move(result).error();

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_allocation.hpp"
 #include "core/cuda_error.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor.hpp"
@@ -8,6 +9,8 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cuda_runtime.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -393,4 +396,74 @@ TEST_F(MemoryPressureTest, SuccessfulViewerReclaimDoesNotLeavePreviewDegraded) {
     coordinator().run_episode(failure, PressureContext::RenderThread);
     EXPECT_EQ(coordinator().episode_count(), 1u);
     EXPECT_FALSE(coordinator().pressure_active());
+}
+
+// Kernel scratch made outside the tensor pool gets the same relief as tensor
+// allocations, instead of failing while a client could free memory.
+TEST_F(MemoryPressureTest, ScratchAllocationRetriesAfterRelief) {
+    constexpr size_t kMiB = size_t{1} << 20;
+    struct DeviceBlock {
+        void* ptr = nullptr;
+        explicit DeviceBlock(const size_t bytes) {
+            if (cudaMalloc(&ptr, bytes) != cudaSuccess) {
+                ptr = nullptr;
+                (void)cudaGetLastError();
+            }
+        }
+        ~DeviceBlock() { release(); }
+        void release() {
+            if (ptr) {
+                cudaFree(ptr);
+                ptr = nullptr;
+            }
+        }
+    };
+    // Warm the stream-ordered path so its first use does not need memory.
+    { const UniqueCudaAllocation<StreamOrderedCudaAllocator> warm(2 * kMiB, nullptr, "test.warm"); }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    cudaMemPool_t pool = nullptr;
+    ASSERT_EQ(cudaDeviceGetDefaultMemPool(&pool, 0), cudaSuccess);
+    ASSERT_EQ(cudaMemPoolTrimTo(pool, 0), cudaSuccess);
+
+    DeviceBlock releasable(512 * kMiB);
+    if (!releasable.ptr) {
+        GTEST_SKIP() << "not enough free VRAM";
+    }
+    bool relieved = false;
+    coordinator().register_client(PressureClient{
+        .name = "test-releasable",
+        .priority = 10,
+        .domain = MemoryDomain::CudaDevice,
+        .affinity = PressureAffinity::ImmediateThreadSafe,
+        .estimate = nullptr,
+        .shrink = [&](const PressureRequest&) {
+            relieved = releasable.ptr != nullptr;
+            releasable.release();
+            return ReclaimResult{.logical_bytes_released = relieved ? 512 * kMiB : 0};
+        },
+    });
+    std::vector<std::unique_ptr<DeviceBlock>> fill;
+    for (size_t chunk = 256 * kMiB; chunk >= 2 * kMiB;) {
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        ASSERT_EQ(cudaMemGetInfo(&free_bytes, &total_bytes), cudaSuccess);
+        if (free_bytes < 64 * kMiB + chunk) {
+            chunk /= 2;
+            continue;
+        }
+        fill.push_back(std::make_unique<DeviceBlock>(chunk));
+        if (!fill.back()->ptr) {
+            fill.pop_back();
+            chunk /= 2;
+        }
+    }
+
+    {
+        std::unique_ptr<UniqueCudaAllocation<StreamOrderedCudaAllocator>> scratch;
+        EXPECT_NO_THROW(scratch = std::make_unique<UniqueCudaAllocation<StreamOrderedCudaAllocator>>(
+                            256 * kMiB, nullptr, "test.scratch"));
+        EXPECT_TRUE(relieved);
+    }
+    (void)cudaGetLastError();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }

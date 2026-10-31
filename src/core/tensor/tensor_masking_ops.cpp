@@ -1557,53 +1557,13 @@ namespace lfs::core {
         // Helper lambda for index_put_ implementation (fallback path)
         auto index_put_impl = [&]<typename DataT, typename IndexT>() {
             if (device_ == Device::CUDA) {
-                // Fallback: CPU roundtrip for complex cases
-                auto cpu_tensor = to(Device::CPU);
-                auto cpu_idx = idx_same_device.to(Device::CPU);
-                auto cpu_vals = vals_same_device.to(Device::CPU);
-
-                pin_operands({&cpu_tensor, &cpu_idx, &cpu_vals});
-                DataT* data = cpu_tensor.ptr<DataT>();
-                const IndexT* indices = cpu_idx.ptr<IndexT>();
-                const DataT* values = cpu_vals.ptr<DataT>();
-
-                if (is_row_assignment) {
-                    size_t row_size = 1;
-                    for (size_t i = 1; i < cpu_tensor.ndim(); ++i) {
-                        row_size *= cpu_tensor.shape()[i];
-                    }
-                    const size_t num_rows = cpu_tensor.shape()[0];
-
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
-                        IndexT row_idx = indices[i];
-                        if (row_idx < 0)
-                            row_idx += num_rows;
-                        if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
-                            std::memcpy(data + row_idx * row_size,
-                                        values + i * row_size,
-                                        row_size * sizeof(DataT));
-                        }
-                    }
-                } else {
-                    const size_t num_elements = cpu_tensor.numel();
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
-                        IndexT pos = indices[i];
-                        if (pos < 0)
-                            pos += num_elements;
-                        if (pos >= 0 && pos < static_cast<IndexT>(num_elements)) {
-                            data[pos] = values[i];
-                        }
-                    }
-                }
-
-                // Copy back preserving capacity
-                auto result = cpu_tensor.to(device_);
-                const size_t bytes = numel() * dtype_size(dtype_);
+                pin_operands({this, &idx_same_device, &vals_same_device});
                 const cudaStream_t execution_stream =
-                    prepare_inputs_for_stream({this, &result}, stream());
-                LFS_CUDA_CHECK(cudaMemcpyAsync(data_ptr(), result.ptr<void>(), bytes,
-                                               cudaMemcpyDeviceToDevice, execution_stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
+                    prepare_inputs_for_stream({this, &idx_same_device, &vals_same_device}, stream());
+                const size_t rows = is_row_assignment ? shape_[0] : numel();
+                tensor_ops::launch_index_put_rows(ptr<DataT>(), idx_same_device.ptr<IndexT>(),
+                                                  vals_same_device.ptr<DataT>(), numel() / rows, rows,
+                                                  idx_same_device.numel(), execution_stream);
             } else {
                 // CPU implementation
                 pin_operands({this, &idx_same_device, &vals_same_device});
@@ -1910,36 +1870,20 @@ namespace lfs::core {
 
         // Special case for 1D tensors
         if (n_dims == 1) {
-            // Allocate MAXIMUM size to prevent buffer overflow from Thrust/CUB mismatch
-            auto temp = empty({numel()}, device_, DataType::Int64);
-            size_t actual_count = count; // Start with Thrust's count
+            // count_nonzero and the selection use the same `!= 0` predicate, so
+            // the result holds exactly `count` indices. A numel()-sized buffer
+            // kept 8 bytes per input element alive for a sparse mask.
+            auto temp = empty({count}, device_, DataType::Int64);
 
             if (device_ == Device::CUDA) {
-                // Get ACTUAL count from CUB (not Thrust which may differ!)
-                if (is_bool_like(dtype_)) {
-                    actual_count = tensor_ops::launch_nonzero_bool(ptr<unsigned char>(),
-                                                                   reinterpret_cast<int64_t*>(temp.data_ptr()),
-                                                                   numel(), numel(), stream());
-                } else {
-                    actual_count = tensor_ops::launch_nonzero(ptr<float>(),
-                                                              reinterpret_cast<int64_t*>(temp.data_ptr()),
-                                                              numel(), numel(), stream());
-                }
-
-                // DEBUG: Check count mismatch
-                if (actual_count != count) {
-                    LOG_DEBUG("nonzero() count mismatch: Thrust={}, CUB={}, numel={}", count, actual_count, numel());
-                }
-
-                // Slice to actual size - slice is [start, end) exclusive on end
-                if (actual_count < numel()) {
-                    if (actual_count > 0) {
-                        temp = temp.slice(0, 0, actual_count);
-                    } else {
-                        temp = empty({0}, device_, DataType::Int64);
-                    }
-                }
-                // No sync - tensor operation
+                const size_t selected = is_bool_like(dtype_)
+                                            ? tensor_ops::launch_nonzero_bool(ptr<unsigned char>(),
+                                                                              reinterpret_cast<int64_t*>(temp.data_ptr()),
+                                                                              numel(), count, stream())
+                                            : tensor_ops::launch_nonzero(ptr<float>(),
+                                                                         reinterpret_cast<int64_t*>(temp.data_ptr()),
+                                                                         numel(), count, stream());
+                LFS_ASSERT_MSG(selected == count, "nonzero selected a different count than count_nonzero");
             } else {
                 int64_t* indices = reinterpret_cast<int64_t*>(temp.data_ptr());
                 size_t write_idx = 0;
@@ -1967,21 +1911,11 @@ namespace lfs::core {
                     }
                 }
 
-                // Update actual_count from write_idx (CPU path)
-                actual_count = write_idx;
+                LFS_ASSERT_MSG(write_idx == count, "nonzero selected a different count than count_nonzero");
             }
 
-            // Slice to actual size (same as CUDA path does at lines 948-954)
-            if (actual_count < numel()) {
-                if (actual_count > 0) {
-                    temp = temp.slice(0, 0, actual_count);
-                } else {
-                    temp = empty({0}, device_, DataType::Int64);
-                }
-            }
-
-            // Reshape to (actual_count, 1) to match PyTorch
-            return temp.reshape({static_cast<int>(actual_count), 1});
+            // Reshape to (count, 1) to match PyTorch
+            return temp.reshape({static_cast<int>(count), 1});
         }
 
         // Multi-dimensional case
@@ -2476,6 +2410,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(new_size <= state_->capacity,
                        std::format("append_gather needs capacity {}, but only {} is reserved",
                                    new_size, state_->capacity));
+        commit_rows(new_size);
 
         // Calculate row size (all elements in dims 1+)
         size_t row_size = 1;
@@ -2604,6 +2539,7 @@ namespace lfs::core {
                 "append_zeros() requires sufficient capacity: current={}, n_rows={}, new_size={}, capacity={}",
                 current_size, n_rows, new_size, state_->capacity));
         }
+        commit_rows(new_size);
 
         // Calculate row size in elements
         size_t row_size = 1;

@@ -21,6 +21,10 @@
 #include <span>
 #include <vector>
 
+namespace lfs::io::project {
+    class SegmentedPayload;
+} // namespace lfs::io::project
+
 namespace lfs::training {
 
     class IStrategy;
@@ -179,7 +183,8 @@ namespace lfs::training {
     struct CapturedTrainingSnapshot {
         lfs::core::Uuid snapshot_uuid;
         int iteration = 0;
-        std::shared_ptr<const std::vector<std::byte>> checkpoint_bytes;
+        // The writer consumes it while compressing.
+        std::shared_ptr<lfs::io::project::SegmentedPayload> checkpoint_bytes;
         TrainingSnapshotPauseMetrics metrics;
     };
 

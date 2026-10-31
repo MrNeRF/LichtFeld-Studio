@@ -17,6 +17,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "io/project_container.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
@@ -43,8 +44,10 @@
 #include <stdexcept>
 #include <streambuf>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -71,6 +74,8 @@ namespace lfs::training {
             4ull * 1024 * 1024 * 1024;
         constexpr std::uint64_t HOST_MEMORY_GATE_HEADROOM_BYTES =
             768ull * 1024 * 1024;
+        constexpr std::size_t DRAIN_COPY_PIECE_BYTES =
+            16ull * 1024;
 
         void require_cuda(
             const cudaError_t status,
@@ -713,14 +718,14 @@ namespace lfs::training {
         std::uint64_t checkpoint_bytes = 0;
         std::uint64_t device_snapshot_bytes = 0;
         std::vector<TensorLayoutWitness> layout;
-        std::shared_ptr<std::vector<std::byte>> staging;
+        std::shared_ptr<lfs::io::project::SegmentedPayload> staging;
         TrainingSnapshotPauseMetrics metrics;
     };
 
     struct PendingTrainingSnapshot::Impl {
         mutable std::mutex mutex;
         std::condition_variable drained_condition;
-        std::shared_ptr<std::vector<std::byte>> staging;
+        std::shared_ptr<lfs::io::project::SegmentedPayload> staging;
         TrainingSnapshotPauseMetrics metrics;
         std::vector<PieceStamp> stamps;
         std::size_t outstanding_drains = 0;
@@ -1204,6 +1209,45 @@ namespace lfs::training {
             }
         }
 
+        // The staging is fresh memory, so one copying thread is bound by
+        // first-touch page faults at about a sixth of memory bandwidth.
+        // While the ring is full the safe point waits on this copy.
+        static void copy_band_to_staging(
+            const DrainTask& task,
+            const std::byte* pinned) {
+            struct Piece {
+                std::byte* destination;
+                const std::byte* source;
+                std::size_t bytes;
+            };
+            std::vector<Piece> pieces;
+            for (const auto& segment : task.segments) {
+                for (std::size_t done = 0; done < segment.bytes;) {
+                    const auto window = task.capture->staging->window(
+                        segment.destination_offset + done);
+                    const std::size_t bytes = std::min(
+                        {window.size(), segment.bytes - done, DRAIN_COPY_PIECE_BYTES});
+                    pieces.push_back({window.data(), pinned + segment.pinned_offset + done, bytes});
+                    done += bytes;
+                }
+            }
+            std::atomic<std::size_t> next{0};
+            const auto copy = [&] {
+                for (std::size_t index; (index = next.fetch_add(1)) < pieces.size();)
+                    non_temporal_copy(pieces[index].destination, pieces[index].source, pieces[index].bytes);
+            };
+            static const std::size_t threads =
+                std::clamp<std::size_t>(std::thread::hardware_concurrency() / 3, 1, 8);
+            std::vector<std::jthread> helpers;
+            try {
+                for (std::size_t helper = 1; helper < std::min(threads, pieces.size()); ++helper)
+                    helpers.emplace_back(copy);
+            } catch (const std::system_error&) {
+                // Fewer helpers only slow the copy.
+            }
+            copy();
+        }
+
         void drain_loop(const std::stop_token stop) {
             while (true) {
                 std::size_t slot_index = 0;
@@ -1229,19 +1273,8 @@ namespace lfs::training {
                     cudaEventSynchronize(
                         slot.d2h_complete);
                 if (event_status == cudaSuccess) {
-                    for (const auto& segment :
-                         task.segments) {
-                        non_temporal_copy(
-                            task.capture
-                                    ->staging->data() +
-                                segment
-                                    .destination_offset,
-                            static_cast<
-                                const std::byte*>(
-                                slot.pinned) +
-                                segment.pinned_offset,
-                            segment.bytes);
-                    }
+                    copy_band_to_staging(
+                        task, static_cast<const std::byte*>(slot.pinned));
                 } else {
                     error = std::format(
                         "snapshot drain event: {}",
@@ -1453,11 +1486,13 @@ namespace lfs::training {
                     return 0;
                 }
                 if (count > 0) {
-                    std::memcpy(
-                        capture_->staging->data() +
-                            cursor_,
-                        source,
-                        static_cast<std::size_t>(count));
+                    for (std::size_t done = 0; done < static_cast<std::size_t>(count);) {
+                        const auto window = capture_->staging->window(cursor_ + done);
+                        const std::size_t bytes =
+                            std::min(window.size(), static_cast<std::size_t>(count) - done);
+                        std::memcpy(window.data(), source + done, bytes);
+                        done += bytes;
+                    }
                     add_stamp(
                         cursor_,
                         static_cast<std::uint64_t>(
@@ -2078,12 +2113,16 @@ namespace lfs::training {
                         reserve_bytes),
                     LFS_SOURCE_SITE_CURRENT());
             }
+            // Segments stay uncommitted until the drain writes them, so this
+            // does not touch the payload on the training thread.
+            auto staging = lfs::io::project::SegmentedPayload::allocate(
+                prepared->checkpoint_bytes);
+            if (!staging) {
+                return std::move(staging).error();
+            }
             prepared->staging =
-                std::make_shared<
-                    std::vector<std::byte>>();
-            prepared->staging->resize(
-                static_cast<std::size_t>(
-                    prepared->checkpoint_bytes));
+                std::make_shared<lfs::io::project::SegmentedPayload>(
+                    std::move(*staging));
             const auto rss_after = read_rss_bytes();
 
             prepared->metrics.snapshot_uuid =

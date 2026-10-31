@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "io/project_container.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -41,6 +42,12 @@
 namespace {
 
     constexpr std::size_t MIB = 1024 * 1024;
+
+    std::vector<std::byte> payload_bytes(const lfs::io::project::SegmentedPayload& payload) {
+        std::vector<std::byte> bytes(payload.size());
+        payload.read(0, bytes);
+        return bytes;
+    }
 
     std::unique_ptr<lfs::core::SplatData>
     make_snapshot_test_splat(
@@ -491,7 +498,7 @@ namespace {
                   reference_bytes.size());
         EXPECT_EQ(
             std::memcmp(
-                captured->checkpoint_bytes->data(),
+                payload_bytes(*captured->checkpoint_bytes).data(),
                 reference_bytes.data(),
                 reference_bytes.size()),
             0);
@@ -553,7 +560,7 @@ namespace {
 
         const std::string captured_string(
             reinterpret_cast<const char*>(
-                captured->checkpoint_bytes->data()),
+                payload_bytes(*captured->checkpoint_bytes).data()),
             captured->checkpoint_bytes->size());
         std::istringstream captured_stream(
             captured_string,
@@ -709,7 +716,7 @@ namespace {
                   reference_bytes.size());
         EXPECT_EQ(
             std::memcmp(
-                captured->checkpoint_bytes->data(),
+                payload_bytes(*captured->checkpoint_bytes).data(),
                 reference_bytes.data(),
                 reference_bytes.size()),
             0);
@@ -920,7 +927,7 @@ namespace {
 
         const std::string checkpoint_string(
             reinterpret_cast<const char*>(
-                captured->checkpoint_bytes->data()),
+                payload_bytes(*captured->checkpoint_bytes).data()),
             captured->checkpoint_bytes->size());
         std::istringstream checkpoint_stream(
             checkpoint_string,
@@ -1142,7 +1149,7 @@ namespace {
         auto captured = pending->wait();
         ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
         ASSERT_EQ(captured->checkpoint_bytes->size(), bytes.size());
-        EXPECT_EQ(std::memcmp(captured->checkpoint_bytes->data(), bytes.data(), bytes.size()), 0);
+        EXPECT_EQ(std::memcmp(payload_bytes(*captured->checkpoint_bytes).data(), bytes.data(), bytes.size()), 0);
         EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 

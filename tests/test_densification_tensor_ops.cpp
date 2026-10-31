@@ -5,6 +5,8 @@
 // Verified against LibTorch reference implementations
 
 #include "core/tensor.hpp"
+#include <cstdint>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
 #include <torch/torch.h>
@@ -356,6 +358,50 @@ TEST_F(DensificationTensorOpsTest, IndexPut_Bool) {
     lfs_mask.index_put_(lfs_indices, lfs_false);
 
     EXPECT_TRUE(tensors_close(lfs_mask, torch_mask, 0, 0, "IndexPut_Bool"));
+}
+
+// Per-Gaussian masks and scores are 1-D: _free_mask, deleted(), error scores.
+TEST_F(DensificationTensorOpsTest, IndexPut_FlatOnDeviceMatchesTorch) {
+    const auto int32_idx = torch::tensor({3, -1, 7, 0, -50}, torch::kCUDA).to(torch::kInt32);
+    const auto int64_idx = int32_idx.to(torch::kInt64);
+    for (const auto& torch_indices : {int32_idx, int64_idx}) {
+        for (const auto dtype : {torch::kFloat32, torch::kInt32, torch::kInt64, torch::kBool}) {
+            SCOPED_TRACE(::testing::Message() << "dtype " << dtype << " index " << torch_indices.dtype());
+            auto torch_data = torch::zeros({50}, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+            const auto torch_values = torch::ones({5}, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+            auto lfs_data = from_torch(torch_data);
+            lfs_data.index_put_(from_torch(torch_indices), from_torch(torch_values));
+            torch_data.index_put_({torch_indices}, torch_values);
+            EXPECT_TRUE(torch::equal(to_torch(lfs_data).cpu(), torch_data.cpu()));
+        }
+    }
+}
+
+// The device path writes in place, with no host staging and no second
+// full-size copy.
+TEST_F(DensificationTensorOpsTest, IndexPut_FlatTakesNoFullSizeCopy) {
+    constexpr size_t n = size_t{64} << 20;
+    auto scores = Tensor::zeros({n}, Device::CUDA);
+    const auto indices = Tensor::arange(0.0f, 4096.0f, 1.0f, Device::CUDA).to(DataType::Int64);
+    const auto values = Tensor::ones({4096}, Device::CUDA);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    int device = 0;
+    cudaMemPool_t pool = nullptr;
+    ASSERT_EQ(cudaGetDevice(&device), cudaSuccess);
+    ASSERT_EQ(cudaDeviceGetDefaultMemPool(&pool, device), cudaSuccess);
+    std::uint64_t used_before = 0;
+    std::uint64_t reset = 0;
+    ASSERT_EQ(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &reset), cudaSuccess);
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used_before), cudaSuccess);
+
+    scores.index_put_(indices, values);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::uint64_t used_high = 0;
+    ASSERT_EQ(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &used_high), cudaSuccess);
+    EXPECT_LT(used_high - used_before, n * sizeof(float) / 16);
+    EXPECT_FLOAT_EQ(scores.sum_scalar(), 4096.0f);
 }
 
 // =============================================================================

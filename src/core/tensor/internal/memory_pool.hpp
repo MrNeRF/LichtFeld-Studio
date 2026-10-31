@@ -121,6 +121,20 @@ namespace lfs::core {
         void* try_allocate(size_t bytes,
                            cudaStream_t stream = nullptr,
                            cudaError_t* failure_status = nullptr) {
+            void* ptr = try_allocate_from_tiers(bytes, stream, failure_status);
+            // A tier that ran out falls through to the next one. If that one
+            // succeeds, its out-of-memory error must not stay pending: CUB
+            // returns any pending error as its own, so the next scan, sort or
+            // reduction would fail.
+            if (ptr != nullptr && cudaPeekAtLastError() == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+            }
+            return ptr;
+        }
+
+        void* try_allocate_from_tiers(size_t bytes,
+                                      cudaStream_t stream,
+                                      cudaError_t* failure_status) {
             unretire_stream(stream);
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
             if (failure_status) {
@@ -166,7 +180,7 @@ namespace lfs::core {
                 }
             }
 
-            if (bytes <= BUCKET_ALLOC_THRESHOLD) {
+            if (bytes <= BUCKET_ALLOC_THRESHOLD && SizeBucketedPool::instance().may_cache(bytes)) {
                 ptr = SizeBucketedPool::instance().try_allocate_cached(bytes, stream);
                 if (ptr) {
                     stats_.bucket_cache_hits.fetch_add(1, std::memory_order_relaxed);
