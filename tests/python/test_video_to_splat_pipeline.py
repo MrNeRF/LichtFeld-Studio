@@ -84,6 +84,10 @@ def make_request(project: Path, video: Path) -> pipeline.Request:
     return pipeline.Request(video=video, project=project, mode_override="auto", preset="balanced")
 
 
+def work_dir(project: Path) -> Path:
+    return project.parent / project.stem
+
+
 @pytest.fixture
 def clip(tmp_path):
     video = tmp_path / "clip.mp4"
@@ -92,13 +96,13 @@ def clip(tmp_path):
 
 
 def test_full_run_order_and_state(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     state = pipeline.run(make_request(project, clip), fakes.hooks(),
                          on_progress=lambda *a: fakes.progress.append(a), should_cancel=fakes.cancel.is_set)
     assert fakes.calls == ["toolchain", "extract", "feature_extractor", "sequential_matcher", "global_mapper",
                            "create_project", "train"]
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert [s["name"] for s in saved["completed"]] == pipeline.STAGE_NAMES
     assert saved["mode"] == "equirectangular"
     assert saved["registered"] == 45 and saved["frames"] == 50
@@ -108,18 +112,18 @@ def test_full_run_order_and_state(tmp_path, clip):
     # extraction used the balanced preset against a 5760 px wide source: 2 fps, scaled to 4096 px
     assert fakes.extract_params.fps == 2.0
     assert fakes.extract_params.scale == pytest.approx(4096 / 5760)
-    assert fakes.extract_params.dataset == project / "dataset"
-    assert fakes.create_args == (project, project / "dataset", "images")
+    assert fakes.extract_params.dataset == tmp_path / "proj" / "dataset"
+    assert fakes.create_args == (project, tmp_path / "proj" / "dataset", "images")
 
 
 def test_rerun_skips_completed_stages(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     first = Fakes(project)
     pipeline.run(make_request(project, clip), first.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     # Truncate state so only toolchain..match are complete, as if map crashed.
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     saved["completed"] = saved["completed"][:4]
-    (project / "pipeline.json").write_text(json.dumps(saved))
+    (work_dir(project) / "pipeline.json").write_text(json.dumps(saved))
     second = Fakes(project)
     pipeline.run(make_request(project, clip), second.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     # COLMAP must still be located because global_mapper has to run, but frames and the database are kept.
@@ -127,7 +131,7 @@ def test_rerun_skips_completed_stages(tmp_path, clip):
 
 
 def test_changed_preset_invalidates_resume(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     first = Fakes(project)
     pipeline.run(make_request(project, clip), first.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     second = Fakes(project)
@@ -137,27 +141,27 @@ def test_changed_preset_invalidates_resume(tmp_path, clip):
 
 
 def test_corrupt_state_file_starts_over(tmp_path, clip):
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / "pipeline.json").write_text("{not json")
+    project = tmp_path / "proj.licht"
+    work_dir(project).mkdir()
+    (work_dir(project) / "pipeline.json").write_text("{not json")
     fakes = Fakes(project)
     pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     assert fakes.calls[0] == "toolchain" and "extract" in fakes.calls
 
 
 def test_too_few_frames_stops(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project, frames=7)
     with pytest.raises(pipeline.PipelineError) as err:
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     assert "7" in str(err.value)
     assert "feature_extractor" not in fakes.calls
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert [s["name"] for s in saved["completed"]] == ["toolchain"]
 
 
 def test_extraction_failure_is_reported(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     fakes.extract = lambda params, on_progress, should_cancel: {"outcome": "failed", "error": "codec unsupported"}
     with pytest.raises(pipeline.PipelineError) as err:
@@ -166,7 +170,7 @@ def test_extraction_failure_is_reported(tmp_path, clip):
 
 
 def test_extraction_cancel_propagates(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     fakes.extract = lambda params, on_progress, should_cancel: {"outcome": "cancelled", "error": ""}
     with pytest.raises(pipeline.PipelineCancelled):
@@ -174,18 +178,18 @@ def test_extraction_cancel_propagates(tmp_path, clip):
 
 
 def test_weak_reconstruction_asks_and_can_stop(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project, frames=50, registered=20)  # 40 percent
     fakes.confirmed_weak = False
     with pytest.raises(pipeline.PipelineStopped):
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     assert "confirm_weak" in fakes.calls and "create_project" not in fakes.calls
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert saved["registered"] == 20
 
 
 def test_weak_reconstruction_can_continue(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project, frames=50, registered=20)
     fakes.confirmed_weak = True
     pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
@@ -193,14 +197,14 @@ def test_weak_reconstruction_can_continue(tmp_path, clip):
 
 
 def test_strong_reconstruction_does_not_ask(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project, frames=50, registered=45)
     pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
     assert "confirm_weak" not in fakes.calls
 
 
 def test_largest_model_is_moved_to_sparse_zero(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     original_run = fakes.run
 
@@ -220,14 +224,14 @@ def test_largest_model_is_moved_to_sparse_zero(tmp_path, clip):
     state = pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
                          should_cancel=lambda: False)
     assert state.registered == 44
-    sparse = project / "dataset" / "sparse"
+    sparse = work_dir(project) / "dataset" / "sparse"
     assert Path(state.model_dir) == sparse / "0"
     assert struct.unpack("<Q", (sparse / "0" / "images.bin").read_bytes()[:8])[0] == 44
     assert not (sparse / "1").exists()
 
 
 def test_no_model_is_an_error(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     original_run = fakes.run
 
@@ -244,7 +248,7 @@ def test_no_model_is_an_error(tmp_path, clip):
 
 
 def test_colmap_failure_raises_with_tail(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project, colmap_rc=1)
     with pytest.raises(pipeline.PipelineError) as err:
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
@@ -253,7 +257,7 @@ def test_colmap_failure_raises_with_tail(tmp_path, clip):
 
 
 def test_cancel_before_map_keeps_state(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     original_run = fakes.run
 
@@ -267,12 +271,12 @@ def test_cancel_before_map_keeps_state(tmp_path, clip):
     with pytest.raises(pipeline.PipelineCancelled):
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
                      should_cancel=fakes.cancel.is_set)
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert [s["name"] for s in saved["completed"]] == ["toolchain", "extract", "features", "match"]
 
 
 def test_cancel_between_stages_is_honoured(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     original_extract = fakes.extract
 
@@ -286,12 +290,12 @@ def test_cancel_between_stages_is_honoured(tmp_path, clip):
         pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None,
                      should_cancel=fakes.cancel.is_set)
     assert "feature_extractor" not in fakes.calls
-    saved = json.loads((project / "pipeline.json").read_text())
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
     assert [s["name"] for s in saved["completed"]] == ["toolchain", "extract"]
 
 
 def test_low_disk_space_warns(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     hooks = fakes.hooks()
     hooks = pipeline.Hooks(**{**hooks.__dict__, "free_bytes": lambda p: 2 * 1024 ** 3})
@@ -302,7 +306,7 @@ def test_low_disk_space_warns(tmp_path, clip):
 
 
 def test_progress_carries_colmap_log_tail(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     fakes = Fakes(project)
     tails = []
     pipeline.run(make_request(project, clip), fakes.hooks(),
@@ -311,10 +315,11 @@ def test_progress_carries_colmap_log_tail(tmp_path, clip):
 
 
 def test_request_fingerprint_tracks_inputs(tmp_path, clip):
-    project = tmp_path / "proj"
+    project = tmp_path / "proj.licht"
     base = make_request(project, clip)
     assert base.fingerprint() == make_request(project, clip).fingerprint()
     assert base.fingerprint() != pipeline.Request(video=clip, project=project, preset="fast").fingerprint()
     assert base.fingerprint() != pipeline.Request(video=clip, project=project, mode_override="off").fingerprint()
     assert base.fingerprint() != pipeline.Request(video=clip, project=project, use_gpu=False).fingerprint()
-    assert base.dataset == project / "dataset"
+    assert base.work_dir == tmp_path / "proj"
+    assert base.dataset == tmp_path / "proj" / "dataset"

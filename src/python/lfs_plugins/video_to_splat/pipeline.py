@@ -58,6 +58,10 @@ class PipelineStopped(Exception):
 
 @dataclass(frozen=True)
 class Request:
+    """What to build. ``project`` is the .licht file the dialog targets; the frames,
+    COLMAP database, sparse model and pipeline.json live in ``work_dir`` beside it
+    (``<location>/<name>/``), because a .licht project is a single-file container."""
+
     video: Path
     project: Path
     mode_override: probe_mod.ModeOverride = "auto"
@@ -73,8 +77,12 @@ class Request:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @property
+    def work_dir(self) -> Path:
+        return self.project.parent / self.project.stem
+
+    @property
     def dataset(self) -> Path:
-        return self.project / DATASET_DIR
+        return self.work_dir / DATASET_DIR
 
 
 @dataclass(frozen=True)
@@ -116,15 +124,15 @@ class State:
     def mark(self, name: str, **facts) -> None:
         self.completed.append({"name": name, "at": time.time(), **facts})
 
-    def save(self, project: Path) -> None:
-        project.mkdir(parents=True, exist_ok=True)
-        tmp = project / (STATE_FILE + ".tmp")
+    def save(self, work_dir: Path) -> None:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        tmp = work_dir / (STATE_FILE + ".tmp")
         tmp.write_text(json.dumps(self.__dict__, indent=2), encoding="utf-8")
-        os.replace(tmp, project / STATE_FILE)
+        os.replace(tmp, work_dir / STATE_FILE)
 
     @classmethod
-    def load(cls, project: Path, fingerprint: str) -> "State":
-        path = project / STATE_FILE
+    def load(cls, work_dir: Path, fingerprint: str) -> "State":
+        path = work_dir / STATE_FILE
         if not path.is_file():
             return cls(fingerprint=fingerprint)
         try:
@@ -154,7 +162,7 @@ def _count_frames(images: Path) -> int:
 
 def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cancel: Callable[[], bool]) -> State:
     """Run all stages, resuming from pipeline.json when the request fingerprint matches."""
-    state = State.load(request.project, request.fingerprint())
+    state = State.load(request.work_dir, request.fingerprint())
     done = state.done()
     preset = probe_mod.PRESETS[request.preset]
     images, database, sparse = sfm.dataset_paths(request.dataset)
@@ -180,7 +188,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         colmap = hooks.resolve_colmap(lambda msg: report("toolchain", 0.0, msg))
         if "toolchain" not in done:
             state.mark("toolchain", colmap=str(colmap.path), version=list(colmap.version))
-            state.save(request.project)
+            state.save(request.work_dir)
     check_cancel()
 
     info = hooks.probe(str(request.video))
@@ -189,7 +197,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
 
     # extract
     if "extract" not in done:
-        probe_root = request.project if request.project.exists() else request.project.parent
+        probe_root = request.work_dir if request.work_dir.exists() else request.project.parent
         free = hooks.free_bytes(probe_root)
         if free < LOW_DISK_BYTES:
             report("extract", 0.0, _tr("video_to_splat.progress.low_disk",
@@ -225,7 +233,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
                 frames=frames, minimum=MIN_FRAMES))
         state.frames = frames
         state.mark("extract", frames=frames)
-        state.save(request.project)
+        state.save(request.work_dir)
     else:
         state.frames = state.frames or _count_frames(images)
     check_cancel()
@@ -260,7 +268,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
                               tool=tool, code=completed.returncode)
                 raise PipelineError(summary + "\n" + "\n".join(tail[-10:]))
             state.mark(stage)
-            state.save(request.project)
+            state.save(request.work_dir)
             check_cancel()
 
     # choose model, judge quality
@@ -274,7 +282,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
     ratio = registered / state.frames if state.frames else 0.0
     if "create_project" not in done and (ratio < MIN_REGISTERED_RATIO or registered < MIN_REGISTERED):
         if not hooks.confirm_weak(ratio, registered, state.frames):
-            state.save(request.project)
+            state.save(request.work_dir)
             raise PipelineStopped()
 
     # LichtFeld expects sparse/0; move the chosen model there when it is not already.
@@ -284,20 +292,20 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
             shutil.rmtree(canonical)
         shutil.move(str(model_dir), str(canonical))
         state.model_dir = str(canonical)
-    state.save(request.project)
+    state.save(request.work_dir)
 
     if "create_project" not in done:
         report("create_project", 0.0, _tr("video_to_splat.progress.creating_project", "Creating project"))
         hooks.create_project(request.project, request.dataset, sfm.IMAGES_DIR)
         state.mark("create_project")
-        state.save(request.project)
+        state.save(request.work_dir)
     check_cancel()
 
     if "train" not in done:
         report("train", 0.0, _tr("video_to_splat.progress.starting_training", "Starting training"))
         hooks.train()
         state.mark("train")
-        state.save(request.project)
+        state.save(request.work_dir)
     report("train", 1.0, _tr("video_to_splat.progress.done", "Done: {registered}/{total} frames registered",
                              registered=registered, total=state.frames))
     return state
