@@ -1041,7 +1041,7 @@ namespace lfs::io {
                 return false;
             }
             if (params.write_source_metadata_sidecars && (!provided_sink || !legacy_file_policy || !params.preserve_source_metadata || embeddedMetadataPolicy(params.format).empty())) {
-                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Source metadata sidecars require the MediaIngest file checkpoint sink", .detection = LFS_SOURCE_SITE_CURRENT()});
+                failure_ = make_error({.code = ErrorCode::InvalidArgument, .domain = ErrorDomain::IO, .detail = "Source metadata sidecars require MediaIngest file extraction with source preservation", .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = std::string(failure_->detail());
                 return false;
             }

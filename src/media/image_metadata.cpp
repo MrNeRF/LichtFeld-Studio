@@ -43,16 +43,7 @@ namespace lfs::media::detail {
             out += "<lfs:";
             out += name;
             out += ">";
-            for (char c : value) {
-                if (c == '&')
-                    out += "&amp;";
-                else if (c == '<')
-                    out += "&lt;";
-                else if (c == '>')
-                    out += "&gt;";
-                else
-                    out += c;
-            }
+            json_detail::appendXmlText(out, value);
             out += "</lfs:";
             out += name;
             out += ">";
@@ -142,21 +133,13 @@ namespace lfs::media::detail {
             const auto summary = summarizeSourceMetadata(catalog);
             if (!summary)
                 return summary.error();
-            // ASCII JSON escapes controls and non-ASCII before XML embedding.
-            const auto json = json_detail::sourceMetadataResult(catalog, *summary).dump(-1, ' ', true, nlohmann::json::error_handler_t::replace);
-            std::size_t escaped_bytes = json.size();
-            for (char c : json) {
-                if (c == '&')
-                    escaped_bytes += 4;
-                else if (c == '<' || c == '>')
-                    escaped_bytes += 3;
-            }
-            if (escaped_bytes > max_packet_bytes - 1024)
+            auto properties = json_detail::sourceMetadataXmlProperty(json_detail::sourceMetadataResult(catalog, *summary), max_packet_bytes - 1024);
+            if (!properties)
                 return metadataError(ErrorCode::ResourceExhausted, "Image source metadata exceeds the export packet budget");
             EmbeddedImageMetadata result;
             result.format = format;
             result.applied_rotation = applied_rotation;
-            property(result.source_properties, "SourceMetadata", json);
+            result.source_properties = std::move(*properties);
             if (format != FrameFileFormat::JPEG || sidecar)
                 return result;
             // Reserve only the largest frame envelope this writer can produce.

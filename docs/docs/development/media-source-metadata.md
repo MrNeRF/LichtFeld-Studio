@@ -804,6 +804,16 @@ Each file is atomic, but the pair is not: cancellation or an XMP write failure
 can leave a published image without its sidecar. A later plain run follows the
 usual overwrite policy rather than verifying or adopting previous output.
 
+Normal sidecar extraction uses the CPU image writer, including JPEG encoding;
+the direct batched GPU JPEG writer bypasses this sink and is disabled for this
+option. Hardware video decoding remains independently selectable. Resume uses
+its existing encoder selection and verifies that provider in the checkpoint.
+CPU image-byte comparisons do not establish GPU encoder equivalence or throughput.
+
+Source preparation counts the ASCII JSON after XML escaping before allocating
+the complete property. It retains the existing source catalog representation
+and packet limit, without an additional complete JSON string beside the XML.
+
 With `resume`, the existing verified checkpoint records selected pixels, image
 and sidecar digests, timing and names before publishing either member. It hashes
 the input video and retains `.media-ingest-checkpoint` for recovery. Replay
