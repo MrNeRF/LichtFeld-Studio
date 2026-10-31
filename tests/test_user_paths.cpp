@@ -235,6 +235,8 @@ namespace {
     }
 
     TEST_F(UserPathsContractTest, PortableRootUsesExecutableDirectory) {
+        // LFS_HOME takes precedence over the portable root.
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
         const lfs::core::UserPathOptions options{
             .executable_dir = portableExecutableDir(),
             .portable = true,
@@ -247,6 +249,8 @@ namespace {
     }
 
     TEST_F(UserPathsContractTest, PortableRootRequiresExecutableDirectory) {
+        // LFS_HOME takes precedence over the portable root.
+        const ScopedEnvironmentVariable lfs_home("LFS_HOME", std::nullopt);
         const lfs::core::UserPathOptions options{.portable = true};
         const auto resolved = lfs::core::UserPaths::resolve(options);
         ASSERT_FALSE(resolved.has_value());

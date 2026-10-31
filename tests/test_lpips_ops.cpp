@@ -74,7 +74,9 @@ namespace {
         EXPECT_NE(report.find("shape=[1, 64, 4, 4]"), std::string::npos);
         EXPECT_NE(report.find("Host stack trace:"), std::string::npos);
         EXPECT_NE(report.find("convolution"), std::string::npos);
+#ifndef _WIN32 // Windows names frames from PDB symbols, which a Release build doesn't have.
         EXPECT_NE(report.find("RejectsOperandDtypesBeforeLaunching"), std::string::npos);
+#endif
 
         auto features = Tensor::zeros({1, 8, 4, 4}, Device::GPU, DataType::Float32);
         auto linear = pattern({1, 8, 1, 1}, 6);

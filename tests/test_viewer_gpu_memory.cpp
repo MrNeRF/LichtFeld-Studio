@@ -49,7 +49,9 @@ TEST(ViewerGpuMemory, CudaStatusKeepsDeviceUsageAndItsOptionalUtilizationReading
     EXPECT_GT(status.total, 0u);
     EXPECT_LE(status.total_used, status.total);
     EXPECT_FALSE(status.uses_process_budget);
-    EXPECT_EQ(status.process_budget, 0u);
+#ifndef _WIN32
+    EXPECT_EQ(status.process_budget, 0u); // Windows reports the DXGI local budget here.
+#endif
     EXPECT_EQ(status.process_budget_used, 0u);
     if (status.gpu_utilization_valid) {
         EXPECT_GE(status.gpu_utilization_percent, 0.0f);

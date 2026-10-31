@@ -177,14 +177,13 @@ TEST_F(TensorReserveInplaceCatCuda, AllocationFailurePreservesInstalledStorage) 
     const size_t original_capacity = tensor.capacity();
     const size_t original_logical_size = tensor.logical_size();
 
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_bytes, &total_bytes), cudaSuccess);
-    const size_t impossible_rows = total_bytes / sizeof(float) + 1;
+    // 256 TiB: more than device memory can hold, and more than the WDDM sysmem fallback can add,
+    // which lets cudaMalloc on Windows go past dedicated memory into shared system memory.
+    const size_t impossible_rows = (size_t{1} << 48) / sizeof(float);
 
     try {
         tensor.reserve(impossible_rows);
-        FAIL() << "reserve unexpectedly allocated more than total device memory";
+        FAIL() << "reserve unexpectedly allocated 256 TiB";
     } catch (const std::runtime_error& error) {
         EXPECT_NE(std::string(error.what()).find("reserve CUDA allocation failed"), std::string::npos);
     }

@@ -604,6 +604,7 @@ TEST(SsogFormat, BundleCancellationPreservesDestination) {
     EXPECT_EQ(saved.error().code, ErrorCode::CANCELLED);
     std::ifstream file(bundle);
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing destination");
+    file.close(); // Windows cannot remove a file that is still open.
     for (const auto& entry : fs::directory_iterator(dir.path))
         EXPECT_EQ(entry.path(), bundle);
     fs::remove(bundle);
@@ -878,6 +879,8 @@ namespace {
 TEST(SsogFormat, BundleReadersAcceptSuffixCaseWithoutChangingRows) {
     ScopedSsogDirectory dir;
     auto source = synthetic(32, 0);
+    // copy.sog and copy.SOG are one file on case-insensitive volumes (NTFS, default APFS).
+    int copy_index = 0;
     for (const bool ssog : {false, true}) {
         const auto lower = dir.path / (ssog ? "lower.ssog" : "lower.sog");
         auto saved = ssog ? save_ssog(source, options(lower)) : save_sog(source, {.output_path = lower});
@@ -887,7 +890,7 @@ TEST(SsogFormat, BundleReadersAcceptSuffixCaseWithoutChangingRows) {
         for (const auto suffix : ssog ? std::vector<std::string>{".ssog", ".SSOG", ".SsOg"}
                                       : std::vector<std::string>{".sog", ".SOG", ".SoG"}) {
             SCOPED_TRACE(suffix);
-            const auto path = dir.path / ("copy" + suffix);
+            const auto path = dir.path / ("copy" + std::to_string(copy_index++) + suffix);
             fs::copy_file(lower, path);
             if (ssog)
                 EXPECT_TRUE(is_ssog_path(path));

@@ -96,10 +96,19 @@ namespace lfs::core {
 #endif
         Status commit(Temporary& temporary, const std::filesystem::path& target, bool overwrite) {
 #ifdef _WIN32
-            if (!MoveFileExW(lfs::core::native_fs::native_path(temporary.path).c_str(),
-                             lfs::core::native_fs::native_path(target).c_str(),
-                             MOVEFILE_WRITE_THROUGH | (overwrite ? MOVEFILE_REPLACE_EXISTING : 0)))
-                return Status::failure(ioError(target, "commit", static_cast<int>(GetLastError()), std::system_category()));
+            // Another writer's commit, a scanner or an indexer can hold the destination for a moment, and
+            // MoveFileExW then fails with access denied or a sharing violation. Retry those as native_fs::rename does.
+            const auto source_path = lfs::core::native_fs::native_path(temporary.path);
+            const auto target_path = lfs::core::native_fs::native_path(target);
+            const DWORD flags = MOVEFILE_WRITE_THROUGH | (overwrite ? MOVEFILE_REPLACE_EXISTING : 0);
+            for (int attempt = 1; !MoveFileExW(source_path.c_str(), target_path.c_str(), flags); ++attempt) {
+                const DWORD error = GetLastError();
+                const bool held = error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION ||
+                                  error == ERROR_LOCK_VIOLATION;
+                if (!held || attempt == 20)
+                    return Status::failure(ioError(target, "commit", static_cast<int>(error), std::system_category()));
+                Sleep(50);
+            }
             temporary.owned = false;
 #else
             int result;

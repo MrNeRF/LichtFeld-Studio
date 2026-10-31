@@ -118,32 +118,35 @@ namespace {
         const auto meta_path = lfs::io::rad_meta_sidecar_path(rad_path);
         ASSERT_TRUE(std::filesystem::exists(meta_path));
 
-        auto view = lfs::io::open_rad_meta_sidecar(rad_path);
-        ASSERT_TRUE(view.has_value()) << view.error();
-        EXPECT_GT(view->node_count, 200'000u);
-        EXPECT_EQ(view->leaf_count, 200'000u);
-        EXPECT_EQ(view->node_count, tree.total_nodes());
-        EXPECT_EQ(view->links[0].parent, 0xFFFFFFFFu);
+        // The view maps the sidecar, which Windows will not let the rebuild below replace.
+        {
+            auto view = lfs::io::open_rad_meta_sidecar(rad_path);
+            ASSERT_TRUE(view.has_value()) << view.error();
+            EXPECT_GT(view->node_count, 200'000u);
+            EXPECT_EQ(view->leaf_count, 200'000u);
+            EXPECT_EQ(view->node_count, tree.total_nodes());
+            EXPECT_EQ(view->links[0].parent, 0xFFFFFFFFu);
 
-        // Links bit-exact; bounds within the per-chunk quantization tolerance.
-        for (std::size_t i = 0; i < view->node_count; ++i) {
-            ASSERT_EQ(view->links[i].child_start, tree.child_start[i]) << "node " << i;
-            ASSERT_EQ(view->links[i].packed & 0xffffu, tree.child_count[i]) << "node " << i;
-            const auto& frame = view->chunkOf(i);
-            const glm::vec3 center = frame.dequantCenter(view->bounds[i]);
-            const glm::vec3 truth = tree.centers[i];
-            for (int d = 0; d < 3; ++d) {
-                const float tolerance = std::max(2.0f * frame.bbox_extent[d] / 65535.0f, 1e-6f);
-                ASSERT_NEAR(center[d], truth[d], tolerance) << "node " << i << " dim " << d;
+            // Links bit-exact; bounds within the per-chunk quantization tolerance.
+            for (std::size_t i = 0; i < view->node_count; ++i) {
+                ASSERT_EQ(view->links[i].child_start, tree.child_start[i]) << "node " << i;
+                ASSERT_EQ(view->links[i].packed & 0xffffu, tree.child_count[i]) << "node " << i;
+                const auto& frame = view->chunkOf(i);
+                const glm::vec3 center = frame.dequantCenter(view->bounds[i]);
+                const glm::vec3 truth = tree.centers[i];
+                for (int d = 0; d < 3; ++d) {
+                    const float tolerance = std::max(2.0f * frame.bbox_extent[d] / 65535.0f, 1e-6f);
+                    ASSERT_NEAR(center[d], truth[d], tolerance) << "node " << i << " dim " << d;
+                }
+                const float size = frame.dequantSize(view->bounds[i]);
+                const float size_truth = tree.sizes[i];
+                const float rel_tolerance =
+                    std::max(2.0f * frame.log_size_range / 65535.0f, 1e-5f);
+                ASSERT_NEAR(std::log(std::max(size, 1e-20f)),
+                            std::log(std::max(size_truth, 1e-20f)),
+                            rel_tolerance)
+                    << "node " << i;
             }
-            const float size = frame.dequantSize(view->bounds[i]);
-            const float size_truth = tree.sizes[i];
-            const float rel_tolerance =
-                std::max(2.0f * frame.log_size_range / 65535.0f, 1e-5f);
-            ASSERT_NEAR(std::log(std::max(size, 1e-20f)),
-                        std::log(std::max(size_truth, 1e-20f)),
-                        rel_tolerance)
-                << "node " << i;
         }
 
         // Touching the RAD file invalidates the sidecar (mtime/hash stamp).

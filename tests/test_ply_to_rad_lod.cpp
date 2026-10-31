@@ -339,87 +339,91 @@ TEST(PlyToRadLod, OutOfCoreLoadKeepsTreeAndStreamsChunks) {
     options.temp_dir = temp_dir / "scratch";
     ASSERT_TRUE(lfs::io::convert_ply_to_rad_lod(ply_path, rad_path, options).has_value());
 
-    auto full = lfs::io::load_rad(rad_path);
-    ASSERT_TRUE(full.has_value()) << full.error();
-    const auto total_nodes = full->lod_tree->total_nodes();
-
-    auto partial = lfs::io::load_rad(
-        rad_path, {.out_of_core = true, .preview_splats = 131072});
-    ASSERT_TRUE(partial.has_value()) << partial.error();
-
-    // Tree metadata covers all nodes; payload tensors hold the coarse prefix.
-    // Out-of-core loads back the metadata with the mmap'd sidecar instead of
-    // in-RAM vectors; the accessors must agree bit-exactly with the full load.
-    ASSERT_TRUE(partial->lod_tree && partial->lod_tree->has_tree());
-    EXPECT_EQ(partial->lod_tree->total_nodes(), total_nodes);
-    EXPECT_EQ(static_cast<std::size_t>(partial->size()), 131072u);
-    EXPECT_LT(static_cast<std::size_t>(partial->size()), total_nodes);
-    EXPECT_TRUE(lfs::io::rad_paged_load_recommended(*partial));
-    EXPECT_TRUE(partial->lod_tree->meta_view.valid()) << "sidecar must back OOC tree metadata";
-    EXPECT_FALSE(partial->lod_tree->nodes_in_memory());
-    EXPECT_TRUE(std::filesystem::exists(lfs::io::rad_meta_sidecar_path(rad_path)));
-
-    // Links are bit-exact; bounds carry the sidecar's per-chunk u16
-    // quantization, so they compare within the frame's step size.
-    for (std::size_t i = 0; i < total_nodes; ++i) {
-        const auto& frame = partial->lod_tree->meta_view.chunkOf(i);
-        const float center_tol = std::max(
-            {2.0f * frame.bbox_extent[0] / 65535.0f,
-             2.0f * frame.bbox_extent[1] / 65535.0f,
-             2.0f * frame.bbox_extent[2] / 65535.0f,
-             1e-6f});
-        EXPECT_NEAR(partial->lod_tree->center_at(i).x, full->lod_tree->center_at(i).x, center_tol);
-        const float size_tol =
-            full->lod_tree->size_at(i) *
-                std::max(2.0f * frame.log_size_range / 65535.0f, 1e-6f) +
-            1e-12f;
-        EXPECT_NEAR(partial->lod_tree->size_at(i), full->lod_tree->size_at(i), size_tol);
-        EXPECT_EQ(partial->lod_tree->child_start_at(i), full->lod_tree->child_start_at(i));
-        EXPECT_EQ(partial->lod_tree->child_count_at(i), full->lod_tree->child_count_at(i));
-        EXPECT_EQ(partial->lod_tree->level_at(i), full->lod_tree->level_at(i));
-        if (HasFailure()) {
-            FAIL() << "tree mismatch at node " << i;
-        }
-    }
-
-    // Parent links in the sidecar must agree with a reference forward scatter
-    // over the full in-RAM tree.
+    // The out-of-core model keeps the .meta sidecar mapped; destroy both models before
+    // removing the folder, which Windows refuses while the mapping is open.
     {
-        std::vector<std::uint32_t> reference_parent(total_nodes, 0xFFFFFFFFu);
-        for (std::size_t p = 0; p < total_nodes; ++p) {
-            const std::uint32_t cc = full->lod_tree->child_count_at(p);
-            const std::uint32_t cs = full->lod_tree->child_start_at(p);
-            for (std::uint32_t c = 0; c < cc; ++c) {
-                reference_parent[cs + c] = static_cast<std::uint32_t>(p);
+        auto full = lfs::io::load_rad(rad_path);
+        ASSERT_TRUE(full.has_value()) << full.error();
+        const auto total_nodes = full->lod_tree->total_nodes();
+
+        auto partial = lfs::io::load_rad(
+            rad_path, {.out_of_core = true, .preview_splats = 131072});
+        ASSERT_TRUE(partial.has_value()) << partial.error();
+
+        // Tree metadata covers all nodes; payload tensors hold the coarse prefix.
+        // Out-of-core loads back the metadata with the mmap'd sidecar instead of
+        // in-RAM vectors; the accessors must agree bit-exactly with the full load.
+        ASSERT_TRUE(partial->lod_tree && partial->lod_tree->has_tree());
+        EXPECT_EQ(partial->lod_tree->total_nodes(), total_nodes);
+        EXPECT_EQ(static_cast<std::size_t>(partial->size()), 131072u);
+        EXPECT_LT(static_cast<std::size_t>(partial->size()), total_nodes);
+        EXPECT_TRUE(lfs::io::rad_paged_load_recommended(*partial));
+        EXPECT_TRUE(partial->lod_tree->meta_view.valid()) << "sidecar must back OOC tree metadata";
+        EXPECT_FALSE(partial->lod_tree->nodes_in_memory());
+        EXPECT_TRUE(std::filesystem::exists(lfs::io::rad_meta_sidecar_path(rad_path)));
+
+        // Links are bit-exact; bounds carry the sidecar's per-chunk u16
+        // quantization, so they compare within the frame's step size.
+        for (std::size_t i = 0; i < total_nodes; ++i) {
+            const auto& frame = partial->lod_tree->meta_view.chunkOf(i);
+            const float center_tol = std::max(
+                {2.0f * frame.bbox_extent[0] / 65535.0f,
+                 2.0f * frame.bbox_extent[1] / 65535.0f,
+                 2.0f * frame.bbox_extent[2] / 65535.0f,
+                 1e-6f});
+            EXPECT_NEAR(partial->lod_tree->center_at(i).x, full->lod_tree->center_at(i).x, center_tol);
+            const float size_tol =
+                full->lod_tree->size_at(i) *
+                    std::max(2.0f * frame.log_size_range / 65535.0f, 1e-6f) +
+                1e-12f;
+            EXPECT_NEAR(partial->lod_tree->size_at(i), full->lod_tree->size_at(i), size_tol);
+            EXPECT_EQ(partial->lod_tree->child_start_at(i), full->lod_tree->child_start_at(i));
+            EXPECT_EQ(partial->lod_tree->child_count_at(i), full->lod_tree->child_count_at(i));
+            EXPECT_EQ(partial->lod_tree->level_at(i), full->lod_tree->level_at(i));
+            if (HasFailure()) {
+                FAIL() << "tree mismatch at node " << i;
             }
         }
-        for (std::size_t i = 0; i < total_nodes; ++i) {
-            ASSERT_EQ(partial->lod_tree->meta_view.links[i].parent, reference_parent[i])
-                << "sidecar parent mismatch at node " << i;
-        }
-    }
 
-    // The recorded chunk ranges must stream back data identical to the full
-    // in-memory decode -- this is exactly what the paged renderer does.
-    const auto& source = partial->lod_tree->rad_source;
-    ASSERT_TRUE(source.valid());
-    const auto full_means = full->means_raw().cpu().contiguous();
-    const float* full_means_ptr = full_means.ptr<float>();
-    const auto full_opacity = full->opacity_raw().cpu().contiguous();
-    const float* full_opacity_ptr = full_opacity.ptr<float>();
-    for (const auto& range : source.chunks) {
-        auto chunk = lfs::io::load_rad_chunk(rad_path, range,
-                                             partial->get_max_sh_degree(),
-                                             partial->lod_tree->lod_opacity_encoded);
-        ASSERT_TRUE(chunk.has_value()) << chunk.error();
-        ASSERT_EQ(chunk->base, range.base);
-        ASSERT_EQ(chunk->count, range.count);
-        for (std::size_t i = 0; i < chunk->count; ++i) {
-            const std::size_t node = chunk->base + i;
-            ASSERT_EQ(chunk->means[i * 3 + 0], full_means_ptr[node * 3 + 0])
-                << "chunk means mismatch at node " << node;
-            ASSERT_EQ(chunk->opacity_raw[i], full_opacity_ptr[node])
-                << "chunk opacity mismatch at node " << node;
+        // Parent links in the sidecar must agree with a reference forward scatter
+        // over the full in-RAM tree.
+        {
+            std::vector<std::uint32_t> reference_parent(total_nodes, 0xFFFFFFFFu);
+            for (std::size_t p = 0; p < total_nodes; ++p) {
+                const std::uint32_t cc = full->lod_tree->child_count_at(p);
+                const std::uint32_t cs = full->lod_tree->child_start_at(p);
+                for (std::uint32_t c = 0; c < cc; ++c) {
+                    reference_parent[cs + c] = static_cast<std::uint32_t>(p);
+                }
+            }
+            for (std::size_t i = 0; i < total_nodes; ++i) {
+                ASSERT_EQ(partial->lod_tree->meta_view.links[i].parent, reference_parent[i])
+                    << "sidecar parent mismatch at node " << i;
+            }
+        }
+
+        // The recorded chunk ranges must stream back data identical to the full
+        // in-memory decode -- this is exactly what the paged renderer does.
+        const auto& source = partial->lod_tree->rad_source;
+        ASSERT_TRUE(source.valid());
+        const auto full_means = full->means_raw().cpu().contiguous();
+        const float* full_means_ptr = full_means.ptr<float>();
+        const auto full_opacity = full->opacity_raw().cpu().contiguous();
+        const float* full_opacity_ptr = full_opacity.ptr<float>();
+        for (const auto& range : source.chunks) {
+            auto chunk = lfs::io::load_rad_chunk(rad_path, range,
+                                                 partial->get_max_sh_degree(),
+                                                 partial->lod_tree->lod_opacity_encoded);
+            ASSERT_TRUE(chunk.has_value()) << chunk.error();
+            ASSERT_EQ(chunk->base, range.base);
+            ASSERT_EQ(chunk->count, range.count);
+            for (std::size_t i = 0; i < chunk->count; ++i) {
+                const std::size_t node = chunk->base + i;
+                ASSERT_EQ(chunk->means[i * 3 + 0], full_means_ptr[node * 3 + 0])
+                    << "chunk means mismatch at node " << node;
+                ASSERT_EQ(chunk->opacity_raw[i], full_opacity_ptr[node])
+                    << "chunk opacity mismatch at node " << node;
+            }
         }
     }
 

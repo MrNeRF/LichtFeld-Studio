@@ -3133,7 +3133,8 @@ TEST_F(UnicodePathTest, Utf8ToPathHandlesEmbeddedNullCharacters) {
 
 TEST_F(UnicodePathTest, Utf8ToPathHandlesUnicodeWithEmbeddedNulls) {
     // Create a Unicode directory
-    auto unicode_dir = test_root_ / "日本語_output";
+    // A narrow literal would be decoded with the ANSI code page on Windows.
+    auto unicode_dir = test_root_ / utf8_to_path("日本語_output");
     fs::create_directories(unicode_dir);
     ASSERT_TRUE(fs::exists(unicode_dir));
 
@@ -3196,7 +3197,8 @@ TEST_F(UnicodePathTest, CheckpointPathConstructionWithBufferPadding) {
         // Verify the paths are correctly constructed
         EXPECT_NE(project_file, output_path)
             << "Path append failed for: " << name;
-        EXPECT_TRUE(project_file.string().length() > output_path.string().length())
+        // native(), not string(): on Windows string() converts through the ANSI code page and throws.
+        EXPECT_TRUE(project_file.native().size() > output_path.native().size())
             << "Project path not longer than output path for: " << name;
 
         // Verify we can create and use these paths
