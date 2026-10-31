@@ -256,8 +256,19 @@ int runFrameSinkUnitContracts() {
         SinkSession session;
         session.source_metadata = std::make_shared<const SourceMetadataCatalog>(std::move(*catalog));
         replacement.write_source_metadata_sidecars = true;
+        auto seed_options = replacement;
+        seed_options.remove_stale_frames = false;
+        FileFrameSink seed_pair(seed_options);
+        require(seed_pair.begin(session).has_value() && seed_pair.write(file_view).has_value() &&
+                    seed_pair.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                "produce a real source XMP packet for companion tests");
+        std::ifstream packet_input(directory / "frame_1.png.xmp", std::ios::binary);
+        const std::string packet(std::istreambuf_iterator<char>(packet_input), {});
+        packet_input.close();
         seed("frame_5.png");
-        seed("frame_5.png.xmp");
+        std::ofstream(directory / "frame_5.png.xmp", std::ios::binary) << packet;
+        seed("frame_6.png");
+        seed("frame_6.png.xmp");
         seed("photo.png.xmp");
         FileFrameSink cancelled_pair(replacement);
         require(cancelled_pair.begin(session).has_value(), "sidecar cleanup snapshot begins");
@@ -268,8 +279,79 @@ int runFrameSinkUnitContracts() {
         require(std::filesystem::exists(directory / "frame_5.png.xmp"), "stale companion survives before complete");
         require(replaced_pair.complete({SinkOutcome::Completed, 1, {}}).has_value(), "sidecar cleanup completes");
         require(!std::filesystem::exists(directory / "frame_5.png") && !std::filesystem::exists(directory / "frame_5.png.xmp"), "stale pair removed");
+        require(!std::filesystem::exists(directory / "frame_6.png") && std::filesystem::exists(directory / "frame_6.png.xmp"),
+                "stale image cleanup preserves a foreign companion");
         require(std::filesystem::exists(directory / "frame_1.png.xmp") && std::filesystem::exists(directory / "photo.png.xmp"), "current and unrelated companions retained");
         replacement.write_source_metadata_sidecars = false;
+        seed_options.write_source_metadata_sidecars = false;
+        seed_options.image_output.overwrite = false;
+        FileFrameSink no_replace(seed_options);
+        require(no_replace.begin({}).has_value() && !no_replace.write(file_view), "failed image replacement refuses before companion cleanup");
+        no_replace.abort({SinkOutcome::Failed, 0, {}});
+        require(std::filesystem::exists(directory / "frame_1.png.xmp"), "failed image replacement retains its source XMP");
+        seed_options.image_output.overwrite = true;
+        seed_options.image_output.cancelled = [] { return true; };
+        FileFrameSink cancel_replace(seed_options);
+        require(cancel_replace.begin({}).has_value() && !cancel_replace.write(file_view), "cancelled image replacement refuses");
+        cancel_replace.abort({SinkOutcome::Cancelled, 0, {}});
+        require(std::filesystem::exists(directory / "frame_1.png.xmp"), "cancelled image replacement retains its source XMP");
+        seed_options.image_output.cancelled = {};
+        FileFrameSink plain(seed_options);
+        require(plain.begin({}).has_value() && plain.write(file_view).has_value(), "plain image replacement succeeds");
+        require(!std::filesystem::exists(directory / "frame_1.png.xmp"), "superseded source XMP removed immediately after image publication");
+        plain.abort({SinkOutcome::Cancelled, 1, {}});
+        require(!std::filesystem::exists(directory / "frame_1.png.xmp"), "later abort cannot leave stale XMP attached to the new image");
+#ifdef _WIN32
+        std::ofstream(directory / "frame_1.png.xmp", std::ios::binary) << packet;
+        std::ifstream companion_reader;
+        seed_options.image_output.cancelled = [&] {
+            if (!companion_reader.is_open())
+                companion_reader.open(directory / "frame_1.png.xmp", std::ios::binary);
+            return false;
+        };
+        FileFrameSink denied_cleanup(seed_options);
+        require(denied_cleanup.begin({}).has_value(), "reader-held companion output begins");
+        const auto denied = denied_cleanup.write(file_view);
+        require(companion_reader.is_open(), "a Windows reader holds the companion during cleanup");
+        companion_reader.close();
+        require(!denied && std::filesystem::exists(directory / "frame_1.png.xmp"),
+                "failed companion deletion returns an error instead of claiming complete output");
+        denied_cleanup.abort({SinkOutcome::Failed, 0, {}});
+        seed_options.image_output.cancelled = {};
+#endif
+        std::ofstream(directory / "frame_1.png.xmp", std::ios::binary) << packet;
+        const auto original_time = std::filesystem::last_write_time(directory / "frame_1.png.xmp");
+        std::string changed(packet.size(), 'x');
+        bool exchanged = false;
+        seed_options.image_output.cancelled = [&] {
+            if (!exchanged) {
+                exchanged = true;
+                const auto changed_file = lfs::core::writeTextFileAtomically(directory / "frame_1.png.xmp", changed);
+                if (!changed_file)
+                    throw std::runtime_error(std::string(changed_file.error().detail()));
+                std::filesystem::last_write_time(directory / "frame_1.png.xmp", original_time);
+            }
+            return false;
+        };
+        FileFrameSink exchanged_pair(seed_options);
+        require(exchanged_pair.begin({}).has_value(), "image output with companion replacement begins");
+        const auto exchanged_write = exchanged_pair.write(file_view);
+        if (!exchanged_write)
+            throw std::runtime_error(std::string(exchanged_write.error().detail()));
+        exchanged_pair.abort({SinkOutcome::Cancelled, 1, {}});
+        std::ifstream preserved(directory / "frame_1.png.xmp", std::ios::binary);
+        require(std::string(std::istreambuf_iterator<char>(preserved), {}) == changed,
+                "a replacement companion with identical size and mtime survives by file identity");
+        preserved.close();
+        seed_options.image_output.cancelled = {};
+        std::ofstream(directory / "frame_8.png") << "old pixels";
+        std::ofstream(directory / "frame_8.png.xmp", std::ios::binary) << packet;
+        FileFrameSink plain_cleanup(replacement);
+        require(plain_cleanup.begin({}).has_value() && plain_cleanup.write(file_view).has_value() &&
+                    plain_cleanup.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                "plain stale cleanup completes with the sidecar option disabled");
+        require(!std::filesystem::exists(directory / "frame_8.png") && !std::filesystem::exists(directory / "frame_8.png.xmp"),
+                "plain stale cleanup removes obsolete images and their generated XMP");
     }
     {
         MediaDescription observed;

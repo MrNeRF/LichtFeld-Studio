@@ -1980,6 +1980,156 @@ class IngestCLI(unittest.TestCase):
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
 
+    def test_source_sidecar_metadata_explicit_names_and_independent_observations(self):
+        image = self.root / "external é 日本語.jpg"
+        source_exif_fixture.write_camera_metadata(image, carrier="jpeg")
+        embedded, _ = self.invoke("source-metadata", image)
+        packet = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:t="http://ns.adobe.com/tiff/1.0/"><rdf:Description rdf:about="" t:Make="External Camera"/></rdf:RDF>'
+        before = image.read_bytes(), image.stat().st_mtime_ns
+        for suffix, naming in ((".jpg.xmp", "image_filename_plus_xmp"), (".xmp", "image_stem_plus_xmp"), (".JPG.XMP", None)):
+            sidecar = image.with_suffix(suffix)
+            sidecar.write_bytes(packet)
+            if naming is None:
+                self.invoke("source-sidecar-metadata", image, sidecar, code=2)
+                continue
+            stamp = sidecar.stat().st_mtime_ns
+            result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+            self.assertEqual(result["association"]["naming"], naming)
+            self.assertEqual(result["association"]["verification"], "explicit_filenames")
+            self.assertEqual(result["association"]["image"], str(image))
+            self.assertEqual(result["metadata"]["scope"], "static_xmp_sidecar")
+            self.assertEqual(result["metadata"]["source_locator"], str(sidecar))
+            block = result["metadata"]["image_xmp"]["blocks"][0]
+            self.assertEqual(block["envelope"], "xmp_sidecar")
+            self.assertEqual(bytes.fromhex(block["bytes"]), packet)
+            self.assertEqual(bytes.fromhex(block["payload_bytes"]), packet)
+            self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "parsed")
+            facts = {f["semantic"]: f for f in result["summary"]["facts"]}
+            self.assertEqual(facts["camera.make"]["value"], "External Camera")
+            self.assertEqual(sidecar.stat().st_mtime_ns, stamp)
+        self.assertEqual(before, (image.read_bytes(), image.stat().st_mtime_ns))
+        unchanged, _ = self.invoke("source-metadata", image)
+        self.assertEqual(embedded, unchanged)
+
+    def test_source_sidecar_metadata_extensionless_image(self):
+        image = self.root / "image without extension é"
+        source_exif_fixture.write_jpeg(image)
+        sidecar = Path(str(image) + ".xmp")
+        sidecar.write_bytes(b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF>')
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+        self.assertEqual(result["association"]["naming"], "image_filename_plus_xmp")
+        self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "parsed")
+
+    def test_source_sidecar_metadata_preserves_packet_failures_and_utf16(self):
+        image = self.root / "external-errors.jpg"
+        source_exif_fixture.write_jpeg(image)
+        sidecar = Path(str(image) + ".xmp")
+        xml = '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF>'
+        cases = [(b"", "malformed"), (b"<broken", "malformed"), (b"\xff<invalid/>", "malformed"),
+                 (xml.encode("utf-16"), "parsed"),
+                 (b'<!DOCTYPE a [<!ENTITY x SYSTEM "file:///must-not-be-read">]><a>&x;</a>', "unsupported")]
+        for packet, state in cases:
+            with self.subTest(state=state, prefix=packet[:20]):
+                sidecar.write_bytes(packet)
+                result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+                self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+                self.assertEqual(result["summary"]["xmp_packets"][0]["state"], state)
+                self.assertEqual(result["summary"]["facts"], [])
+        # Collection and interpretation are separately bounded: retain originals.
+        packet = b" " * (1024 * 1024 + 1)
+        sidecar.write_bytes(packet)
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+        self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "limited")
+
+    def test_source_sidecar_metadata_rejects_paths_limits_and_special_files(self):
+        image = self.root / "external-paths.jpg"
+        source_exif_fixture.write_jpeg(image)
+        sidecar = Path(str(image) + ".xmp")
+        self.invoke("source-sidecar-metadata", image, sidecar, code=3)
+        foreign = self.root / "unrelated.xmp"
+        foreign.write_bytes(b"opaque")
+        self.invoke("source-sidecar-metadata", image, foreign, code=2)
+        other = self.root / "other-sidecar-dir"
+        other.mkdir()
+        (other / sidecar.name).write_bytes(b"opaque")
+        self.invoke("source-sidecar-metadata", image, other / sidecar.name, code=2)
+        sidecar.mkdir()
+        self.invoke("source-sidecar-metadata", image, sidecar, code=4)
+        sidecar.rmdir()
+        with sidecar.open("wb") as stream:
+            stream.truncate(32 * 1024 * 1024 + 1)
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar, code=4)
+        self.assertEqual(result["error"]["code"], "ResourceExhausted")
+        sidecar.unlink()
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(sidecar)
+            self.invoke("source-sidecar-metadata", image, sidecar, code=4)
+            sidecar.unlink()
+        os.link(image, sidecar)
+        self.invoke("source-sidecar-metadata", image, sidecar, code=2)
+        sidecar.unlink()
+        self.assertEqual(foreign.read_bytes(), b"opaque")
+
+    def test_source_sidecar_metadata_symlinks_and_directory_aliases(self):
+        folder = self.root / "sidecar-real-directory"
+        folder.mkdir()
+        image = folder / "camera.jpg"
+        source_exif_fixture.write_jpeg(image)
+        target = folder / "original.xmp"
+        target.write_bytes(b"opaque")
+        sidecar = Path(str(image) + ".xmp")
+        alias = self.root / "sidecar-directory-alias"
+        try:
+            sidecar.symlink_to(target)
+            alias.symlink_to(folder, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Symlink creation unavailable: {error}")
+        self.invoke("source-sidecar-metadata", image, sidecar, code=4)
+        sidecar.unlink()
+        sidecar.write_bytes(b"opaque")
+        result, _ = self.invoke("source-sidecar-metadata", image, alias / sidecar.name)
+        self.assertEqual(result["metadata"]["source_locator"], str(alias / sidecar.name))
+        linked_image = folder / "linked.jpg"
+        linked_image.symlink_to(image)
+        linked_sidecar = Path(str(linked_image) + ".xmp")
+        linked_sidecar.write_bytes(b"opaque")
+        self.invoke("source-sidecar-metadata", linked_image, linked_sidecar, code=4)
+        # A symlink followed by '..' must retain filesystem resolution, rather
+        # than being lexically reduced to another directory before reading.
+        nested = folder / "nested"
+        nested.mkdir()
+        nested_alias = self.root / "sidecar-nested-alias"
+        nested_alias.symlink_to(nested, target_is_directory=True)
+        outside_sidecar = self.root / sidecar.name
+        outside_sidecar.write_bytes(b"unrelated")
+        self.invoke("source-sidecar-metadata", nested_alias / ".." / image.name, outside_sidecar, code=3 if os.name == "nt" else 2)
+        self.assertEqual(outside_sidecar.read_bytes(), b"unrelated")
+
+    @unittest.skipUnless(platform.system() == "Linux", "Arbitrary native filename bytes use Linux filesystem semantics")
+    def test_source_sidecar_metadata_native_filename_bytes(self):
+        image = self.root / os.fsdecode(b"external-\xff.jpg")
+        source_exif_fixture.write_jpeg(image)
+        sidecar = Path(str(image) + ".xmp")
+        sidecar.write_bytes(b"<invalid")
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+        self.assertEqual(bytes.fromhex(result["association"]["image_bytes"]), os.fsencode(image))
+        self.assertEqual(bytes.fromhex(result["metadata"]["source_locator_bytes"]), os.fsencode(sidecar))
+        self.assertIn("\ufffd", result["association"]["image"])
+        self.assertEqual(result["metadata"]["source_locator_encoding"], "posix_bytes")
+
+    def test_source_sidecar_metadata_roundtrip_extraction_output(self):
+        directory = self.root / "external-export-roundtrip"
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--end", "0.01", "--source-metadata-sidecars")
+        image = directory / "frame_1.png"
+        sidecar = Path(str(image) + ".xmp")
+        packet = sidecar.read_bytes()
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+        self.assertEqual(bytes.fromhex(result["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+        self.assertEqual(result["summary"]["xmp_packets"][0]["state"], "parsed")
+        self.assertFalse((directory / ".media-ingest-checkpoint").exists())
+
     def test_source_metadata_sidecars_cli(self):
         import xml.etree.ElementTree as ET
         directory = self.root / "source-sidecars é 日本語"
@@ -2003,6 +2153,52 @@ class IngestCLI(unittest.TestCase):
         self.assertEqual({name: value[0] for name, value in before.items()},
                          {name: (directory / name).read_bytes() for name in before})
         self.assertFalse((directory / ".media-ingest-checkpoint").exists())
+
+    def test_source_metadata_sidecars_disabled_replaces_only_selected_companions(self):
+        directory = self.root / "superseded-sidecars é 日本語"
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.glob("*.xmp")}
+        self.assertIn("frame_1.png.xmp", before)
+        packet = before["frame_1.png.xmp"][0]
+        stem = directory / "frame_1.xmp"
+        unrelated = directory / "unselected.png.xmp"
+        stem.write_bytes(packet)
+        unrelated.write_bytes(packet)
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--interval", "1", "--end", "0.01", "--rotate", "90", "--metadata")
+        self.assertFalse((directory / "frame_1.png.xmp").exists())
+        for name, value in before.items():
+            if name != "frame_1.png.xmp":
+                self.assertEqual(((directory / name).read_bytes(), (directory / name).stat().st_mtime_ns), value)
+        self.assertEqual(stem.read_bytes(), packet)
+        self.assertEqual(unrelated.read_bytes(), packet)
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertNotIn("sidecar_metadata_policy", manifest)
+        self.assertTrue(all("sidecar" not in frame for frame in manifest["frames"]))
+        foreign = directory / "frame_1.png.xmp"
+        foreign.write_bytes(b"external XMP")
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--interval", "1", "--end", "0.01", "--metadata")
+        self.assertEqual(foreign.read_bytes(), b"external XMP")
+
+    def test_source_metadata_sidecars_disabled_preserves_symlink(self):
+        directory = self.root / "superseded-sidecar-link"
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--interval", "1", "--end", "0.01", "--source-metadata-sidecars")
+        sidecar = directory / "frame_1.png.xmp"
+        packet = sidecar.read_bytes()
+        target = self.root / "foreign-target.xmp"
+        target.write_bytes(packet)
+        sidecar.unlink()
+        try:
+            sidecar.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"File symlinks unavailable: {error}")
+        self.invoke("extract", self.source(), "--output", directory, "--format", "png",
+                    "--interval", "1", "--end", "0.01", "--metadata")
+        self.assertTrue(sidecar.is_symlink())
+        self.assertEqual(target.read_bytes(), packet)
 
     def test_plain_metadata_extraction_ignores_uncommitted_checkpoint(self):
         for identity in (None, b"", b"true"):

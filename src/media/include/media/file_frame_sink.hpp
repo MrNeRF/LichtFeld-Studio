@@ -68,6 +68,7 @@ namespace lfs::media {
             std::filesystem::path path;
             std::filesystem::file_time_type modified;
             std::uintmax_t size;
+            bool sidecar = false;
         };
         std::vector<ExistingFrame> existing_frames_;
     };

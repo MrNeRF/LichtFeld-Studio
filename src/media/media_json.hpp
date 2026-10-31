@@ -6,8 +6,10 @@
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <nlohmann/json.hpp>
+#include <ostream>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -144,13 +146,18 @@ namespace lfs::media::json_detail {
         const auto& block = std::get<StreamSideDataReference>(reference);
         return {{"kind", "stream_side_data"}, {"stream", block.stream}, {"block", block.block}};
     }
-    inline json sourceMetadata(const SourceMetadataCatalog& catalog) {
+    inline json sourceMetadata(const SourceMetadataCatalog& catalog, bool include_xmp_bytes = true) {
         const char* status = "unknown";
         switch (catalog.indexStatus()) {
         case MetadataIndexStatus::Complete: status = "complete"; break;
         case MetadataIndexStatus::Limited: status = "limited"; break;
         }
-        json result{{"scope", catalog.container() ? "container_stream" : "static_image_exif"}, {"index_status", status}, {"records", json::array()}};
+        const auto& xmp_blocks = catalog.imageXmp().blocks;
+        const bool sidecar = !xmp_blocks.empty() && std::all_of(xmp_blocks.begin(), xmp_blocks.end(), [](const auto& block) { return block.envelope == core::image_codecs::XmpEnvelope::SidecarFile; });
+        json result{{"scope", catalog.container() ? "container_stream" : sidecar ? "static_xmp_sidecar"
+                                                                                 : "static_image_exif"},
+                    {"index_status", status},
+                    {"records", json::array()}};
         if (!catalog.container()) {
             result["image_exif"] = sourceExif(catalog.imageExif());
             const auto& xmp = catalog.imageXmp();
@@ -164,11 +171,13 @@ namespace lfs::media::json_detail {
                                                                                            : block.envelope == XmpEnvelope::TiffTag              ? "tiff_tag700"
                                                                                            : block.envelope == XmpEnvelope::HeifMime             ? "heif_mime"
                                                                                            : block.envelope == XmpEnvelope::ExrString            ? "exr_string"
+                                                                                           : block.envelope == XmpEnvelope::SidecarFile          ? "xmp_sidecar"
                                                                                                                                                  : "jxl_xml";
                 json payload = nullptr;
-                if (const auto view = catalog.xmpPayloadBytes({index}))
-                    payload = hexBytes(*view);
-                retained["blocks"].push_back({{"envelope", envelope}, {"bytes", original ? json(hexBytes(*original)) : json(nullptr)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
+                if (include_xmp_bytes)
+                    if (const auto view = catalog.xmpPayloadBytes({index}))
+                        payload = hexBytes(*view);
+                retained["blocks"].push_back({{"envelope", envelope}, {"bytes", include_xmp_bytes && original ? json(hexBytes(*original)) : json(nullptr)}, {"status", metadataStatus(block.status)}, {"diagnostic", block.diagnostic}, {"crc_valid", optional(block.crc_valid)}, {"payload_offset", block.payload_offset}, {"payload_kind", block.envelope == XmpEnvelope::JpegExtendedApp1 ? "extended_segment" : "packet"}, {"compressed", block.compressed}, {"payload_bytes", std::move(payload)}});
                 if (block.heif_item) {
                     const auto& item = *block.heif_item;
                     retained["blocks"].back()["representation"] = "libheif_decoded_bytes";
@@ -348,8 +357,134 @@ namespace lfs::media::json_detail {
         }
         return result;
     }
-    inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
-        return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
+    inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary, bool include_xmp_bytes = true) {
+        return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog, include_xmp_bytes)}, {"summary", metadataSummary(summary)}};
+    }
+    inline json sourceSidecarMetadataResult(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary, bool include_xmp_bytes = true) {
+        auto result = sourceMetadataResult(sidecar.catalog, summary, include_xmp_bytes);
+        result["association"] = {{"image", sidecar.image.display},
+                                 {"image_bytes", hexBytes(sidecar.image.native_bytes)},
+                                 {"image_encoding", sidecar.image.encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"},
+                                 {"naming", sidecar.naming == XmpSidecarNaming::ImageFilename ? "image_filename_plus_xmp" : "image_stem_plus_xmp"},
+                                 {"verification", "explicit_filenames"}};
+        return result;
+    }
+
+    struct SidecarJsonDocument {
+        explicit SidecarJsonDocument(json document) : value(std::move(document)) {}
+        SidecarJsonDocument(const SidecarJsonDocument&) = delete;
+        SidecarJsonDocument& operator=(const SidecarJsonDocument&) = delete;
+        SidecarJsonDocument(SidecarJsonDocument&&) = default;
+        SidecarJsonDocument& operator=(SidecarJsonDocument&&) = default;
+        json value;
+        struct Bytes {
+            const json* slot;
+            std::span<const std::uint8_t> bytes;
+        };
+        // Slots borrow stable nodes. Do not mutate the DOM after binding them.
+        std::vector<Bytes> fields;
+    };
+    inline SidecarJsonDocument sidecarJsonDocument(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        SidecarJsonDocument result(sourceSidecarMetadataResult(sidecar, summary, false));
+        auto& blocks = result.value["metadata"]["image_xmp"]["blocks"];
+        for (std::size_t index = 0; index < blocks.size(); ++index) {
+            if (const auto bytes = sidecar.catalog.xmpBytes({index}))
+                result.fields.push_back({&blocks[index]["bytes"], *bytes});
+            if (const auto payload = sidecar.catalog.xmpPayloadBytes({index}))
+                result.fields.push_back({&blocks[index]["payload_bytes"], *payload});
+        }
+        return result;
+    }
+    // Binary spans borrow the input catalog, which must outlive emission.
+    struct SidecarJsonOutput {
+        using Part = std::variant<std::string, std::span<const std::uint8_t>>;
+        std::vector<Part> parts;
+        std::size_t bytes = 0;
+    };
+    // Prepare all escaping/formatting before any stream output. Large raw fields
+    // remain borrowed spans, so neither the DOM nor the plan owns hex copies.
+    inline SidecarJsonOutput prepareSidecarJson(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        const auto document = sidecarJsonDocument(sidecar, summary);
+        SidecarJsonOutput output;
+        const auto text = [&](std::string_view value) {
+            output.bytes += value.size();
+            if (!output.parts.empty() && std::holds_alternative<std::string>(output.parts.back()))
+                std::get<std::string>(output.parts.back()).append(value);
+            else
+                output.parts.emplace_back(std::string(value));
+        };
+        const auto visit = [&](const auto& self, const json& node) -> void {
+            const auto field = std::find_if(document.fields.begin(), document.fields.end(), [&](const auto& item) { return item.slot == &node; });
+            if (field != document.fields.end()) {
+                text("\"");
+                output.parts.emplace_back(field->bytes);
+                output.bytes += field->bytes.size() * 2;
+                text("\"");
+            } else if (node.is_object()) {
+                text("{");
+                bool first = true;
+                for (const auto& item : node.items()) {
+                    if (!first)
+                        text(",");
+                    first = false;
+                    text(dump(json(item.key())));
+                    text(":");
+                    self(self, item.value());
+                }
+                text("}");
+            } else if (node.is_array()) {
+                text("[");
+                bool first = true;
+                for (const auto& item : node) {
+                    if (!first)
+                        text(",");
+                    first = false;
+                    self(self, item);
+                }
+                text("]");
+            } else {
+                text(dump(node));
+            }
+        };
+        visit(visit, document.value);
+        return output;
+    }
+    template <class Emit>
+    bool emitSidecarJson(const SidecarJsonOutput& output, Emit&& emit) {
+        constexpr char digits[] = "0123456789abcdef";
+        std::array<char, 8192> buffer{};
+        for (const auto& part : output.parts) {
+            if (const auto* text = std::get_if<std::string>(&part)) {
+                if (!emit(*text))
+                    return false;
+                continue;
+            }
+            const auto bytes = std::get<std::span<const std::uint8_t>>(part);
+            std::size_t offset = 0;
+            while (offset < bytes.size()) {
+                const auto count = std::min(buffer.size() / 2, bytes.size() - offset);
+                for (std::size_t index = 0; index < count; ++index) {
+                    const auto byte = bytes[offset + index];
+                    buffer[index * 2] = digits[byte >> 4];
+                    buffer[index * 2 + 1] = digits[byte & 15];
+                }
+                if (!emit(std::string_view(buffer.data(), count * 2)))
+                    return false;
+                offset += count;
+            }
+        }
+        return true;
+    }
+    inline std::string sourceSidecarMetadataJson(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        const auto output = prepareSidecarJson(sidecar, summary);
+        std::string result;
+        result.reserve(output.bytes);
+        emitSidecarJson(output, [&](std::string_view part) { result.append(part); return true; });
+        return result;
+    }
+    inline bool writeSourceSidecarMetadataJson(std::ostream& stream, const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        const auto output = prepareSidecarJson(sidecar, summary);
+        return emitSidecarJson(output, [&](std::string_view part) { stream.write(part.data(), static_cast<std::streamsize>(part.size())); return static_cast<bool>(stream); });
     }
     inline void appendXmlText(std::string& output, std::string_view text) {
         for (const auto c : text) {

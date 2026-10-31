@@ -19,6 +19,25 @@ namespace lfs::media::detail {
     inline constexpr char sidecar_metadata_policy[] = "image-static-source-xmp-v1";
     inline constexpr char sidecar_metadata_naming[] = "image-filename-plus-xmp-v1";
     inline constexpr char sidecar_metadata_suffix[] = ".xmp";
+    struct SidecarObservation;
+    // Only recognize our exact generated prefix, without parsing foreign XMP.
+    // Compare native identity and timestamps without locking a companion across
+    // image output (open Windows handles prevent ordinary atomic replacement).
+    class PreviousSourceSidecar {
+    public:
+        PreviousSourceSidecar() = default;
+        PreviousSourceSidecar(const PreviousSourceSidecar&) = delete;
+        PreviousSourceSidecar& operator=(const PreviousSourceSidecar&) = delete;
+        PreviousSourceSidecar(PreviousSourceSidecar&&) = default;
+        PreviousSourceSidecar& operator=(PreviousSourceSidecar&&) = default;
+        explicit operator bool() const noexcept { return bool(observation_); }
+        [[nodiscard]] static PreviousSourceSidecar inspect(const std::filesystem::path& image);
+        [[nodiscard]] SinkResult removeUnchanged();
+
+    private:
+        std::filesystem::path path_;
+        std::shared_ptr<const SidecarObservation> observation_;
+    };
     [[nodiscard]] std::string_view embeddedMetadataPolicy(FrameFileFormat);
     // One prepared static observation per writer session. JPEG alone needs
     // Extended XMP markers when its Standard APP1 packet cannot hold the source.

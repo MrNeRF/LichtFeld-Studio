@@ -43,6 +43,23 @@ class SourceMetadataBindings(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_explicit_sidecar_json_matches_cli_and_retains_owned_original(self):
+        image = self.root / "sidecar é 日本語.jpg"
+        source_exif_fixture.write_jpeg(image)
+        sidecar = Path(str(image) + ".xmp")
+        packet = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:t="http://ns.adobe.com/tiff/1.0/"><rdf:Description rdf:about="" t:Make="External"/></rdf:RDF>'
+        sidecar.write_bytes(packet)
+        encoded = media.MediaIngest.source_sidecar_metadata_json(image, sidecar)
+        reference = subprocess.run([str(METADATA_CLI), "source-sidecar-metadata", str(image), str(sidecar)], check=True, capture_output=True, timeout=30)
+        self.assertEqual(json.loads(encoded), json.loads(reference.stdout))
+        sidecar.unlink()
+        self.assertEqual(bytes.fromhex(json.loads(encoded)["metadata"]["image_xmp"]["blocks"][0]["bytes"]), packet)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.source_sidecar_metadata_json(image, sidecar)
+        # Nanobind may reject a NUL path before the C++ API receives it.
+        with self.assertRaises((MEDIA_ERROR, TypeError, ValueError)):
+            media.MediaIngest.source_sidecar_metadata_json("bad\0.jpg", sidecar)
+
     def test_catalog_and_summary_match_cli_and_legacy_exif(self):
         cli = METADATA_CLI
         if cli is None or not cli.is_file():
@@ -1479,6 +1496,11 @@ class MediaBindings(unittest.TestCase):
                 media.MediaIngest.extract_files(request, output)
                 self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir() if p.suffix in (extension, ".xmp")})
                 self.assertFalse((root / ".media-ingest-checkpoint").exists())
+                output.write_source_metadata_sidecars = False
+                media.MediaIngest.extract_files(request, output)
+                self.assertFalse(list(root.glob("*.xmp")))
+                self.assertEqual({name: data for name, data in before.items() if name.endswith(extension)},
+                                 {p.name: p.read_bytes() for p in root.glob("*" + extension)})
 
     def test_plain_sidecars_cancellation_and_overwrite_policy(self):
         request = self.metadata_request()
@@ -1515,7 +1537,7 @@ class MediaBindings(unittest.TestCase):
         self.assertEqual(sidecar.read_bytes(), packet)
         output.write_source_metadata_sidecars = False
         media.MediaIngest.extract_files(request, output)
-        self.assertEqual(sidecar.read_bytes(), packet)
+        self.assertFalse(sidecar.exists())
         self.assertFalse((root / ".media-ingest-checkpoint").exists())
 
     def test_source_metadata_sidecars_recover_partial_pairs_and_refuse_tampering(self):

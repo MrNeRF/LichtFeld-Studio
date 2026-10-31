@@ -1,8 +1,13 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
 #include "media/source_metadata.hpp"
+#include "media/xmp_sidecar_io.hpp"
+#include <chrono>
+#include <fstream>
+#include <sstream>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
@@ -21,6 +26,77 @@ namespace {
     void require(bool condition, const char* text) {
         if (!condition)
             throw std::runtime_error(text);
+    }
+    struct SidecarFaultReader {
+        std::vector<std::uint8_t> bytes;
+        std::size_t offset = 0;
+        std::size_t chunk = 2;
+        int calls = 0;
+        int fail_call = -1;
+        bool allocation_failure = false;
+        bool changed = false;
+        lfs::Result<std::size_t> read(std::span<std::uint8_t> output) {
+            if (++calls == fail_call) {
+                if (allocation_failure)
+                    throw std::bad_alloc();
+                return lfs::media::detail::sidecarError(lfs::ErrorCode::Unavailable, "Injected sidecar read failure");
+            }
+            const auto count = std::min({output.size(), chunk, bytes.size() - offset});
+            if (count)
+                std::copy_n(bytes.data() + offset, count, output.data());
+            offset += count;
+            return count;
+        }
+        SinkResult verifyUnchanged() const {
+            if (changed)
+                return SinkResult::failure(lfs::media::detail::sidecarError(lfs::ErrorCode::DataLoss, "Injected sidecar metadata change"));
+            return {};
+        }
+    };
+    void sidecarFaultContracts() {
+        using lfs::media::detail::readSidecarBytes;
+        struct NonUtf8Category final : std::error_category {
+            const char* name() const noexcept override { return "native-test"; }
+            std::string message(int) const override { return "non-UTF8 \xff"; }
+        } category;
+        const auto native_error = lfs::media::detail::sidecarIoError({32, category}, "Open XMP sidecar");
+        require(native_error.native().has_value(), "native I/O error retains its native record");
+        const nlohmann::json native_json{{"message", native_error.detail()}, {"category", native_error.native()->name}};
+        require(nlohmann::json::parse(native_json.dump()).at("category") == "native-test" && native_error.native()->code == 32,
+                "native I/O diagnostics stay valid UTF-8 without losing the native code");
+        const auto expect_error = [](auto& reader, std::size_t size, lfs::ErrorCode code, const char* text) {
+            const auto result = lfs::media::detail::readSidecarBytes(reader, size);
+            require(!result && result.error().code() == code, text);
+        };
+        SidecarFaultReader good{{1, 2, 3, 4}};
+        const auto bytes = readSidecarBytes(good, 4);
+        require(bytes && *bytes == good.bytes, "short successful reads are assembled exactly");
+        for (const auto failure : {1, 2, 3}) {
+            SidecarFaultReader failed{{1, 2, 3, 4}};
+            failed.fail_call = failure;
+            const auto result = readSidecarBytes(failed, 4);
+            require(!result && result.error().code() == lfs::ErrorCode::Unavailable, "read and EOF-probe errors do not become success");
+        }
+        SidecarFaultReader truncated{{1, 2}};
+        expect_error(truncated, 4, lfs::ErrorCode::DataLoss, "partial packet truncation rejected");
+        SidecarFaultReader grown{{1, 2, 3, 4, 5}};
+        expect_error(grown, 4, lfs::ErrorCode::DataLoss, "growth after announced size rejected");
+        SidecarFaultReader changed{{1, 2, 3, 4}};
+        changed.changed = true;
+        expect_error(changed, 4, lfs::ErrorCode::DataLoss, "post-read metadata change rejected");
+        SidecarFaultReader allocation{{1, 2, 3, 4}};
+        allocation.fail_call = 1;
+        allocation.allocation_failure = true;
+        expect_error(allocation, 4, lfs::ErrorCode::ResourceExhausted, "allocation exception uses structured exhaustion error");
+        struct InvalidReader {
+            lfs::Result<std::size_t> read(std::span<std::uint8_t> output) { return output.size() + 1; }
+            SinkResult verifyUnchanged() const { return {}; }
+        } invalid;
+        expect_error(invalid, 4, lfs::ErrorCode::DataLoss, "invalid read counts cannot overflow retained bytes");
+        SidecarFaultReader empty{};
+        const auto zero = readSidecarBytes(empty, 0);
+        require(zero && zero->empty(), "empty originals retained for separate XML interpretation");
+        expect_error(empty, 32u * 1024 * 1024 + 1, lfs::ErrorCode::ResourceExhausted, "over-budget read refused before allocation");
     }
     ImageExifDescription description() {
         ImageExifDescription result;
@@ -142,6 +218,7 @@ namespace {
 } // namespace
 
 int runSourceMetadataContracts() {
+    sidecarFaultContracts();
     containerContracts();
     SourceXmp xmp;
     xmp.status = MetadataStatus::Collected;
@@ -369,5 +446,101 @@ int runSourceMetadataContracts() {
     mismatch = description();
     mismatch.interpretations.emplace_back();
     require(!catalogSourceMetadata(std::move(mismatch)), "extra interpretation ordinal is rejected");
+    {
+        const auto root = std::filesystem::temp_directory_path() / ("lfs-sidecar-index-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root);
+        struct Cleanup {
+            std::filesystem::path root;
+            ~Cleanup() {
+                std::error_code error;
+                std::filesystem::remove_all(root, error);
+            }
+        } cleanup{root};
+        const auto image = root / "frame.jpg";
+        const auto sidecar = root / "frame.jpg.xmp";
+        std::ofstream(image, std::ios::binary) << "association only, no pixel decoding";
+        const std::string bytes = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\"/></rdf:RDF>";
+        std::ofstream(sidecar, std::ios::binary) << bytes;
+        const auto nul_path = std::filesystem::path(std::string("bad\0.jpg", 8));
+        const auto nul_result = MediaIngest::sourceSidecarMetadata(nul_path, sidecar);
+        require(!nul_result && nul_result.error().code() == lfs::ErrorCode::InvalidArgument, "C++ rejects embedded NUL without truncating the image path");
+        const auto bound = MediaIngest::sourceSidecarMetadata(image, sidecar, {}, bytes.size());
+        require(bound.has_value() && bound->naming == XmpSidecarNaming::ImageFilename, "sidecar explicit pair collected at exact byte limit");
+        const auto handle = bound->catalog.bind(XmpBlockReference{0});
+        require(handle.has_value(), "sidecar retains indexed block provenance");
+        const auto small = MediaIngest::sourceSidecarMetadata(image, sidecar, {}, bytes.size() - 1);
+        require(!small && small.error().code() == lfs::ErrorCode::ResourceExhausted, "sidecar byte budget enforced before retention");
+        require(!MediaIngest::sourceSidecarMetadata(image, sidecar, {}, 0) &&
+                    !MediaIngest::sourceSidecarMetadata(image, sidecar, {}, 32u * 1024 * 1024 + 1),
+                "invalid sidecar limits refused");
+        auto unindexed = MediaIngest::sourceSidecarMetadata(image, sidecar, {.records = 0});
+        require(unindexed && unindexed->catalog.records().empty() && unindexed->catalog.indexStatus() == MetadataIndexStatus::Limited &&
+                    unindexed->catalog.imageXmp().blocks[0].bytes.size() == bytes.size(),
+                "limited sidecar index preserves original bytes");
+        auto summary = summarizeImageMetadata(bound->catalog);
+        require(summary.has_value(), "sidecar summary for serializer parity");
+        summary->facts.push_back({.semantic = "untrusted \"bytes\":null", .value = std::string("quote\" slash\\ control\n")});
+        const auto reference = lfs::media::json_detail::sourceSidecarMetadataResult(*bound, *summary);
+        const auto encoded = lfs::media::json_detail::sourceSidecarMetadataJson(*bound, *summary);
+        require(encoded == lfs::media::json_detail::dump(reference), "chunked JSON matches legacy escaping and schema byte for byte");
+        std::ostringstream stream;
+        require(lfs::media::json_detail::writeSourceSidecarMetadataJson(stream, *bound, *summary) && stream.str() == encoded, "CLI and string serialization share identical output");
+        require(lfs::media::json_detail::sourceMetadata(bound->catalog).at("scope") == "static_xmp_sidecar", "shared serializer preserves sidecar provenance without wrapper patch");
+        struct RejectingBuffer : std::streambuf {
+            std::streamsize xsputn(const char*, std::streamsize) override { return 0; }
+            int_type overflow(int_type) override { return traits_type::eof(); }
+        } rejecting;
+        std::ostream failed_stream(&rejecting);
+        require(!lfs::media::json_detail::writeSourceSidecarMetadataJson(failed_stream, *bound, *summary), "stream errors are reported instead of accepted");
+        const auto plan = lfs::media::json_detail::prepareSidecarJson(*bound, *summary);
+        std::size_t writes = 0;
+        require(!lfs::media::json_detail::emitSidecarJson(plan, [&](std::string_view) { ++writes; return false; }) && writes == 1, "failed output stops before hex work continues");
+        {
+            lfs::media::detail::SidecarFile pinned_image;
+            lfs::media::detail::SidecarFile pinned_sidecar;
+            require(pinned_image.open(image, std::numeric_limits<std::size_t>::max(), true).has_value() && pinned_sidecar.open(sidecar, bytes.size()).has_value(), "pin both opened file identities");
+            require(!pinned_image.sameFile(pinned_sidecar), "distinct opened objects distinguished");
+            require(!pinned_sidecar.open(sidecar, bytes.size()), "overlapping reader open cannot leak the first handle");
+#ifndef _WIN32
+            const auto moved = root / "original-image";
+            std::filesystem::rename(image, moved);
+            std::filesystem::create_hard_link(sidecar, image);
+            require(std::filesystem::equivalent(image, sidecar) && !pinned_image.sameFile(pinned_sidecar), "pathname replacement does not change pinned identities");
+            std::filesystem::remove(image);
+            std::filesystem::rename(moved, image);
+#endif
+        }
+        {
+            SourceXmp large;
+            large.status = MetadataStatus::Collected;
+            XmpBlock block;
+            block.envelope = XmpEnvelope::SidecarFile;
+            block.bytes.resize(32u * 1024 * 1024, 0x7f);
+            large.blocks.push_back(std::move(block));
+            auto catalog = catalogSourceMetadata({}, {}, std::nullopt, std::move(large));
+            require(catalog.has_value(), "maximum packet retained once");
+            SourceSidecarMetadata maximum{{}, XmpSidecarNaming::ImageFilename, std::move(*catalog)};
+            MetadataSummary limited;
+            limited.limited = true;
+            const auto output = lfs::media::json_detail::prepareSidecarJson(maximum, limited);
+            std::size_t text_bytes = 0, binary_bytes = 0;
+            for (const auto& part : output.parts) {
+                if (const auto* text = std::get_if<std::string>(&part))
+                    text_bytes += text->size();
+                else {
+                    const auto span = std::get<std::span<const std::uint8_t>>(part);
+                    require(span.data() == maximum.catalog.imageXmp().blocks[0].bytes.data(), "large JSON fields borrow the same original allocation");
+                    binary_bytes += span.size();
+                }
+            }
+            require(text_bytes < 16384 && binary_bytes == 64u * 1024 * 1024 && output.bytes == text_bytes + binary_bytes * 2, "maximum JSON plan retains bounded text instead of duplicate hex packets");
+        }
+        auto owned = bound->catalog;
+        std::filesystem::remove(sidecar);
+        require(owned.resolve(*handle).has_value() && owned.xmpPayloadBytes({0})->size() == bytes.size(), "sidecar immutable storage outlives source file");
+        auto invalid = owned.imageXmp();
+        invalid.blocks[0].payload_offset = 1;
+        require(!catalogSourceMetadata({}, {}, std::nullopt, std::move(invalid)), "sidecar carrier rejects invented payload offsets");
+    }
     return runMetadataObservationContracts();
 }

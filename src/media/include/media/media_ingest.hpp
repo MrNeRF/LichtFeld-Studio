@@ -109,6 +109,11 @@ namespace lfs::media {
         // Explicit metadata-only collection; never called implicitly by training or probe.
         [[nodiscard]] static Result<SourceMetadataCatalog> sourceMetadata(
             const std::filesystem::path&, const SourceMetadataIndexLimits& = {}, const core::image_codecs::XmpLimits& = {});
+        // Explicit same-directory image+XMP pair. Does not decode pixels or search
+        // for companions. Raw bytes retain their own locator and parser status.
+        [[nodiscard]] static Result<SourceSidecarMetadata> sourceSidecarMetadata(
+            const std::filesystem::path& image, const std::filesystem::path& sidecar,
+            const SourceMetadataIndexLimits& = {}, std::size_t max_bytes = 32u * 1024 * 1024);
         [[nodiscard]] static Result<SourceMetadataCatalog> sourceContainerMetadata(
             const std::filesystem::path&, const ProbeOptions& = {}, const SourceMetadataIndexLimits& = {});
         [[nodiscard]] static Result<IngestReport> extract(const IngestRequest&, FrameSink&);

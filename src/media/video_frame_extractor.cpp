@@ -500,19 +500,6 @@ namespace lfs::io {
             return {true, "sparse_fps_adaptive_keyframe_seek"};
         }
 
-        void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
-            std::ofstream file(lfs::core::native_fs::native_path(path), std::ios::binary);
-            if (!file)
-                throw std::runtime_error("Failed to open JPEG output: " + lfs::core::path_to_utf8(path));
-            file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-            file.flush();
-            if (!file)
-                throw std::runtime_error("Failed to write JPEG output: " + lfs::core::path_to_utf8(path));
-            file.close();
-            if (!file)
-                throw std::runtime_error("Failed to close JPEG output: " + lfs::core::path_to_utf8(path));
-        }
-
         const char* get_hw_decoder_name(AVCodecID codec_id) {
             switch (codec_id) {
             case AV_CODEC_ID_H264:
@@ -1071,8 +1058,7 @@ namespace lfs::io {
             const bool custom_sink = external_sink && !legacy_file_policy;
             media::FileFrameSinkOptions file_options{params.output_dir, params.filename_pattern, params.format == ImageFormat::PNG ? media::FrameFileFormat::PNG : media::FrameFileFormat::JPEG, params.jpg_quality, {}, false, false, {.overwrite = true, .durable = false, .create_directories = false}, params.first_source_frame_number};
             file_options.embed_source_metadata = params.embed_source_metadata;
-            if (params.embed_source_metadata)
-                file_options.image_output = params.jpeg_metadata_output;
+            file_options.image_output = params.jpeg_metadata_output;
             media::FileFrameSink file_sink(std::move(file_options));
             auto& sink = provided_sink ? *provided_sink : static_cast<media::FrameSink&>(file_sink);
             bool sink_started = false;
@@ -1877,6 +1863,12 @@ namespace lfs::io {
                         throw_if_cancelled();
                         if (!encoded[i].empty()) {
                             const auto jpeg_write_started = std::chrono::steady_clock::now();
+                            auto previous_sidecar = media::detail::PreviousSourceSidecar::inspect(batch_filenames[i]);
+                            auto options = params.jpeg_metadata_output;
+                            const auto cancelled = options.cancelled;
+                            options.cancelled = [&, cancelled] {
+                                return (params.cancel_requested && params.cancel_requested()) || (cancelled && cancelled());
+                            };
                             if (params.embed_source_metadata) {
                                 if (!jpeg_metadata) {
                                     auto prepared = media::detail::prepareImageMetadata(*session.source_metadata, session.applied_rotation, media::FrameFileFormat::JPEG);
@@ -1889,15 +1881,14 @@ namespace lfs::io {
                                 info.timestamp_origin = batch_meta[i].timestamp_origin;
                                 if (batch_meta[i].source_pts)
                                     info.source_timestamp = media::Timestamp{*batch_meta[i].source_pts, {video_stream->time_base.num, video_stream->time_base.den}};
-                                auto options = params.jpeg_metadata_output;
-                                const auto cancelled = options.cancelled;
-                                options.cancelled = [&, cancelled] {
-                                    return (params.cancel_requested && params.cancel_requested()) || (cancelled && cancelled());
-                                };
                                 check_sink(core::writeFileAtomically(batch_filenames[i], [&](FILE* stream) { return media::detail::writeJpegMetadata(stream, encoded[i], *jpeg_metadata, batch_encode_w, batch_encode_h, info); }, options));
                             } else {
-                                write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                                check_sink(core::writeFileAtomically(batch_filenames[i], [&](FILE* stream) -> media::SinkResult {
+                                    if (std::fwrite(encoded[i].data(), 1, encoded[i].size(), stream) != encoded[i].size())
+                                        return media::SinkResult::failure(make_error({.code = ErrorCode::Unavailable, .domain = ErrorDomain::IO, .detail = "GPU JPEG output write failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                                    return {}; }, options));
                             }
+                            check_sink(previous_sidecar.removeUnchanged());
                             jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             ++accepted_frames;

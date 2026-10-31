@@ -858,6 +858,12 @@ class MediaIngest:
         """
 
     @staticmethod
+    def source_sidecar_metadata_json(image: str | os.PathLike, sidecar: str | os.PathLike) -> str:
+        """
+        Read an explicitly named image/XMP sidecar pair as a separate metadata observation. No discovery, pixel validation or embedded-metadata merge; uses the shared bounded XMP interpreter.
+        """
+
+    @staticmethod
     def source_exif_json(path: str | os.PathLike) -> str:
         """
         Read JPEG/PNG EXIF envelopes, primary HEIF or JPEG XL provider-decoded EXIF, or TIFF decoded tags and observed source ranges as JSON; binary values are hex, MakerNotes opaque.

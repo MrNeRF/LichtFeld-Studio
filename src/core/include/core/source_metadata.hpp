@@ -105,7 +105,8 @@ namespace lfs::core::image_codecs {
                              TiffTag,
                              HeifMime,
                              JxlXml,
-                             ExrString };
+                             ExrString,
+                             SidecarFile };
     struct XmpLimits {
         std::size_t blocks = 64;
         std::size_t block_bytes = 1024 * 1024;

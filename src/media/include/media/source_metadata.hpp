@@ -61,6 +61,8 @@ namespace lfs::media {
         std::string native_bytes;
         MetadataPathEncoding encoding = MetadataPathEncoding::PosixBytes;
     };
+    enum class XmpSidecarNaming { ImageFilename,
+                                  ImageStem };
     struct SourceMetadataStorage;
     struct SourceMetadataCatalog {
         SourceMetadataCatalog() = default;
@@ -95,6 +97,13 @@ namespace lfs::media {
         std::shared_ptr<const SourceMetadataStorage> storage_;
         friend LFS_MEDIA_API Result<SourceMetadataCatalog> catalogSourceMetadata(ImageExifDescription, const SourceMetadataIndexLimits&, std::optional<MetadataSourceLocator>, core::image_codecs::SourceXmp);
         friend LFS_MEDIA_API Result<SourceMetadataCatalog> catalogContainerMetadata(MediaDescription, const SourceMetadataIndexLimits&, std::optional<MetadataSourceLocator>);
+    };
+    // A separate external observation, never implicitly merged with embedded XMP.
+    // Association confirms the explicitly supplied file names, not image content.
+    struct SourceSidecarMetadata {
+        MetadataSourceLocator image;
+        XmpSidecarNaming naming = XmpSidecarNaming::ImageFilename;
+        SourceMetadataCatalog catalog;
     };
     // Consumes an already collected description without rereading/reparsing it.
     // Pass an rvalue to transfer ownership without copying the source payloads.
