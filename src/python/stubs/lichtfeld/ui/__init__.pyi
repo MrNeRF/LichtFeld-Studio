@@ -2873,6 +2873,15 @@ def set_navigation_speed_preference(speed: float, persist: bool = True) -> None:
 def get_camera_browse_repeat() -> bool:
     """Get whether held camera shortcuts repeat through dataset images"""
 
+def get_space_mouse_preferences() -> dict:
+    """Get 3D mouse navigation preferences"""
+
+def set_space_mouse_preferences(values: dict, persist: bool = True) -> None:
+    """Update 3D mouse preferences; speed multipliers are clamped to 0.1-5"""
+
+def get_space_mouse_status() -> dict:
+    """Get the connected 3D mouse name and input backend"""
+
 def set_camera_browse_repeat(enabled: bool) -> None:
     """Enable held camera shortcuts through dataset images"""
 

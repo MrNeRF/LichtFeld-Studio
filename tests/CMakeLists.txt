@@ -34,6 +34,23 @@ endif()
 
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
+
+add_executable(lichtfeld_space_mouse_tests
+    test_space_mouse.cpp
+    ../src/visualizer/input/space_mouse.cpp)
+target_compile_features(lichtfeld_space_mouse_tests PRIVATE cxx_std_23)
+target_compile_definitions(lichtfeld_space_mouse_tests PRIVATE
+    LFS_STATIC_BUILD PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}")
+target_include_directories(lichtfeld_space_mouse_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/visualizer
+    ${CMAKE_SOURCE_DIR}/src/visualizer/include
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/rendering/include)
+target_link_libraries(lichtfeld_space_mouse_tests PRIVATE GTest::gtest_main glm::glm)
+add_test(NAME lichtfeld.space_mouse COMMAND lichtfeld_space_mouse_tests)
+set_tests_properties(lichtfeld.space_mouse PROPERTIES LABELS "fast;cpu;input" TIMEOUT 30)
+
 add_executable(lichtfeld_collision_preview_upload_tests test_collision_preview_upload.cpp)
 target_compile_features(lichtfeld_collision_preview_upload_tests PRIVATE cxx_std_23)
 target_include_directories(lichtfeld_collision_preview_upload_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/visualizer)
@@ -797,6 +814,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
+    test_lazy_direct_storage.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
     test_splat_decimate.cpp

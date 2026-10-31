@@ -865,6 +865,17 @@ namespace lfs::core {
 
     SplatData::~SplatData() = default;
 
+    SplatData::DensificationRows SplatData::densification_rows(const size_t n) {
+        auto& info = _densification_info;
+        if (!info.is_valid() || info.numel() == 0 || info.dtype() != DataType::Float32 || n == 0)
+            return {};
+        if (info.ndim() == 2 && info.shape()[0] >= 2 && info.shape()[1] >= n)
+            return {info.ptr<float>(), info.ptr<float>() + info.shape()[1]};
+        if (info.ndim() == 1 && info.shape()[0] >= n)
+            return {nullptr, info.ptr<float>()};
+        return {};
+    }
+
     SplatData SplatData::clone() const {
         // Tensor::clone() copies neither the name nor the row capacity.
         const auto cloned = [](const Tensor& src, const char* name = nullptr) {

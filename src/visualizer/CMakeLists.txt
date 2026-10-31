@@ -144,6 +144,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Input handling
         input/input_controller.cpp
+        input/space_mouse.cpp
+        input/space_mouse_device.cpp
+        input/space_mouse_windows.cpp
         input/gamepad_service.cpp
         input/input_router.cpp
         input/input_bindings.cpp

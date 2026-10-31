@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3D-muis",
+  "preferences.space_mouse_enabled": "Ingeschakeld",
+  "preferences.space_mouse_translation_speed": "Verplaatsingssnelheid",
+  "preferences.space_mouse_rotation_speed": "Rotatiesnelheid",
+  "preferences.space_mouse_keep_horizon": "Horizon horizontaal houden",
+  "preferences.space_mouse_none": "Geen 3D-muis gevonden",
+  "preferences.space_mouse_connected": "{name} via {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: geef toegang tot hidraw met een udev-regel of start spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact: de rechterknop brengt de selectie of scène in beeld; de linkerknop keert terug naar de beginweergave.",
   "gamepad.left_stick": "Linkerstick",
   "gamepad.right_stick": "Rechterstick",
   "gamepad.triggers": "Triggers",

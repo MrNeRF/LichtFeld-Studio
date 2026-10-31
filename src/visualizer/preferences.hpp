@@ -27,6 +27,13 @@ namespace lfs::vis {
         bool request_logging = false;
     };
 
+    struct SpaceMousePreferenceState {
+        bool enabled = true;
+        float translation_speed = 1.0f;
+        float rotation_speed = 1.0f;
+        bool keep_horizon = true;
+    };
+
     struct VrPreferences {
         bool enabled = false;               // read at startup
         float resolution_scale = 0.7f;      // 0.25 .. 1.5 of the headset's recommended size
@@ -69,6 +76,9 @@ namespace lfs::vis {
         [[nodiscard]] float zoomSpeed();
         void setNavigationSpeed(float value, bool persist = true);
         [[nodiscard]] float navigationSpeed();
+
+        void setSpaceMouse(const SpaceMousePreferenceState& state, bool persist = true);
+        [[nodiscard]] SpaceMousePreferenceState spaceMouse();
 
         void setCameraBrowseRepeat(bool enabled);
         [[nodiscard]] bool cameraBrowseRepeat();

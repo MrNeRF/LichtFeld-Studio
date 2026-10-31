@@ -30,6 +30,18 @@ def test_project_folder_remove_label_uses_sentence_case_in_all_locales():
             for path in locales.glob("*.json")} == expected
 
 
+def test_space_mouse_settings_and_hotplug_refresh_preferences(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    before = panel._state()
+    state.space_mouse_status.update(connected=True, name="SpaceMouse Compact", backend="HID")
+    assert panel._state() != before
+    panel._set_space_mouse_preference("translation_speed", 1.7)
+    panel._set_space_mouse_preference("keep_horizon", False)
+    assert state.space_mouse_preferences["translation_speed"] == 1.7
+    assert state.space_mouse_preferences["keep_horizon"] is False
+
+
 @pytest.fixture
 def preferences_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -90,6 +102,9 @@ def preferences_panel_module(monkeypatch):
         camera_browse_repeat_rate=5.0,
         zoom_speed=11.0,
         navigation_speed=10.0,
+        space_mouse_preferences={"enabled": True, "translation_speed": 1.0,
+                                 "rotation_speed": 1.0, "keep_horizon": True},
+        space_mouse_status={"connected": False, "name": "", "backend": ""},
         vr_preferences={"enabled": False, "resolution_scale": 0.7, "scene_units_per_meter": 1.0, "move_speed": 1.5},
         vr_writes=[],
         project_location="",
@@ -242,6 +257,9 @@ def preferences_panel_module(monkeypatch):
         get_viewport_toolbar_position=lambda: state.viewport_toolbar_position,
         set_viewport_toolbar_position=set_viewport_toolbar_position,
         get_camera_browse_repeat=lambda: state.camera_browse_repeat,
+        get_space_mouse_preferences=lambda: dict(state.space_mouse_preferences),
+        set_space_mouse_preferences=lambda values, persist=True: state.space_mouse_preferences.update(values),
+        get_space_mouse_status=lambda: dict(state.space_mouse_status),
         set_camera_browse_repeat=lambda value: setattr(state, "camera_browse_repeat", bool(value)),
         get_camera_browse_repeat_rate=lambda: state.camera_browse_repeat_rate,
         set_camera_browse_repeat_rate=lambda value, persist=True: setattr(state, "camera_browse_repeat_rate", float(value)),

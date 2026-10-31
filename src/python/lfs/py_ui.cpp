@@ -5514,6 +5514,37 @@ namespace lfs::python {
             "Set the default WASD navigation speed (1-100)");
 
         m.def("get_camera_browse_repeat", [] { return vis::UserPreferences::instance().cameraBrowseRepeat(); }, "Get whether held camera shortcuts repeat through dataset images");
+
+        m.def("get_space_mouse_preferences", [] {
+            const auto preferences = vis::UserPreferences::instance().spaceMouse();
+            nb::dict result;
+            result["enabled"] = preferences.enabled;
+            result["translation_speed"] = preferences.translation_speed;
+            result["rotation_speed"] = preferences.rotation_speed;
+            result["keep_horizon"] = preferences.keep_horizon;
+            return result; }, "Get 3D mouse navigation preferences");
+        m.def("set_space_mouse_preferences", [](const nb::dict& values, const bool persist) {
+            auto& preferences = vis::UserPreferences::instance();
+            auto state = preferences.spaceMouse();
+            if (values.contains("enabled"))
+                state.enabled = nb::cast<bool>(values["enabled"]);
+            if (values.contains("translation_speed"))
+                state.translation_speed = nb::cast<float>(values["translation_speed"]);
+            if (values.contains("rotation_speed"))
+                state.rotation_speed = nb::cast<float>(values["rotation_speed"]);
+            if (values.contains("keep_horizon"))
+                state.keep_horizon = nb::cast<bool>(values["keep_horizon"]);
+            preferences.setSpaceMouse(state, persist); }, nb::arg("values"), nb::arg("persist") = true, "Update 3D mouse preferences; speed multipliers are clamped to 0.1-5");
+        m.def("get_space_mouse_status", [] {
+            const auto connection = invoke_on_viewer([]() -> std::optional<vis::input::SpaceMouseConnection> {
+                const auto* controller = vis::InputController::instance();
+                return controller ? controller->spaceMouseConnection() : std::nullopt;
+            }, std::optional<vis::input::SpaceMouseConnection>{});
+            nb::dict result;
+            result["connected"] = connection.has_value();
+            result["name"] = connection ? connection->name : "";
+            result["backend"] = connection ? connection->backend : "";
+            return result; }, "Get the connected 3D mouse name and input backend");
         m.def("set_camera_browse_repeat", [](bool enabled) { vis::UserPreferences::instance().setCameraBrowseRepeat(enabled); }, nb::arg("enabled"), "Enable held camera shortcuts through dataset images");
         m.def("get_camera_browse_repeat_rate", [] { return vis::UserPreferences::instance().cameraBrowseRepeatRate(); }, "Get camera image repeat rate in images per second");
         m.def("set_camera_browse_repeat_rate", [](float rate, bool persist) { vis::UserPreferences::instance().setCameraBrowseRepeatRate(rate, persist); }, nb::arg("rate"), nb::arg("persist") = true, "Set camera image repeat rate (1-20 images per second)");

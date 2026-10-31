@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3D 마우스",
+  "preferences.space_mouse_enabled": "사용",
+  "preferences.space_mouse_translation_speed": "이동 속도",
+  "preferences.space_mouse_rotation_speed": "회전 속도",
+  "preferences.space_mouse_keep_horizon": "수평 유지",
+  "preferences.space_mouse_none": "3D 마우스를 찾을 수 없습니다",
+  "preferences.space_mouse_connected": "{name} ({backend} 연결)",
+  "preferences.space_mouse_linux_hint": "Linux: udev 규칙으로 hidraw 접근을 허용하거나 spacenavd를 시작하세요.",
+  "preferences.space_mouse_buttons_hint": "Compact: 오른쪽 버튼은 선택 항목 또는 장면 전체를 화면에 맞추고, 왼쪽 버튼은 홈 보기로 돌아갑니다.",
   "gamepad.left_stick": "왼쪽 스틱",
   "gamepad.right_stick": "오른쪽 스틱",
   "gamepad.triggers": "트리거",

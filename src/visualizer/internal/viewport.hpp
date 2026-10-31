@@ -23,7 +23,7 @@
 class Viewport {
     class CameraMotion {
     public:
-        glm::vec2 prePos;
+        glm::vec2 prePos{0.0f};
         float zoomSpeed = 11.0f;
         float maxZoomSpeed = 100.0f;
         float rotateSpeed = 0.001f;
@@ -161,6 +161,43 @@ class Viewport {
         }
 
         void translate(const glm::vec2& pos) { applyPanDrag(pos); }
+
+        // A 3D mouse in Orbit and Trackball acts as the mouse there: an orbit drag of `orbit` pixels and a pan drag of
+        // `pan` pixels about the same pivot, and `roll` pixels of roll about the view axis when the horizon is free.
+        void applySpaceMouseOrbit(const glm::vec2& orbit, const glm::vec2& pan, const float roll, const bool trackball) {
+            clearTransientMotion();
+            applyOrbitRotation(-orbit.x * rotateCenterSpeed, -orbit.y * rotateCenterSpeed, trackball);
+            if (roll != 0.0f) {
+                const auto previous_rotation = R;
+                rotate_roll(roll * rotateCenterSpeed / rotateRollSpeed);
+                t = pivot + R * glm::transpose(previous_rotation) * (t - pivot);
+            }
+            const auto saved_pos = prePos;
+            prePos = glm::vec2(0.0f);
+            applyPanDrag(pan);
+            prePos = saved_pos;
+        }
+
+        // A 3D mouse in Fly, Drone and Walk looks as a mouse look drag of `look` pixels, rolls by `roll` pixels when
+        // the horizon is free, and moves the camera by `movement` in its own frame at the WASD speed.
+        void applySpaceMouseFly(const glm::vec2& look, const float roll, const glm::vec3& movement,
+                                const bool keep_horizon) {
+            clearTransientMotion();
+            const auto saved_pos = prePos;
+            prePos = glm::vec2(0.0f);
+            if (keep_horizon) {
+                rotateFpv(look);
+            } else {
+                const float distance = std::max(glm::length(pivot - t), 0.1f);
+                rotate(look);
+                rotate_roll(roll * rotateSpeed / rotateRollSpeed);
+                updatePivotFromCamera(distance);
+            }
+            prePos = saved_pos;
+            const auto step = R * movement * wasdSpeed * kWasdUnitsPerSecondPerLevel;
+            t += step;
+            pivot += step;
+        }
 
         // Continuous inputs use rates, independent of pixels and pointer state.
         // Positive angles use the same yaw/pitch convention as orbit rotation.

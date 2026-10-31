@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3D 鼠标",
+  "preferences.space_mouse_enabled": "启用",
+  "preferences.space_mouse_translation_speed": "平移速度",
+  "preferences.space_mouse_rotation_speed": "旋转速度",
+  "preferences.space_mouse_keep_horizon": "保持水平",
+  "preferences.space_mouse_none": "未检测到 3D 鼠标",
+  "preferences.space_mouse_connected": "{name}（通过 {backend}）",
+  "preferences.space_mouse_linux_hint": "Linux：使用 udev 规则允许访问 hidraw，或启动 spacenavd。",
+  "preferences.space_mouse_buttons_hint": "Compact：右键将选中对象或整个场景居中显示；左键返回初始视图。",
   "gamepad.left_stick": "左摇杆",
   "gamepad.right_stick": "右摇杆",
   "gamepad.triggers": "扳机",

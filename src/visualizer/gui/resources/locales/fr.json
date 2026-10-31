@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "Souris 3D",
+  "preferences.space_mouse_enabled": "Activée",
+  "preferences.space_mouse_translation_speed": "Vitesse de translation",
+  "preferences.space_mouse_rotation_speed": "Vitesse de rotation",
+  "preferences.space_mouse_keep_horizon": "Maintenir l’horizon horizontal",
+  "preferences.space_mouse_none": "Aucune souris 3D détectée",
+  "preferences.space_mouse_connected": "{name} via {backend}",
+  "preferences.space_mouse_linux_hint": "Linux : autorisez l’accès à hidraw avec une règle udev ou démarrez spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact : le bouton droit cadre la sélection ou la scène ; le bouton gauche revient à la vue initiale.",
   "gamepad.left_stick": "Stick gauche",
   "gamepad.right_stick": "Stick droit",
   "gamepad.triggers": "Gâchettes",

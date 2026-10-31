@@ -546,6 +546,7 @@ namespace lfs::vis {
     }
 
     InputController::~InputController() {
+        space_mouse_.reset();
         auto unsubscribe = [](const auto event_tag, std::size_t& handler_id) {
             if (handler_id == 0)
                 return;
@@ -622,6 +623,12 @@ namespace lfs::vis {
 
     void InputController::initialize() {
         instance_ = this;
+        if (window_) {
+            space_mouse_ = std::make_unique<input::SpaceMouseDevice>(window_, [window_manager = services().windowOrNull()] {
+                if (window_manager)
+                    window_manager->wakeEventLoop();
+            });
+        }
         try {
             gamepad_settings_ = input::GamepadNavigationSettings::fromJson(nlohmann::json::parse(UserPreferences::instance().gamepadNavigation()));
         } catch (const std::exception& error) {
@@ -864,6 +871,10 @@ namespace lfs::vis {
     }
 
     void InputController::onWindowFocusLost() {
+        space_mouse_active_ = false;
+        space_mouse_walk_velocity_ = glm::vec3(0.0f);
+        if (space_mouse_)
+            space_mouse_->setInputEnabled(false);
         pauseGamepadNavigation();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
@@ -1922,6 +1933,31 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::zoomViewport(Viewport& target, const float delta, const bool carry_pivot) {
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering) {
+            target.camera.zoom(delta, carry_pivot);
+            return;
+        }
+        auto settings = rendering->getSettings();
+        if (!settings.orthographic) {
+            target.camera.zoom(delta, carry_pivot);
+            return;
+        }
+        constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
+        constexpr float MIN_ORTHO_SCALE = 1.0f;
+        constexpr float MAX_ORTHO_SCALE = 10000.0f;
+        const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
+        const float current = target.ortho_scale_override.value_or(settings.ortho_scale);
+        const float scale = std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+        if (&target != &viewport_ || target.ortho_scale_override)
+            target.ortho_scale_override = scale;
+        if (&target == &viewport_) {
+            settings.ortho_scale = scale;
+            rendering->updateSettings(settings);
+        }
+    }
+
     void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
         if (vr_viewing_)
             return;
@@ -2004,29 +2040,7 @@ namespace lfs::vis {
         if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
-            // In orthographic mode, adjust ortho_scale instead of camera position
-            if (services().renderingOrNull()) {
-                auto settings = services().renderingOrNull()->getSettings();
-                if (settings.orthographic) {
-                    constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
-                    constexpr float MIN_ORTHO_SCALE = 1.0f;
-                    constexpr float MAX_ORTHO_SCALE = 10000.0f;
-                    const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
-                    const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
-                    const float scale = std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
-                    if (&target_viewport != &viewport_ || target_viewport.ortho_scale_override) {
-                        target_viewport.ortho_scale_override = scale;
-                    }
-                    if (&target_viewport == &viewport_) {
-                        settings.ortho_scale = scale;
-                        services().renderingOrNull()->updateSettings(settings);
-                    }
-                } else {
-                    target_viewport.camera.zoom(delta, carry_pivot);
-                }
-            } else {
-                target_viewport.camera.zoom(delta, carry_pivot);
-            }
+            zoomViewport(target_viewport, delta, carry_pivot);
         } else {
             return;
         }
@@ -2717,6 +2731,75 @@ namespace lfs::vis {
         }
     }
 
+    std::optional<input::SpaceMouseConnection> InputController::spaceMouseConnection() const {
+        return space_mouse_ ? space_mouse_->connection() : std::nullopt;
+    }
+
+    void InputController::updateSpaceMouse(const float delta_time) {
+        space_mouse_active_ = false;
+        space_mouse_walk_velocity_ = glm::vec3(0.0f);
+        if (!space_mouse_)
+            return;
+        const auto preferences = UserPreferences::instance().spaceMouse();
+        if (!preferences.enabled || !window_ || !(SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) ||
+            (input_router_ && (input_router_->isModalOpen() || input_router_->isTextInputActive())) ||
+            op::operators().hasModalOperator() ||
+            drag_mode_ != DragMode::None || isValueDragActive() || SDL_GetMouseState(nullptr, nullptr) != 0) {
+            space_mouse_->setInputEnabled(false);
+            return;
+        }
+        space_mouse_->setInputEnabled(true);
+        const auto frame = space_mouse_->takeFrame();
+        if ((frame.pressed & 3) && camera_navigation_mode_ == CameraNavigationMode::Walk)
+            setCameraNavigationMode(CameraNavigationMode::Orbit);
+        if ((frame.pressed & 1) && focusSelection()) {
+            if (auto* const viewer = lfs::python::get_visualizer())
+                viewer->projectMarkSessionChapterCommitted("VIEW");
+        }
+        if (frame.pressed & 2)
+            goHome();
+
+        // The puck acts as the mouse of the active navigation mode: full deflection is a drag of kDragPixels pixels or
+        // kWheelNotches wheel notches per second, scaled by the 3D mouse speed preferences. In Orbit and Trackball the
+        // scene follows the hand as when dragging it with the mouse; in Fly, Drone and Walk the camera does.
+        constexpr float kDragPixels = 800.0f, kWheelNotches = 10.0f;
+        const auto response = [](const glm::vec3& v) {
+            return glm::vec3(input::spaceMouseResponse(v.x), input::spaceMouseResponse(v.y),
+                             input::spaceMouseResponse(v.z));
+        };
+        const glm::vec3 move = response(frame.motion.translation) * preferences.translation_speed;
+        const glm::vec3 turn = response(frame.motion.rotation) * preferences.rotation_speed;
+        if (move == glm::vec3(0.0f) && turn == glm::vec3(0.0f))
+            return;
+        const float dt = std::clamp(delta_time, 0.0f, 0.1f);
+        const float roll = preferences.keep_horizon ? 0.0f : turn.z * kDragPixels * dt;
+        auto& target = activeKeyboardViewport();
+        auto& camera = target.camera;
+        camera.finishGlide();
+        camera.setSceneExtent(sceneExtent());
+        switch (camera_navigation_mode_) {
+        case CameraNavigationMode::Orbit:
+        case CameraNavigationMode::Trackball:
+            camera.applySpaceMouseOrbit(glm::vec2(turn.y, turn.x) * kDragPixels * dt,
+                                        glm::vec2(move.x, -move.y) * kDragPixels * dt, -roll,
+                                        camera_navigation_mode_ == CameraNavigationMode::Trackball);
+            if (move.z != 0.0f)
+                zoomViewport(target, move.z * kWheelNotches * dt, false);
+            break;
+        case CameraNavigationMode::Walk:
+            space_mouse_walk_velocity_ = camera.R * move * camera.getWasdSpeed() * 0.1f;
+            camera.applySpaceMouseFly(-glm::vec2(turn.y, turn.x) * kDragPixels * dt, roll, glm::vec3(0.0f), true);
+            break;
+        default:
+            camera.applySpaceMouseFly(-glm::vec2(turn.y, turn.x) * kDragPixels * dt, roll, move * dt,
+                                      preferences.keep_horizon);
+            break;
+        }
+        space_mouse_active_ = true;
+        onCameraMovementStart();
+        publishCameraMove(&target);
+    }
+
     bool InputController::configureGamepadNavigation(input::GamepadNavigationSettings settings, SDL_JoystickID device) {
         settings.validate();
         auto* window = services().windowOrNull();
@@ -3019,6 +3102,7 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        updateSpaceMouse(delta_time);
         if (vr_viewing_)
             return;
         updateCameraBrowseRepeat();
@@ -3239,7 +3323,8 @@ namespace lfs::vis {
                     keys_active && keys_movement_[0], keys_active && keys_movement_[2],
                     keys_active && keys_movement_[1], keys_active && keys_movement_[3],
                     false, false);
-                const auto velocity = camera.walkVelocity(movement, walk_settings.speed);
+                auto velocity = camera.walkVelocity(movement, walk_settings.speed);
+                velocity += space_mouse_walk_velocity_;
                 core::advanceWalk(walk_state_, walk_settings, up, velocity, delta_time, walkQuery());
                 const auto delta = walk_state_.presentation - camera.t;
                 camera.t += delta;

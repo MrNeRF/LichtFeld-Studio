@@ -461,7 +461,8 @@ namespace fast_lfs::rasterization {
     }
 
     BackwardOutputs backward_raw(
-        float* densification_info_ptr,
+        float* densification_weight_ptr,
+        float* densification_error_ptr,
         const float* densification_error_map_ptr,
         const float* grad_image_ptr,
         const BackgroundAlphaGradient& background_grad,
@@ -562,7 +563,8 @@ namespace fast_lfs::rasterization {
             LFS_VALIDATE_CUDA_DEVICE_POINTER(cam_position_ptr, "cam_position_ptr");
 
             // Optional pointer
-            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_info_ptr, "densification_info_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_weight_ptr, "densification_weight_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_ptr, "densification_error_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
@@ -682,7 +684,8 @@ namespace fast_lfs::rasterization {
                 grad_depth_helper,
                 grad_normal_helper,
                 grad_w2c_ptr ? reinterpret_cast<float4*>(grad_w2c_ptr) : nullptr,
-                densification_info_ptr,
+                densification_weight_ptr,
+                densification_error_ptr,
                 n_primitives,
                 forward_ctx.n_instances,
                 forward_ctx.n_visible,
@@ -826,7 +829,7 @@ namespace fast_lfs::rasterization {
 
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
-                nullptr, nullptr, grad_image, BackgroundAlphaGradient{.grad_alpha_map = grad_alpha}, nullptr, nullptr, image, alpha,
+                nullptr, nullptr, nullptr, grad_image, BackgroundAlphaGradient{.grad_alpha_map = grad_alpha}, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
                 NUM_GAUSSIANS, NUM_GAUSSIANS, 1, 1,

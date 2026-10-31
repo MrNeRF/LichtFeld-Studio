@@ -6,7 +6,6 @@
  */
 
 #include "core/tensor.hpp"
-#include "lfs/training/refine_scratch.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/strategies/strategy_utils.hpp"
@@ -15,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <functional>
 #include <gtest/gtest.h>
 #include <limits>
 #include <vector>
@@ -281,83 +281,37 @@ TEST(DensifyEvents4x, PositiveMedianNormalizeZerosWhenNoPositives) {
     }
 }
 
-TEST(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
-    constexpr size_t n = 64;
-    constexpr size_t k = 7;
-    std::vector<float> weights(n, 0.f);
-    size_t nnz = 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (i % 3 != 0) {
-            weights[i] = static_cast<float>(i + 1);
-            ++nnz;
-        }
-    }
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    constexpr uint64_t seed = 0xC0FFEEULL;
-
-    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>());
-    GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
-    mrnf_strategy::launch_gumbel_topk(
-        w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, true, &scratch, nnz);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-
-    const auto a = allocating.cpu().to_vector_int64();
-    const auto b = persisted.cpu().to_vector_int64();
-    ASSERT_EQ(a.size(), b.size());
-    for (size_t i = 0; i < a.size(); ++i) {
-        EXPECT_EQ(a[i], b[i]) << "i=" << i;
-    }
-}
-
-TEST(DensifyEvents4x, GumbelScratchUsesSelectableCount) {
-    constexpr size_t n = 1024;
-    constexpr size_t nnz = 31;
-    constexpr size_t k = 7;
-    std::vector<float> weights(n, 0.0f);
-    for (size_t i = 0; i < nnz; ++i)
-        weights[(i * 31) % n] = static_cast<float>(i + 1);
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto expected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    auto actual = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    constexpr uint64_t seed = 0x4c4653ULL;
-    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, expected.ptr<int64_t>());
-    GumbelTopKScratch scratch;
-    mrnf_strategy::launch_gumbel_topk(
-        w.ptr<float>(), n, k, seed, actual.ptr<int64_t>(), nullptr, true, &scratch, nnz);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    EXPECT_EQ(scratch.n_capacity, nnz);
-    EXPECT_EQ(actual.cpu().to_vector_int64(), expected.cpu().to_vector_int64());
-}
-
-TEST(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
-    constexpr size_t n = 32;
-    constexpr size_t k = 5;
+TEST(DensifyEvents4x, GumbelIsDeterministicPerSeed) {
+    constexpr size_t n = 4096;
+    constexpr size_t k = 300;
     std::vector<float> weights(n);
-    for (size_t i = 0; i < n; ++i) {
-        weights[i] = 0.25f + static_cast<float>(i);
-    }
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    constexpr uint64_t seed = 42;
-
-    mrnf_strategy::launch_gumbel_topk(
-        w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>(), nullptr, false);
-    GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
-    mrnf_strategy::launch_gumbel_topk(
-        w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, false, &scratch, n);
+    for (size_t i = 0; i < n; ++i)
+        weights[i] = i % 3 == 0 ? 0.0f : 0.5f + static_cast<float>(i % 17);
+    const auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto first = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto second = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, 0xC0FFEEULL, first.ptr<int64_t>());
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, 0xC0FFEEULL, second.ptr<int64_t>());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(first.cpu().to_vector_int64(), second.cpu().to_vector_int64());
+}
 
-    const auto a = allocating.cpu().to_vector_int64();
-    const auto b = persisted.cpu().to_vector_int64();
-    ASSERT_EQ(a.size(), b.size());
-    for (size_t i = 0; i < a.size(); ++i) {
-        EXPECT_EQ(a[i], b[i]) << "i=" << i;
-    }
+// Output is in descending key order: rows whose weight no Gumbel noise can
+// overcome come first, in their weight order.
+TEST(DensifyEvents4x, GumbelOrdersPicksByKey) {
+    constexpr size_t n = 1000;
+    std::vector<float> weights(n, 1.0f);
+    weights[700] = 1.0e30f;
+    weights[3] = 1.0e20f;
+    weights[512] = 1.0e10f;
+    const auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto picks = Tensor::empty({5}, Device::CUDA, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, 5, 7, picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto values = picks.cpu().to_vector_int64();
+    EXPECT_EQ(values[0], 700);
+    EXPECT_EQ(values[1], 3);
+    EXPECT_EQ(values[2], 512);
 }
 
 TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
@@ -367,13 +321,8 @@ TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     weights.back() = 1.0e30f;
     auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
     auto selected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
-    ASSERT_EQ(scratch.indices.dtype(), DataType::UInt32);
-    ASSERT_EQ(scratch.indices_sorted.dtype(), DataType::UInt32);
 
-    mrnf_strategy::launch_gumbel_topk(
-        w.ptr<float>(), n, k, 0x12345678ULL, selected.ptr<int64_t>(), nullptr, false, &scratch, n);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, 0x12345678ULL, selected.ptr<int64_t>());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto values = selected.cpu().to_vector_int64();
     ASSERT_EQ(values.size(), k);
@@ -387,32 +336,77 @@ TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     }
 }
 
-// Catches a NaN weight getting a NaN key, which the descending sort puts before every real candidate.
+// Catches a NaN weight getting a NaN key, which a descending order puts before every real candidate.
 TEST(DensifyEvents4x, GumbelNeverPicksNanOrNonPositiveWeights) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> weights{nan, 1.0f, 0.0f, -2.0f, 3.0f, nan, 4.0f, 0.5f};
     const std::vector<int64_t> positive{1, 4, 6, 7};
     const auto w = Tensor::from_vector(weights, TensorShape({weights.size()}), Device::CUDA);
-    for (const bool compact : {false, true}) {
-        SCOPED_TRACE(compact ? "compact" : "dense");
-        auto picks = Tensor::empty({positive.size()}, Device::CUDA, DataType::Int64);
-        GumbelTopKScratch scratch;
-        mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), weights.size(), positive.size(), 0x5eedULL,
-                                          picks.ptr<int64_t>(), nullptr, compact, &scratch);
-        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-        auto values = picks.cpu().to_vector_int64();
-        std::sort(values.begin(), values.end());
-        EXPECT_EQ(values, positive);
-    }
+    auto picks = Tensor::empty({positive.size()}, Device::CUDA, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), weights.size(), positive.size(), 0x5eedULL,
+                                      picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto values = picks.cpu().to_vector_int64();
+    std::sort(values.begin(), values.end());
+    EXPECT_EQ(values, positive);
 }
 
-TEST(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
-    GumbelTopKScratch gumbel;
-    gumbel.ensure_n(128, Device::CUDA);
-    EXPECT_GT(gumbel.resident_bytes(), 0u);
-    gumbel.release();
-    EXPECT_EQ(gumbel.resident_bytes(), 0u);
-    EXPECT_FALSE(gumbel.indices.is_valid());
+// More picks than positive weights: the rest tie at the lowest key and go
+// to the lowest rows, after every positive row.
+TEST(DensifyEvents4x, GumbelTiesAtTheThresholdTakeTheLowestRows) {
+    const std::vector<float> weights{0.0f, 2.0f, 0.0f, 0.0f, 5.0f, 0.0f, 1.0f, 0.0f};
+    const auto w = Tensor::from_vector(weights, TensorShape({weights.size()}), Device::CUDA);
+    auto picks = Tensor::empty({5}, Device::CUDA, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), weights.size(), 5, 11, picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto values = picks.cpu().to_vector_int64();
+    std::vector<int64_t> positive(values.begin(), values.begin() + 3);
+    std::sort(positive.begin(), positive.end());
+    EXPECT_EQ(positive, (std::vector<int64_t>{1, 4, 6}));
+    EXPECT_EQ(values[3], 0);
+    EXPECT_EQ(values[4], 2);
+}
+
+TEST(DensifyEvents4x, GumbelLargeSelectionIsUniqueAndPositive) {
+    constexpr size_t n = size_t{3} << 20;
+    constexpr size_t k = size_t{1} << 20;
+    std::vector<float> weights(n);
+    for (size_t i = 0; i < n; ++i)
+        weights[i] = i % 3 == 1 ? 0.0f : 1.0f + static_cast<float>((i * 2654435761u) % 997);
+    const auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto picks = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, 99, picks.ptr<int64_t>());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto values = picks.cpu().to_vector_int64();
+    for (const int64_t v : values)
+        ASSERT_GT(weights[static_cast<size_t>(v)], 0.0f);
+    std::sort(values.begin(), values.end());
+    EXPECT_EQ(std::adjacent_find(values.begin(), values.end()), values.end());
+}
+
+TEST(DensifyEvents4x, KthLargestMatchesASortOverIncludedRows) {
+    constexpr size_t n = size_t{1} << 20;
+    std::vector<float> values(n);
+    std::vector<float> included_values;
+    std::vector<float> include_flags(n);
+    for (size_t i = 0; i < n; ++i) {
+        // Few distinct values, so the threshold is shared by many rows.
+        values[i] = static_cast<float>(static_cast<int>((i * 2654435761u) % 4001) - 2000) * 0.25f;
+        include_flags[i] = (i % 5 != 0) ? 1.0f : 0.0f;
+        if (include_flags[i] != 0.0f)
+            included_values.push_back(values[i]);
+    }
+    std::sort(included_values.begin(), included_values.end(), std::greater<float>());
+    const auto v = Tensor::from_vector(values, TensorShape({n}), Device::CUDA);
+    const auto include = Tensor::from_vector(include_flags, TensorShape({n}), Device::CUDA) > 0.5f;
+    for (const size_t k : {size_t{1}, size_t{777}, included_values.size() / 2, included_values.size()}) {
+        SCOPED_TRACE(k);
+        EXPECT_EQ(mrnf_strategy::launch_kth_largest(v.ptr<float>(), include.ptr<bool>(), n, k),
+                  included_values[k - 1]);
+    }
+    std::vector<float> all = values;
+    std::sort(all.begin(), all.end(), std::greater<float>());
+    EXPECT_EQ(mrnf_strategy::launch_kth_largest(v.ptr<float>(), nullptr, n, 12345), all[12344]);
 }
 
 TEST(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
@@ -462,4 +456,31 @@ TEST(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
     ensure_densification_info_shape_inplace(info, 40, Device::CUDA);
     EXPECT_EQ(info.shape()[1], 40u);
     EXPECT_NE(info.ptr<float>(), p0); // reallocated for new N
+}
+
+TEST(DensifyEvents4x, DensificationInfoLayoutChangeKeepsTheErrorRow) {
+    constexpr size_t n = 6;
+    const std::vector<float> weight = {1, 2, 3, 4, 5, 6};
+    const std::vector<float> error = {0.5f, 0.f, 7.f, 0.25f, 9.f, 1.f};
+    std::vector<float> rows = weight;
+    rows.insert(rows.end(), error.begin(), error.end());
+    Tensor info = Tensor::from_vector(rows, {2, n}, Device::CUDA);
+
+    ensure_densification_info_shape_inplace(info, n, Device::CUDA, 1);
+    ASSERT_EQ(info.ndim(), 1u);
+    ASSERT_EQ(info.shape()[0], n);
+    EXPECT_EQ(to_host(info), error);
+    float* const single = info.ptr<float>();
+    ensure_densification_info_shape_inplace(info, n, Device::CUDA, 1);
+    EXPECT_EQ(info.ptr<float>(), single);
+
+    ensure_densification_info_shape_inplace(info, n, Device::CUDA);
+    ASSERT_EQ(info.ndim(), 2u);
+    ASSERT_EQ(info.shape()[0], 2u);
+    const auto both = to_host(info);
+    EXPECT_EQ(std::vector<float>(both.begin(), both.begin() + n), std::vector<float>(n, 0.f));
+    EXPECT_EQ(std::vector<float>(both.begin() + n, both.end()), error);
+
+    ensure_densification_info_shape_inplace(info, n + 2, Device::CUDA, 1);
+    EXPECT_EQ(to_host(info), std::vector<float>(n + 2, 0.f));
 }

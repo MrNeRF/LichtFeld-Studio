@@ -57,7 +57,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* __restrict__ grad_opacity_helper,
         float3* __restrict__ grad_color_helper,
         float4* __restrict__ grad_w2c,
-        float* __restrict__ densification_info,
+        float* __restrict__ densification_weight,
+        float* __restrict__ densification_error,
         const uint n_primitives,
         const float w,
         const float h,
@@ -538,9 +539,10 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         } // contribution geometry
 
-        if (visible && densification_info != nullptr) {
-            densification_info[primitive_idx] += 1.0f;
-            densification_info[n_primitives + primitive_idx] += length(grad_mean2d[work_idx] * make_float2(0.5f * w, 0.5f * h));
+        if (visible && densification_error != nullptr) {
+            if (densification_weight != nullptr)
+                densification_weight[primitive_idx] += 1.0f;
+            densification_error[primitive_idx] += length(grad_mean2d[work_idx] * make_float2(0.5f * w, 0.5f * h));
         }
 
         if constexpr (DISABLED_FEATURES) {
@@ -646,7 +648,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3* __restrict__ grad_normal,
         float* __restrict__ grad_compensated_opacity,
         float3* __restrict__ grad_color,
-        float* __restrict__ densification_info,
+        float* __restrict__ densification_weight,
+        float* __restrict__ densification_error,
         const float* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
         float* __restrict__ edge_score_out,
@@ -782,15 +785,19 @@ namespace fast_lfs::rasterization::kernels::backward {
         constexpr int kUColor = 1;
         constexpr int kUDepth = 4;
         constexpr int kUNormal = 5;
+        // MRNF sums weight and error; MCMC reads the error row alone.
+        constexpr int kDensificationFields = DENSIFICATION_TYPE == DensificationType::MRNF   ? 2
+                                             : DENSIFICATION_TYPE == DensificationType::MCMC ? 1
+                                                                                             : 0;
         constexpr int kUDensification = kUNormal + (NORMAL_CHANNEL ? 3 : 0);
-        constexpr int kUEdge = kUDensification + (DENSIFICATION_TYPE != DensificationType::None ? 2 : 0);
+        constexpr int kUEdge = kUDensification + kDensificationFields;
         constexpr int kUImpact = kUEdge + 1;
         constexpr int kU = kUImpact + (IMPACT_SCORE ? 1 : 0);
         // Output field ids of the accumulation targets.
         constexpr int kFieldMeanX = 0, kFieldMeanY = 1, kFieldConicX = 2, kFieldConicY = 3, kFieldConicZ = 4;
         constexpr int kFieldDepth = 5, kFieldOpacity = 6, kFieldColor = 7, kFieldNormal = 10;
         constexpr int kFieldDensification = kFieldNormal + (NORMAL_CHANNEL ? 3 : 0);
-        constexpr int kFieldEdge = kFieldDensification + (DENSIFICATION_TYPE != DensificationType::None ? 2 : 0);
+        constexpr int kFieldEdge = kFieldDensification + kDensificationFields;
         constexpr int kFieldImpact = kFieldEdge + 1;
         auto u_field = [](const int u) {
             if (u == kUConicZ)
@@ -825,7 +832,10 @@ namespace fast_lfs::rasterization::kernels::backward {
             else if (field < kFieldDensification)
                 target_ptr = reinterpret_cast<float*>(grad_normal) + 3 * row + field - kFieldNormal;
             else if (field < kFieldEdge)
-                target_ptr = densification_info + static_cast<size_t>(field - kFieldDensification) * n_primitives + primitive;
+                target_ptr = (DENSIFICATION_TYPE == DensificationType::MRNF && field == kFieldDensification
+                                  ? densification_weight
+                                  : densification_error) +
+                             primitive;
             else if (field == kFieldEdge)
                 target_ptr = edge_score_out != nullptr ? edge_score_out + primitive : nullptr;
             else
@@ -913,9 +923,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                     sums.u[kUNormal + 1] += w * pixel_grad_normal.y;
                     sums.u[kUNormal + 2] += w * pixel_grad_normal.z;
                 }
-                if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
+                if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
                     sums.u[kUDensification] += w;
                     sums.u[kUDensification + 1] += w * pixel_error[k];
+                } else if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
+                    sums.u[kUDensification] += w * pixel_error[k];
                 }
                 sums.u[kUEdge] += w * edge_weight[k];
                 if constexpr (IMPACT_SCORE) {

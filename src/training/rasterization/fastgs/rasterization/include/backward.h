@@ -46,7 +46,8 @@ namespace fast_lfs::rasterization {
         float* grad_depth_helper,
         float3* grad_normal_helper, // [N] or nullptr, required when grad_normal != nullptr
         float4* grad_w2c,
-        float* densification_info,
+        float* densification_weight, // [N] or nullptr
+        float* densification_error,  // [N] or nullptr
         const int n_primitives,
         const int n_instances,
         const int n_visible,

@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3D-Maus",
+  "preferences.space_mouse_enabled": "Aktiviert",
+  "preferences.space_mouse_translation_speed": "Verschiebungsgeschwindigkeit",
+  "preferences.space_mouse_rotation_speed": "Drehgeschwindigkeit",
+  "preferences.space_mouse_keep_horizon": "Horizont waagerecht halten",
+  "preferences.space_mouse_none": "Keine 3D-Maus gefunden",
+  "preferences.space_mouse_connected": "{name} über {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: hidraw-Zugriff mit einer udev-Regel erlauben oder spacenavd starten.",
+  "preferences.space_mouse_buttons_hint": "Compact: Die rechte Taste zentriert die Auswahl oder Szene; die linke Taste kehrt zur Ausgangsansicht zurück.",
   "gamepad.left_stick": "Linker Stick",
   "gamepad.right_stick": "Rechter Stick",
   "gamepad.triggers": "Trigger",

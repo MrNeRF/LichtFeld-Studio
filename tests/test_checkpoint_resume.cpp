@@ -217,13 +217,18 @@ namespace {
         auto& manager = lfs::core::GlobalArenaManager::instance();
         manager.reconfigure_for_testing(config);
 
+        // The 4 KiB inputs are never read: the first FastGS allocation, the
+        // visibility buffers, holds at least 4 bytes per primitive and must
+        // already exceed the 64 MiB arena.
+        constexpr int primitives = 40'000'000;
+        static_assert(std::size_t{primitives} * sizeof(std::uint32_t) > 2 * (64ULL << 20));
         const auto attempt = [storage] {
             auto* ptr = static_cast<float*>(storage);
             return fast_lfs::rasterization::forward_raw(
                 ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr,
                 ptr, ptr, ptr, nullptr,
                 /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
-                10'000'000, 1, 1, 1, 1,
+                primitives, 1, 1, 1, 1,
                 1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
         };
 
@@ -1935,6 +1940,8 @@ namespace {
             const size_t stop_refine = static_cast<size_t>(iterations);
             params.optimization.start_refine = std::min<size_t>(500, stop_refine);
             params.optimization.stop_refine = stop_refine;
+            // Phase two resumes from a checkpoint the final save superseded.
+            params.optimization.keep_all_checkpoints = true;
             return params;
         }
 

@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "Ratón 3D",
+  "preferences.space_mouse_enabled": "Activado",
+  "preferences.space_mouse_translation_speed": "Velocidad de traslación",
+  "preferences.space_mouse_rotation_speed": "Velocidad de rotación",
+  "preferences.space_mouse_keep_horizon": "Mantener el horizonte nivelado",
+  "preferences.space_mouse_none": "No se ha encontrado ningún ratón 3D",
+  "preferences.space_mouse_connected": "{name} mediante {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: permite el acceso a hidraw con una regla udev o inicia spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact: el botón derecho encuadra la selección o la escena; el izquierdo vuelve a la vista de inicio.",
   "gamepad.left_stick": "Stick izquierdo",
   "gamepad.right_stick": "Stick derecho",
   "gamepad.triggers": "Gatillos",

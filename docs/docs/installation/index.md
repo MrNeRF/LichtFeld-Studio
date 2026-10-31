@@ -8,6 +8,8 @@ Windows binaries are available from the project's [GitHub Releases](https://gith
 
 For source builds and platform-specific instructions, see the [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/) and the repo-local docs in [docs/README.md](../../README.md).
 
+For SpaceMouse permissions, driver setup, and controls, see [3D mouse navigation](../features/3d-mouse.md).
+
 ## Windows Defender detections
 
 If Defender quarantines a binary such as `lfs_core.dll`, record the detection name,

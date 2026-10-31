@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "Mysz 3D",
+  "preferences.space_mouse_enabled": "Włączona",
+  "preferences.space_mouse_translation_speed": "Szybkość przesuwania",
+  "preferences.space_mouse_rotation_speed": "Szybkość obrotu",
+  "preferences.space_mouse_keep_horizon": "Utrzymuj poziomy horyzont",
+  "preferences.space_mouse_none": "Nie znaleziono myszy 3D",
+  "preferences.space_mouse_connected": "{name} przez {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: zezwól na dostęp do hidraw za pomocą reguły udev lub uruchom spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact: prawy przycisk kadruje zaznaczenie lub scenę, a lewy przywraca widok początkowy.",
   "gamepad.left_stick": "Lewy drążek",
   "gamepad.right_stick": "Prawy drążek",
   "gamepad.triggers": "Spusty",

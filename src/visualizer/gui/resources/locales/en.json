@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3D mouse",
+  "preferences.space_mouse_enabled": "Enabled",
+  "preferences.space_mouse_translation_speed": "Translation speed",
+  "preferences.space_mouse_rotation_speed": "Rotation speed",
+  "preferences.space_mouse_keep_horizon": "Keep horizon level",
+  "preferences.space_mouse_none": "No 3D mouse found",
+  "preferences.space_mouse_connected": "{name} via {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: allow hidraw access with a udev rule, or start spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact: right button frames the selection or scene; left button returns to Home.",
   "gamepad.left_stick": "Left stick",
   "gamepad.right_stick": "Right stick",
   "gamepad.triggers": "Triggers",

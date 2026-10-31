@@ -5,6 +5,7 @@
 import lichtfeld as lf
 import threading
 import shutil
+import sys
 
 from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
 from .asset_watch import scan_all_asset_folders, scan_asset_folder
@@ -85,6 +86,8 @@ class PreferencesPanel(Panel):
     SPEED_SCRUB_FIELD_DEFS = {
         "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "space_mouse_translation_speed": ScrubFieldSpec(0.1, 5.0, 0.1, "%.1f"),
+        "space_mouse_rotation_speed": ScrubFieldSpec(0.1, 5.0, 0.1, "%.1f"),
         **{f"theme_vignette_{name}": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f")
            for name in ("intensity", "radius", "softness")},
         "vr_resolution_scale": ScrubFieldSpec(0.25, 1.5, 0.05, "%.2f"),
@@ -109,6 +112,7 @@ class PreferencesPanel(Panel):
         "appearance",
         "scene_rendering",
         "navigation",
+        "space_mouse",
         "view_snap",
         "key_bindings",
         "interface",
@@ -265,6 +269,13 @@ class PreferencesPanel(Panel):
             lf.ui.get_navigation_speed_preference,
             self._set_navigation_speed,
         )
+        for key in ("enabled", "translation_speed", "rotation_speed", "keep_horizon"):
+            model.bind("space_mouse_" + key,
+                       lambda k=key: lf.ui.get_space_mouse_preferences()[k],
+                       lambda value, k=key: self._set_space_mouse_preference(k, value))
+        model.bind_func("space_mouse_status", self._space_mouse_status_text)
+        model.bind_func("space_mouse_linux_hint", lambda: sys.platform.startswith("linux")
+                        and not lf.ui.get_space_mouse_status()["connected"])
         model.bind("camera_browse_repeat", lf.ui.get_camera_browse_repeat,
                    self._set_camera_browse_repeat)
         model.bind("camera_browse_repeat_rate", self._get_camera_repeat_rate_draft,
@@ -484,6 +495,8 @@ class PreferencesPanel(Panel):
             lf.get_new_project_align_grid(),
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
+            tuple(lf.ui.get_space_mouse_preferences().values()),
+            tuple(lf.ui.get_space_mouse_status().values()),
             lf.ui.get_camera_browse_repeat(),
             float(lf.ui.get_camera_browse_repeat_rate()),
             lf.get_camera_view_snap_enabled(),
@@ -921,6 +934,19 @@ class PreferencesPanel(Panel):
         lf.ui.set_navigation_speed_preference(float(value))
         self._refresh_selection()
 
+    def _set_space_mouse_preference(self, key, value):
+        value = bool(value) if key in ("enabled", "keep_horizon") else float(value)
+        lf.ui.set_space_mouse_preferences({key: value})
+        self._refresh_selection()
+
+    @staticmethod
+    def _space_mouse_status_text():
+        status = lf.ui.get_space_mouse_status()
+        if not status["connected"]:
+            return lf.ui.tr("preferences.space_mouse_none")
+        return lf.ui.tr("preferences.space_mouse_connected").replace(
+            "{name}", status["name"]).replace("{backend}", status["backend"])
+
     def _set_camera_browse_repeat(self, value):
         lf.ui.set_camera_browse_repeat(bool(value))
         self._refresh_selection()
@@ -959,6 +985,8 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def _get_scrub_value(self, prop):
+        if prop.startswith("space_mouse_"):
+            return float(lf.ui.get_space_mouse_preferences()[prop.removeprefix("space_mouse_")])
         if prop.startswith("theme_vignette_"):
             return float(vignette_value(prop.removeprefix("theme_vignette_")))
         if prop == "zoom_speed":
@@ -970,6 +998,11 @@ class PreferencesPanel(Panel):
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
+        if prop.startswith("space_mouse_"):
+            lf.ui.set_space_mouse_preferences({prop.removeprefix("space_mouse_"): float(value)}, persist=False)
+            if self._handle:
+                self._handle.dirty(prop)
+            return
         if prop.startswith("theme_vignette_"):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value, persist=False)
             if self._handle:
@@ -985,6 +1018,9 @@ class PreferencesPanel(Panel):
         self._refresh_selection()
 
     def _commit_scrub_value(self, prop, value):
+        if prop.startswith("space_mouse_"):
+            self._set_space_mouse_preference(prop.removeprefix("space_mouse_"), value)
+            return
         if prop.startswith("theme_vignette_"):
             set_vignette_value(prop.removeprefix("theme_vignette_"), value)
             return
@@ -1876,6 +1912,10 @@ class PreferencesPanel(Panel):
             lf.set_new_project_navigation_defaults("legacy_y", True)
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(10.0)
+            lf.ui.set_space_mouse_preferences({
+                "enabled": True, "translation_speed": 1.0,
+                "rotation_speed": 1.0, "keep_horizon": True,
+            })
             lf.ui.set_camera_browse_repeat(True)
             self._camera_repeat_rate_draft = None
             lf.ui.set_camera_browse_repeat_rate(5.0)
@@ -1923,6 +1963,8 @@ class PreferencesPanel(Panel):
             self._handle.dirty("new_project_align_grid")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
+            for key in ("enabled", "translation_speed", "rotation_speed", "keep_horizon", "status", "linux_hint"):
+                self._handle.dirty("space_mouse_" + key)
             for key in (*self.VR_PREFERENCE_DEFAULTS, "status"):
                 self._handle.dirty("vr_" + key)
             self._handle.dirty("camera_browse_repeat")

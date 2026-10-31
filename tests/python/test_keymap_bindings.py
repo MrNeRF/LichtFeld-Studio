@@ -166,6 +166,8 @@ def _install_lf_stub(monkeypatch):
         started=[],
         cancelled=0,
         section_request="",
+        space_mouse_preferences={"enabled": True, "translation_speed": 1.0,
+                                 "rotation_speed": 1.0, "keep_horizon": True},
         splat_drag_preferences={"format": "ply", "sh_degree": 3, "up_axis": -2},
         mcp_preferences={
             "enabled": True,
@@ -296,6 +298,9 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_camera_view_snap_enabled = lambda: False
     lf_stub.ui = SimpleNamespace(
         get_camera_browse_repeat=lambda: True,
+        get_space_mouse_preferences=lambda: dict(state.space_mouse_preferences),
+        set_space_mouse_preferences=lambda values, persist=True: state.space_mouse_preferences.update(values),
+        get_space_mouse_status=lambda: {"connected": False, "name": "", "backend": ""},
         set_camera_browse_repeat=lambda _enabled: None,
         get_camera_browse_repeat_rate=lambda: 5.0,
         set_camera_browse_repeat_rate=lambda _rate, persist=True: None,

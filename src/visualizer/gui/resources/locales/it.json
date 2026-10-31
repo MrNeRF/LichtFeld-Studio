@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "Mouse 3D",
+  "preferences.space_mouse_enabled": "Abilitato",
+  "preferences.space_mouse_translation_speed": "Velocità di traslazione",
+  "preferences.space_mouse_rotation_speed": "Velocità di rotazione",
+  "preferences.space_mouse_keep_horizon": "Mantieni l’orizzonte orizzontale",
+  "preferences.space_mouse_none": "Nessun mouse 3D trovato",
+  "preferences.space_mouse_connected": "{name} tramite {backend}",
+  "preferences.space_mouse_linux_hint": "Linux: consenti l’accesso a hidraw con una regola udev oppure avvia spacenavd.",
+  "preferences.space_mouse_buttons_hint": "Compact: il pulsante destro inquadra la selezione o la scena; il sinistro torna alla vista iniziale.",
   "gamepad.left_stick": "Stick sinistro",
   "gamepad.right_stick": "Stick destro",
   "gamepad.triggers": "Grilletti",

@@ -648,7 +648,9 @@ namespace lfs::io::project {
                 item.sh_range = true;
                 source.push_back(std::move(item));
             } else {
-                source.push_back(describe(2, model.shN_canonical().contiguous()));
+                // Quantized SH decodes on the host; uploading it only to copy
+                // it back would take 180 bytes of VRAM per Gaussian at SH3.
+                source.push_back(describe(2, model.shN_canonical_cpu()));
             }
             source.push_back(describe(3, model.scaling_raw().contiguous()));
             source.push_back(describe(4, model.rotation_raw().contiguous()));

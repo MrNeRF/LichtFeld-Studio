@@ -1073,6 +1073,36 @@ namespace lfs::vis {
         impl_->values["camera_browse_repeat"] = enabled;
         impl_->saveLocked();
     }
+
+    void UserPreferences::setSpaceMouse(const SpaceMousePreferenceState& state, const bool persist) {
+        const std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto speed = [](const float value) {
+            return std::isfinite(value) ? std::clamp(value, 0.1f, 5.0f) : 1.0f;
+        };
+        impl_->values["space_mouse"] = {
+            {"enabled", state.enabled},
+            {"translation_speed", speed(state.translation_speed)},
+            {"rotation_speed", speed(state.rotation_speed)},
+            {"keep_horizon", state.keep_horizon}};
+        if (persist)
+            impl_->saveLocked();
+    }
+
+    SpaceMousePreferenceState UserPreferences::spaceMouse() {
+        const std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("space_mouse");
+        if (it == impl_->values.end() || !it->is_object())
+            return {};
+        using lfs::core::persisted_settings::field;
+        const auto speed = [&it](const char* key) {
+            const float value = field<float>(*it, key, 1.0f);
+            return std::isfinite(value) ? std::clamp(value, 0.1f, 5.0f) : 1.0f;
+        };
+        return {field<bool>(*it, "enabled", true), speed("translation_speed"),
+                speed("rotation_speed"), field<bool>(*it, "keep_horizon", true)};
+    }
     bool UserPreferences::cameraBrowseRepeat() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();

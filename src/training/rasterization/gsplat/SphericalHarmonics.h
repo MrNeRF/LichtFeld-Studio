@@ -34,9 +34,12 @@ namespace gsplat_lfs {
         int64_t n_elements,
         int32_t K,
         bool compute_v_dirs,
-        float* v_coeffs, // [..., K, 3] canonical output
+        float* v_coeffs, // [..., K, 3] canonical output, unless grad_sh0 is set
         float* v_dirs,   // [..., 3] optional
         cudaStream_t stream = nullptr,
-        const float* sh_value_bounds = nullptr);
+        const float* sh_value_bounds = nullptr,
+        float* grad_sh0 = nullptr,    // [N, 1, 3]: adds the gradient here instead
+        float* grad_shN = nullptr,    // swizzled FP32 shN gradient, optional
+        uint32_t grad_shN_slots = 0); // float4 slots per primitive of grad_shN
 
 } // namespace gsplat_lfs

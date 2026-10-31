@@ -1,4 +1,13 @@
 {
+  "preferences.space_mouse": "3Dマウス",
+  "preferences.space_mouse_enabled": "有効",
+  "preferences.space_mouse_translation_speed": "移動速度",
+  "preferences.space_mouse_rotation_speed": "回転速度",
+  "preferences.space_mouse_keep_horizon": "水平を維持",
+  "preferences.space_mouse_none": "3Dマウスが見つかりません",
+  "preferences.space_mouse_connected": "{name}（{backend}経由）",
+  "preferences.space_mouse_linux_hint": "Linux：udevルールでhidrawへのアクセスを許可するか、spacenavdを起動してください。",
+  "preferences.space_mouse_buttons_hint": "Compact：右ボタンで選択対象またはシーン全体を表示し、左ボタンでホームビューに戻ります。",
   "gamepad.left_stick": "左スティック",
   "gamepad.right_stick": "右スティック",
   "gamepad.triggers": "トリガー",

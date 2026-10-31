@@ -11,6 +11,7 @@
 #include "input/camera_browse_repeat.hpp"
 #include "input/gamepad_navigation.hpp"
 #include "input/input_bindings.hpp"
+#include "input/space_mouse_device.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -151,6 +152,7 @@ namespace lfs::vis {
             depth_range_initialized_ = true;
         }
         [[nodiscard]] static InputController* instance() { return instance_; }
+        [[nodiscard]] std::optional<input::SpaceMouseConnection> spaceMouseConnection() const;
 
         // Update function for continuous input (WASD movement and inertia)
         void update(float delta_time);
@@ -190,7 +192,7 @@ namespace lfs::vis {
             const bool drone_settling =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
-            return gamepad_frame_demand_ || camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
+            return space_mouse_active_ || gamepad_frame_demand_ || camera_browse_repeat_.active() || movement_active || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool isCameraNavigating() const {
@@ -227,6 +229,12 @@ namespace lfs::vis {
         void resetHome();
 
     private:
+        void updateSpaceMouse(float delta_time);
+        // Wheel zoom of `delta` notches: ortho scale in orthographic views, else toward the pivot.
+        void zoomViewport(Viewport& target, float delta, bool carry_pivot);
+        std::unique_ptr<input::SpaceMouseDevice> space_mouse_;
+        bool space_mouse_active_ = false;
+        glm::vec3 space_mouse_walk_velocity_{0.0f};
         void handleVrKey(int physical_key, int logical_key, int action, int mods, bool gui_owned);
         bool vr_viewing_ = false;
         bool setCameraNavigationModeImpl(CameraNavigationMode mode, bool report_failure, Viewport* target = nullptr);
