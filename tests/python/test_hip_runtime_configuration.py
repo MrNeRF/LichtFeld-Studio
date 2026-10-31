@@ -43,6 +43,24 @@ class HipConfiguration(unittest.TestCase):
                 self.assertIn("--offload-arch=" + architecture, output)
         return output
 
+    def configure_backend_registry(self, directory, settings, prelude=""):
+        self.assertIsNotNone(CMAKE, "CMake is required for configuration tests")
+        (directory / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.30)\n'
+            'project(BackendRegistryContracts LANGUAGES NONE)\n'
+            + settings + '\n' + prelude + '\n'
+            f'include("{(ROOT / "cmake/GpuBackendRegistry.cmake").as_posix()}")\n'
+            'lfs_generate_backend_registry()\n'
+            'lfs_generate_backend_registry()\n'
+            'get_target_property(includes lfs_backend_configuration INTERFACE_INCLUDE_DIRECTORIES)\n'
+            'file(WRITE "${CMAKE_BINARY_DIR}/backend_configuration_includes.txt" "${includes}")\n',
+            encoding="utf-8")
+        build = directory / "build"
+        result = subprocess.run([CMAKE, "-S", str(directory), "-B", str(build), "-G", "Ninja"],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return build
+
     def test_backend_registry_matches_each_build_configuration(self):
         """Registration and public inventory must share the same CMake source."""
         self.assertIsNotNone(CMAKE, "CMake is required for configuration tests")
@@ -51,21 +69,14 @@ class HipConfiguration(unittest.TestCase):
         for mask in range(16):
             enabled = [name for index, name in enumerate(names) if mask & (1 << index)]
             with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as temporary:
-                directory = Path(temporary)
-                script = directory / "registry.cmake"
+                directory = Path(temporary).resolve()
                 settings = "\n".join(f"set({flag} {'ON' if mask & (1 << index) else 'OFF'})"
                                      for index, flag in enumerate(flags))
-                script.write_text(
-                    'cmake_minimum_required(VERSION 3.30)\n'
-                    f'set(CMAKE_BINARY_DIR "{directory.as_posix()}")\n'
-                    + settings + '\n'
-                    f'include("{(ROOT / "cmake/GpuBackendRegistry.cmake").as_posix()}")\n'
-                    'lfs_generate_backend_registry()\n', encoding="utf-8")
-                result = subprocess.run([CMAKE, "-P", str(script)], capture_output=True,
-                                        text=True, timeout=30)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                header = (directory / "include/core/gpu_backend_config.hpp").read_text()
-                source = (directory / "generated_backend_registration.cpp").read_text()
+                build = self.configure_backend_registry(directory, settings)
+                self.assertEqual((build / "backend_configuration_includes.txt").read_text(encoding="utf-8"),
+                                 (build / "include").as_posix())
+                header = (build / "include/core/gpu_backend_config.hpp").read_text(encoding="utf-8")
+                source = (build / "generated_backend_registration.cpp").read_text(encoding="utf-8")
                 compiled = ", ".join(f"GpuBackend::{name}" for name in enabled)
                 self.assertIn(f"kCompiledGpuBackends{{{compiled}}}", header)
                 for name in names:
@@ -76,6 +87,17 @@ class HipConfiguration(unittest.TestCase):
                             (["HIP"] if "HIP" in enabled else ["CUDA"]))
                 expected = ", ".join(f"GpuBackend::{name}" for name in defaults)
                 self.assertIn(f"kDefaultGpuBackends{{{expected}}}", header)
+
+    def test_backend_registry_preserves_an_existing_configuration_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            build = self.configure_backend_registry(
+                directory, "set(LFS_TENSOR_HIP ON)",
+                'add_library(lfs_backend_configuration INTERFACE)\n'
+                'target_include_directories(lfs_backend_configuration INTERFACE '
+                '"${CMAKE_CURRENT_SOURCE_DIR}/existing")')
+            self.assertEqual((build / "backend_configuration_includes.txt").read_text(encoding="utf-8"),
+                             (directory / "existing").as_posix())
 
     def test_explicit_target(self):
         self.configure('set(LFS_HIP_ARCHITECTURE gfx1150)', 'gfx1150')
