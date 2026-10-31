@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -39,6 +40,11 @@ namespace lfs::training {
         std::size_t band_bytes = 64ull * 1024 * 1024;
         std::size_t calibration_bytes = 32ull * 1024 * 1024;
         int calibration_iterations = 4;
+        // Upper bound for the VRAM copy taken inside the pause. Bands that fit
+        // in free VRAM are copied device to device and reach the host after
+        // training resumes; the rest go through the pinned ring.
+        std::uint64_t device_hold_max_bytes =
+            std::numeric_limits<std::uint64_t>::max();
     };
 
     struct TrainingSnapshotCpuStateMetrics {
@@ -52,6 +58,7 @@ namespace lfs::training {
         int iteration = 0;
         std::uint64_t checkpoint_bytes = 0;
         std::uint64_t device_snapshot_bytes = 0;
+        std::uint64_t device_hold_bytes = 0;
         std::uint64_t pinned_peak_bytes = 0;
         std::uint64_t host_staging_bytes = 0;
         std::uint64_t host_rss_delta_bytes = 0;
@@ -157,6 +164,10 @@ namespace lfs::training {
         // Asked for the missing bytes before the host-memory gate defers or
         // rejects the capture; the gate reads host memory again afterwards.
         std::function<void(std::uint64_t)> release_host_memory;
+        // Training continues after the pause, so device bands may wait in
+        // free VRAM and reach the host in the background. A terminal save is
+        // waited on and gains nothing from that; it keeps the lower VRAM peak.
+        bool training_resumes = false;
         // Optional origin for the one optimizer-pause clock. The caller sets
         // this immediately before draining model readers/locks so those waits
         // are included with the service-side stream synchronizations.
