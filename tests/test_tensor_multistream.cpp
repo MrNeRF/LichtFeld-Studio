@@ -368,15 +368,35 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     void* device_buffer = nullptr;
     ASSERT_EQ(cudaMalloc(&device_buffer, kBytes), cudaSuccess);
 
-    h2d_stream.close();
-    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
-              cudaSuccess);
+    // The D2H use finishes before the gate closes. Blocking on CUDA work while the gate's
+    // host function spins can deadlock: on Windows the D2H copy never completed behind it.
     ASSERT_EQ(cudaMemcpyAsync(host_block, device_buffer, kBytes, cudaMemcpyDeviceToHost, d2h_stream),
               cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(d2h_stream), cudaSuccess);
 
+    // A spare cached block lets the allocation made while the gate is closed come from the cache.
+    // A cache miss would call cudaHostAlloc, which CUDA may serialize with the gated stream.
+    void* spare = pinned.allocate(kBytes);
+    ASSERT_NE(spare, nullptr);
+    pinned.deallocate(spare, d2h_stream);
+
+    h2d_stream.close();
+    ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
+              cudaSuccess);
+
     pinned.record_stream(host_block, h2d_stream.get());
     pinned.deallocate(host_block, d2h_stream);
+
+    // Only the gated H2D use may be pending, so wait for the event deallocate recorded on
+    // d2h_stream. Poll with a deadline instead of synchronizing, so a stall fails the test.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    cudaError_t d2h_state = cudaErrorNotReady;
+    while ((d2h_state = cudaStreamQuery(d2h_stream)) == cudaErrorNotReady &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // On failure, ~GateStream releases the gate.
+    ASSERT_EQ(d2h_state, cudaSuccess) << "d2h_stream did not finish while the gate was closed";
 
     // The gated H2D copy is still pending, so the block must not be handed out.
     void* reused = pinned.allocate(kBytes);
