@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from ..process_runner import ProcessCancelled
 from . import probe as probe_mod
 from . import sfm
+from .text import _tr
 from .toolchain import Resolved
 
 STAGE_NAMES = ["toolchain", "extract", "features", "match", "map", "create_project", "train"]
@@ -164,7 +165,8 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         del tail[:-LOG_TAIL_LINES]
 
     def report(stage: str, fraction: float, message: str) -> None:
-        on_progress(stage, fraction, message, "\n".join(tail))
+        log_tail = "\n".join(tail)
+        on_progress(stage, fraction, message, log_tail)
 
     def check_cancel() -> None:
         if should_cancel():
@@ -174,7 +176,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
     colmap: Optional[Resolved] = None
     colmap_pending = any(stage not in done for stage in COLMAP_STAGES)
     if "toolchain" not in done or colmap_pending:
-        report("toolchain", 0.0, "Locating COLMAP")
+        report("toolchain", 0.0, _tr("video_to_splat.progress.locating_colmap", "Locating COLMAP"))
         colmap = hooks.resolve_colmap(lambda msg: report("toolchain", 0.0, msg))
         if "toolchain" not in done:
             state.mark("toolchain", colmap=str(colmap.path), version=list(colmap.version))
@@ -190,31 +192,37 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         probe_root = request.project if request.project.exists() else request.project.parent
         free = hooks.free_bytes(probe_root)
         if free < LOW_DISK_BYTES:
-            report("extract", 0.0, f"Only {free / 1024 ** 3:.1f} GB free on the destination; frames need several GB")
+            report("extract", 0.0, _tr("video_to_splat.progress.low_disk",
+                                       "Only {free_gb} GB free on the destination; frames need several GB",
+                                       free_gb=f"{free / 1024 ** 3:.1f}"))
         if images.exists():
             shutil.rmtree(images)
         images.mkdir(parents=True, exist_ok=True)
         params = ExtractParams(video=request.video, dataset=request.dataset, fps=preset.fps,
                                scale=probe_mod.plan_frame_scale(int(info.get("width", 0) or 0), preset.max_width),
                                rotation=0)
-        report("extract", 0.0, "Extracting frames")
+        report("extract", 0.0, _tr("video_to_splat.progress.extracting", "Extracting frames"))
 
         def extract_progress(current: int, total: int, discarded: int) -> None:
             fraction = current / total if total else 0.0
-            report("extract", fraction, f"Frame {current}/{total}, {discarded} discarded as blurry")
+            report("extract", fraction, _tr("video_to_splat.progress.extract_frame",
+                                            "Frame {current}/{total}, {discarded} discarded as blurry",
+                                            current=current, total=total, discarded=discarded))
 
         result = hooks.extract(params, extract_progress, should_cancel)
         outcome = result.get("outcome")
         if outcome == "cancelled":
             raise PipelineCancelled()
         if outcome != "completed":
-            raise PipelineError(f"Frame extraction failed: {result.get('error') or 'unknown error'}")
+            raise PipelineError(_tr("video_to_splat.error.extract_failed", "Frame extraction failed: {error}",
+                                    error=result.get("error") or "unknown error"))
         frames = _count_frames(images)
         if frames < MIN_FRAMES:
-            raise PipelineError(
-                f"Only {frames} usable frames were extracted; at least {MIN_FRAMES} are needed. "
-                "Raise the frame rate or lower the sharpness threshold."
-            )
+            raise PipelineError(_tr(
+                "video_to_splat.error.too_few_frames",
+                "Only {frames} usable frames were extracted; at least {minimum} are needed. "
+                "Raise the frame rate or lower the sharpness threshold.",
+                frames=frames, minimum=MIN_FRAMES))
         state.frames = frames
         state.mark("extract", frames=frames)
         state.save(request.project)
@@ -237,20 +245,20 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
                     shutil.rmtree(sparse)
                 sparse.mkdir(parents=True, exist_ok=True)
             tool = cmd[1]
-            report(stage, 0.0, f"Running COLMAP {tool}")
+            report(stage, 0.0, _tr("video_to_splat.progress.running_colmap", "Running COLMAP {tool}", tool=tool))
 
             def on_output(line: str, _stage: str = stage, _tool: str = tool) -> None:
                 log(line)
-                report(_stage, 0.0, f"COLMAP {_tool}")
+                report(_stage, 0.0, _tr("video_to_splat.progress.colmap", "COLMAP {tool}", tool=_tool))
 
             try:
                 completed = hooks.run(cmd, on_output, should_cancel)
             except ProcessCancelled:
                 raise PipelineCancelled()
             if completed.returncode != 0:
-                raise PipelineError(
-                    f"COLMAP {tool} failed with exit code {completed.returncode}.\n" + "\n".join(tail[-10:])
-                )
+                summary = _tr("video_to_splat.error.colmap_failed", "COLMAP {tool} failed with exit code {code}.",
+                              tool=tool, code=completed.returncode)
+                raise PipelineError(summary + "\n" + "\n".join(tail[-10:]))
             state.mark(stage)
             state.save(request.project)
             check_cancel()
@@ -258,7 +266,8 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
     # choose model, judge quality
     best = sfm.find_largest_model(sparse)
     if best is None:
-        raise PipelineError("COLMAP produced no reconstruction. The footage may lack overlap or texture.")
+        raise PipelineError(_tr("video_to_splat.error.no_model",
+                                "COLMAP produced no reconstruction. The footage may lack overlap or texture."))
     model_dir, registered = best
     state.registered = registered
     state.model_dir = str(model_dir)
@@ -278,16 +287,17 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
     state.save(request.project)
 
     if "create_project" not in done:
-        report("create_project", 0.0, "Creating project")
+        report("create_project", 0.0, _tr("video_to_splat.progress.creating_project", "Creating project"))
         hooks.create_project(request.project, request.dataset, sfm.IMAGES_DIR)
         state.mark("create_project")
         state.save(request.project)
     check_cancel()
 
     if "train" not in done:
-        report("train", 0.0, "Starting training")
+        report("train", 0.0, _tr("video_to_splat.progress.starting_training", "Starting training"))
         hooks.train()
         state.mark("train")
         state.save(request.project)
-    report("train", 1.0, f"Done: {registered}/{state.frames} frames registered")
+    report("train", 1.0, _tr("video_to_splat.progress.done", "Done: {registered}/{total} frames registered",
+                             registered=registered, total=state.frames))
     return state

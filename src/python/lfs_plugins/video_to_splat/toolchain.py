@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from .text import _tr
+
 COLMAP_VERSION = "4.2.1"
 COLMAP_WINDOWS_URL = (
     f"https://github.com/colmap/colmap/releases/download/{COLMAP_VERSION}/colmap-x64-windows-cuda.zip"
@@ -68,12 +70,13 @@ def _check_binary(path: Path, run_version: Callable[[list[str]], str]) -> Resolv
     text = run_version([str(path), "help"])
     version = parse_version(text)
     if version is None:
-        raise ToolchainError(f"'{path}' did not report a COLMAP version. Is it a COLMAP executable?")
+        raise ToolchainError(_tr("video_to_splat.error.not_colmap",
+                                 "'{path}' did not report a COLMAP version. Is it a COLMAP executable?", path=path))
     if version < MIN_VERSION:
-        raise ToolchainError(
-            f"COLMAP {version_string(version)} at '{path}' is too old. "
-            f"Version {version_string(MIN_VERSION)} or later is needed for 360 cameras."
-        )
+        raise ToolchainError(_tr(
+            "video_to_splat.error.colmap_too_old",
+            "COLMAP {found} at '{path}' is too old. Version {minimum} or later is needed for 360 cameras.",
+            found=version_string(version), path=path, minimum=version_string(MIN_VERSION)))
     return Resolved(path=path, version=version)
 
 
@@ -104,7 +107,8 @@ def extract_archive(archive: Path, dest: Path) -> None:
         for name in names:
             parts = name.replace("\\", "/").split("/")
             if name.startswith(("/", "\\")) or ":" in parts[0] or any(part in ("..", "") for part in parts):
-                raise ToolchainError(f"Archive entry escapes destination: {name}")
+                raise ToolchainError(_tr("video_to_splat.error.archive_escape",
+                                         "Archive entry escapes destination: {name}", name=name))
         top_levels = {n.split("/", 1)[0] for n in names}
         prefix = ""
         if len(top_levels) == 1 and all("/" in n for n in names):
@@ -113,7 +117,8 @@ def extract_archive(archive: Path, dest: Path) -> None:
             relative = name[len(prefix):] if prefix else name
             target = (dest / relative).resolve()
             if target != dest_resolved and dest_resolved not in target.parents:
-                raise ToolchainError(f"Archive entry escapes destination: {name}")
+                raise ToolchainError(_tr("video_to_splat.error.archive_escape",
+                                         "Archive entry escapes destination: {name}", name=name))
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(name) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
@@ -129,10 +134,10 @@ def _download_windows_build(cache_dir: Path, download: DownloadFn, on_progress: 
         download(COLMAP_WINDOWS_URL, archive, on_progress)
         actual = _sha256_of(archive)
         if actual.lower() != COLMAP_WINDOWS_SHA256.lower():
-            raise ToolchainError(
+            raise ToolchainError(_tr(
+                "video_to_splat.error.hash_mismatch",
                 "The downloaded COLMAP archive failed its SHA-256 check and was discarded. "
-                "Try again, or install COLMAP manually and set its path in preferences."
-            )
+                "Try again, or install COLMAP manually and set its path in preferences."))
         if target_dir.exists():
             shutil.rmtree(target_dir)
         extract_archive(archive, target_dir)
@@ -141,7 +146,8 @@ def _download_windows_build(cache_dir: Path, download: DownloadFn, on_progress: 
     exe = cached_binary_path(cache_dir, "win32")
     if not exe.is_file():
         shutil.rmtree(target_dir, ignore_errors=True)
-        raise ToolchainError(f"The COLMAP archive did not contain {COLMAP_WINDOWS_EXE_RELATIVE.name}.")
+        raise ToolchainError(_tr("video_to_splat.error.archive_missing_exe",
+                                 "The COLMAP archive did not contain {name}.", name=COLMAP_WINDOWS_EXE_RELATIVE.name))
     return exe
 
 
@@ -160,7 +166,8 @@ def resolve_colmap(
     if configured_path:
         path = Path(configured_path)
         if not path.is_file():
-            raise ToolchainError(f"The configured COLMAP path does not exist: {path}")
+            raise ToolchainError(_tr("video_to_splat.error.configured_path_missing",
+                                     "The configured COLMAP path does not exist: {path}", path=path))
         return _check_binary(path, run_version)
 
     cached = cached_binary_path(cache_dir, platform)
@@ -172,18 +179,19 @@ def resolve_colmap(
         return _check_binary(Path(found), run_version)
 
     if not platform.startswith("win"):
-        raise ToolchainError(
-            f"COLMAP {version_string(MIN_VERSION)} or later was not found on PATH. "
-            "Install COLMAP or set its path in the Video to Splat preferences."
-        )
+        raise ToolchainError(_tr(
+            "video_to_splat.error.not_on_path",
+            "COLMAP {minimum} or later was not found on PATH. "
+            "Install COLMAP or set its path in the Video to Splat preferences.",
+            minimum=version_string(MIN_VERSION)))
 
     if not request_consent():
-        raise ToolchainError(
+        raise ToolchainError(_tr(
+            "video_to_splat.error.download_declined",
             "COLMAP is needed to solve camera poses and the download was declined. "
-            "Allow the download, or install COLMAP 4.1+ and set its path in preferences."
-        )
+            "Allow the download, or install COLMAP 4.1+ and set its path in preferences."))
     if download is None:
-        raise ToolchainError("No downloader is available for COLMAP.")
+        raise ToolchainError(_tr("video_to_splat.error.no_downloader", "No downloader is available for COLMAP."))
     exe = _download_windows_build(cache_dir, download, on_progress)
     return _check_binary(exe, run_version)
 
