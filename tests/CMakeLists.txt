@@ -1662,6 +1662,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rml_section_toggle.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_process_runner.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_planning.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_reveal_license.py
