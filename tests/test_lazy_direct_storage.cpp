@@ -412,3 +412,17 @@ TEST(LazyDirectStorage, NoCommitAheadIntoArenaOwedMemory) {
     arena.end_frame(frame, nullptr);
     EXPECT_EQ(arena.get_memory_info().recommit_bytes, size_t{0});
 }
+
+TEST(LazyDirectStorage, ReclaimKeepsLiveRowsInPartialFinalPage) {
+    constexpr size_t initial_bytes = 14 * kMiB;
+    constexpr size_t live_bytes = 16 * kMiB + 1024;
+    constexpr size_t capacity_bytes = 16 * kMiB + 4096;
+    auto tensor = Tensor::zeros_direct({initial_bytes / sizeof(float)},
+                                      capacity_bytes / sizeof(float), Device::CUDA);
+    tensor.append_zeros((live_bytes - initial_bytes) / sizeof(float));
+    ASSERT_GE(tensor.committed_rows(), tensor.numel());
+    release_lazy_direct_storage_ahead();
+    EXPECT_GE(tensor.committed_rows(), tensor.numel()) << "Reclaim unmapped live rows";
+    tensor.fill_(1.0f);
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}

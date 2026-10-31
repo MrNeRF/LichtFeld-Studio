@@ -175,9 +175,10 @@ namespace lfs::core {
 
     std::size_t LazyDeviceStorage::release_ahead_locked() {
         const std::size_t granularity = buffer_.granularity_bytes();
-        const std::size_t keep = std::min(
-            reserved_bytes_,
-            (requested_bytes_ + kPaddingBytes + granularity - 1) / granularity * granularity);
+        // The logical reservation can end inside a physical page. Clamp before
+        // rounding so decommit_tail's alignment cannot discard live tail rows.
+        const std::size_t padded = std::min(reserved_bytes_, requested_bytes_ + kPaddingBytes);
+        const std::size_t keep = (padded + granularity - 1) / granularity * granularity;
         const std::size_t before = buffer_.committed_bytes();
         if (before <= keep) {
             return 0;
