@@ -10,4 +10,8 @@ namespace lfs::core::cuda {
                                   const float* scales, const float* rotations,
                                   float* out_scales, float* out_rotations,
                                   std::size_t count, cudaStream_t stream);
+    // Per-axis min/max over finite rows that `deleted` (nullable) keeps, reduced
+    // into six device words of `scratch`. False when no row qualifies.
+    bool splat_position_bounds(const float* means, const unsigned char* deleted, std::size_t count,
+                               unsigned* scratch, float out_min[3], float out_max[3], cudaStream_t stream);
 }
