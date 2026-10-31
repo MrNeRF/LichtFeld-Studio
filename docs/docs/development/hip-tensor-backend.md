@@ -208,17 +208,24 @@ enable a complete HIP training configuration.
 Scale regularization computes `weight * mean(exp(raw))`; opacity regularization
 computes `weight * mean(sigmoid(raw))`. Both optionally accumulate into an
 existing gradient. The opacity derivative uses
-`exp(-abs(raw)) / (1 + exp(-abs(raw)))^2`, retaining small gradients for saturated
-finite logits. All expressions, reductions, allocation and queue ordering use
-Tensor's HIP implementation, without host scalar readbacks or a CUDA dependency.
+`exp(-abs(raw)) / (1 + exp(-abs(raw)))^2`, avoiding cancellation when the sigmoid
+has rounded to one, subject to Float32 range. All expressions, reductions,
+allocation and queue ordering use Tensor's HIP implementation, without host
+scalar readbacks or a CUDA dependency.
 
 Bindings must be contiguous Float32 HIP tensors. The loss has one element; an
 optional gradient has the parameter's shape. Parameter, gradient and loss ranges
 must not overlap, while disjoint views of the same allocation are accepted.
-Empty parameters and zero weight leave the outputs unchanged. The caller's
-reduction scratch is not used or modified by this Tensor-based implementation.
-Invalid bindings are rejected before output writes. Temporary backend scopes are
-restored before returning.
+Empty parameters and zero weight leave the outputs unchanged. This implementation
+does not access the reduction-scratch argument; aliasing it with an output does
+not protect that output's underlying storage from writes. Invalid bindings are
+rejected before output writes. Both backend and execution-target bindings are
+restored before returning or propagating an error, including when called inside
+a foreign CUDA queue scope. Deferred inputs are materialized only after binding
+HIP's own default queue.
+Concurrent calls require independent writable outputs; callers must synchronize
+access to shared Tensor handles. Gradient accumulation is not an atomic operation
+across concurrent calls that write the same output.
 
 `training_hip_contracts` is a focused test target available without the full
 trainer. `TrainingBackendContracts.CPU` verifies registry identity, missing-family
@@ -231,6 +238,9 @@ step also builds it with HIP enabled and runs the same CPU check.
 `TrainingPrimitiveContracts.HIP` is registered only with HIP enabled and requires
 a compatible AMD device. It checks independent loss/gradient references,
 accumulation, empty inputs, saturated opacity logits, placement, overlapping and
-disjoint views, output-storage retention and backend scope restoration. Required
-GPU execution fails explicitly when HIP is unavailable; hosted CPU runners do
-not run this test.
+disjoint views, deferred inputs, output-storage retention, temporary-allocation
+reuse, independent worker calls and backend scope restoration. When CUDA is
+compiled and a CUDA device is available, an additional case checks foreign
+native queue isolation and restoration, including errors. Required HIP execution
+fails explicitly when HIP is unavailable; hosted CPU runners do not run these
+GPU tests.

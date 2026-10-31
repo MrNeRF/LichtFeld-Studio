@@ -4,6 +4,7 @@
 #include "lfs/training/ops/extra_loss_hip.hpp"
 
 #include "core/tensor_backend.hpp"
+#include "core/tensor_execution.hpp"
 
 #include <cstdint>
 #include <format>
@@ -38,6 +39,9 @@ namespace lfs::training {
                 if (gradient.shape() != raw.shape())
                     throw std::invalid_argument("HIP regularization gradient must match the parameter shape");
             }
+            // Bind both backend and execution target before data_ptr() can
+            // materialize deferred inputs under a foreign caller's queue.
+            const core::TensorExecutionTarget::Scope scope(core::TensorExecutionTarget::default_queue(core::GpuBackend::HIP));
             if (overlaps(raw, loss) || (gradient.is_valid() && (overlaps(gradient, raw) || overlaps(gradient, loss))))
                 throw std::invalid_argument("HIP regularization parameter, gradient and loss must not overlap");
             if (raw.numel() == 0 || weight == 0.f)
@@ -45,7 +49,6 @@ namespace lfs::training {
 
             // All allocation, expression lowering, reduction and ordering stay
             // inside Tensor. No host scalar readback or foreign queue is needed.
-            const core::GpuBackendScope scope(core::GpuBackend::HIP);
             const Tensor activated = kind == Regularizer::Scale ? raw.exp() : raw.sigmoid();
             const Tensor reduced = (activated.mean() * weight).reshape({1});
             Tensor updated;

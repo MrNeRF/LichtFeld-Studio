@@ -3,13 +3,16 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor_execution.hpp"
+#include "core/tensor_upload.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "tensor_backend_contract.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
-#include <limits>
+#include <future>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 // These providers isolate the production registry from unrelated trainer
@@ -225,6 +228,132 @@ namespace {
         EXPECT_EQ(gpu_backend_of(gradient), GpuBackend::HIP);
         EXPECT_NEAR(loss.item<float>(), 1.f, 1e-6f);
     }
+
+    TEST_P(HipTrainingPrimitives, DeferredInputsAndQueuedUpdatesRetainValuesAndOwnership) {
+        constexpr size_t n = 8193;
+        const auto raw = Tensor::full({n}, 0.125f, Device::GPU).add(0.25f);
+        auto gradient = Tensor::full({n}, 0.25f, Device::GPU).sub(0.25f);
+        auto loss = Tensor::full({1, 1}, -9.f, Device::GPU);
+        Tensor scratch;
+        ASSERT_TRUE(raw.is_deferred());
+        ASSERT_TRUE(gradient.is_deferred());
+        regularizer().regularize(raw, gradient, loss, scratch, ops::Regularizer::Scale, 0.5f);
+        regularizer().regularize(raw, gradient, loss, scratch, ops::Regularizer::Opacity, 0.5f);
+        const double e = std::exp(-0.375);
+        const double expected = 0.5 / n * (std::exp(0.375) + e / ((1. + e) * (1. + e)));
+        for (const float value : gradient.to_vector())
+            EXPECT_NEAR(value, expected, expected * 2e-5);
+        EXPECT_EQ(loss.shape(), (TensorShape{1, 1}));
+        EXPECT_NEAR(loss.item<float>(), 0.5 / (1. + e), 1e-6);
+        EXPECT_EQ(raw.to_vector(), std::vector<float>(n, 0.375f));
+    }
+
+    TEST_P(HipTrainingPrimitives, RepeatedCallsReleaseTemporaryAllocationsAfterWarmup) {
+        constexpr size_t n = 4099;
+        const auto raw = Tensor::full({n}, 0.125f, Device::GPU);
+        auto gradient = Tensor::zeros({n}, Device::GPU);
+        auto loss = Tensor::zeros({1}, Device::GPU);
+        Tensor scratch;
+        const auto cycle = [&] {
+            for (const auto kind : {ops::Regularizer::Scale, ops::Regularizer::Opacity})
+                regularizer().regularize(raw, gradient, loss, scratch, kind, 0.05f);
+        };
+        for (int i = 0; i < 4; ++i)
+            cycle();
+        const auto target = TensorExecutionTarget::default_queue(GpuBackend::HIP);
+        target.wait();
+        const auto warm = gpu_backend_memory_info(GpuBackend::HIP);
+        ASSERT_GT(warm.allocated_bytes, 0u);
+        for (int i = 0; i < 32; ++i)
+            cycle();
+        target.wait();
+        const auto after = gpu_backend_memory_info(GpuBackend::HIP);
+        RecordProperty("live_bytes_after_warmup", std::to_string(warm.allocated_bytes));
+        RecordProperty("live_bytes_after_repeats", std::to_string(after.allocated_bytes));
+        // Reserved cache may retain reusable blocks. Live allocations and native
+        // workspace must not grow with repeated calls of the same shape.
+        EXPECT_LE(after.allocated_bytes, warm.allocated_bytes);
+        const double e = std::exp(-0.125);
+        const double expected = 36. * 0.05 / n * (std::exp(0.125) + e / ((1. + e) * (1. + e)));
+        for (const float value : gradient.to_vector())
+            EXPECT_NEAR(value, expected, expected * 5e-5);
+    }
+
+    TEST_P(HipTrainingPrimitives, IndependentWorkerCallsRetainTheirPlacementAndScope) {
+        constexpr size_t n = 1027;
+        struct Buffers {
+            Tensor raw, gradient, loss;
+        };
+        std::array<Buffers, 2> buffers;
+        for (size_t i = 0; i < buffers.size(); ++i)
+            buffers[i] = {Tensor::full({n}, i == 0 ? 0.125f : -0.25f, Device::GPU),
+                          Tensor::zeros({n}, Device::GPU), Tensor::zeros({1}, Device::GPU)};
+        std::array<std::future<void>, 2> workers;
+        for (size_t i = 0; i < workers.size(); ++i) {
+            workers[i] = std::async(std::launch::async, [&, i] {
+                const auto before = TensorExecutionTarget::current();
+                Tensor scratch;
+                for (int repeat = 0; repeat < 8; ++repeat)
+                    for (const auto kind : {ops::Regularizer::Scale, ops::Regularizer::Opacity})
+                        regularizer().regularize(buffers[i].raw, buffers[i].gradient, buffers[i].loss, scratch, kind, 0.05f);
+                EXPECT_EQ(TensorExecutionTarget::current(), before);
+            });
+        }
+        for (auto& worker : workers)
+            worker.get();
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            const double x = i == 0 ? 0.125 : -0.25;
+            const double e = std::exp(-std::abs(x));
+            const double expected = 8. * 0.05 / n * (std::exp(x) + e / ((1. + e) * (1. + e)));
+            EXPECT_EQ(gpu_backend_of(buffers[i].gradient), GpuBackend::HIP);
+            EXPECT_EQ(gpu_backend_of(buffers[i].loss), GpuBackend::HIP);
+            for (const float value : buffers[i].gradient.to_vector())
+                EXPECT_NEAR(value, expected, expected * 5e-5);
+            EXPECT_NEAR(buffers[i].loss.item<float>(), 0.05 / (1. + std::exp(-x)), 1e-6);
+        }
+    }
+
+#if defined(LFS_HAS_CUDA) && LFS_HAS_CUDA
+    TEST_P(HipTrainingPrimitives, ForeignCudaQueueIsIsolatedAndRestored) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "A CUDA device is required for a foreign native queue";
+        const auto raw = Tensor::zeros({257}, Device::GPU);
+        auto gradient = Tensor::zeros(raw.shape(), Device::GPU);
+        auto loss = Tensor::zeros({1}, Device::GPU);
+        const auto invalid = Tensor::zeros({257}, Device::CPU);
+        const auto deferred_raw = Tensor::full({8193}, 0.125f, Device::GPU).add(0.25f);
+        auto deferred_gradient = Tensor::full({8193}, 0.25f, Device::GPU).sub(0.25f);
+        auto deferred_loss = Tensor::zeros({1}, Device::GPU);
+        ASSERT_TRUE(deferred_raw.is_deferred());
+        ASSERT_TRUE(deferred_gradient.is_deferred());
+        Tensor scratch;
+        TensorWorkQueue foreign(GpuBackend::CUDA);
+        const TensorExecutionTarget target(foreign);
+        ASSERT_FALSE(target.is_default_queue());
+        {
+            const TensorExecutionTarget::Scope other(target);
+            ASSERT_NO_THROW(regularizer().regularize(raw, gradient, loss, scratch, ops::Regularizer::Scale, 1.f));
+            EXPECT_EQ(TensorExecutionTarget::current(), target);
+            ASSERT_NO_THROW(regularizer().regularize(deferred_raw, deferred_gradient, deferred_loss, scratch, ops::Regularizer::Scale, 1.f));
+            EXPECT_EQ(TensorExecutionTarget::current(), target);
+            EXPECT_THROW(regularizer().regularize(invalid, gradient, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
+            EXPECT_EQ(TensorExecutionTarget::current(), target);
+            auto alias = raw;
+            EXPECT_THROW(regularizer().regularize(raw, alias, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
+            EXPECT_EQ(TensorExecutionTarget::current(), target);
+            const auto cuda_control = Tensor::ones({1}, Device::GPU);
+            EXPECT_EQ(gpu_backend_of(cuda_control), GpuBackend::CUDA);
+            EXPECT_FLOAT_EQ(cuda_control.item<float>(), 1.f);
+        }
+        foreign.wait();
+        EXPECT_NEAR(loss.item<float>(), 1.f, 1e-6f);
+        for (const auto value : gradient.to_vector())
+            EXPECT_NEAR(value, 1.f / 257.f, 1e-7f);
+        EXPECT_NEAR(deferred_loss.item<float>(), std::exp(0.375), 1e-5);
+        for (const auto value : deferred_gradient.to_vector())
+            EXPECT_NEAR(value, std::exp(0.375) / 8193., 1e-7);
+    }
+#endif
 
     INSTANTIATE_TEST_SUITE_P(Backends, HipTrainingPrimitives,
                              testing::Values(lfs::test::TensorBackendTarget{"HIP", GpuBackend::HIP}),
