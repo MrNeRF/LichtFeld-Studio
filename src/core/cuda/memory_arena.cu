@@ -19,18 +19,6 @@
 
 namespace lfs::core {
 
-    namespace {
-        std::atomic<size_t> g_measured_frame_headroom{0};
-    } // namespace
-
-    void set_measured_frame_headroom_bytes(const size_t bytes) noexcept {
-        g_measured_frame_headroom.store(bytes, std::memory_order_relaxed);
-    }
-
-    size_t measured_frame_headroom_bytes() noexcept {
-        return g_measured_frame_headroom.load(std::memory_order_relaxed);
-    }
-
     // Default constructor implementation
     RasterizerMemoryArena::RasterizerMemoryArena()
         : RasterizerMemoryArena(Config{}) {

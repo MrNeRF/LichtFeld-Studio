@@ -3,6 +3,7 @@
 
 #include "core/memory_pressure.hpp"
 #include "core/cuda_allocation.hpp"
+#include "cuda/memory_arena.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
@@ -28,6 +29,7 @@
 namespace lfs::core {
 
     namespace {
+        std::atomic<size_t> g_measured_frame_headroom{0};
 
         std::string format_bytes(size_t bytes) {
             constexpr double mib = 1024.0 * 1024.0;
@@ -125,6 +127,14 @@ namespace lfs::core {
         }
 
     } // namespace
+
+    void set_measured_frame_headroom_bytes(const size_t bytes) noexcept {
+        g_measured_frame_headroom.store(bytes, std::memory_order_relaxed);
+    }
+
+    size_t measured_frame_headroom_bytes() noexcept {
+        return g_measured_frame_headroom.load(std::memory_order_relaxed);
+    }
 
     MemoryAllocationError::MemoryAllocationError(const AllocationFailure& failure)
         : std::runtime_error(std::format(
