@@ -378,7 +378,6 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     // A cache miss would call cudaHostAlloc, which CUDA may serialize with the gated stream.
     void* spare = pinned.allocate(kBytes);
     ASSERT_NE(spare, nullptr);
-    pinned.deallocate(spare, d2h_stream);
 
     h2d_stream.close();
     ASSERT_EQ(cudaMemcpyAsync(device_buffer, host_block, kBytes, cudaMemcpyHostToDevice, h2d_stream.get()),
@@ -386,8 +385,11 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
 
     pinned.record_stream(host_block, h2d_stream.get());
     pinned.deallocate(host_block, d2h_stream);
+    // The cache hands out the first finished block, so the spare goes in after host_block:
+    // the allocation below has to skip the busy block to reach it.
+    pinned.deallocate(spare, d2h_stream);
 
-    // Only the gated H2D use may be pending, so wait for the event deallocate recorded on
+    // Only the gated H2D use may be pending, so wait for the events deallocate recorded on
     // d2h_stream. Poll with a deadline instead of synchronizing, so a stall fails the test.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     cudaError_t d2h_state = cudaErrorNotReady;
