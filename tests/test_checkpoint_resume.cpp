@@ -1935,6 +1935,8 @@ namespace {
             const size_t stop_refine = static_cast<size_t>(iterations);
             params.optimization.start_refine = std::min<size_t>(500, stop_refine);
             params.optimization.stop_refine = stop_refine;
+            // Phase two resumes from a checkpoint the final save superseded.
+            params.optimization.keep_all_checkpoints = true;
             return params;
         }
 
