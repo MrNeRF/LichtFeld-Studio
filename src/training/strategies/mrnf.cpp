@@ -18,7 +18,6 @@
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
-#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
@@ -906,20 +905,12 @@ namespace lfs::training {
         publish_vram_attribution();
     }
 
-    void MRNF::permute_gaussian_rows(const lfs::core::Tensor& perm) {
-        morton::permute_row_tensor(_refine_weight_max, perm);
-        if (_rendered_count.is_valid())
-            morton::permute_row_tensor(_rendered_count, perm);
-        morton::permute_row_tensor(_precomputed_edge_scores, perm);
-        morton::permute_row_tensor(_edge_score_sum, perm);
-        morton::permute_row_tensor(_free_mask, perm);
-        morton::permute_row_tensor(_exchange_importance_sum, perm);
-        morton::permute_row_tensor(_exchange_importance_peak, perm);
-        morton::permute_row_tensor(_exchange_birth, perm);
-        morton::permute_row_tensor(_exchange_window_impact_sum, perm);
-        morton::permute_row_tensor(_exchange_window_impact_peak, perm);
-        morton::permute_row_tensor(_far_field_mask, perm);
-        publish_mean_step_far_mask();
+    void MRNF::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
+        for (auto* rows : {&_refine_weight_max, &_rendered_count, &_precomputed_edge_scores, &_edge_score_sum,
+                           &_free_mask, &_exchange_importance_sum, &_exchange_importance_peak, &_exchange_birth,
+                           &_exchange_window_impact_sum, &_exchange_window_impact_peak, &_far_field_mask}) {
+            visit(*rows);
+        }
     }
 
     bool MRNF::is_refining(int iter) const {

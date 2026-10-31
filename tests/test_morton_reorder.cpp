@@ -5,6 +5,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
@@ -910,30 +911,6 @@ namespace {
               frame(a.begin_frame(s)) {}
         ~HeldArenaFrame() { arena.end_frame(frame, stream); }
     };
-
-    // Takes device memory outside the tensor pool until about `keep` is free.
-    struct VramFill {
-        std::vector<void*> blocks;
-        explicit VramFill(const size_t keep) {
-            for (size_t chunk = size_t{256} << 20; chunk >= (size_t{2} << 20);) {
-                size_t free_bytes = 0;
-                size_t total_bytes = 0;
-                void* block = nullptr;
-                if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || free_bytes < keep + chunk ||
-                    cudaMalloc(&block, chunk) != cudaSuccess) {
-                    (void)cudaGetLastError();
-                    chunk /= 2;
-                    continue;
-                }
-                blocks.push_back(block);
-            }
-        }
-        ~VramFill() {
-            for (void* block : blocks) {
-                cudaFree(block);
-            }
-        }
-    };
 } // namespace
 
 // The reorder only improves locality: with too little free VRAM for its
@@ -945,24 +922,80 @@ TEST(MortonReorderTest, SkipsInsteadOfRunningOutOfVram) {
     AdamConfig cfg;
     cfg.initial_capacity = n;
     AdamOptimizer opt(splat, cfg);
-    // CUDA loads kernels on first use, which needs free VRAM itself.
     ASSERT_TRUE(morton::apply_morton_reorder(splat, &opt, stream).applied);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto means = device_bytes(splat.means());
+    const auto shN = device_bytes(splat.shN());
 
     auto& arena = GlobalArenaManager::instance().get_arena();
+    auto& pressure = MemoryPressureCoordinator::instance();
     morton::ReorderResult skipped;
     {
         const HeldArenaFrame held(arena, stream);
-        Tensor::trim_memory_pool();
-        const VramFill fill(size_t{32} << 20);
-        skipped = morton::apply_morton_reorder(splat, &opt, stream);
+        // No room for the 13 MiB SH copy.
+        pressure.set_allocation_probe(
+            [](const MemoryDomain domain, const size_t bytes) {
+                return domain == MemoryDomain::CudaDevice && bytes >= (size_t{8} << 20);
+            });
+        EXPECT_NO_THROW(skipped = morton::apply_morton_reorder(splat, &opt, stream));
+        pressure.set_allocation_probe(nullptr);
         EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
     EXPECT_FALSE(skipped.applied);
     EXPECT_FALSE(skipped.permutation.is_valid());
+    EXPECT_EQ(device_bytes(splat.means()), means);
+    EXPECT_EQ(device_bytes(splat.shN()), shN);
 
     EXPECT_TRUE(morton::apply_morton_reorder(splat, &opt, stream).applied);
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+// Running out of VRAM at any allocation of a reorder must leave the model as it
+// was or finish the reorder, never move only some of its rows.
+TEST(MortonReorderTest, RunningOutOfVramNeverLeavesAPartialReorder) {
+    constexpr size_t n = 70000;
+    const cudaStream_t stream = getCurrentCUDAStream();
+    AdamConfig cfg;
+    cfg.initial_capacity = n;
+    auto reference = make_mixed_splat(n, 3);
+    AdamOptimizer reference_opt(reference, cfg);
+    ASSERT_TRUE(morton::apply_morton_reorder(reference, &reference_opt, stream).applied);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    auto& arena = GlobalArenaManager::instance().get_arena();
+    auto& pressure = MemoryPressureCoordinator::instance();
+    bool completed = false;
+    for (int allowed = 0; !completed && allowed < 64; ++allowed) {
+        SCOPED_TRACE(::testing::Message() << "allocations allowed: " << allowed);
+        auto splat = make_mixed_splat(n, 3);
+        AdamOptimizer opt(splat, cfg);
+        const auto means = device_bytes(splat.means());
+        const auto rotation = device_bytes(splat.rotation_raw());
+        const auto shN = device_bytes(splat.shN());
+        int calls = 0;
+        morton::ReorderResult result;
+        {
+            // Without the arena every copy needs VRAM of its own.
+            const HeldArenaFrame held(arena, stream);
+            pressure.set_allocation_probe([&](const MemoryDomain domain, size_t) {
+                return domain == MemoryDomain::CudaDevice && ++calls > allowed;
+            });
+            EXPECT_NO_THROW(result = morton::apply_morton_reorder(splat, &opt, stream));
+            pressure.set_allocation_probe(nullptr);
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        if (!result.applied) {
+            EXPECT_EQ(device_bytes(splat.means()), means);
+            EXPECT_EQ(device_bytes(splat.rotation_raw()), rotation);
+            EXPECT_EQ(device_bytes(splat.shN()), shN);
+            continue;
+        }
+        completed = true;
+        EXPECT_EQ(device_bytes(splat.means()), device_bytes(reference.means()));
+        EXPECT_EQ(device_bytes(splat.rotation_raw()), device_bytes(reference.rotation_raw()));
+        EXPECT_EQ(device_bytes(splat.shN()), device_bytes(reference.shN()));
+    }
+    EXPECT_TRUE(completed);
 }
 
 // Fails if a cell or slot group lands at the wrong offset, a group is skipped

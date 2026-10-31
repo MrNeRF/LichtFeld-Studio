@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "optimizer/render_output.hpp"
 #include <exception>
+#include <functional>
 #include <istream>
 #include <memory>
 #include <ostream>
@@ -41,8 +42,9 @@ namespace lfs::training {
 
         virtual void step(int iter) = 0;
 
-        /// Permute row-indexed strategy aux tensors (vis counts, error maxima, free masks).
-        virtual void permute_gaussian_rows(const lfs::core::Tensor&) {}
+        /// Visits row-indexed strategy aux tensors (vis counts, error maxima, free
+        /// masks) so a Morton reorder permutes them with the model.
+        virtual void for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>&) {}
 
         virtual bool is_refining(int iter) const = 0;
         [[nodiscard]] virtual lfs::core::Tensor rendered_support_counts() const { return {}; }

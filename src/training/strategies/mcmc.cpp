@@ -10,7 +10,6 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
-#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -827,8 +826,8 @@ namespace lfs::training {
         _error_score_windows = 0;
     }
 
-    void MCMC::permute_gaussian_rows(const lfs::core::Tensor& perm) {
-        morton::permute_row_tensor(_error_score_max, perm);
+    void MCMC::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
+        visit(_error_score_max);
     }
 
     bool MCMC::is_refining(int iter) const {

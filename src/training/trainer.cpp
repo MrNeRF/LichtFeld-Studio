@@ -123,8 +123,8 @@ namespace lfs::training {
     namespace {
         // Extra free VRAM densification keeps after each recovered OOM.
         constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
-        // Steps in a row that may run out of memory before training gives up.
-        constexpr unsigned kMaxStepOomRecoveries = 3;
+        // Longest pause between retries of a step that keeps running out of VRAM.
+        constexpr int kMaxStepOomBackoffMs = 2000;
 
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
@@ -2022,11 +2022,9 @@ namespace lfs::training {
             return;
         }
         auto& model = strategy_->get_model();
-        const auto result = morton::apply_morton_reorder(model, &strategy_->get_optimizer());
-        if (!result.applied) {
-            return;
-        }
-        strategy_->permute_gaussian_rows(result.permutation);
+        static_cast<void>(morton::apply_morton_reorder(
+            model, &strategy_->get_optimizer(), nullptr,
+            [this](const morton::RowVisitor& visit) { strategy_->for_each_gaussian_row(visit); }));
     }
 
     void Trainer::setCropBoxSnapshot(std::optional<TrainingCropBoxGeometry> geometry) {
@@ -6120,21 +6118,14 @@ namespace lfs::training {
 
     Trainer::StepOomRecovery Trainer::classify_step_oom(
         const lfs::Error& step_error,
-        const MutationStamp failed,
-        const unsigned recovered_in_a_row,
-        const bool popspa) noexcept {
-        if (step_error.code() != lfs::ErrorCode::ResourceExhausted || popspa ||
-            recovered_in_a_row >= kMaxStepOomRecoveries) {
+        const MutationStamp failed) noexcept {
+        // Optimizer and refinement commits can stop halfway through the model.
+        if (step_error.code() != lfs::ErrorCode::ResourceExhausted ||
+            failed.phase == StepPhase::OptimizerCommit || failed.phase == StepPhase::RefinementCommit) {
             return StepOomRecovery::Fail;
         }
-        if (!failed.persistent_commit) {
-            return StepOomRecovery::RetryIteration;
-        }
-        // Optimizer and refinement commits can stop halfway through the model;
-        // evaluation and saves after them can be dropped.
-        return failed.phase == StepPhase::Publish || failed.phase == StepPhase::TerminalCleanup
-                   ? StepOomRecovery::SkipRest
-                   : StepOomRecovery::Fail;
+        // Repeating a step that already committed would repeat its commit.
+        return failed.persistent_commit ? StepOomRecovery::SkipRest : StepOomRecovery::RetryIteration;
     }
 
     lfs::Status Trainer::recover_from_oom(const lfs::Error& cause) {
@@ -6553,6 +6544,8 @@ namespace lfs::training {
                     } refining_mutation_mark(need_exclusive);
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
+                    ++mutation_epoch_;
+                    persistent_commit = true;
                     strategy_->post_backward(iter, r_output);
                     maybe_morton_reorder(iter);
                     fastgs_strategy_hooks_at_start = true;
@@ -6587,8 +6580,6 @@ namespace lfs::training {
                     }
                     // densify_barrier dtor runs when leaving this block — topology
                     // fan-out only after q16 commit is stable (see defer above).
-                    ++mutation_epoch_;
-                    persistent_commit = true;
                 }
                 if (fastgs_path && refining_this_step && !in_sparsification) {
                     // Post-barrier topology publish (deferred from inside densify).
@@ -9444,8 +9435,7 @@ namespace lfs::training {
                         .count();
                 bool repeat_iteration = false;
                 if (!step_result) {
-                    const auto recovery = classify_step_oom(
-                        step_result.error(), failed_step_, oom_steps_in_a_row, popspa_enabled());
+                    const auto recovery = classify_step_oom(step_result.error(), failed_step_);
                     if (recovery == StepOomRecovery::Fail) {
                         terminal_error = std::move(step_result).error();
                         break;
@@ -9453,6 +9443,16 @@ namespace lfs::training {
                     if (auto recovered = recover_from_oom(step_result.error()); !recovered) {
                         terminal_error = std::move(recovered).error();
                         break;
+                    }
+                    // Memory another client holds for a moment frees by itself; back
+                    // off instead of spinning on the same shortfall.
+                    if (oom_steps_in_a_row > 0) {
+                        const auto backoff = std::chrono::milliseconds(
+                            std::min(kMaxStepOomBackoffMs, 50 << std::min(oom_steps_in_a_row - 1, 6u)));
+                        const auto resume_at = std::chrono::steady_clock::now() + backoff;
+                        while (std::chrono::steady_clock::now() < resume_at && !stop_token.stop_requested() &&
+                               !stop_requested_.load())
+                            std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     }
                     ++oom_steps_in_a_row;
                     repeat_iteration = recovery == StepOomRecovery::RetryIteration;
@@ -9463,10 +9463,10 @@ namespace lfs::training {
                             ppisp_->zero_grad();
                         if (bilateral_grid_)
                             bilateral_grid_->zero_grad();
-                        LOG_WARN("Iteration {} ran out of VRAM; retrying it on another view", iter);
+                        LOG_WARN("Iteration {} ran out of VRAM ({} in a row); retrying it on another view", iter,
+                                 oom_steps_in_a_row);
                     } else {
-                        LOG_WARN("Iteration {} ran out of VRAM after its update; skipped its evaluation and saves",
-                                 iter);
+                        LOG_WARN("Iteration {} ran out of VRAM after its update; skipped the rest of it", iter);
                     }
                     step_result = repeat_iteration || (iter < get_total_iterations() && !stop_requested_.load() &&
                                                        !stop_token.stop_requested())

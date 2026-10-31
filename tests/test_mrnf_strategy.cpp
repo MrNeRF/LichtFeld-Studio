@@ -44,6 +44,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/mean_step_scale.cuh"
+#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
@@ -1956,7 +1957,7 @@ TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     EXPECT_NEAR(dx_huge / dx_med, r_max / r_min, 0.02f * (r_max / r_min));
 }
 
-TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
+TEST(MRNFStrategyTest, MortonReorderKeepsFarMaskPublished) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
     params.max_cap = 8;
@@ -1970,23 +1971,18 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     auto& optimizer = strategy.get_optimizer();
     ASSERT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), 4);
-    // Keep the old allocation alive so allocator reuse cannot hide a stale pointer.
-    const auto old_mask = strategy._far_field_mask;
-    const auto permutation = Tensor::from_vector(
-                                 std::vector<int>{1, 3, 0, 2}, TensorShape({4}), Device::CUDA)
-                                 .to(DataType::Int64);
+    const auto before = strategy._far_field_mask.cpu();
 
-    strategy.permute_gaussian_rows(permutation);
+    const auto result = morton::apply_morton_reorder(
+        splat, &optimizer, nullptr, [&](const morton::RowVisitor& visit) { strategy.for_each_gaussian_row(visit); });
+    ASSERT_TRUE(result.applied);
 
-    EXPECT_NE(strategy._far_field_mask.ptr<bool>(), old_mask.ptr<bool>());
     EXPECT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), strategy._far_field_mask.numel());
+    const auto permutation = result.permutation.cpu();
     const auto reordered = strategy._far_field_mask.cpu();
-    const bool* values = reordered.ptr<bool>();
-    EXPECT_TRUE(values[0]);
-    EXPECT_TRUE(values[1]);
-    EXPECT_FALSE(values[2]);
-    EXPECT_FALSE(values[3]);
+    for (size_t i = 0; i < 4; ++i)
+        EXPECT_EQ(reordered.ptr<bool>()[i], before.ptr<bool>()[permutation.ptr<int64_t>()[i]]) << i;
 
     // A hull refresh with no cameras must clear the borrowed pointer immediately.
     strategy.refresh_camera_hull();

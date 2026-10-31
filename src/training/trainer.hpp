@@ -581,7 +581,7 @@ namespace lfs::training {
         [[nodiscard]] static RetryDecision classify_forward_retry(
             const lfs::Error& forward_error, MutationStamp stamp, unsigned attempts) noexcept;
         [[nodiscard]] static StepOomRecovery classify_step_oom(
-            const lfs::Error& step_error, MutationStamp failed, unsigned recovered_in_a_row, bool popspa) noexcept;
+            const lfs::Error& step_error, MutationStamp failed) noexcept;
         [[nodiscard]] lfs::Status recover_from_oom(const lfs::Error& cause);
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);

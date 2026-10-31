@@ -3060,9 +3060,9 @@ TEST(NormalLossRegression, Morton50kFourReordersJointAllParameters) {
             for (size_t i = 0; i < n; ++i)
                 std::swap(orig[3 * i], orig[3 * i + 1]);
         }
-        auto result = morton::apply_morton_reorder(splat, &opt);
+        auto result = morton::apply_morton_reorder(
+            splat, &opt, nullptr, [&](const morton::RowVisitor& visit) { strategy.for_each_gaussian_row(visit); });
         ASSERT_TRUE(result.applied);
-        strategy.permute_gaussian_rows(result.permutation);
         auto p = result.permutation.cpu();
         auto previous = order;
         for (size_t i = 0; i < n; ++i)

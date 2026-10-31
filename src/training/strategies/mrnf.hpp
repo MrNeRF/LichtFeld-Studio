@@ -21,7 +21,7 @@ namespace lfs::training::sh_value {
     class ShNMutationBatch;
 }
 
-class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+class MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
 class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
 class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
 class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
@@ -81,7 +81,7 @@ namespace lfs::training {
         void step(int iter) override;
         [[nodiscard]] lfs::core::Tensor rendered_support_counts() const override { return _rendered_count; }
 
-        void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
+        void for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) override;
 
         lfs::core::SplatData& get_model() override { return *_splat_data; }
         const lfs::core::SplatData& get_model() const override { return *_splat_data; }
@@ -114,7 +114,7 @@ namespace lfs::training {
         void on_impact_accumulated(int iter) override;
 
     private:
-        friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+        friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
