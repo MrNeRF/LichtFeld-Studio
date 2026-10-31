@@ -418,7 +418,7 @@ TEST(LazyDirectStorage, ReclaimKeepsLiveRowsInPartialFinalPage) {
     constexpr size_t live_bytes = 16 * kMiB + 1024;
     constexpr size_t capacity_bytes = 16 * kMiB + 4096;
     auto tensor = Tensor::zeros_direct({initial_bytes / sizeof(float)},
-                                      capacity_bytes / sizeof(float), Device::CUDA);
+                                       capacity_bytes / sizeof(float), Device::CUDA);
     tensor.append_zeros((live_bytes - initial_bytes) / sizeof(float));
     ASSERT_GE(tensor.committed_rows(), tensor.numel());
     release_lazy_direct_storage_ahead();
