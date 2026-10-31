@@ -17,6 +17,7 @@
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
 #include "gui/global_context_menu.hpp"
+#include "gui/async_task_manager.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
@@ -3238,6 +3239,20 @@ namespace lfs::vis::gui {
                     items.push_back(makeAction(
                         tr(string_keys::Scene::DISABLE_ALL_TRAINING),
                         prefixedAction(std::format("disable_all_train:{}", node_id))));
+                    items.push_back(makeAction(tr("scene.invert_camera_selection"),
+                                               prefixedAction("invert_all_train"), true));
+                    items.push_back(makeAction(tr("scene.enable_all_cameras"),
+                                               prefixedAction("enable_all_scene_train")));
+                    items.push_back(makeAction(tr("scene.disable_all_cameras"),
+                                               prefixedAction("disable_all_scene_train")));
+                    items.push_back(makeAction(tr("scene.select_random_cameras") + "...",
+                                               prefixedAction("camera_selection:random"), true));
+                    items.push_back(makeAction(tr("scene.select_every_n_cameras") + "...",
+                                               prefixedAction("camera_selection:every_n")));
+                    items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
+                                               prefixedAction("camera_selection:distinct")));
+                    items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
+                                               prefixedAction("camera_selection:cropbox_visibility")));
                 }
                 break;
             case core::NodeType::DATASET:
@@ -3461,6 +3476,20 @@ namespace lfs::vis::gui {
             core::NodeId group_id = core::NULL_NODE;
             if (parseNodeId(parts[1], group_id))
                 toggleChildrenTraining(group_id, kind == "enable_all_train");
+        } else if (kind == "enable_all_scene_train" || kind == "disable_all_scene_train" || kind == "invert_all_train") {
+            if (auto* gui = services().guiOrNull()) {
+                const auto operation = kind == "enable_all_scene_train" ? AsyncTaskManager::CameraSelectionOperation::EnableAll
+                                     : kind == "disable_all_scene_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
+                                                                          : AsyncTaskManager::CameraSelectionOperation::Invert;
+                static_cast<void>(gui->asyncTasks().startCameraSelection({.operation = operation}));
+            }
+        } else if (kind == "camera_selection" && parts.size() >= 2) {
+            lfs::python::set_camera_selection_operation(parts[1]);
+            auto& panels = PanelRegistry::instance();
+            if (const auto panel = panels.get_panel_instance("lfs.camera_selection"))
+                panel->on_content_changed();
+            panels.set_panel_enabled("lfs.camera_selection", true);
+            panels.bring_panel_to_front("lfs.camera_selection");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {

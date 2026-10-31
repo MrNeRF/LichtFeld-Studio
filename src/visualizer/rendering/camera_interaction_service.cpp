@@ -6,6 +6,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "scene/scene_manager.hpp"
+#include <unordered_set>
 
 namespace lfs::vis {
 
@@ -43,6 +44,23 @@ namespace lfs::vis {
         }
 
         auto scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
+        const auto disabled = settings.hide_disabled_camera_frustums
+                                  ? scene_manager->getScene().getTrainingDisabledCameraUids()
+                                  : std::unordered_set<int>{};
+        std::vector<std::shared_ptr<const lfs::core::Camera>> enabled_cameras;
+        std::vector<glm::mat4> enabled_transforms;
+        enabled_cameras.reserve(cameras.size());
+        enabled_transforms.reserve(scene_transforms.size());
+        for (size_t index = 0; index < cameras.size() && index < scene_transforms.size(); ++index) {
+            if (!disabled.contains(cameras[index]->uid())) {
+                enabled_cameras.push_back(cameras[index]);
+                enabled_transforms.push_back(scene_transforms[index]);
+            }
+        }
+        if (enabled_cameras.empty())
+            return -1;
+        cameras = std::move(enabled_cameras);
+        scene_transforms = std::move(enabled_transforms);
         for (auto& transform : scene_transforms) {
             transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
         }
@@ -58,9 +76,8 @@ namespace lfs::vis {
         const auto pick_result = engine->pickCameraFrustum(cameras, request);
 
         int cam_id = -1;
-        if (pick_result) {
+        if (pick_result)
             cam_id = *pick_result;
-        }
 
         hover_changed = updateHoveredCamera(cam_id);
         return hovered_camera_id_;

@@ -2567,6 +2567,7 @@ namespace lfs::vis::gui {
             std::uint64_t hash = 0;
             hashCombine(hash, settings.show_camera_frustums);
             hashCombine(hash, hashFloat(settings.camera_frustum_scale));
+            hashCombine(hash, settings.hide_disabled_camera_frustums);
             hashCombine(hash, hashFloat(settings.focal_length_mm));
             hashCombine(hash, settings.orthographic);
             hashCombine(hash, settings.equirectangular);
@@ -2900,6 +2901,8 @@ namespace lfs::vis::gui {
                         if (!cache.valid_cameras[camera_index])
                             continue;
                         const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        if (settings.hide_disabled_camera_frustums && disabled)
+                            continue;
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], translation,
                             settings.camera_frustum_scale, disabled);
@@ -3060,6 +3063,10 @@ namespace lfs::vis::gui {
                         if (!cache.valid_cameras[camera_index])
                             continue;
                         const bool disabled = cache.disabled_cameras[camera_index] != 0;
+                        if (settings.hide_disabled_camera_frustums && disabled) {
+                            cache.camera_colors[panel_index * camera_count + camera_index] = glm::vec4(0.0f);
+                            continue;
+                        }
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], view_position,
                             settings.camera_frustum_scale, disabled);
@@ -6001,6 +6008,7 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.async_poll", 0.25);
             async_tasks_.pollMesh2SplatCompletion();
             async_tasks_.pollSplatSimplifyCompletion();
+            async_tasks_.pollCameraSelectionCompletion();
         }
 
         // Poll UV package manager for async operations

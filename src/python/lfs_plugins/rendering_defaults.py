@@ -10,7 +10,7 @@ from .default_reset import LabelDefaultReset
 
 DEFAULTS = {
     "show_coord_axes": False, "show_pivot": False, "show_grid": True,
-    "show_camera_frustums": False, "desaturate_unselected": False, "selection_outline": False,
+    "show_camera_frustums": False, "hide_disabled_camera_frustums": False, "desaturate_unselected": False, "selection_outline": False,
     "selection_outline_color": [0.0, 0.604, 0.733],
     "selection_outline_opacity": 1.0,
     "selection_outline_width": 2.0,

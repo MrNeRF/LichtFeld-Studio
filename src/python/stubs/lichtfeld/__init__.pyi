@@ -520,6 +520,24 @@ def set_node_visibility(name: str, visible: bool) -> None:
 def set_camera_training_enabled(name: str, enabled: bool) -> None:
     """Enable or disable a camera for training by name"""
 
+def select_cameras(operation: str, percentage: float = 25.0, every_n: int = 2) -> None:
+    """
+    Apply a synchronous global camera-training selection operation. Prefer camera_selection_start for GUI-safe asynchronous work.
+    """
+
+def camera_selection_start(operation: str, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
+    """
+    Start a cancellable camera-selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    """
+
+def camera_selection_status() -> dict:
+    """Return the camera-selection job status without changing the scene."""
+
+def camera_selection_cancel() -> bool:
+    """
+    Request cancellation. Returns true only when a running job accepted the request.
+    """
+
 def remove_node(name: str, keep_children: bool = False) -> None:
     """Remove a scene node by name"""
 

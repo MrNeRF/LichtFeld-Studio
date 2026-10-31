@@ -33,6 +33,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/video/video_export_schedule.hpp"
+#include "nanoflann.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
@@ -69,12 +70,16 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <numeric>
+#include <random>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
 #include <typeinfo>
+#include <unordered_map>
 
 namespace lfs::vis::gui {
 
@@ -1025,6 +1030,10 @@ namespace lfs::vis::gui {
         if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable())
             splat_simplify_state_.thread->join();
         splat_simplify_state_.thread.reset();
+        cancelCameraSelection();
+        if (camera_selection_state_.thread && camera_selection_state_.thread->joinable())
+            camera_selection_state_.thread->join();
+        camera_selection_state_.thread.reset();
         settlePendingJobs();
     }
 
@@ -1945,6 +1954,8 @@ namespace lfs::vis::gui {
                mesh2splat_state_.pending.load(std::memory_order_acquire) ||
                splat_simplify_state_.apply_pending.load(std::memory_order_acquire) ||
                splat_simplify_state_.completed.load(std::memory_order_acquire) ||
+               camera_selection_state_.completion.load(std::memory_order_acquire) !=
+                   CameraSelectionState::Completion::Idle ||
                (jobs_.peek(export_state_.job) &&
                 jobs_.peek(export_state_.job)->status ==
                     JobStatus::CompletionPending) ||
@@ -2875,6 +2886,16 @@ namespace lfs::vis::gui {
             state.output_name = splat_simplify_state_.output_name;
         }
         lfs::vis::app_store().splat_simplify_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishCameraSelectionState() {
+        lfs::vis::AppStore::TaskProgressState state;
+        const auto job = jobs_.peek(camera_selection_state_.job);
+        state.active = job && job->running();
+        state.progress = job ? job->progress : 0.0F;
+        state.stage = job ? job->stage : std::string{};
+        state.error = job ? job->error : std::string{};
+        lfs::vis::app_store().camera_selection_state.set(std::move(state));
     }
 
     void AsyncTaskManager::cancelImportCompletionDismiss() {
@@ -4366,6 +4387,383 @@ namespace lfs::vis::gui {
         if (splat_simplify_state_.thread) {
             splat_simplify_state_.thread->request_stop();
         }
+    }
+
+    namespace {
+        struct CameraSelectionGridCell {
+            int x = 0, y = 0, z = 0;
+            bool operator==(const CameraSelectionGridCell&) const = default;
+        };
+        struct CameraSelectionGridCellHash {
+            size_t operator()(const CameraSelectionGridCell& cell) const noexcept {
+                size_t value = std::hash<int>{}(cell.x);
+                value ^= std::hash<int>{}(cell.y) + 0x9e3779b9 + (value << 6U) + (value >> 2U);
+                value ^= std::hash<int>{}(cell.z) + 0x9e3779b9 + (value << 6U) + (value >> 2U);
+                return value;
+            }
+        };
+        struct CameraSelectionPointCloud {
+            const float* points = nullptr;
+            size_t count = 0;
+            [[nodiscard]] size_t kdtree_get_point_count() const { return count; }
+            [[nodiscard]] float kdtree_get_pt(const size_t index, const size_t dimension) const { return points[index * 3 + dimension]; }
+            template <class BBox>
+            bool kdtree_get_bbox(BBox&) const { return false; }
+        };
+        using CameraSelectionKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, CameraSelectionPointCloud>, CameraSelectionPointCloud, 3>;
+
+        template <class Snapshot>
+        float camera_selection_overlap(const Snapshot& first,
+                                       const Snapshot& second,
+                                       const float spacing) {
+            const float dot = std::clamp(glm::dot(first.forward, second.forward), -1.0F, 1.0F);
+            const float angular = std::max(0.0F, 1.0F - std::acos(dot) / std::max(first.fov + second.fov, 1.e-6F));
+            const float distance = glm::distance(first.center, second.center);
+            const float normalized = distance / std::max(1.5F * spacing, 1.e-6F);
+            return 100.0F * angular / (1.0F + normalized * normalized);
+        }
+
+        template <class Snapshot>
+        float camera_selection_crop_coverage(const Snapshot& camera,
+                                             const std::vector<glm::vec3>& points) {
+            if (!camera.pose_valid || points.empty())
+                return 0.0F;
+            float min_x = camera.width, max_x = 0.0F, min_y = camera.height, max_y = 0.0F;
+            bool projected = false;
+            for (const auto& point : points) {
+                const glm::vec3 view = glm::vec3(camera.world_to_camera * glm::vec4(point, 1.0F));
+                if (view.z <= 1.e-6F)
+                    continue;
+                const float x = camera.focal_x * view.x / view.z + camera.center_x;
+                const float y = camera.focal_y * view.y / view.z + camera.center_y;
+                min_x = std::min(min_x, x); max_x = std::max(max_x, x);
+                min_y = std::min(min_y, y); max_y = std::max(max_y, y);
+                projected = true;
+            }
+            if (!projected)
+                return 0.0F;
+            const float width = std::max(0.0F, std::min(camera.width, max_x) - std::max(0.0F, min_x));
+            const float height = std::max(0.0F, std::min(camera.height, max_y) - std::max(0.0F, min_y));
+            return 100.0F * width * height / std::max(camera.width * camera.height, 1.e-6F);
+        }
+
+        bool same_cropbox_points(const std::vector<glm::vec3>& first,
+                                 const std::vector<glm::vec3>& second) {
+            if (first.size() != second.size())
+                return false;
+            for (size_t index = 0; index < first.size(); ++index) {
+                if (glm::length(first[index] - second[index]) > 1.e-5F)
+                    return false;
+            }
+            return true;
+        }
+
+        std::vector<glm::vec3> cropbox_world_points(const core::Scene& scene,
+                                                     const core::SceneNode& cropbox) {
+            std::vector<glm::vec3> points;
+            if (!cropbox.cropbox)
+                return points;
+            const auto& data = *cropbox.cropbox;
+            const glm::mat4 transform = scene.getWorldTransform(cropbox.id);
+            points.reserve(9);
+            for (const float x : {data.min.x, data.max.x})
+                for (const float y : {data.min.y, data.max.y})
+                    for (const float z : {data.min.z, data.max.z})
+                        points.push_back(glm::vec3(transform * glm::vec4{x, y, z, 1.0F}));
+            points.push_back(glm::vec3(transform * glm::vec4{(data.min + data.max) * 0.5F, 1.0F}));
+            return points;
+        }
+    } // namespace
+
+    std::optional<JobHandle> AsyncTaskManager::startCameraSelection(const CameraSelectionOptions options) {
+        if (camera_selection_state_.thread && camera_selection_state_.thread->joinable()) {
+            if (const auto prior = cameraSelectionStatus(); prior && prior->running())
+                return std::nullopt;
+            camera_selection_state_.thread->join();
+            camera_selection_state_.thread.reset();
+        }
+        auto* const manager = viewer_->getSceneManager();
+        if (!manager || !viewer_->project_lifecycle_)
+            return std::nullopt;
+        auto& scene = manager->getScene();
+        std::vector<core::Uuid> uuids;
+        std::vector<bool> enabled;
+        std::vector<CameraSelectionState::CameraSnapshot> cameras;
+        for (const auto* node : scene.getNodes()) {
+            if (node && node->type == core::NodeType::CAMERA && node->camera) {
+                uuids.push_back(node->uuid);
+                enabled.push_back(node->training_enabled);
+                CameraSelectionState::CameraSnapshot snapshot{.uuid = node->uuid};
+                const auto rotation = node->camera->R().cpu().contiguous().to_vector();
+                const auto translation = node->camera->T().cpu().contiguous().to_vector();
+                snapshot.focal_x = node->camera->focal_x();
+                snapshot.focal_y = node->camera->focal_y();
+                snapshot.center_x = node->camera->center_x();
+                snapshot.center_y = node->camera->center_y();
+                snapshot.width = static_cast<float>(node->camera->camera_width());
+                snapshot.height = static_cast<float>(node->camera->camera_height());
+                snapshot.model = node->camera->camera_model_type();
+                if (rotation.size() >= 9 && translation.size() >= 3 && snapshot.focal_x > 0.0F && snapshot.focal_y > 0.0F && snapshot.width > 0.0F && snapshot.height > 0.0F) {
+                    glm::mat4 local_world_to_camera(1.0F);
+                    for (int row = 0; row < 3; ++row) {
+                        for (int column = 0; column < 3; ++column)
+                            local_world_to_camera[column][row] = rotation[row * 3 + column];
+                        local_world_to_camera[3][row] = translation[row];
+                    }
+                    const glm::mat4 camera_to_world = scene.getWorldTransform(node->id) * glm::inverse(local_world_to_camera);
+                    snapshot.world_to_camera = glm::inverse(camera_to_world);
+                    snapshot.center = glm::vec3(camera_to_world[3]);
+                    snapshot.forward = glm::normalize(glm::vec3(camera_to_world * glm::vec4{0.0F, 0.0F, 1.0F, 0.0F}));
+                    snapshot.fov = std::max({std::atan(snapshot.width / (2.0F * snapshot.focal_x)),
+                                             std::atan(snapshot.height / (2.0F * snapshot.focal_y)), glm::radians(1.0F)});
+                    snapshot.pose_valid = std::isfinite(snapshot.center.x) && std::isfinite(snapshot.center.y) && std::isfinite(snapshot.center.z) &&
+                                          std::isfinite(snapshot.forward.x) && std::isfinite(snapshot.forward.y) && std::isfinite(snapshot.forward.z);
+                }
+                cameras.push_back(snapshot);
+            }
+        }
+        std::vector<glm::vec3> cropbox_points;
+        core::Uuid cropbox_uuid;
+        bool has_cropbox = false;
+        if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
+            const auto* cropbox = scene.getNodeById(options.cropbox_id);
+            if (!cropbox || !cropbox->cropbox)
+                return std::nullopt;
+            if (std::ranges::any_of(cameras, [](const auto& camera) {
+                    return camera.model != core::CameraModelType::PINHOLE;
+                })) {
+                if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
+                              LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
+                    return std::nullopt;
+                jobs_.failed(camera_selection_state_.job,
+                             LOC("scene.camera_selection_pinhole_required"),
+                             LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS));
+                publishCameraSelectionState();
+                return camera_selection_state_.job;
+            }
+            cropbox_points = cropbox_world_points(scene, *cropbox);
+            cropbox_uuid = cropbox->uuid;
+            has_cropbox = true;
+        }
+        if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
+                      LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
+            return std::nullopt;
+        publishCameraSelectionState();
+        camera_selection_state_.completion.store(CameraSelectionState::Completion::Idle, std::memory_order_release);
+        {
+            const std::lock_guard lock(camera_selection_state_.mutex);
+            camera_selection_state_.document_epoch = viewer_->project_lifecycle_->documentEpoch();
+            camera_selection_state_.scene_generation = scene.renderGeneration();
+            camera_selection_state_.camera_uuids = std::move(uuids);
+            camera_selection_state_.cameras = std::move(cameras);
+            camera_selection_state_.cropbox_uuid = cropbox_uuid;
+            camera_selection_state_.cropbox_points = std::move(cropbox_points);
+            camera_selection_state_.has_cropbox = has_cropbox;
+            camera_selection_state_.selected_indices.clear();
+        }
+        const auto job = camera_selection_state_.job;
+        std::vector<bool> snapshot_enabled = std::move(enabled);
+        std::vector<CameraSelectionState::CameraSnapshot> snapshot_cameras;
+        std::vector<glm::vec3> snapshot_cropbox_points;
+        {
+            const std::lock_guard lock(camera_selection_state_.mutex);
+            snapshot_cameras = camera_selection_state_.cameras;
+            snapshot_cropbox_points = camera_selection_state_.cropbox_points;
+        }
+        camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points)](std::stop_token stop) mutable {
+            jobs_.work(job);
+            std::vector<size_t> selected;
+            std::string error;
+            const auto count = snapshot_enabled.size();
+            const auto cancelled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
+            try {
+                if (options.operation == CameraSelectionOperation::EnableAll) {
+                    selected.resize(count);
+                    std::iota(selected.begin(), selected.end(), size_t{0});
+                } else if (options.operation == CameraSelectionOperation::Invert) {
+                    for (size_t index = 0; index < count; ++index) {
+                        if (cancelled())
+                            break;
+                        if (!snapshot_enabled[index])
+                            selected.push_back(index);
+                    }
+                } else if (options.operation == CameraSelectionOperation::Random) {
+                    selected.resize(count);
+                    std::iota(selected.begin(), selected.end(), size_t{0});
+                    std::mt19937 generator{std::random_device{}()};
+                    std::shuffle(selected.begin(), selected.end(), generator);
+                    const auto target = static_cast<size_t>(std::clamp(
+                        std::floor(static_cast<double>(std::clamp(options.percentage, 0.0F, 100.0F)) * count / 100.0 + 0.5),
+                        0.0, static_cast<double>(count)));
+                    selected.resize(target);
+                } else if (options.operation == CameraSelectionOperation::EveryN) {
+                    const auto step = static_cast<size_t>(std::max(1, options.every_n));
+                    for (size_t index = 0; index < count; index += step) {
+                        if (cancelled())
+                            break;
+                        selected.push_back(index);
+                    }
+                } else if (options.operation == CameraSelectionOperation::Distinct) {
+                    std::vector<float> positions;
+                    std::vector<size_t> pose_indices;
+                    positions.reserve(count * 3); pose_indices.reserve(count);
+                    for (size_t index = 0; index < count; ++index) if (cameras[index].pose_valid) {
+                        positions.insert(positions.end(), {cameras[index].center.x, cameras[index].center.y, cameras[index].center.z}); pose_indices.push_back(index);
+                    }
+                    CameraSelectionPointCloud cloud{positions.data(), pose_indices.size()};
+                    CameraSelectionKDTree tree(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
+                    tree.buildIndex();
+                    std::vector<float> distances;
+                    for (size_t point = 0; point < pose_indices.size(); ++point) {
+                        if (cancelled()) break;
+                        std::array<size_t, 2> indices{}; std::array<float, 2> squared{};
+                        nanoflann::KNNResultSet<float> result(2); result.init(indices.data(), squared.data());
+                        tree.findNeighbors(result, positions.data() + point * 3, nanoflann::SearchParameters(0));
+                        if (result.size() == 2 && squared[1] > 1.e-18F) distances.push_back(std::sqrt(squared[1]));
+                        if ((point & 63U) == 0U) jobs_.report(job, 0.4F * static_cast<float>(point) / std::max<size_t>(pose_indices.size(), 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
+                    }
+                    std::sort(distances.begin(), distances.end());
+                    const float spacing = distances.empty() ? 1.0F : std::max(distances[distances.size() / 2], 1.e-6F);
+                    const float threshold = std::clamp(options.overlap, 0.0F, 100.0F);
+                    if (threshold <= 0.0F) {
+                        if (const auto found = std::ranges::find_if(cameras, [](const auto& camera) { return camera.pose_valid; }); found != cameras.end())
+                            selected.push_back(static_cast<size_t>(std::distance(cameras.begin(), found)));
+                    } else {
+                    const float radius = threshold <= 0.0F ? 0.0F : 1.5F * spacing * std::sqrt(std::max(0.0F, 100.0F / threshold - 1.0F));
+                    const float cell_size = std::max(radius, 1.e-6F);
+                    std::unordered_map<CameraSelectionGridCell, std::vector<size_t>, CameraSelectionGridCellHash> grid;
+                    const auto cell_for = [cell_size](const glm::vec3 point) { return CameraSelectionGridCell{static_cast<int>(std::floor(point.x / cell_size)), static_cast<int>(std::floor(point.y / cell_size)), static_cast<int>(std::floor(point.z / cell_size))}; };
+                    const int cell_radius = radius > 0.0F ? 1 : 0;
+                    for (size_t index = 0; index < count; ++index) {
+                        if (cancelled()) break;
+                        const auto& candidate = cameras[index];
+                        if (!candidate.pose_valid) continue;
+                        const auto cell = cell_for(candidate.center);
+                        bool keep = true;
+                        for (int x = -cell_radius; keep && x <= cell_radius; ++x)
+                            for (int y = -cell_radius; keep && y <= cell_radius; ++y)
+                                for (int z = -cell_radius; keep && z <= cell_radius; ++z)
+                                    if (const auto found = grid.find({cell.x + x, cell.y + y, cell.z + z}); found != grid.end())
+                                        for (const auto prior : found->second)
+                                            if (camera_selection_overlap(candidate, cameras[prior], spacing) >= threshold) { keep = false; break; }
+                        if (keep) { selected.push_back(index); grid[cell].push_back(index); }
+                        if ((index & 63U) == 0U) jobs_.report(job, 0.4F + 0.5F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
+                    }
+                    }
+                } else if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
+                    if (cropbox_points.empty()) error = LOC("scene.camera_selection_cropbox_required");
+                    else for (size_t index = 0; index < count; ++index) {
+                        if (cancelled()) break;
+                        if (camera_selection_crop_coverage(cameras[index], cropbox_points) >= std::clamp(options.coverage, 0.0F, 100.0F)) selected.push_back(index);
+                        if ((index & 63U) == 0U) jobs_.report(job, 0.9F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
+                    }
+                }
+            } catch (const std::exception& exception) {
+                error = exception.what();
+            }
+            const bool was_cancelled = cancelled();
+            if (!was_cancelled && error.empty()) {
+                const std::lock_guard lock(camera_selection_state_.mutex);
+                camera_selection_state_.selected_indices = std::move(selected);
+                jobs_.report(job, 1.0F, LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+            }
+            jobs_.finishWork(job, was_cancelled, error);
+            camera_selection_state_.completion.store(
+                !was_cancelled && error.empty() ? CameraSelectionState::Completion::Apply : CameraSelectionState::Completion::Settle,
+                std::memory_order_release);
+            publishCameraSelectionState();
+            wakeMainThreadForAsyncWork();
+        });
+        return job;
+    }
+
+    void AsyncTaskManager::pollCameraSelectionCompletion() {
+        const auto completion = camera_selection_state_.completion.exchange(
+            CameraSelectionState::Completion::Idle, std::memory_order_acq_rel);
+        if (completion == CameraSelectionState::Completion::Idle)
+            return;
+        if (camera_selection_state_.thread && camera_selection_state_.thread->joinable()) {
+            camera_selection_state_.thread->join();
+            camera_selection_state_.thread.reset();
+        }
+        if (completion == CameraSelectionState::Completion::Apply) {
+            std::vector<core::Uuid> uuids;
+            std::vector<size_t> selected_indices;
+            uint64_t epoch = 0;
+            uint64_t scene_generation = 0;
+            core::Uuid cropbox_uuid;
+            std::vector<glm::vec3> cropbox_points;
+            bool has_cropbox = false;
+            {
+                const std::lock_guard lock(camera_selection_state_.mutex);
+                uuids = camera_selection_state_.camera_uuids;
+                selected_indices = camera_selection_state_.selected_indices;
+                epoch = camera_selection_state_.document_epoch;
+                scene_generation = camera_selection_state_.scene_generation;
+                cropbox_uuid = camera_selection_state_.cropbox_uuid;
+                cropbox_points = camera_selection_state_.cropbox_points;
+                has_cropbox = camera_selection_state_.has_cropbox;
+            }
+            auto* const manager = viewer_->getSceneManager();
+            const bool cancel_requested = jobs_.cancelRequested(camera_selection_state_.job);
+            bool valid = manager && viewer_->project_lifecycle_ &&
+                         viewer_->project_lifecycle_->documentEpoch() == epoch &&
+                         manager->getScene().renderGeneration() == scene_generation &&
+                         !cancel_requested;
+            std::unordered_set<core::NodeId> selected;
+            if (valid) {
+                std::unordered_set<core::Uuid> current;
+                for (const auto* node : manager->getScene().getNodes())
+                    if (node && node->type == core::NodeType::CAMERA && node->camera)
+                        current.insert(node->uuid);
+                valid = current.size() == uuids.size() &&
+                        std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
+            }
+            if (valid && has_cropbox) {
+                const auto* cropbox = manager->getScene().getNodeByUuid(cropbox_uuid);
+                valid = cropbox && cropbox->cropbox &&
+                        same_cropbox_points(cropbox_points, cropbox_world_points(manager->getScene(), *cropbox));
+            }
+            if (valid) {
+                for (const size_t index : selected_indices) {
+                    if (index >= uuids.size())
+                        continue;
+                    const auto* node = manager->getScene().getNodeByUuid(uuids[index]);
+                    if (!node || node->type != core::NodeType::CAMERA) {
+                        selected.clear();
+                        break;
+                    }
+                    selected.insert(node->id);
+                }
+            }
+            if (cancel_requested) {
+                jobs_.canceled(camera_selection_state_.job);
+            } else if (!valid || (selected.empty() && !selected_indices.empty())) {
+                jobs_.failed(camera_selection_state_.job, LOC("scene.camera_selection_stale"),
+                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+            } else {
+                static_cast<void>(manager->getScene().setCameraTrainingSelection(selected));
+                jobs_.completed(camera_selection_state_.job);
+            }
+            publishCameraSelectionState();
+            return;
+        }
+        if (const auto state = jobs_.update(camera_selection_state_.job); state && state->status == JobStatus::CompletionPending) {
+            if (state->worker_canceled)
+                jobs_.canceled(camera_selection_state_.job);
+            else if (!state->error.empty())
+                jobs_.failed(camera_selection_state_.job, state->error, state->stage);
+            else
+                jobs_.completed(camera_selection_state_.job);
+        }
+        publishCameraSelectionState();
+    }
+
+    void AsyncTaskManager::cancelCameraSelection() {
+        jobs_.requestCancel(camera_selection_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+        publishCameraSelectionState();
+        if (camera_selection_state_.thread)
+            camera_selection_state_.thread->request_stop();
     }
 
 } // namespace lfs::vis::gui

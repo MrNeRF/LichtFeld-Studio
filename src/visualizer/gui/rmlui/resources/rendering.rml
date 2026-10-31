@@ -441,6 +441,12 @@
             <span class="slider-value">{{camera_frustum_scale | format_float(3)}}</span>
           </div>
         </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.hide_disabled_camera_frustums">
+          <span class="setting-row__label-col" data-reset-prop="hide_disabled_camera_frustums">{{label_hide_disabled_camera_frustums}}</span>
+          <label class="setting-row__control-col setting-row__control-col--checkbox">
+            <input type="checkbox" data-checked="hide_disabled_camera_frustums" />
+          </label>
+        </div>
       </div>
       <div class="text-muted">@tr:rendering_panel.project_values_hint</div>
       <div class="rendering-default-actions">

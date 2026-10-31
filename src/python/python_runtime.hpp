@@ -402,6 +402,10 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API int get_selected_camera_uid();
     LFS_PYTHON_RUNTIME_API bool get_invert_masks();
 
+    // Transient Scene Graph request consumed by the built-in camera-selection panel.
+    LFS_PYTHON_RUNTIME_API void set_camera_selection_operation(std::string operation);
+    LFS_PYTHON_RUNTIME_API std::string get_camera_selection_operation();
+
     // Sequencer visibility
     using IsSequencerVisibleCallback = bool (*)();
     using SetSequencerVisibleCallback = void (*)(bool);

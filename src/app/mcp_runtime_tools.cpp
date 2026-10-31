@@ -78,7 +78,7 @@ namespace lfs::app {
                         {"live_holders", std::move(holders)}};
         }
 
-        constexpr std::array<std::string_view, 10> kRuntimeJobIds = {
+        constexpr std::array<std::string_view, 11> kRuntimeJobIds = {
             "collision.main",
             "editor.python",
             "shader.compile",
@@ -89,6 +89,7 @@ namespace lfs::app {
             "mesh2splat",
             "operator.modal",
             "apriltag.scan",
+            "camera.selection",
         };
 
         json supported_runtime_job_ids_json() {
@@ -118,6 +119,8 @@ namespace lfs::app {
         std::string_view runtime_job_label(const std::string_view job_id) {
             if (job_id == "apriltag.scan")
                 return LOC("runtime.apriltag_scan");
+            if (job_id == "camera.selection")
+                return LOC("scene.camera_selection");
             if (job_id == "collision.main")
                 return "Collision";
             if (job_id == "editor.python") {
@@ -707,6 +710,23 @@ namespace lfs::app {
             return payload;
         }
 
+        json camera_selection_job_json(vis::gui::GuiManager& gui) {
+            const auto state = gui.asyncTasks().cameraSelectionStatus();
+            const bool active = state && state->running();
+            const bool completed = state && state->status == vis::JobStatus::Completed;
+            const bool canceled = state && state->status == vis::JobStatus::Canceled;
+            const bool failed = state && state->status == vis::JobStatus::Failed;
+            json payload{{"id", "camera.selection"}, {"label", LOC("scene.camera_selection")}, {"kind", "selection"},
+                         {"active", active}, {"status", active ? "running" : completed ? "finished" : failed ? "failed" : canceled ? "cancelled" : "idle"},
+                         {"outcome", active ? "running" : completed ? "completed" : failed ? "failed" : canceled ? "cancelled" : "idle"},
+                         {"progress", state ? state->progress : 0.0F}, {"stage", state ? state->stage : ""},
+                         {"cancel_supported", active}, {"dismiss_supported", false},
+                         {"actions", {{"start", false}, {"pause", false}, {"resume", false}, {"cancel", active}, {"dismiss", false}}}};
+            if (state && !state->error.empty()) payload["error"] = state->error;
+            add_runtime_job_links(payload);
+            return payload;
+        }
+
         json operator_modal_job_json() {
             auto& operators = vis::op::operators();
             const auto modal_state = operators.modalState();
@@ -763,6 +783,10 @@ namespace lfs::app {
                 return gui ? std::expected<json, std::string>(apriltag_job_json(*gui))
                            : std::expected<json, std::string>(unavailable_job_json(
                                  "apriltag.scan", LOC("runtime.apriltag_scan"), "calibration", "GUI manager is not initialized"));
+            }
+            if (job_id == "camera.selection") {
+                return gui ? std::expected<json, std::string>(camera_selection_job_json(*gui))
+                           : std::expected<json, std::string>(unavailable_job_json("camera.selection", LOC("scene.camera_selection"), "selection", "GUI manager is not initialized"));
             }
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);
@@ -1079,6 +1103,13 @@ namespace lfs::app {
                 if (!state || !state->running())
                     return std::unexpected("AprilTag scan is not running");
                 gui->asyncTasks().cancelAprilTagScan();
+                return {};
+            }
+            if (job_id == "camera.selection") {
+                if (action != "cancel" || !gui) return std::unexpected("Only cancellation is supported for camera.selection");
+                const auto state = gui->asyncTasks().cameraSelectionStatus();
+                if (!state || !state->running()) return std::unexpected("Camera selection is not running");
+                gui->asyncTasks().cancelCameraSelection();
                 return {};
             }
             if (job_id == "editor.python") {

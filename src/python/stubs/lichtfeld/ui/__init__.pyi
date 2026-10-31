@@ -2876,6 +2876,9 @@ def get_camera_browse_repeat() -> bool:
 def set_camera_browse_repeat(enabled: bool) -> None:
     """Enable held camera shortcuts through dataset images"""
 
+def get_camera_selection_operation() -> str:
+    """Get the Scene Graph camera-selection dialog operation"""
+
 def get_camera_browse_repeat_rate() -> float:
     """Get camera image repeat rate in images per second"""
 

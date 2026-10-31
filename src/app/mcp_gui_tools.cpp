@@ -1078,6 +1078,7 @@ namespace lfs::app {
                                  {"show_center_markers", settings.show_center_markers},
                                  {"show_camera_frustums", settings.show_camera_frustums},
                                  {"camera_frustum_scale", settings.camera_frustum_scale},
+                                 {"hide_disabled_camera_frustums", settings.hide_disabled_camera_frustums},
                                  {"train_camera_color", json::array({settings.train_camera_color[0], settings.train_camera_color[1], settings.train_camera_color[2]})},
                                  {"eval_camera_color", json::array({settings.eval_camera_color[0], settings.eval_camera_color[1], settings.eval_camera_color[2]})},
                                  {"show_pivot", settings.show_pivot},
@@ -1305,6 +1306,7 @@ namespace lfs::app {
             set_bool("show_center_markers", settings.show_center_markers);
             set_bool("show_camera_frustums", settings.show_camera_frustums);
             set_float("camera_frustum_scale", settings.camera_frustum_scale);
+            set_bool("hide_disabled_camera_frustums", settings.hide_disabled_camera_frustums);
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
             set_float("split_position", settings.split_position);
@@ -2463,6 +2465,48 @@ namespace lfs::app {
 
         // --- Scene operations (posted to GUI thread) ---
         registry.register_tool(
+            McpTool{
+                .name = "camera_selection.start",
+                .description = "Start a cancellable global camera-training selection job",
+                .input_schema = {.type = "object", .properties = json{
+                    {"operation", {{"type", "string"}}},
+                    {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
+                    {"every_n", {{"type", "integer"}, {"minimum", 1}}},
+                    {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
+                    {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
+                    {"cropbox", {{"type", "string"}}}}, .required = {"operation"}},
+                .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    auto* manager = viewer_impl->getSceneManager();
+                    auto* gui = viewer_impl->getGuiManager();
+                    if (!manager || !gui)
+                        return json{{"error", "Scene manager not initialized"}};
+                    auto& scene = manager->getScene();
+                    const auto operation = args.at("operation").get<std::string>();
+                    using Selection = vis::gui::AsyncTaskManager;
+                    const auto type = operation == "enable_all" ? Selection::CameraSelectionOperation::EnableAll
+                                    : operation == "disable_all" ? Selection::CameraSelectionOperation::DisableAll
+                                    : operation == "invert" ? Selection::CameraSelectionOperation::Invert
+                                    : operation == "random" ? Selection::CameraSelectionOperation::Random
+                                    : operation == "every_n" ? Selection::CameraSelectionOperation::EveryN
+                                    : operation == "distinct" ? Selection::CameraSelectionOperation::Distinct
+                                    : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
+                                    : throw std::invalid_argument("Unsupported camera selection operation");
+                    core::NodeId cropbox_id = core::NULL_NODE;
+                    if (type == Selection::CameraSelectionOperation::CropBoxVisibility) {
+                        cropbox_id = scene.getNodeIdByName(args.value("cropbox", ""));
+                        if (cropbox_id == core::NULL_NODE)
+                            return json{{"error", "A valid crop box is required"}};
+                    }
+                    const auto handle = gui->asyncTasks().startCameraSelection({.operation = type,
+                        .percentage = args.value("percentage", 25.0F), .every_n = args.value("every_n", 2),
+                        .overlap = args.value("overlap", 65.0F), .coverage = args.value("coverage", 40.0F), .cropbox_id = cropbox_id});
+                    if (!handle) return json{{"error", "Camera selection is already running"}};
+                    return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
+                });
+            });
+        registry.register_tool(
             McpTool{.name = "scene.generate_collision",
                     .description = "Voxelize exactly one selected loaded splat into a new undoable collision node; observe collision.main",
                     .input_schema = {.type = "object", .properties = json{{"voxel_size", {{"type", "number"}}}, {"opacity", {{"type", "number"}}}, {"auto_resolution", {{"type", "boolean"}}}, {"cleanup", {{"type", "boolean"}}}, {"max_gaussian_area", {{"type", "number"}}}}, .required = {}},
@@ -3411,6 +3455,7 @@ namespace lfs::app {
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
+                        {"hide_disabled_camera_frustums", json{{"type", "boolean"}}},
                         {"point_cloud_mode", json{{"type", "boolean"}}},
                         {"selection_outline", json{{"type", "boolean"}}},
                         {"selection_outline_holes", json{{"type", "boolean"}}},

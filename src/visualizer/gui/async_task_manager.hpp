@@ -23,6 +23,7 @@
 #include "training/training_cropbox_mask.hpp"
 #include "visualizer/apriltag_calibration.hpp"
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <deque>
 #include <expected>
@@ -36,6 +37,7 @@
 #include <shared_mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -257,6 +259,28 @@ namespace lfs::vis {
             }
             void cancelSplatSimplify();
 
+            enum class CameraSelectionOperation : uint8_t {
+                EnableAll,
+                DisableAll,
+                Invert,
+                Random,
+                EveryN,
+                Distinct,
+                CropBoxVisibility,
+            };
+            struct CameraSelectionOptions {
+                CameraSelectionOperation operation = CameraSelectionOperation::Random;
+                float percentage = 25.0F;
+                int every_n = 2;
+                float overlap = 65.0F;
+                float coverage = 40.0F;
+                core::NodeId cropbox_id = core::NULL_NODE;
+            };
+            [[nodiscard]] std::optional<JobHandle> startCameraSelection(CameraSelectionOptions options);
+            void pollCameraSelectionCompletion();
+            void cancelCameraSelection();
+            [[nodiscard]] std::optional<JobSnapshot> cameraSelectionStatus() const { return jobs_.peek(camera_selection_state_.job); }
+
         private:
             friend class CollisionJobsTest;
             bool import_cancel_pending_ = false;
@@ -348,6 +372,7 @@ namespace lfs::vis {
             void publishVideoExportOverlayState();
             void publishMesh2SplatState();
             void publishSplatSimplifyState();
+            void publishCameraSelectionState();
             [[nodiscard]] float
             jobProgress(JobHandle handle) const;
             [[nodiscard]] std::string
@@ -460,6 +485,42 @@ namespace lfs::vis {
             };
             SplatSimplifyState splat_simplify_state_;
             uint64_t splat_simplify_scene_epoch_ = 0;
+
+            struct CameraSelectionState {
+                enum class Completion {
+                    Idle,
+                    Apply,
+                    Settle,
+                };
+                struct CameraSnapshot {
+                    core::Uuid uuid;
+                    glm::vec3 center{0.0f};
+                    glm::vec3 forward{0.0f, 0.0f, 1.0f};
+                    float fov = 0.0f;
+                    float focal_x = 0.0f;
+                    float focal_y = 0.0f;
+                    float center_x = 0.0f;
+                    float center_y = 0.0f;
+                    float width = 0.0f;
+                    float height = 0.0f;
+                    core::CameraModelType model = core::CameraModelType::PINHOLE;
+                    glm::mat4 world_to_camera{1.0f};
+                    bool pose_valid = false;
+                };
+                JobHandle job;
+                std::atomic<Completion> completion{Completion::Idle};
+                mutable std::mutex mutex;
+                uint64_t document_epoch = 0;
+                uint64_t scene_generation = 0;
+                std::vector<core::Uuid> camera_uuids;
+                std::vector<CameraSnapshot> cameras;
+                core::Uuid cropbox_uuid;
+                std::vector<glm::vec3> cropbox_points;
+                bool has_cropbox = false;
+                std::vector<size_t> selected_indices;
+                std::optional<std::jthread> thread;
+            };
+            CameraSelectionState camera_selection_state_;
         };
 
     } // namespace gui

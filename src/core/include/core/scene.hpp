@@ -765,6 +765,11 @@ namespace lfs::core {
         [[nodiscard]] CameraTrainingCounts getCameraTrainingCounts(NodeId camera_group_id) const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);
         void setCameraTrainingEnabled(NodeId id, bool enabled);
+        // Sets the global training selection in one scene mutation.  A camera
+        // is enabled exactly when its id occurs in enabled_camera_ids.
+        [[nodiscard]] bool setCameraTrainingSelection(const std::unordered_set<NodeId>& enabled_camera_ids);
+        void setAllCameraTrainingEnabled(bool enabled);
+        void invertAllCameraTrainingEnabled();
 
         [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
         [[nodiscard]] bool isCameraTrainingEnabled(int uid) const;
