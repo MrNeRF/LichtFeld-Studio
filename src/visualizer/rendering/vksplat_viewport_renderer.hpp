@@ -131,7 +131,7 @@ namespace lfs::vis {
             RenderTargetId target,
             bool synchronize_input_upload = false,
             bool deterministic_export = false);
-        [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
+        [[nodiscard]] LFS_VIS_API std::expected<RenderResult, std::string> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
@@ -170,7 +170,7 @@ namespace lfs::vis {
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);
-        void invalidateStochasticHistory(DirtyMask dirty_flags = DirtyFlag::ALL);
+        LFS_VIS_API void invalidateStochasticHistory(DirtyMask dirty_flags = DirtyFlag::ALL);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -187,7 +187,7 @@ namespace lfs::vis {
         [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             RenderTargetId target) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
             RenderTargetId target) const;
         [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
@@ -272,9 +272,9 @@ namespace lfs::vis {
             bool stochastic = false, warmup = false;
         };
         // `deterministic_export` is render()'s parameter of that name: the draw's band decision depends on it.
-        [[nodiscard]] std::expected<PreparedDraw, std::string> prepare(VulkanContext&, const core::SplatData&,
-                                                                       const rendering::ViewportRenderRequest&, RenderTargetId, bool synchronize_input_upload = false,
-                                                                       bool capture = false, bool deterministic_export = false);
+        [[nodiscard]] LFS_VIS_API std::expected<PreparedDraw, std::string> prepare(VulkanContext&, const core::SplatData&,
+                                                                                   const rendering::ViewportRenderRequest&, RenderTargetId, bool synchronize_input_upload = false,
+                                                                                   bool capture = false, bool deterministic_export = false);
         [[nodiscard]] PreparedDraw prepareDecision(const rendering::ViewportRenderRequest&, RenderTargetId, bool synchronize_input_upload,
                                                    bool capture = false, bool deterministic_export = false);
         [[nodiscard]] VulkanGSRenderer::HostPlan hostsFor(const VulkanGSRenderer::HostInputs& inputs) { return renderer_.hostsFor(inputs); }

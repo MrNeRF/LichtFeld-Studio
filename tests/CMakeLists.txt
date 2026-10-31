@@ -3074,7 +3074,9 @@ if(LFS_VKSPLAT_VIEWPORT_BUILD AND TARGET lfs_visualizer AND TARGET lfs_user_shad
         endif()
     endforeach()
     target_link_libraries(vksplat_custom_effect_tests PRIVATE GTest::gtest_main)
-    target_link_libraries(shader_service_tests PRIVATE GTest::gtest_main)
+    # lfs_visualizer links these static libraries privately; on Windows it is a DLL and
+    # does not re-export their symbols, so the test has to link them itself.
+    target_link_libraries(shader_service_tests PRIVATE lfs_io lfs_sequencer GTest::gtest_main)
     # The standalone benchmark has its own main and is deliberately absent from ctest.
     if(TARGET bench_user_shaders)
         target_compile_definitions(bench_user_shaders PRIVATE
