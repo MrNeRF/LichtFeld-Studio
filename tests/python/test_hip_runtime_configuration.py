@@ -56,7 +56,7 @@ class HipConfiguration(unittest.TestCase):
             'file(WRITE "${CMAKE_BINARY_DIR}/backend_configuration_includes.txt" "${includes}")\n',
             encoding="utf-8")
         build = directory / "build"
-        result = subprocess.run([CMAKE, "-S", str(directory), "-B", str(build), "-G", "Ninja"],
+        result = subprocess.run([CMAKE, "-S", str(directory), "-B", str(build)],
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return build
