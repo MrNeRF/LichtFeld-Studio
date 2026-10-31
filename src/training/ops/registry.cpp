@@ -75,8 +75,7 @@ namespace lfs::training {
         static const TrainingOps& kCuda = cuda_training_ops_table();
         static const TrainingOps& kVulkan = vulkan_training_ops_table();
         static const TrainingOps& kMetal = metal_training_ops_table();
-        static const TrainingOps& kHip = hip_training_ops_table();
-        static const std::array tables{&kCuda, &kVulkan, &kMetal, &kHip};
+        static const std::array tables{&kCuda, &kVulkan, &kMetal, &hip_training_ops_table()};
         const auto index = static_cast<size_t>(backend);
         return index < tables.size() ? *tables[index] : kVulkan;
     }
