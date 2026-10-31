@@ -43,16 +43,7 @@ namespace lfs::media::detail {
             out += "<lfs:";
             out += name;
             out += ">";
-            for (char c : value) {
-                if (c == '&')
-                    out += "&amp;";
-                else if (c == '<')
-                    out += "&lt;";
-                else if (c == '>')
-                    out += "&gt;";
-                else
-                    out += c;
-            }
+            json_detail::appendXmlText(out, value);
             out += "</lfs:";
             out += name;
             out += ">";
@@ -121,13 +112,13 @@ namespace lfs::media::detail {
         // Rewriting the packet requires updating the carrier lengths/structure.
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
-    Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        if ((metadata.format == FrameFileFormat::JPEG || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
+    Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info, bool sidecar) {
+        if (((metadata.format == FrameFileFormat::JPEG && !sidecar) || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
             tree += tree_start;
-            frameProperties(tree, width, height, metadata.applied_rotation, info, embeddedMetadataPolicy(metadata.format));
+            frameProperties(tree, width, height, metadata.applied_rotation, info, sidecar ? std::string_view(sidecar_metadata_policy) : embeddedMetadataPolicy(metadata.format));
             if (tree.size() + metadata.source_properties.size() + imageXmpSuffix().size() > max_packet_bytes)
                 return metadataError(ErrorCode::ResourceExhausted, "Image XMP exceeds the export packet budget");
             return tree;
@@ -135,29 +126,21 @@ namespace lfs::media::detail {
             return metadataError(ErrorCode::ResourceExhausted, "Image frame metadata allocation failed");
         }
     }
-    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format) {
+    Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog& catalog, int applied_rotation, FrameFileFormat format, bool sidecar) {
         if (embeddedMetadataPolicy(format).empty())
             return metadataError(ErrorCode::InvalidArgument, "Embedded metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
         try {
             const auto summary = summarizeSourceMetadata(catalog);
             if (!summary)
                 return summary.error();
-            // ASCII JSON escapes controls and non-ASCII before XML embedding.
-            const auto json = json_detail::sourceMetadataResult(catalog, *summary).dump(-1, ' ', true, nlohmann::json::error_handler_t::replace);
-            std::size_t escaped_bytes = json.size();
-            for (char c : json) {
-                if (c == '&')
-                    escaped_bytes += 4;
-                else if (c == '<' || c == '>')
-                    escaped_bytes += 3;
-            }
-            if (escaped_bytes > max_packet_bytes - 1024)
+            auto properties = json_detail::sourceMetadataXmlProperty(json_detail::sourceMetadataResult(catalog, *summary), max_packet_bytes - 1024);
+            if (!properties)
                 return metadataError(ErrorCode::ResourceExhausted, "Image source metadata exceeds the export packet budget");
             EmbeddedImageMetadata result;
             result.format = format;
             result.applied_rotation = applied_rotation;
-            property(result.source_properties, "SourceMetadata", json);
-            if (format != FrameFileFormat::JPEG)
+            result.source_properties = std::move(*properties);
+            if (format != FrameFileFormat::JPEG || sidecar)
                 return result;
             // Reserve only the largest frame envelope this writer can produce.
             // A valid Standard packet must not depend on the MD5 provider.
@@ -199,8 +182,8 @@ namespace lfs::media::detail {
             return metadataError(ErrorCode::ResourceExhausted, "Image metadata allocation failed");
         }
     }
-    Result<std::string> imageXmpPacket(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info) {
-        auto packet = imageXmpPrefix(metadata, width, height, info);
+    Result<std::string> imageXmpPacket(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info, bool sidecar) {
+        auto packet = imageXmpPrefix(metadata, width, height, info, sidecar);
         if (!packet)
             return packet.error();
         try {

@@ -771,3 +771,67 @@ contract; the explicit XMP API handles this packet. Embedding preserves private
 source information, including GPS, identifiers and locator bytes, under the
 existing opt-in preservation policy. No additional encoder or provider overlay
 is required for metadata insertion.
+
+
+### XMP sidecars for extracted frames
+
+`FileExtraction::write_source_metadata_sidecars`, the matching Python property,
+and CLI `--source-metadata-sidecars` write one UTF-8 XMP file beside each selected
+image. The name is the complete image filename followed by `.xmp`, for example
+`frame_1.jpg.xmp`. Keeping the image extension avoids collisions between image
+formats. The extraction manifest records `sidecar` on each frame,
+`sidecar_metadata_policy: image-static-source-xmp-v1` and
+`sidecar_naming: image-filename-plus-xmp-v1`.
+
+When embedding and sidecars are both requested, their immutable prepared source
+properties are shared whenever the carrier uses the ordinary packet. JPEG
+Extended XMP keeps its separate segmented representation. Packet policy is
+selected at serialization, without mutating the shared properties.
+
+The packet uses the shared source catalog, frame timing, output dimensions and
+applied rotation. The same 32 MiB packet ceiling and XML escaping apply. Static
+GPS and container creation facts remain static source observations. This is an
+explicit preservation option and can retain private identifiers, GPS and locator
+bytes. It also enables source preservation in the manifest. Embedded metadata
+can be requested independently or together with the sidecar; without embedding,
+the image writer receives no additional metadata.
+
+Without `resume`, the normal file sink writes the image and then its XMP with
+existing atomic writers, following the image format's overwrite and cancellation
+options. It does not hash the input video, stage checkpoint records or create a
+checkpoint directory. Existing checkpoint contents do not constrain a plain run.
+Each file is atomic, but the pair is not: cancellation or an XMP write failure
+can leave a published image without its sidecar. A later plain run follows the
+usual overwrite policy rather than verifying or adopting previous output.
+
+Normal sidecar extraction uses the CPU image writer, including JPEG encoding;
+the direct batched GPU JPEG writer bypasses this sink and is disabled for this
+option. Hardware video decoding remains independently selectable. Resume uses
+its existing encoder selection and verifies that provider in the checkpoint.
+CPU image-byte comparisons do not establish GPU encoder equivalence or throughput.
+
+Source preparation counts the ASCII JSON after XML escaping before allocating
+the complete property. It retains the existing source catalog representation
+and packet limit, without an additional complete JSON string beside the XML.
+
+With `resume`, the existing verified checkpoint records selected pixels, image
+and sidecar digests, timing and names before publishing either member. It hashes
+the input video and retains `.media-ingest-checkpoint` for recovery. Replay
+verifies retained members and regenerates only missing ones. A retained image is
+not re-encoded solely to repair its XMP. Modified or untracked members are
+refused; tracked zero-length reservations use the existing recovery policy only
+after companion validation and regeneration checks succeed. Verification of
+retained XMP stops at the packet byte budget.
+
+Resume checks checkpoint/output entry types before reading identity or hashing
+the source. Records must be JSON objects with supported version and encoder
+values. Identity includes sidecar policy, naming, source properties and the
+existing source, selection and encoder identity. Use the same resume request to
+recover an interrupted run, or a fresh directory when changing that identity.
+Resume retains its existing restriction against stale-frame removal. Separate
+file publication does not establish power-loss durability.
+
+This consumer is file extraction through MediaIngest (C++, Python and CLI).
+External XMP collection and automatic sidecar discovery remain separate readers;
+export does not enable them. Generic rendered image sequences continue to use
+their existing APIs.

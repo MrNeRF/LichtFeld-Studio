@@ -54,6 +54,38 @@ namespace {
 } // namespace
 
 int runSourceExifContracts() {
+    {
+        // Compare against the previous complete JSON -> XML representation,
+        // including invalid UTF-8 replacement, controls and numeric formatting.
+        const std::vector<nlohmann::json> values{
+            nullptr, true, -42, UINT64_MAX, -0.0, 1.25,
+            nlohmann::json::array(), nlohmann::json::object(),
+            nlohmann::json{{"<&>\"", {std::string("\0\n\t", 3), "\xc3\xa9", "\xf0\x9f\x98\x80", "bad\xff\xfe", "a<&>b"}}, {"array", {nullptr, false, 42, 1.5}}},
+            std::string(65536, '&')};
+        for (const auto& value : values) {
+            const auto json = value.dump(-1, ' ', true, nlohmann::json::error_handler_t::replace);
+            std::string escaped;
+            for (const auto c : json) {
+                if (c == '&')
+                    escaped += "&amp;";
+                else if (c == '<')
+                    escaped += "&lt;";
+                else if (c == '>')
+                    escaped += "&gt;";
+                else
+                    escaped += c;
+            }
+            const auto exact = json_detail::sourceMetadataXmlProperty(value, escaped.size());
+            require(exact && *exact == "<lfs:SourceMetadata>" + escaped + "</lfs:SourceMetadata>",
+                    "bounded source JSON preserves exact previous XML bytes");
+            require(!json_detail::sourceMetadataXmlProperty(value, escaped.size() - 1),
+                    "one-byte-short XML budget refuses before property allocation");
+            require(json_detail::sourceMetadataXmlProperty(value, escaped.size() + 1) == exact,
+                    "larger XML budget does not change serialized bytes");
+        }
+        require(!json_detail::sourceMetadataXmlProperty(nlohmann::json::array({"&", "tail"}), 0),
+                "zero XML budget cannot underflow or accept a partial value");
+    }
     auto unknown = values(true);
     unknown.envelope = static_cast<ExifEnvelope>(-1);
     ImageExifDescription unknown_description;

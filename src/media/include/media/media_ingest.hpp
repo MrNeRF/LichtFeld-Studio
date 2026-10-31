@@ -66,6 +66,9 @@ namespace lfs::media {
         // Opt-in static demuxer observation in the shared extraction manifest.
         // Includes retained tags/opaque side data, potentially GPS/identifiers.
         bool preserve_source_metadata = false;
+        // Opt-in XMP beside each image (full image filename + .xmp). The
+        // checkpoint is used only with resume; a pair is not atomic.
+        bool write_source_metadata_sidecars = false;
     };
     struct IngestReport {
         std::size_t frames_accepted = 0;

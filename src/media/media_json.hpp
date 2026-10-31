@@ -351,4 +351,75 @@ namespace lfs::media::json_detail {
     inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
         return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
     }
+    inline void appendXmlText(std::string& output, std::string_view text) {
+        for (const auto c : text) {
+            if (c == '&')
+                output += "&amp;";
+            else if (c == '<')
+                output += "&lt;";
+            else if (c == '>')
+                output += "&gt;";
+            else
+                output += c;
+        }
+    }
+    // The DOM is built from our bounded source catalog, not arbitrary nested JSON.
+    // Let the JSON library format every key/scalar (including replacement UTF-8).
+    // Count the XML-escaped output first, then allocate exactly once. Neither
+    // pass retains a second complete JSON serialization alongside the XML.
+    inline std::optional<std::string> sourceMetadataXmlProperty(const json& value, std::size_t max_value_bytes) {
+        const auto visit = [&](const auto& self, const json& node, auto&& emit) -> bool {
+            if (node.is_object()) {
+                if (!emit("{"))
+                    return false;
+                bool first = true;
+                for (const auto& item : node.items()) {
+                    if ((!first && !emit(",")) ||
+                        !emit(json(item.key()).dump(-1, ' ', true, json::error_handler_t::replace)) ||
+                        !emit(":") || !self(self, item.value(), emit))
+                        return false;
+                    first = false;
+                }
+                return emit("}");
+            }
+            if (node.is_array()) {
+                if (!emit("["))
+                    return false;
+                bool first = true;
+                for (const auto& item : node) {
+                    if ((!first && !emit(",")) || !self(self, item, emit))
+                        return false;
+                    first = false;
+                }
+                return emit("]");
+            }
+            return emit(node.dump(-1, ' ', true, json::error_handler_t::replace));
+        };
+        std::size_t bytes = 0;
+        const auto count = [&](std::string_view part) {
+            for (const auto c : part) {
+                const std::size_t size = c == '&' ? 5 : c == '<' || c == '>' ? 4
+                                                                             : 1;
+                if (size > max_value_bytes - bytes)
+                    return false;
+                bytes += size;
+            }
+            return true;
+        };
+        if (!visit(visit, value, count))
+            return std::nullopt;
+        constexpr std::string_view prefix = "<lfs:SourceMetadata>", suffix = "</lfs:SourceMetadata>";
+        std::string result;
+        if (bytes > result.max_size() - prefix.size() - suffix.size())
+            return std::nullopt;
+        result.reserve(prefix.size() + bytes + suffix.size());
+        result += prefix;
+        const auto append = [&](std::string_view part) {
+            appendXmlText(result, part);
+            return true;
+        };
+        visit(visit, value, append);
+        result += suffix;
+        return result;
+    }
 } // namespace lfs::media::json_detail

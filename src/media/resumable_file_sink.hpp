@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 namespace lfs::media::detail {
+    // Do not detach existing image/XMP pairs by bypassing their checkpoint.
     // Extraction checkpoint policy, separate from manifest publication. Codecs,
     // selection and atomic publication remain owned by their existing services.
     class ResumableFileSink final : public FrameSink {
@@ -33,5 +34,6 @@ namespace lfs::media::detail {
         int applied_rotation_ = 0;
         std::shared_ptr<const SourceMetadataCatalog> source_metadata_;
         std::shared_ptr<const EmbeddedImageMetadata> embedded_metadata_;
+        std::shared_ptr<const EmbeddedImageMetadata> sidecar_metadata_;
     };
 } // namespace lfs::media::detail

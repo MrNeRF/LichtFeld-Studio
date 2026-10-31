@@ -1980,6 +1980,123 @@ class IngestCLI(unittest.TestCase):
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
 
+    def test_source_metadata_sidecars_cli(self):
+        import xml.etree.ElementTree as ET
+        directory = self.root / "source-sidecars é 日本語"
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--format", "png", "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
+        self.assertTrue(result["success"])
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["sidecar_metadata_policy"], "image-static-source-xmp-v1")
+        self.assertTrue(manifest["frames"])
+        before = {}
+        for entry in manifest["frames"]:
+            self.assertEqual(entry["sidecar"], entry["file"] + ".xmp")
+            image, sidecar = directory / entry["file"], directory / entry["sidecar"]
+            ET.fromstring(sidecar.read_bytes())
+            before[image.name] = image.read_bytes(), image.stat().st_mtime_ns
+            before[sidecar.name] = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        self.assertFalse((directory / ".media-ingest-checkpoint").exists())
+        result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                "--format", "png", "--interval", "1", "--end", "0.2", "--source-metadata-sidecars")
+        self.assertTrue(result["success"])
+        self.assertEqual({name: value[0] for name, value in before.items()},
+                         {name: (directory / name).read_bytes() for name in before})
+        self.assertFalse((directory / ".media-ingest-checkpoint").exists())
+
+    def test_plain_metadata_extraction_ignores_uncommitted_checkpoint(self):
+        for identity in (None, b"", b"true"):
+            for sidecars in (False, True):
+                with self.subTest(identity=identity, sidecars=sidecars):
+                    directory = self.root / ("uncommitted-" + str(identity) + str(sidecars))
+                    checkpoint = directory / ".media-ingest-checkpoint"
+                    checkpoint.mkdir(parents=True)
+                    path = checkpoint / "identity.json"
+                    if identity is not None:
+                        path.write_bytes(identity)
+                    flags = ("--source-metadata-sidecars",) if sidecars else ()
+                    result, _ = self.invoke("extract", self.source(), "--output", directory,
+                                            "--format", "png", "--interval", "1", "--end", "0.01", *flags)
+                    self.assertTrue(result["success"])
+                    self.assertTrue((directory / "frame_1.png").is_file())
+                    self.assertEqual((directory / "frame_1.png.xmp").exists(), sidecars)
+                    self.assertEqual(path.read_bytes() if path.exists() else None, identity)
+
+    def test_source_metadata_sidecars_cli_recovers_and_refuses_corruption(self):
+        directory = self.root / "sidecar-cli-recovery"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
+        self.invoke(*args)
+        manifest = json.loads((directory / "extraction_metadata.json").read_text(encoding="utf-8"))
+        self.assertTrue(manifest["frames"])
+        entry = manifest["frames"][0]
+        image, sidecar = directory / entry["file"], directory / entry["sidecar"]
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
+        packet = sidecar.read_bytes()
+        sidecar.unlink()
+        self.invoke(*args)
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+        self.assertEqual(sidecar.read_bytes(), packet)
+        sidecar_snapshot = sidecar.read_bytes(), sidecar.stat().st_mtime_ns
+        image.unlink()
+        self.invoke(*args)
+        self.assertEqual(image.read_bytes(), image_snapshot[0])
+        self.assertEqual(sidecar_snapshot, (sidecar.read_bytes(), sidecar.stat().st_mtime_ns))
+        sidecar.write_bytes(packet + b" ")
+        image_snapshot = image.read_bytes(), image.stat().st_mtime_ns
+        result, _ = self.invoke(*args, code=4)
+        self.assertEqual(result["error"]["code"], "FailedPrecondition")
+        self.assertEqual(sidecar.read_bytes(), packet + b" ")
+        self.assertEqual(image_snapshot, (image.read_bytes(), image.stat().st_mtime_ns))
+
+    def test_source_metadata_sidecars_checkpoint_schema_refusal(self):
+        directory = self.root / "sidecar-identity-schema"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
+        self.invoke(*args)
+        identity_path = directory / ".media-ingest-checkpoint/identity.json"
+        identity_bytes = identity_path.read_bytes()
+        identity = json.loads(identity_bytes)
+        before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()}
+        variants = [True, {}, {**identity, "image_encoder": 3}, {**identity, "image_encoder": "unknown"}]
+        for value in variants:
+            with self.subTest(identity=value):
+                identity_path.write_text(json.dumps(value), encoding="utf-8")
+                result, _ = self.invoke(*args, code=4)
+                self.assertEqual(result["error"]["code"], "FailedPrecondition")
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()})
+        identity_path.write_bytes(identity_bytes)
+        self.invoke(*args)
+
+    def test_source_metadata_sidecars_checkpoint_symlink_is_refused(self):
+        directory = self.root / "sidecar-symlink"
+        args = ("extract", self.source(), "--output", directory, "--format", "png",
+                "--interval", "1", "--end", "0.01", "--resume", "--source-metadata-sidecars")
+        self.invoke(*args)
+        checkpoint = directory / ".media-ingest-checkpoint"
+        moved = self.root / "outside-checkpoint"
+        checkpoint.rename(moved)
+        try:
+            try:
+                checkpoint.symlink_to(moved, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"Directory symlinks unavailable: {error}")
+            # Reading this identity before checking its parent would reach the
+            # malformed JSON schema instead of refusing the checkpoint link.
+            target = moved / "identity.json"
+            target.write_bytes(b"true")
+            before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()}
+            for flags in (args, args[:-1]):
+                result, _ = self.invoke(*flags, code=4)
+                self.assertEqual(result["error"]["code"], "FailedPrecondition")
+                self.assertIn("non-symlink", result["error"]["message"])
+                self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in directory.iterdir() if p.is_file()})
+                self.assertEqual(target.read_bytes(), b"true")
+        finally:
+            if checkpoint.is_symlink():
+                checkpoint.unlink()
+            moved.rename(checkpoint)
+
     def test_embedded_avif_metadata_cli(self):
         import xml.etree.ElementTree as ET
         directory = self.root / "embedded-avif"

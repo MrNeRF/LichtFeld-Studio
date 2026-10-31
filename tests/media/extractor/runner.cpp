@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/image_codecs.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "media/file_frame_sink.hpp"
@@ -47,6 +48,15 @@ int main(int argc, char** argv) {
             return runAtomicFileContracts();
         std::ifstream input(lfs::core::utf8_to_path(argv[1]));
         const auto request = json::parse(input);
+        if (request.value("operation", "extract") == "decode-image") {
+            lfs::core::image_codecs::Image image;
+            std::string error;
+            const auto path = lfs::core::utf8_to_path(request.at("input").get<std::string>());
+            if (!lfs::core::image_codecs::decode(path, image, error))
+                throw std::runtime_error(error);
+            std::cout << json{{"width", image.width}, {"height", image.height}, {"channels", image.channels}, {"bytes", image.data.size()}}.dump() << '\n';
+            return 0;
+        }
         if (request.value("operation", "extract") == "source-metadata") {
             lfs::core::image_codecs::XmpLimits limits;
             limits.blocks = request.value("blocks", limits.blocks);
