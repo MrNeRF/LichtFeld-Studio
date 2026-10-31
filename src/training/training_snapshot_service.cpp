@@ -10,6 +10,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/resource_messages.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
@@ -590,6 +591,160 @@ namespace lfs::training {
                    values[upper] * fraction;
         }
 
+        constexpr std::size_t DEVICE_HOLD_ALIGNMENT = 256;
+        // Bounds one copy or SH decode into the hold, as a band does for
+        // the ring.
+        constexpr std::size_t DEVICE_HOLD_PIECE_BYTES =
+            256ull * 1024 * 1024;
+        constexpr auto DEVICE_HOLD_RELIEF_WAIT =
+            std::chrono::seconds(10);
+
+        // Free VRAM a hold leaves to the arena and the next steps.
+        [[nodiscard]] std::uint64_t device_hold_keep_bytes(
+            const std::uint64_t total_bytes) {
+            return std::max<std::uint64_t>(
+                2 * lfs::core::MemoryPressureCoordinator::
+                        instance()
+                            .reserve_bytes(),
+                total_bytes / 8);
+        }
+
+        // VRAM copy of the snapshot's device bands, taken inside the pause.
+        class DeviceHold {
+        public:
+            DeviceHold() = default;
+            DeviceHold(const DeviceHold&) = delete;
+            DeviceHold& operator=(const DeviceHold&) = delete;
+            DeviceHold(DeviceHold&& other) noexcept {
+                *this = std::move(other);
+            }
+            DeviceHold& operator=(DeviceHold&& other) noexcept {
+                if (this != &other) {
+                    reset();
+                    data_ = std::exchange(other.data_, nullptr);
+                    capacity_ = std::exchange(other.capacity_, 0);
+                    used_ = std::exchange(other.used_, 0);
+                    closed_ = std::exchange(other.closed_, true);
+                    stream_ = std::exchange(other.stream_, nullptr);
+                }
+                return *this;
+            }
+            ~DeviceHold() { reset(); }
+
+            // No pressure relief: the hold is optional, so a failed
+            // allocation only means the ring carries every band.
+            [[nodiscard]] static DeviceHold try_allocate(
+                const std::uint64_t bytes,
+                const cudaStream_t stream) {
+                DeviceHold hold;
+                void* data = nullptr;
+                if (bytes == 0 ||
+                    cudaMallocAsync(&data, bytes, stream) !=
+                        cudaSuccess) {
+                    (void)cudaGetLastError();
+                    return hold;
+                }
+                hold.data_ = static_cast<std::byte*>(data);
+                hold.capacity_ = bytes;
+                hold.closed_ = false;
+                hold.stream_ = stream;
+                return hold;
+            }
+
+            [[nodiscard]] std::size_t room() const noexcept {
+                return closed_ ? 0 : capacity_ - used_;
+            }
+            [[nodiscard]] std::byte* claim(const std::size_t bytes) noexcept {
+                auto* const destination = data_ + used_;
+                used_ = std::min(
+                    capacity_,
+                    (used_ + bytes + DEVICE_HOLD_ALIGNMENT - 1) /
+                        DEVICE_HOLD_ALIGNMENT *
+                        DEVICE_HOLD_ALIGNMENT);
+                return destination;
+            }
+            void close() noexcept { closed_ = true; }
+            explicit operator bool() const noexcept {
+                return data_ != nullptr;
+            }
+            [[nodiscard]] const std::byte* data() const noexcept {
+                return data_;
+            }
+            [[nodiscard]] std::size_t used() const noexcept {
+                return used_;
+            }
+            [[nodiscard]] std::size_t capacity() const noexcept {
+                return capacity_;
+            }
+
+            void reset() noexcept {
+                if (data_) {
+                    LFS_CUDA_LOG_TEARDOWN(
+                        cudaFreeAsync(data_, stream_), stream_,
+                        "free training snapshot device hold");
+                }
+                data_ = nullptr;
+                capacity_ = 0;
+                used_ = 0;
+                closed_ = true;
+                stream_ = nullptr;
+            }
+
+        private:
+            std::byte* data_ = nullptr;
+            std::size_t capacity_ = 0;
+            std::size_t used_ = 0;
+            bool closed_ = true;
+            cudaStream_t stream_ = nullptr;
+        };
+
+        struct HeldBand {
+            std::size_t hold_offset = 0;
+            std::uint64_t destination_offset = 0;
+            std::size_t bytes = 0;
+        };
+
+        // Holds handed to the issuer. Pressure relief waits until they reach
+        // the host; a hold still being filled in the pause is not counted.
+        struct DeviceHoldsInFlight {
+            std::mutex mutex;
+            std::condition_variable drained;
+            std::uint64_t bytes = 0;
+        };
+
+        DeviceHoldsInFlight& device_holds_in_flight() {
+            static DeviceHoldsInFlight holds;
+            static std::once_flag registered;
+            std::call_once(registered, [] {
+                lfs::core::MemoryPressureCoordinator::instance()
+                    .register_client(lfs::core::PressureClient{
+                        .name = "training-snapshot-device-hold",
+                        .priority = 30,
+                        .domain = lfs::core::MemoryDomain::CudaDevice,
+                        .affinity = lfs::core::PressureAffinity::
+                            ImmediateThreadSafe,
+                        .estimate =
+                            [](const lfs::core::PressureRequest&)
+                            -> std::size_t {
+                            std::scoped_lock lock(holds.mutex);
+                            return holds.bytes;
+                        },
+                        .shrink =
+                            [](const lfs::core::PressureRequest&) {
+                                std::unique_lock lock(holds.mutex);
+                                const auto held = holds.bytes;
+                                const bool drained = holds.drained.wait_for(
+                                    lock, DEVICE_HOLD_RELIEF_WAIT,
+                                    [] { return holds.bytes == 0; });
+                                return lfs::core::ReclaimResult{
+                                    .logical_bytes_released =
+                                        drained ? held : 0};
+                            },
+                    });
+            });
+            return holds;
+        }
+
     } // namespace
 
     TrainingStepRegressionTracker::
@@ -729,6 +884,7 @@ namespace lfs::training {
         TrainingSnapshotPauseMetrics metrics;
         std::vector<PieceStamp> stamps;
         std::size_t outstanding_drains = 0;
+        std::uint64_t baseline_rss_bytes = 0;
         bool issuing_complete = false;
         bool drained = false;
         bool completion_recorded = false;
@@ -813,6 +969,42 @@ namespace lfs::training {
                         drain_loop(stop);
                     });
             }
+        }
+
+        // Sized from free VRAM at the safe point, keeping room for the arena
+        // and the next steps; any smaller fit is still taken.
+        [[nodiscard]] DeviceHold allocate_device_hold(
+            const PreparedTrainingSnapshot::Impl& prepared) {
+            if (prepared.device_snapshot_bytes == 0 ||
+                config.device_hold_max_bytes == 0) {
+                return {};
+            }
+            std::size_t free_bytes = 0;
+            std::size_t total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) !=
+                cudaSuccess) {
+                (void)cudaGetLastError();
+                return {};
+            }
+            // Every piece may be padded up to the alignment.
+            const std::uint64_t pieces =
+                prepared.layout.size() +
+                prepared.device_snapshot_bytes /
+                    DEVICE_HOLD_PIECE_BYTES +
+                1;
+            const std::uint64_t wanted = std::min<std::uint64_t>(
+                config.device_hold_max_bytes,
+                prepared.device_snapshot_bytes +
+                    DEVICE_HOLD_ALIGNMENT * pieces);
+            const auto keep = device_hold_keep_bytes(total_bytes);
+            const std::uint64_t budget =
+                free_bytes > keep ? free_bytes - keep : 0;
+            const auto bytes = std::min(wanted, budget);
+            if (bytes <
+                std::min<std::uint64_t>(wanted, config.band_bytes)) {
+                return {};
+            }
+            return DeviceHold::try_allocate(bytes, d2h_stream);
         }
 
         void ensure_device_scratch() {
@@ -1032,6 +1224,18 @@ namespace lfs::training {
                 source, bytes);
         }
 
+        void issue_native_to_device(
+            void* destination,
+            const void* source,
+            const std::size_t bytes) {
+            require_cuda(
+                cudaMemcpyAsync(
+                    destination, source, bytes,
+                    cudaMemcpyDeviceToDevice,
+                    d2h_stream),
+                "hold snapshot bytes in VRAM");
+        }
+
         void issue_sh_to_slot(
             const std::size_t slot_index,
             const std::size_t pinned_offset,
@@ -1040,8 +1244,30 @@ namespace lfs::training {
             const std::size_t bytes) {
             validate_slot_range(
                 slot_index, pinned_offset, bytes);
-            if (!device_scratch ||
-                tensor_byte_offset % sizeof(float) != 0 ||
+            if (!device_scratch) {
+                throw std::runtime_error(
+                    "Snapshot D2H scratch is missing");
+            }
+            decode_sh_to_device(
+                static_cast<float*>(device_scratch.get()),
+                witness, tensor_byte_offset, bytes);
+            require_cuda(
+                cudaMemcpyAsync(
+                    static_cast<std::byte*>(
+                        slots[slot_index].pinned) +
+                        pinned_offset,
+                    device_scratch.get(), bytes,
+                    cudaMemcpyDeviceToHost,
+                    d2h_stream),
+                "issue packed SH snapshot D2H");
+        }
+
+        void decode_sh_to_device(
+            float* destination,
+            const TensorLayoutWitness& witness,
+            const std::uint64_t tensor_byte_offset,
+            const std::size_t bytes) {
+            if (tensor_byte_offset % sizeof(float) != 0 ||
                 bytes % sizeof(float) != 0) {
                 throw std::runtime_error(
                     "Bounded SH snapshot band is misaligned");
@@ -1058,7 +1284,7 @@ namespace lfs::training {
                         static_cast<const float*>(
                             witness
                                 .auxiliary_source_pointer),
-                        static_cast<float*>(device_scratch.get()),
+                        destination,
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -1078,7 +1304,7 @@ namespace lfs::training {
                     decode_shN_f16_range_to_canonical(
                         static_cast<const std::uint16_t*>(
                             witness.source_pointer),
-                        static_cast<float*>(device_scratch.get()),
+                        destination,
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -1095,7 +1321,7 @@ namespace lfs::training {
                     undo_reorder_sh_range_from_swizzled(
                         static_cast<const float*>(
                             witness.source_pointer),
-                        static_cast<float*>(device_scratch.get()),
+                        destination,
                         tensor_byte_offset /
                             sizeof(float),
                         bytes / sizeof(float),
@@ -1109,15 +1335,6 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Unsupported SH snapshot encoding");
             }
-            require_cuda(
-                cudaMemcpyAsync(
-                    static_cast<std::byte*>(
-                        slots[slot_index].pinned) +
-                        pinned_offset,
-                    device_scratch.get(), bytes,
-                    cudaMemcpyDeviceToHost,
-                    d2h_stream),
-                "issue packed SH snapshot D2H");
         }
 
         [[nodiscard]] cudaEvent_t submit_ring_slot(
@@ -1316,6 +1533,130 @@ namespace lfs::training {
             }
         }
 
+        // Moves the held bands through the ring once training has resumed.
+        void issue_held_bands(
+            const std::shared_ptr<
+                PendingTrainingSnapshot::Impl>& capture,
+            const DeviceHold& hold,
+            const std::vector<HeldBand>& bands) {
+            std::optional<std::size_t> slot;
+            std::size_t slot_bytes = 0;
+            std::vector<DrainSegment> segments;
+            try {
+                for (const auto& band : bands) {
+                    std::size_t offset = 0;
+                    while (offset < band.bytes) {
+                        if (!slot) {
+                            slot = reserve_ring_slot();
+                            slot_bytes = 0;
+                            segments.clear();
+                        }
+                        const auto count = std::min(
+                            config.band_bytes - slot_bytes,
+                            band.bytes - offset);
+                        require_cuda(
+                            cudaMemcpyAsync(
+                                static_cast<std::byte*>(
+                                    slots[*slot].pinned) +
+                                    slot_bytes,
+                                hold.data() + band.hold_offset +
+                                    offset,
+                                count, cudaMemcpyDeviceToHost,
+                                d2h_stream),
+                            "issue held snapshot D2H");
+                        segments.push_back(DrainSegment{
+                            .pinned_offset = slot_bytes,
+                            .destination_offset =
+                                band.destination_offset + offset,
+                            .bytes = count,
+                        });
+                        slot_bytes += count;
+                        offset += count;
+                        if (slot_bytes == config.band_bytes) {
+                            (void)submit_ring_slot(
+                                *slot, capture,
+                                std::move(segments));
+                            slot.reset();
+                        }
+                    }
+                }
+                if (slot) {
+                    (void)submit_ring_slot(
+                        *slot, capture, std::move(segments));
+                    slot.reset();
+                }
+            } catch (const std::exception& error) {
+                // LFS-CENSUS-OK(empty-catch): the capture error fails the snapshot at finalize.
+                if (slot) {
+                    cancel_ring_slot(*slot);
+                }
+                std::scoped_lock lock(capture->mutex);
+                if (capture->error.empty()) {
+                    capture->error = std::format(
+                        "Issue held training snapshot failed: {}",
+                        error.what());
+                }
+            }
+        }
+
+        void finish_held_capture(
+            const std::shared_ptr<
+                PendingTrainingSnapshot::Impl>& capture,
+            DeviceHold& hold,
+            const std::vector<HeldBand>& bands,
+            const std::uint64_t held_bytes) {
+            issue_held_bands(capture, hold, bands);
+            // Freed in stream order behind the D2H; the sync returns the
+            // pages to the driver.
+            hold.reset();
+            LFS_CUDA_LOG_TEARDOWN(
+                cudaStreamSynchronize(d2h_stream), d2h_stream,
+                "release training snapshot device hold");
+            auto& in_flight = device_holds_in_flight();
+            {
+                std::scoped_lock lock(in_flight.mutex);
+                in_flight.bytes -= held_bytes;
+            }
+            in_flight.drained.notify_all();
+            mark_issuing_complete(capture);
+        }
+
+        void start_hold_issuer(
+            const std::shared_ptr<
+                PendingTrainingSnapshot::Impl>& capture,
+            DeviceHold hold,
+            std::vector<HeldBand> bands) {
+            if (hold_issuer.joinable()) {
+                hold_issuer.join();
+            }
+            const std::uint64_t held_bytes = hold.capacity();
+            auto& in_flight = device_holds_in_flight();
+            {
+                std::scoped_lock lock(in_flight.mutex);
+                in_flight.bytes += held_bytes;
+            }
+            // Shared, so a failed thread start still owns both here.
+            auto shared_hold =
+                std::make_shared<DeviceHold>(std::move(hold));
+            auto shared_bands =
+                std::make_shared<std::vector<HeldBand>>(
+                    std::move(bands));
+            try {
+                hold_issuer = std::jthread(
+                    [this, capture, shared_hold, shared_bands,
+                     held_bytes] {
+                        finish_held_capture(
+                            capture, *shared_hold, *shared_bands,
+                            held_bytes);
+                    });
+            } catch (const std::system_error&) {
+                // No thread: issue here, as the ring path would have.
+                finish_held_capture(
+                    capture, *shared_hold, *shared_bands,
+                    held_bytes);
+            }
+        }
+
         void mark_issuing_complete(
             const std::shared_ptr<
                 PendingTrainingSnapshot::Impl>& capture) {
@@ -1342,6 +1683,18 @@ namespace lfs::training {
                     return;
                 }
                 capture->completion_recorded = true;
+                // Held bands reach the staging after the pause, so its pages
+                // are all touched only once the drain ends.
+                const auto drained_rss = read_rss_bytes();
+                if (drained_rss >= capture->baseline_rss_bytes) {
+                    capture->metrics.host_rss_delta_bytes = std::max(
+                        capture->metrics.host_rss_delta_bytes,
+                        drained_rss - capture->baseline_rss_bytes);
+                }
+                capture->metrics.host_ram_within_gate =
+                    capture->metrics.host_rss_delta_bytes <=
+                    capture->metrics.checkpoint_bytes +
+                        HOST_MEMORY_GATE_HEADROOM_BYTES;
                 capture->metrics.final_drain_ms =
                     Milliseconds(
                         Clock::now() -
@@ -1401,6 +1754,10 @@ namespace lfs::training {
         }
 
         void shutdown() {
+            // The issuer needs the drain to free ring slots.
+            if (hold_issuer.joinable()) {
+                hold_issuer.join();
+            }
             if (drain_thread.joinable()) {
                 {
                     // Under the mutex, so the drain thread between its predicate check and
@@ -1454,6 +1811,7 @@ namespace lfs::training {
         std::condition_variable ring_condition;
         std::deque<std::size_t> drain_queue;
         std::jthread drain_thread;
+        std::jthread hold_issuer;
         double measured_bandwidth = 0.0;
 
         mutable std::mutex metrics_mutex;
@@ -1604,11 +1962,13 @@ namespace lfs::training {
                 std::shared_ptr<
                     PendingTrainingSnapshot::Impl>
                     capture,
-                const lfs::core::Uuid& snapshot_uuid)
+                const lfs::core::Uuid& snapshot_uuid,
+                DeviceHold* hold)
                 : service_(service),
                   layout_(layout),
                   capture_(std::move(capture)),
-                  snapshot_uuid_(snapshot_uuid) {}
+                  snapshot_uuid_(snapshot_uuid),
+                  hold_(hold) {}
 
             ~CaptureTensorSink() override {
                 if (active_slot_) {
@@ -1721,6 +2081,11 @@ namespace lfs::training {
                 return last_event_;
             }
 
+            [[nodiscard]] std::vector<HeldBand>
+            take_held_bands() noexcept {
+                return std::move(held_bands_);
+            }
+
         private:
             void append_device_tensor(
                 const lfs::core::
@@ -1731,6 +2096,48 @@ namespace lfs::training {
                 const std::uint64_t bytes) {
                 std::uint64_t tensor_offset = 0;
                 while (tensor_offset < bytes) {
+                    // The hold fills first; once a band does not fit, the
+                    // ring carries everything after it.
+                    if (hold_ && hold_->room() > 0) {
+                        const auto count = trim_to_encoding(
+                            descriptor,
+                            static_cast<std::size_t>(
+                                std::min<std::uint64_t>(
+                                    {hold_->room(),
+                                     DEVICE_HOLD_PIECE_BYTES,
+                                     bytes - tensor_offset})));
+                        if (count == 0) {
+                            hold_->close();
+                            continue;
+                        }
+                        const auto hold_offset = hold_->used();
+                        auto* const destination =
+                            hold_->claim(count);
+                        if (descriptor.encoding ==
+                            lfs::core::TensorPayloadEncoding::
+                                NativeContiguous) {
+                            service_.issue_native_to_device(
+                                destination,
+                                static_cast<const std::byte*>(
+                                    witness.source_pointer) +
+                                    tensor_offset,
+                                count);
+                        } else {
+                            service_.decode_sh_to_device(
+                                reinterpret_cast<float*>(
+                                    destination),
+                                witness, tensor_offset, count);
+                        }
+                        held_bands_.push_back(HeldBand{
+                            .hold_offset = hold_offset,
+                            .destination_offset =
+                                destination_offset +
+                                tensor_offset,
+                            .bytes = count,
+                        });
+                        tensor_offset += count;
+                        continue;
+                    }
                     if (!active_slot_) {
                         active_slot_ =
                             service_
@@ -1741,42 +2148,12 @@ namespace lfs::training {
                     const auto available =
                         service_.config.band_bytes -
                         active_slot_bytes_;
-                    auto count =
+                    const auto count = trim_to_encoding(
+                        descriptor,
                         static_cast<std::size_t>(
                             std::min<std::uint64_t>(
                                 available,
-                                bytes - tensor_offset));
-                    if (descriptor.encoding !=
-                        lfs::core::
-                            TensorPayloadEncoding::
-                                NativeContiguous) {
-                        const auto row_bytes =
-                            static_cast<std::uint64_t>(
-                                descriptor
-                                    .sh_coefficients_rest) *
-                            lfs::core::kShChannels *
-                            sizeof(float);
-                        const auto block_bytes =
-                            row_bytes *
-                            static_cast<std::uint64_t>(
-                                lfs::training::sh_value::
-                                    kBlockSize);
-                        if (block_bytes > 0 &&
-                            count >= block_bytes) {
-                            count -=
-                                count %
-                                static_cast<std::size_t>(
-                                    block_bytes);
-                        } else if (row_bytes > 0) {
-                            count -=
-                                count %
-                                static_cast<std::size_t>(
-                                    row_bytes);
-                        } else {
-                            count -=
-                                count % sizeof(float);
-                        }
-                    }
+                                bytes - tensor_offset)));
                     if (count == 0) {
                         flush_active_slot();
                         continue;
@@ -1819,6 +2196,37 @@ namespace lfs::training {
                 }
             }
 
+            // SH bands end on whole quantization blocks (or rows when less
+            // than a block remains) so the decode never splits one.
+            [[nodiscard]] static std::size_t trim_to_encoding(
+                const lfs::core::
+                    TensorSerializationDescriptor& descriptor,
+                std::size_t count) {
+                if (descriptor.encoding ==
+                    lfs::core::TensorPayloadEncoding::
+                        NativeContiguous) {
+                    return count;
+                }
+                const auto row_bytes =
+                    static_cast<std::uint64_t>(
+                        descriptor.sh_coefficients_rest) *
+                    lfs::core::kShChannels * sizeof(float);
+                const auto block_bytes =
+                    row_bytes *
+                    static_cast<std::uint64_t>(
+                        lfs::training::sh_value::kBlockSize);
+                if (block_bytes > 0 && count >= block_bytes) {
+                    count -= count %
+                             static_cast<std::size_t>(block_bytes);
+                } else if (row_bytes > 0) {
+                    count -= count %
+                             static_cast<std::size_t>(row_bytes);
+                } else {
+                    count -= count % sizeof(float);
+                }
+                return count;
+            }
+
             void flush_active_slot() {
                 if (!active_slot_) {
                     return;
@@ -1854,6 +2262,8 @@ namespace lfs::training {
                 TrainingSnapshotService::Impl::
                     DrainSegment>
                 active_segments_;
+            DeviceHold* hold_ = nullptr;
+            std::vector<HeldBand> held_bands_;
         };
 
     } // namespace
@@ -2235,6 +2645,8 @@ namespace lfs::training {
             request.iteration;
         pending->metrics.snapshot_uuid =
             prepared.impl_->snapshot_uuid;
+        pending->baseline_rss_bytes =
+            prepared.impl_->baseline_rss_bytes;
 
         try {
             const auto capture_begin = Clock::now();
@@ -2275,6 +2687,10 @@ namespace lfs::training {
             }
             const auto sync_end = Clock::now();
             impl_->ensure_device_scratch();
+            DeviceHold hold =
+                request.training_resumes
+                    ? impl_->allocate_device_hold(*prepared.impl_)
+                    : DeviceHold{};
 
             if (request.capture_additional_cpu_state) {
                 auto captured =
@@ -2309,7 +2725,8 @@ namespace lfs::training {
             CaptureTensorSink sink(
                 *impl_, prepared.impl_->layout,
                 pending,
-                prepared.impl_->snapshot_uuid);
+                prepared.impl_->snapshot_uuid,
+                hold ? &hold : nullptr);
             {
                 lfs::core::
                     TensorSerializationSinkScope
@@ -2360,6 +2777,14 @@ namespace lfs::training {
                     cudaEventSynchronize(last_event),
                     "wait for last snapshot D2H");
             }
+            auto held_bands = sink.take_held_bands();
+            if (!held_bands.empty()) {
+                // Training may write the sources once the VRAM copies land.
+                require_cuda(
+                    cudaStreamSynchronize(impl_->d2h_stream),
+                    "wait for snapshot VRAM hold");
+            }
+            pending->metrics.device_hold_bytes = hold.used();
             impl_->device_scratch.reset();
             const auto pause_end = Clock::now();
             const auto capture_rss = read_rss_bytes();
@@ -2422,7 +2847,14 @@ namespace lfs::training {
             pending->pause_end = pause_end;
             lfs::core::Tensor::trim_memory_pool();
 
-            impl_->mark_issuing_complete(pending);
+            if (held_bands.empty()) {
+                hold.reset();
+                impl_->mark_issuing_complete(pending);
+            } else {
+                impl_->start_hold_issuer(
+                    pending, std::move(hold),
+                    std::move(held_bands));
+            }
             prepared.impl_.reset();
             return PendingTrainingSnapshot(
                 std::move(pending));
