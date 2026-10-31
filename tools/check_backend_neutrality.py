@@ -42,12 +42,14 @@ TRAINER_CUDA_FILE = re.compile(
     r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
     r'ops/[^/]+_vulkan\.cpp|'
     r'include/lfs/training/ops/[^/]+_vulkan\.hpp|'
+    r'ops/[^/]+_hip\.cpp|'
+    r'include/lfs/training/ops/[^/]+_hip\.hpp|'
     r'vulkan/.*|'
     r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
 # Neutral trainer sources dispatch through the ops table. Kernel and CUDA
 # headers stay on the implementation side of that boundary.
 TRAINER_KERNEL_INCLUDE = re.compile(
-    r'(?:^|/)kernels/|_cuda\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
+    r'(?:^|/)kernels/|_(?:cuda|hip)\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
 CUDA_RASTERIZERS = ("src/rendering/rasterizer/cuda/",)
 # File-specific native interoperability and backend selection seams.
 SEAMS = {

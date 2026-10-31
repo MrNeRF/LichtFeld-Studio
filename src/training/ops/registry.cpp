@@ -69,12 +69,14 @@ namespace lfs::training {
     const TrainingOps& cuda_training_ops_table();
     const TrainingOps& metal_training_ops_table();
     const TrainingOps& vulkan_training_ops_table();
+    const TrainingOps& hip_training_ops_table();
 
     const TrainingOps& training_ops(const core::GpuBackend backend) {
         static const TrainingOps& kCuda = cuda_training_ops_table();
         static const TrainingOps& kVulkan = vulkan_training_ops_table();
         static const TrainingOps& kMetal = metal_training_ops_table();
-        static const std::array tables{&kCuda, &kVulkan, &kMetal};
+        static const TrainingOps& kHip = hip_training_ops_table();
+        static const std::array tables{&kCuda, &kVulkan, &kMetal, &kHip};
         const auto index = static_cast<size_t>(backend);
         return index < tables.size() ? *tables[index] : kVulkan;
     }
@@ -164,6 +166,17 @@ namespace lfs::training {
         }
         text += '.';
         return text;
+    }
+
+    std::optional<std::string> unavailable_training_family(
+        const core::GpuBackend backend, const Family family) {
+        FamilySet required;
+        required.set(static_cast<size_t>(family));
+        const auto missing = missing_training_families(training_ops(backend), required);
+        if (missing.empty()) {
+            return std::nullopt;
+        }
+        return training_unavailable_message(backend, missing);
     }
 
 } // namespace lfs::training

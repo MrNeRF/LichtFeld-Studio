@@ -112,6 +112,8 @@ set(TRAINING_NEW_SOURCES
     ops/blob.cpp
     ops/structure.cpp
     ops/registry.cpp
+    ops/table_hip.cpp
+    $<$<BOOL:${LFS_TENSOR_HIP}>:ops/extra_loss_hip.cpp>
     $<$<BOOL:${LFS_TENSOR_VULKAN}>:ops/table_vulkan.cpp>
     $<$<NOT:$<BOOL:${LFS_TENSOR_VULKAN}>>:ops/table_backend_unavailable.cpp>
     ops/requirements.cpp

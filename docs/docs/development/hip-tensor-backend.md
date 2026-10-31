@@ -196,3 +196,41 @@ in `cmake/hip-native/README.md`, configure the main tree with
 `LFS_HIP_ADAPTER_FAULT_MODULE` pointing to that absolute module path, build
 `hip_adapter_recovery`, and run `HipAdapter.Recovery` on a compatible AMD device.
 These hooks exist only in the separately instrumented module.
+
+## Training primitives
+
+The training registry has a distinct HIP table, including in HIP-OFF builds.
+Selecting HIP never selects Vulkan's training functions. With `LFS_TENSOR_HIP`
+enabled, the table exposes the existing shared image operations and the
+`ExtraLoss` family. Other families remain unavailable; these primitives do not
+enable a complete HIP training configuration.
+
+Scale regularization computes `weight * mean(exp(raw))`; opacity regularization
+computes `weight * mean(sigmoid(raw))`. Both optionally accumulate into an
+existing gradient. The opacity derivative uses
+`exp(-abs(raw)) / (1 + exp(-abs(raw)))^2`, retaining small gradients for saturated
+finite logits. All expressions, reductions, allocation and queue ordering use
+Tensor's HIP implementation, without host scalar readbacks or a CUDA dependency.
+
+Bindings must be contiguous Float32 HIP tensors. The loss has one element; an
+optional gradient has the parameter's shape. Parameter, gradient and loss ranges
+must not overlap, while disjoint views of the same allocation are accepted.
+Empty parameters and zero weight leave the outputs unchanged. The caller's
+reduction scratch is not used or modified by this Tensor-based implementation.
+Invalid bindings are rejected before output writes. Temporary backend scopes are
+restored before returning.
+
+`training_hip_contracts` is a focused test target available without the full
+trainer. `TrainingBackendContracts.CPU` verifies registry identity, missing-family
+diagnostics and the compiled HIP family's availability without requiring a GPU.
+It uses inert non-HIP table providers to isolate dispatch; it does not qualify
+their mathematical kernels. The existing Windows Release/Debug, Ubuntu
+Release/Debug and macOS CPU contract steps run this check. The Ubuntu adapter
+step also builds it with HIP enabled and runs the same CPU check.
+
+`TrainingPrimitiveContracts.HIP` is registered only with HIP enabled and requires
+a compatible AMD device. It checks independent loss/gradient references,
+accumulation, empty inputs, saturated opacity logits, placement, overlapping and
+disjoint views, output-storage retention and backend scope restoration. Required
+GPU execution fails explicitly when HIP is unavailable; hosted CPU runners do
+not run this test.

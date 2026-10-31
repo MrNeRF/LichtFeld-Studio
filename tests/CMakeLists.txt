@@ -176,6 +176,7 @@ endif()
 # Shared tensor contracts are available without the full LibTorch comparison suite.
 if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
     include(${CMAKE_CURRENT_LIST_DIR}/TensorOperationContracts.cmake)
+    include(${CMAKE_CURRENT_LIST_DIR}/TrainingHipContracts.cmake)
 endif()
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently

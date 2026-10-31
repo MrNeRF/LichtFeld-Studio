@@ -24,6 +24,7 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
             "training/kernels/mrnf_kernels.hpp",
             "lfs/kernels/ssim.cuh",
             "lfs/training/ops/geometry_cuda.hpp",
+            "lfs/training/ops/extra_loss_hip.hpp",
             "cuda_runtime.h",
             "cuda.h",
         ):
@@ -49,6 +50,16 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
             "src/training/vulkan/shaders/pair_sort.slang",
         ):
             self.assertFalse(gate.neutral_trainer_file(relative), relative)
+
+    def test_hip_implementation_files_are_not_neutral(self) -> None:
+        for relative in (
+            "src/training/ops/extra_loss_hip.cpp",
+            "src/training/ops/table_hip.cpp",
+            "src/training/include/lfs/training/ops/extra_loss_hip.hpp",
+        ):
+            self.assertFalse(gate.neutral_trainer_file(relative), relative)
+        for relative in ("src/training/trainer.cpp", "src/training/ops/extra_loss.cpp"):
+            self.assertTrue(gate.neutral_trainer_file(relative), relative)
 
     def test_scan_reports_a_neutral_include(self) -> None:
         path = Path(__file__).resolve().parent.parent / "src/training/trainer.hpp"
