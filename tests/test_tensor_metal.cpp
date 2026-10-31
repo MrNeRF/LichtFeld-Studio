@@ -828,6 +828,29 @@ namespace {
         }
     }
 
+    // Concatenating tensors that queued GPU work still writes copies them on the queue after that work, without a
+    // host wait per input.
+    TEST_F(TensorMetal, CatOfInputsInUseReturnsBeforeTheGpuFinishes) {
+        GpuBackendScope scope(GpuBackend::Metal);
+        constexpr size_t n = 2048;
+        Tensor product = Tensor::ones({n, n}, Device::GPU);
+        const Tensor identity = Tensor::eye(n, Device::GPU);
+        for (int i = 0; i < 40; ++i)
+            product = product.mm(identity);
+        const Tensor first = product.slice(0, 0, 1).reshape({n}) * 2.0f;
+        const Tensor second = Tensor::full({n}, 3.0f, Device::GPU);
+        TensorFence queued(GpuBackend::Metal);
+        queued.record(TensorExecutionTarget::current());
+        if (queued.ready())
+            GTEST_SKIP() << "the GPU finished the queued work before the concatenation";
+        const Tensor joined = Tensor::cat({first, second, first}, 0);
+        EXPECT_FALSE(queued.ready()) << "cat waited for the GPU";
+        std::vector<float> expected(n, 2.0f);
+        expected.resize(2 * n, 3.0f);
+        expected.resize(3 * n, 2.0f);
+        EXPECT_EQ(joined.cpu().to_vector(), expected);
+    }
+
     std::vector<int> pseudo_indices(const size_t count, const size_t extent, const unsigned seed) {
         std::mt19937 generator(seed);
         std::uniform_int_distribution<int> distribution(0, static_cast<int>(extent) - 1);
