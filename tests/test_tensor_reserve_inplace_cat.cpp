@@ -174,14 +174,13 @@ TEST(TensorReserveInplaceCat, AllocationFailurePreservesInstalledStorage) {
     const size_t original_capacity = tensor.capacity();
     const size_t original_logical_size = tensor.logical_size();
 
-    size_t free_bytes = 0;
-    size_t total_bytes = 0;
-    ASSERT_EQ(cudaMemGetInfo(&free_bytes, &total_bytes), cudaSuccess);
-    const size_t impossible_rows = total_bytes / sizeof(float) + 1;
+    // A CUDA reserve only maps the live rows of its address range, so it has
+    // to exceed the device's address space (4 PiB) to fail.
+    const size_t impossible_rows = (size_t{1} << 52) / sizeof(float);
 
     try {
         tensor.reserve(impossible_rows);
-        FAIL() << "reserve unexpectedly allocated more than total device memory";
+        FAIL() << "reserve unexpectedly allocated more than the device address space";
     } catch (const std::runtime_error& error) {
         EXPECT_NE(std::string(error.what()).find("reserve CUDA allocation failed"), std::string::npos);
     }

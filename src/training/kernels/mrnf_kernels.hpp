@@ -7,10 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace lfs::training {
-    struct GumbelTopKScratch;
-} // namespace lfs::training
-
 namespace lfs::training::mrnf_strategy {
 
     struct MRNFBounds {
@@ -20,29 +16,41 @@ namespace lfs::training::mrnf_strategy {
         float max_extent;
     };
 
+    // Edge guidance of row i is 1 + weight * score_i / median, where median is
+    // the scores' positive median (0 when none is positive: factor 1) and NaN
+    // scores count as 0. Null scores disable it.
+    struct EdgeGuidance {
+        const float* scores = nullptr;
+        float median = 0.0f;
+        float weight = 0.0f;
+    };
+
+    // sigmoid(raw_opacities) * (visibility > 0), masked and edge-guided.
     void launch_replace_parent_weights(
-        const float* opacities,
+        const float* raw_opacities,
         const float* visibility,
         const bool* active_mask,
         const bool* trainable_mask,
-        const float* edge_guidance,
+        EdgeGuidance edge_guidance,
         float* output,
         size_t N,
         void* stream = nullptr);
 
-    void launch_fused_exchange_ranks(
-        const int64_t* primary_order,
-        const int64_t* secondary_order,
-        const bool* eligible,
-        int32_t* ranks,
-        int64_t* row_indices,
-        size_t N,
-        void* stream = nullptr);
+    // weights *= edge guidance factor.
+    void launch_apply_edge_guidance(float* weights, EdgeGuidance edge_guidance, size_t N,
+                                    void* stream = nullptr);
 
-    void launch_sort_exchange_ranks(
-        int32_t* ranks,
-        int64_t* row_indices,
+    // The `count` rows the growth exchange gives up first. A row's rank is the
+    // later of its positions in ascending `primary` and `secondary` importance
+    // (NaN last, ties by row; `secondary` may be null); rows come out by rank,
+    // ties by row, and ineligible rows rank after all eligible ones.
+    void launch_rank_exchange_rows(
+        const float* primary,
+        const float* secondary,
+        const bool* eligible,
         size_t N,
+        size_t count,
+        int64_t* rows,
         void* stream = nullptr);
 
     void launch_fill_index_mask(
@@ -143,6 +151,9 @@ namespace lfs::training::mrnf_strategy {
      * key[i] = -log(-log(U)) + log(weight[i])
      * selected = top_k(key, K)
      *
+     * Rows with non-positive or NaN weight are picked only when K exceeds
+     * the positive rows. Output is in descending key order.
+     *
      * @param weights [N] — sampling weights (non-negative)
      * @param N — total number of elements
      * @param K — number of samples to draw
@@ -156,10 +167,17 @@ namespace lfs::training::mrnf_strategy {
         size_t K,
         uint64_t seed,
         int64_t* output_indices,
-        void* stream = nullptr,
-        bool compact_sparse = true,
-        lfs::training::GumbelTopKScratch* scratch = nullptr,
-        size_t known_nnz = 0);
+        void* stream = nullptr);
+
+    // The K-th largest of values[i] over the rows where include[i] is set
+    // (all rows when include is null), without sorting. Needs K <= N and,
+    // with include, K <= the included rows.
+    [[nodiscard]] float launch_kth_largest(
+        const float* values,
+        const bool* include,
+        size_t N,
+        size_t K,
+        void* stream = nullptr);
 
     // Row 0 is MRNF's persistent visibility count and must not be cleared.
     // Fold row 1 into the persistent error maximum and clear only the row-1

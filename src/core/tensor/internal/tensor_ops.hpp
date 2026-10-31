@@ -515,6 +515,24 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_index_put(float* data, const int* indices, const float* values,
                                        size_t data_size, size_t index_size, cudaStream_t stream);
 
+    // index_put_ on device: writes value row k to row indices[k]; negative
+    // indices count from the end, out-of-range ones are skipped.
+    template <typename T, typename IndexT>
+    void launch_index_put_rows(T* data, const IndexT* indices, const T* values,
+                               size_t row_size, size_t num_rows, size_t index_size, cudaStream_t stream);
+
+#define LFS_INDEX_PUT_ROWS(T, I) \
+    extern template void launch_index_put_rows<T, I>(T*, const I*, const T*, size_t, size_t, size_t, cudaStream_t);
+    LFS_INDEX_PUT_ROWS(float, int)
+    LFS_INDEX_PUT_ROWS(float, int64_t)
+    LFS_INDEX_PUT_ROWS(unsigned char, int)
+    LFS_INDEX_PUT_ROWS(unsigned char, int64_t)
+    LFS_INDEX_PUT_ROWS(int, int)
+    LFS_INDEX_PUT_ROWS(int, int64_t)
+    LFS_INDEX_PUT_ROWS(int64_t, int)
+    LFS_INDEX_PUT_ROWS(int64_t, int64_t)
+#undef LFS_INDEX_PUT_ROWS
+
     LFS_CORE_API size_t launch_nonzero(const float* data, int64_t* indices,
                                        size_t n, size_t output_size, cudaStream_t stream);
 

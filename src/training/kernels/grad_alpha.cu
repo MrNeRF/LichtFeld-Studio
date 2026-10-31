@@ -21,36 +21,6 @@ namespace lfs::training::kernels {
             return static_cast<unsigned int>((total + kThreadsPerBlock - 1) / kThreadsPerBlock);
         }
 
-        __device__ __forceinline__ int64_t sh_swizzled_float_offset(
-            const int64_t primitive_idx,
-            const int64_t packed_coeff_channel_offset,
-            const int64_t slots_per_primitive) {
-            const int64_t slot = packed_coeff_channel_offset / 4;
-            const int64_t component = packed_coeff_channel_offset % 4;
-            const int64_t block = primitive_idx / lfs::core::kShReorderSize;
-            const int64_t lane = primitive_idx % lfs::core::kShReorderSize;
-            const int64_t float4_index =
-                block * (slots_per_primitive * lfs::core::kShReorderSize) +
-                slot * lfs::core::kShReorderSize +
-                lane;
-            return float4_index * 4 + component;
-        }
-
-        // Device mirror of lfs::core::sh_float4_slots_for_rest. That host helper is not __device__
-        // (it routes through std::min), so calling it from a kernel under --expt-relaxed-constexpr
-        // emits a host call that traps at runtime with a runtime argument.
-        __device__ __forceinline__ int sh_layout_slots(const uint32_t coeffs_rest) {
-            if (coeffs_rest == 0u)
-                return 0;
-            const uint32_t clamped = coeffs_rest > lfs::core::kShMaxCoeffsRest
-                                         ? lfs::core::kShMaxCoeffsRest
-                                         : coeffs_rest;
-            const uint32_t slots = (clamped * lfs::core::kShChannels + 3u) / 4u;
-            return static_cast<int>(slots > lfs::core::kShRestFloat4PerPrimitive
-                                        ? lfs::core::kShRestFloat4PerPrimitive
-                                        : slots);
-        }
-
         template <bool kUseImage, bool kSubtract>
         __global__ void fused_background_compose_kernel(
             const float* __restrict__ image,
@@ -289,68 +259,6 @@ namespace lfs::training::kernels {
         grad_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             dst, src, n_elements);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.grad_accumulate");
-    }
-
-    // Accumulate with unsqueeze: src [N] -> dst [N, 1]
-    // (Same memory layout, just add)
-    void launch_grad_accumulate_unsqueeze(
-        float* dst,
-        const float* src,
-        int64_t N,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        // [N] and [N, 1] have the same memory layout
-        launch_grad_accumulate(dst, src, N, stream);
-    }
-
-    __global__ void grad_accumulate_sh_swizzled_kernel(
-        float* __restrict__ dst_sh0,
-        float* __restrict__ dst_shN,
-        const float* __restrict__ src,
-        int64_t N,
-        int64_t K_src,
-        uint32_t shN_layout_rest) {
-        const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (idx >= N)
-            return;
-
-        const int64_t src_base = idx * K_src * 3;
-        const int64_t dst_sh0_base = idx * 3;
-        dst_sh0[dst_sh0_base + 0] += src[src_base + 0];
-        dst_sh0[dst_sh0_base + 1] += src[src_base + 1];
-        dst_sh0[dst_sh0_base + 2] += src[src_base + 2];
-
-        if (dst_shN == nullptr || K_src <= 1)
-            return;
-
-        const int64_t max_rest = K_src - 1 < lfs::core::kShMaxCoeffsRest
-                                     ? K_src - 1
-                                     : lfs::core::kShMaxCoeffsRest;
-        const int64_t slots_per_primitive = sh_layout_slots(shN_layout_rest);
-        if (slots_per_primitive == 0)
-            return;
-        for (int64_t k = 0; k < max_rest; ++k) {
-            const int64_t src_coeff = src_base + (k + 1) * 3;
-            const int64_t packed_offset = k * 3;
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 0, slots_per_primitive)] += src[src_coeff + 0];
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 1, slots_per_primitive)] += src[src_coeff + 1];
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 2, slots_per_primitive)] += src[src_coeff + 2];
-        }
-    }
-
-    void launch_grad_accumulate_sh_swizzled(
-        float* dst_sh0,
-        float* dst_shN,
-        const float* src,
-        int64_t N,
-        int64_t K_src,
-        uint32_t shN_layout_rest,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        const unsigned int blocks = num_blocks_1d(N);
-        grad_accumulate_sh_swizzled_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-            dst_sh0, dst_shN, src, N, K_src, shN_layout_rest);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.grad_accumulate_sh");
     }
 
     // ==================== Gradient Norm Accumulate ====================

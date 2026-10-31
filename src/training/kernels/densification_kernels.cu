@@ -674,6 +674,23 @@ namespace lfs::training::kernels {
         return result.value;
     }
 
+    float launch_select_positive_median(const float* values, const size_t n, cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        if (n == 0 || values == nullptr) {
+            return 0.0f;
+        }
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<unsigned int>::max()),
+                       "positive-median input exceeds the 32-bit count limit");
+        radix_select::Workspace workspace(stream);
+        radix_select::run<true>(values, n, workspace.state, workspace.hist, stream);
+        radix_select::State result{};
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(&result, workspace.state, sizeof(result), cudaMemcpyDeviceToHost, stream),
+            "positive median readback");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "positive median sync");
+        return result.total == 0u ? 0.0f : result.value;
+    }
+
     void launch_normalize_by_positive_median(float* data, size_t n, cudaStream_t stream) {
         stream = resolve_stream(stream);
         if (n == 0 || data == nullptr)

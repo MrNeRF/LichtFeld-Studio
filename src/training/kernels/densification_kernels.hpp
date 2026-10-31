@@ -141,6 +141,10 @@ namespace lfs::training::kernels {
     /// order. Synchronizes the stream to return the value.
     [[nodiscard]] float launch_select_median(const float* values, size_t n, cudaStream_t stream);
 
+    /// The median launch_normalize_by_positive_median divides by, without
+    /// touching the values: 0 when none is positive. Synchronizes the stream.
+    [[nodiscard]] float launch_select_positive_median(const float* values, size_t n, cudaStream_t stream);
+
     /// Accumulate the image-clipped projected bounding rectangle area / image area.
     /// radii and means2d are [N, 2]; zero radii exclude culled splats. Call once
     /// per completed training frame, independently of tile batching.

@@ -11,11 +11,17 @@
 
 namespace lfs::training::kernels {
 
+    /// Device scratch launch_morton_permutation uses for n Gaussians.
+    [[nodiscard]] std::size_t morton_permutation_scratch_bytes(std::size_t n);
+
     /// 30-bit Morton argsort of [N, 3] CUDA float means. Returns Int64 [N]
-    /// permutation such that dest[i] <- src[perm[i]].
+    /// permutation such that dest[i] <- src[perm[i]]. Works in `scratch` when
+    /// it holds morton_permutation_scratch_bytes(N), otherwise allocates it.
     [[nodiscard]] lfs::core::Tensor launch_morton_permutation(
         const lfs::core::Tensor& means,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        void* scratch = nullptr,
+        std::size_t scratch_bytes = 0);
 
     /// Decode joint packed rows under source 256-splat bounds, write dest packed
     /// with freshly reduced dest-block bounds. src/dst packed must not alias.

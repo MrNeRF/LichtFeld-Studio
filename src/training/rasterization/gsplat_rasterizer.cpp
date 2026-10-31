@@ -726,6 +726,29 @@ namespace lfs::training {
             const uint32_t W = ctx.image_width;
             const uint32_t channels = ctx.channels;
 
+            // Pixel-error densification input ([H, W] or [1, H, W])
+            const auto densification_rows = gaussian_model.densification_rows(N);
+            const bool update_densification_info = densification_rows.error != nullptr;
+            core::Tensor error_map_2d;
+            if (update_densification_info && pixel_error_map.is_valid() && pixel_error_map.numel() > 0) {
+                error_map_2d = pixel_error_map;
+                if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
+                    error_map_2d = error_map_2d.squeeze(0);
+                }
+                assert(error_map_2d.ndim() == 2 &&
+                       static_cast<uint32_t>(error_map_2d.shape()[0]) == H &&
+                       static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
+                       "pixel_error_map must have shape [H, W] or [1, H, W]");
+                if (error_map_2d.device() != core::Device::CUDA) {
+                    error_map_2d = error_map_2d.cuda();
+                }
+                if (!error_map_2d.is_contiguous()) {
+                    error_map_2d = error_map_2d.contiguous();
+                }
+            }
+            const float* const pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid())
+                                                         ? error_map_2d.ptr<float>()
+                                                         : nullptr;
             // Calculate sizes for arena allocation
             auto align = [](size_t size, size_t alignment = 128) {
                 return (size + alignment - 1) & ~(alignment - 1);
@@ -736,18 +759,16 @@ namespace lfs::training {
             const bool have_alpha_grad = !expected_depth && grad_alpha.is_valid() && grad_alpha.numel() > 0;
             size_t v_render_colors_size = have_color_grad ? 0 : align(H * W * channels * sizeof(float));
             size_t v_render_alphas_size = have_alpha_grad ? 0 : align(H * W * sizeof(float));
-            size_t v_means_size = align(N * 3 * sizeof(float));
-            size_t v_quats_size = align(N * 4 * sizeof(float));
-            size_t v_scales_size = align(N * 3 * sizeof(float));
-            size_t v_opacities_size = align(N * sizeof(float));
-            size_t v_sh_coeffs_size = align(N * K * 3 * sizeof(float));
+            // Gaussian gradients add straight into the optimizer's gradients.
+            // Means are staged only when the densification norm needs this
+            // frame's gradient alone.
+            const bool stage_means = densification_rows.weight != nullptr && pixel_error_map_ptr == nullptr;
+            size_t v_means_size = stage_means ? align(N * 3 * sizeof(float)) : 0;
 
-            size_t total_bwd_size = v_render_colors_size + v_render_alphas_size +
-                                    v_means_size + v_quats_size + v_scales_size +
-                                    v_opacities_size + v_sh_coeffs_size;
+            size_t total_bwd_size = v_render_colors_size + v_render_alphas_size + v_means_size;
 
-            char* bwd_blob = arena_allocator(total_bwd_size);
-            if (bwd_blob == nullptr) {
+            char* bwd_blob = total_bwd_size > 0 ? arena_allocator(total_bwd_size) : nullptr;
+            if (total_bwd_size > 0 && bwd_blob == nullptr) {
                 throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::ResourceExhausted,
                     .domain = lfs::ErrorDomain::CUDA,
@@ -773,19 +794,23 @@ namespace lfs::training {
             } else {
                 v_render_alphas_ptr = const_cast<float*>(grad_alpha.ptr<float>());
             }
-            auto* v_means_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_means_size;
-            auto* v_quats_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_quats_size;
-            auto* v_scales_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_scales_size;
-            auto* v_opacities_ptr = reinterpret_cast<float*>(bwd_ptr);
-            bwd_ptr += v_opacities_size;
-            auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
+            auto& means_grad = optimizer.get_grad(ParamType::Means);
+            auto& rotation_grad = optimizer.get_grad(ParamType::Rotation);
+            auto& scaling_grad = optimizer.get_grad(ParamType::Scaling);
+            auto& opacity_grad = optimizer.get_grad(ParamType::Opacity);
+            for (auto* grad : {&means_grad, &rotation_grad, &scaling_grad, &opacity_grad}) {
+                grad->set_stream(stream);
+            }
+            float* const v_means_ptr = stage_means ? reinterpret_cast<float*>(bwd_ptr) : means_grad.ptr<float>();
+            float* const v_quats_ptr = rotation_grad.ptr<float>();
+            float* const v_scales_ptr = scaling_grad.ptr<float>();
+            float* const v_opacities_ptr = opacity_grad.ptr<float>(); // [N, 1] is [N] in memory
 
-            LFS_CUDA_CHECK_MSG(
-                cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
-                "gsplat backward gradient arena clear");
+            if (total_bwd_size > 0) {
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemsetAsync(bwd_blob, 0, total_bwd_size, stream),
+                    "gsplat backward gradient arena clear");
+            }
 
             if (channels != 3) {
                 const size_t plane_bytes = static_cast<size_t>(H) * W * sizeof(float);
@@ -826,33 +851,6 @@ namespace lfs::training {
                 bg_color_ptr = ctx.bg_color.ptr<float>();
             }
 
-            // Pixel-error densification input ([H, W] or [1, H, W])
-            const bool update_densification_info =
-                gaussian_model._densification_info.ndim() == 2 &&
-                gaussian_model._densification_info.shape()[1] >= N;
-            core::Tensor error_map_2d;
-            if (update_densification_info && pixel_error_map.is_valid() && pixel_error_map.numel() > 0) {
-                error_map_2d = pixel_error_map;
-                if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
-                    error_map_2d = error_map_2d.squeeze(0);
-                }
-                assert(error_map_2d.ndim() == 2 &&
-                       static_cast<uint32_t>(error_map_2d.shape()[0]) == H &&
-                       static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
-                       "pixel_error_map must have shape [H, W] or [1, H, W]");
-                if (error_map_2d.device() != core::Device::CUDA) {
-                    error_map_2d = error_map_2d.cuda();
-                }
-                if (!error_map_2d.is_contiguous()) {
-                    error_map_2d = error_map_2d.contiguous();
-                }
-            }
-            float* const densification_info_ptr = update_densification_info
-                                                      ? gaussian_model._densification_info.ptr<float>()
-                                                      : nullptr;
-            const float* const pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid())
-                                                         ? error_map_2d.ptr<float>()
-                                                         : nullptr;
             const bool edge_scoring =
                 edge_weight_map.is_valid() && edge_score_out.is_valid() &&
                 edge_weight_map.device() == core::Device::CUDA &&
@@ -867,6 +865,25 @@ namespace lfs::training {
                 edge_scoring ? edge_weight_map.ptr<float>() : nullptr;
             float* const edge_score_out_ptr =
                 edge_scoring ? edge_score_out.ptr<float>() : nullptr;
+
+            // SH gradients add straight into the optimizer's sh0 / shN
+            // gradients; an [N, K, 3] staging buffer would cost 192 B per
+            // Gaussian at degree 3.
+            gsplat_lfs::ShGradientTarget sh_grads;
+            {
+                auto& sh0_grad = optimizer.get_grad(ParamType::Sh0);
+                sh0_grad.set_stream(stream);
+                sh_grads.sh0 = sh0_grad.ptr<float>();
+                if (K > 1) {
+                    auto& shN_grad = optimizer.get_grad(ParamType::ShN);
+                    if (shN_grad.is_valid() && shN_grad.numel() > 0) {
+                        shN_grad.set_stream(stream);
+                        sh_grads.shN = shN_grad.ptr<float>();
+                        sh_grads.shN_slots = lfs::core::sh_float4_slots_for_rest(
+                            static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest()));
+                    }
+                }
+            }
 
             // Call backward with raw pointers
             gsplat_lfs::rasterize_from_world_with_sh_bwd(
@@ -921,80 +938,21 @@ namespace lfs::training {
                 v_quats_ptr,
                 v_scales_ptr,
                 v_opacities_ptr,
-                v_sh_coeffs_ptr,
-                densification_info_ptr,
+                nullptr, // SH gradients: sh_grads
+                densification_rows.weight,
+                densification_rows.error,
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream, ctx.batches, ctx.tiles_per_gauss_ptr, ctx.shN_bounds_ptr);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr, ctx.shN_bounds_ptr, sh_grads);
 
             gsplat_lfs::flatten_scale_grad(ctx.scales.ptr<float>(), v_scales_ptr, N, flatten_weight, stream);
 
-            // ============ Accumulate gradients into optimizer using CUDA kernels ============
-            // This avoids any tensor operations that might allocate from memory pool
-
-            // Means: [N, 3] -> [N, 3]
-            auto& means_grad = optimizer.get_grad(ParamType::Means);
-            means_grad.set_stream(stream);
-            kernels::launch_grad_accumulate(
-                means_grad.ptr<float>(),
-                v_means_ptr,
-                N * 3,
-                stream);
-
-            // Scales: [N, 3] -> [N, 3]
-            auto& scaling_grad = optimizer.get_grad(ParamType::Scaling);
-            scaling_grad.set_stream(stream);
-            kernels::launch_grad_accumulate(
-                scaling_grad.ptr<float>(),
-                v_scales_ptr,
-                N * 3,
-                stream);
-
-            // Rotations: [N, 4] -> [N, 4]
-            auto& rotation_grad = optimizer.get_grad(ParamType::Rotation);
-            rotation_grad.set_stream(stream);
-            kernels::launch_grad_accumulate(
-                rotation_grad.ptr<float>(),
-                v_quats_ptr,
-                N * 4,
-                stream);
-
-            // Opacities: [N] -> [N, 1] (same memory layout)
-            auto& opacity_grad = optimizer.get_grad(ParamType::Opacity);
-            opacity_grad.set_stream(stream);
-            kernels::launch_grad_accumulate_unsqueeze(
-                opacity_grad.ptr<float>(),
-                v_opacities_ptr,
-                N,
-                stream);
-
-            // SH coefficients: [N, K, 3] -> sh0 [N, 1, 3] + swizzled shN.
-            float* dst_shN = nullptr;
-            if (K > 1) {
-                auto& shN_grad = optimizer.get_grad(ParamType::ShN);
-                if (shN_grad.is_valid() && shN_grad.numel() > 0) {
-                    shN_grad.set_stream(stream);
-                    dst_shN = shN_grad.ptr<float>();
-                }
-            }
-
-            auto& sh0_grad = optimizer.get_grad(ParamType::Sh0);
-            sh0_grad.set_stream(stream);
-            kernels::launch_grad_accumulate_sh_swizzled(
-                sh0_grad.ptr<float>(),
-                dst_shN,
-                v_sh_coeffs_ptr,
-                N,
-                K,
-                static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest()),
-                stream);
-
-            // Accumulate gradient norms when pixel-error map is not provided
-            if (update_densification_info && pixel_error_map_ptr == nullptr) {
+            if (stage_means) {
+                kernels::launch_grad_accumulate(means_grad.ptr<float>(), v_means_ptr, N * 3, stream);
                 gaussian_model._densification_info.set_stream(stream);
                 kernels::launch_grad_norm_accumulate(
-                    gaussian_model._densification_info.ptr<float>(),
+                    densification_rows.weight,
                     v_means_ptr,
                     N,
                     stream);

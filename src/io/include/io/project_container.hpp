@@ -585,6 +585,38 @@ namespace lfs::io::project {
         std::optional<std::uint64_t> expected_stream_bytes = std::nullopt;
     };
 
+    // Payload bytes in fixed 64 MiB segments. Preparing a framed chunk from it
+    // frees each segment once no record still reads it, so the payload and
+    // its compressed form are never resident together.
+    class LFS_IO_API SegmentedPayload {
+    public:
+        // Equals the framed record size, so no record spans two segments.
+        static constexpr std::size_t SEGMENT_BYTES = 64ull * 1024 * 1024;
+
+        SegmentedPayload() = default;
+        SegmentedPayload(SegmentedPayload&&) noexcept = default;
+        SegmentedPayload& operator=(SegmentedPayload&&) noexcept = default;
+
+        // Zero-filled. Pages are committed when first written, so allocating
+        // does not touch the payload.
+        [[nodiscard]] static lfs::Result<SegmentedPayload> allocate(std::uint64_t bytes);
+
+        [[nodiscard]] std::size_t size() const noexcept { return size_; }
+        [[nodiscard]] std::size_t segment_count() const noexcept { return segments_.size(); }
+        [[nodiscard]] std::span<const std::byte> segment(std::size_t index) const noexcept;
+        // The contiguous bytes from offset to the end of its segment.
+        [[nodiscard]] std::span<std::byte> window(std::size_t offset) noexcept;
+        void read(std::size_t offset, std::span<std::byte> destination) const noexcept;
+        void release(std::size_t index) noexcept;
+
+    private:
+        struct Free {
+            void operator()(std::byte* bytes) const noexcept;
+        };
+        std::vector<std::unique_ptr<std::byte, Free>> segments_;
+        std::size_t size_ = 0;
+    };
+
     // Compress once before choosing a publication strategy. The immutable stored
     // representation is written without another compression or payload copy; a
     // STORED payload is referenced, so it must outlive the prepared chunk.
@@ -592,7 +624,10 @@ namespace lfs::io::project {
     public:
         PreparedChunk(PreparedChunk&&) noexcept = default;
         PreparedChunk& operator=(PreparedChunk&&) noexcept = default;
-        [[nodiscard]] std::uint64_t stored_bytes() const noexcept { return stored_.size(); }
+        [[nodiscard]] std::uint64_t stored_bytes() const noexcept { return stored_bytes_; }
+        [[nodiscard]] std::uint64_t logical_bytes() const noexcept { return logical_bytes_; }
+        // The logical payload, decompressed and unshuffled.
+        [[nodiscard]] lfs::Result<std::vector<std::byte>> decode() const;
         // Conservative layout estimate, including tensor alignment and CRC tables.
         [[nodiscard]] std::uint64_t occupied_bytes() const noexcept {
             const bool blocks = options_.block_crcs || stored_bytes() >= BLOCK_CRC_REQUIRED_AT;
@@ -604,8 +639,13 @@ namespace lfs::io::project {
     private:
         friend class ProjectWriter;
         PreparedChunk() = default;
-        std::unique_ptr<std::byte[]> bytes_;
-        std::span<const std::byte> stored_;
+        // Stored bytes in file order: the framed header and table, then one
+        // piece per record.
+        std::vector<std::unique_ptr<std::byte[]>> bytes_;
+        std::vector<std::span<const std::byte>> stored_;
+        // Keeps referenced STORED segments alive.
+        std::shared_ptr<const void> stored_owner_;
+        std::uint64_t stored_bytes_ = 0;
         std::uint64_t logical_bytes_ = 0;
         ChunkWriteOptions options_;
     };
@@ -693,6 +733,11 @@ namespace lfs::io::project {
                     const ChunkWriteOptions& options = {});
         [[nodiscard]] static lfs::Result<PreparedChunk>
         prepare_chunk(std::span<const std::byte> payload,
+                      const ChunkWriteOptions& options = {});
+        // Consumes the payload: framed compression frees its segments as the
+        // records that read them finish. On failure the payload is gone.
+        [[nodiscard]] static lfs::Result<PreparedChunk>
+        prepare_chunk(SegmentedPayload&& payload,
                       const ChunkWriteOptions& options = {});
         [[nodiscard]] lfs::Result<void>
         write_prepared_chunk(const ChunkKey& key, const PreparedChunk& payload);

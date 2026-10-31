@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
+#include "strategies/strategy_utils.hpp"
 
 #include <cuda_runtime.h>
 
@@ -72,11 +73,13 @@ namespace lfs::training {
             std::uint64_t u = 0;
             std::uint64_t r = 0;
             if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &u) == cudaSuccess) {
-                used_high = static_cast<std::size_t>(u);
+                // Frame probes restart the pool's mark; fold their peaks in.
+                used_high = std::max(static_cast<std::size_t>(u), tensor_pool_used_high_bytes());
             }
             if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &r) ==
                 cudaSuccess) {
-                reserved_high = static_cast<std::size_t>(r);
+                // Refine windows restart the pool's mark; fold their peaks in.
+                reserved_high = std::max(static_cast<std::size_t>(r), tensor_pool_reserved_high_bytes());
             }
             u = r = 0;
             if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &u) ==

@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <memory>
 #include <string_view>
+#include <utility>
 
 namespace lfs::training::sh_value {
 
@@ -91,6 +92,11 @@ namespace lfs::training::sh_value {
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
+
+    /// q16 codes and bounds for rows dest[i] = src[keep[i]], encoded straight
+    /// from the source codes without an fp32 copy. splat must be q16.
+    [[nodiscard]] std::pair<core::Tensor, core::Tensor> gather_shN_q16(core::SplatData& splat,
+                                                                       const core::Tensor& keep_indices);
 
     /// Compact shN so dest[i] = src[keep[i]], sized to keep.numel().
     /// n_src is the pre-compact primitive count (means may already be compacted).

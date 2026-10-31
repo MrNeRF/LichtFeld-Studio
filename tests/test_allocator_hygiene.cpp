@@ -164,6 +164,40 @@ TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
 // 3.3 — op temps route through the pool (count_nonzero correctness + hygiene)
 // ---------------------------------------------------------------------------
 
+// The async tiers run out in a size-capped mempool, so only the direct tier
+// can serve the request. Its success must leave no out-of-memory error pending.
+TEST(AllocatorHygiene, DirectFallbackAfterAsyncOomLeavesNoPendingError) {
+    int device = 0;
+    ASSERT_EQ(cudaGetDevice(&device), cudaSuccess);
+    cudaMemPool_t default_pool = nullptr;
+    ASSERT_EQ(cudaDeviceGetDefaultMemPool(&default_pool, device), cudaSuccess);
+    cudaMemPoolProps props{};
+    props.allocType = cudaMemAllocationTypePinned;
+    props.location.type = cudaMemLocationTypeDevice;
+    props.location.id = device;
+    props.maxSize = size_t{64} << 20;
+    cudaMemPool_t small_pool = nullptr;
+    ASSERT_EQ(cudaMemPoolCreate(&small_pool, &props), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSetMemPool(device, small_pool), cudaSuccess);
+    struct RestorePool {
+        int device;
+        cudaMemPool_t default_pool;
+        cudaMemPool_t small_pool;
+        ~RestorePool() {
+            cudaDeviceSetMemPool(device, default_pool);
+            cudaMemPoolDestroy(small_pool);
+        }
+    } restore{device, default_pool, small_pool};
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+
+    auto& pool = CudaMemoryPool::instance();
+    void* ptr = pool.try_allocate(size_t{256} << 20, nullptr);
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(cudaPeekAtLastError(), cudaSuccess);
+    pool.deallocate(ptr, nullptr);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
 TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
     // Correctness after routing d_count through CudaMemoryPool instead of bare
     // cudaMalloc/cudaFree.

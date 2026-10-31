@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace lfs::training {
@@ -42,16 +43,6 @@ namespace lfs::training {
             return false;
         }
 
-        const float get_percentil_value(const float q_percent, const lfs::core::Tensor tensor) {
-            auto [sorted_val, sorted_idx] = tensor.sort();
-
-            const int num_gaussians = static_cast<int>(tensor.shape()[0]);
-            const int q_index = std::clamp(static_cast<int>(num_gaussians * q_percent), 0, num_gaussians - 1);
-            const float quantile_threshold = sorted_val[q_index].item_as<float>();
-
-            return quantile_threshold;
-        }
-
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
             if (tensor.device() == lfs::core::Device::CUDA &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
@@ -69,12 +60,6 @@ namespace lfs::training {
             auto [sorted, _] = valid.sort();
             float median = sorted[valid.numel() / 2].item_as<float>();
             tensor.div_(std::max(median, 1e-9f));
-        }
-
-        lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
-            auto normalized = tensor.clone();
-            normalize_by_positive_median_inplace(normalized);
-            return normalized;
         }
 
         [[nodiscard]] size_t deleted_mask_capacity(const lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
@@ -174,8 +159,15 @@ namespace lfs::training {
                 return {};
             }
 
-            const float p95 = get_percentil_value(0.95f, sampled_scales);
-            const float max_raw = get_percentil_value(1.0f, sampled_scales);
+            // Same ranks as an ascending sort, without sorting.
+            const size_t count = sampled_scales.numel();
+            const auto quantile = [&](const float q) {
+                const size_t rank = std::min(static_cast<size_t>(static_cast<float>(count) * q), count - 1);
+                return lfs::training::mrnf_strategy::launch_kth_largest(
+                    sampled_scales.ptr<float>(), nullptr, count, count - rank);
+            };
+            const float p95 = quantile(0.95f);
+            const float max_raw = quantile(1.0f);
             return {
                 .p95 = p95,
                 .max = max_raw,
@@ -231,9 +223,9 @@ namespace lfs::training {
         const double gamma = std::pow(0.1, 1.0 / optimParams.iterations);
         _scheduler = std::make_unique<ExponentialLR>(*_optimizer, gamma, std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
 
-        // Initialize densification info: [2, N] tensor for tracking per-view densification statistics
+        // Per-view densification error: [N], the error row alone (IGS+ never reads the weight).
         _splat_data->_densification_info = lfs::core::Tensor::zeros(
-            {2, static_cast<size_t>(_splat_data->size())},
+            {static_cast<size_t>(_splat_data->size())},
             _splat_data->means().device());
 
         // Initialize free mask: all slots are active (not free)
@@ -262,65 +254,75 @@ namespace lfs::training {
         return apply_crop_damping_to_scores(*_optimizer, scores);
     }
 
-    void ImprovedGSPlus::densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget) {
+    void ImprovedGSPlus::densify_with_score(lfs::core::Tensor& edge_scores, lfs::core::Tensor& error_scores, const int64_t budget) {
         const int64_t current_size = static_cast<int64_t>(_splat_data->size());
         const int64_t curr_points = static_cast<int64_t>(active_count());
         const int64_t free_slots = static_cast<int64_t>(free_count());
-        const int64_t budget_for_alloc = std::max<int64_t>(0, budget - curr_points);
+        // Free slots are refilled in place; only rows appended past N need VRAM.
+        const int64_t wanted = std::max<int64_t>(0, budget - curr_points);
+        const int64_t appended = std::max<int64_t>(0, wanted - free_slots);
+        const int64_t budget_for_alloc =
+            wanted - appended +
+            static_cast<int64_t>(clamp_growth_to_vram(static_cast<size_t>(appended), *_splat_data, _optimizer.get()));
         if (budget_for_alloc <= 0) {
             return;
         }
 
-        auto active_indices = get_active_indices();
-        if (auto frozen_mask = make_frozen_mask(*_splat_data, static_cast<size_t>(current_size), _splat_data->means().device());
-            frozen_mask.is_valid() && active_indices.numel() > 0) {
-            auto trainable = frozen_mask.index_select(0, active_indices).logical_not();
-            active_indices = active_indices.masked_select(trainable);
-        }
-        const int64_t total_active = static_cast<int64_t>(active_indices.numel());
-        if (total_active == 0) {
-            return;
-        }
+        // Both score buffers are refilled after every refine, so they are
+        // normalized and combined in place, and the masks are gone before
+        // LAS_densify allocates the child rows: growth charges every Gaussian
+        // the refine's peak.
+        lfs::core::Tensor sampling_scores;
+        int64_t candidate_budget = 0;
+        int64_t selectable = 0;
+        {
+            // Active, trainable rows as a mask: an index list would cost 8 bytes
+            // per Gaussian.
+            const auto device = _splat_data->means().device();
+            const auto n = static_cast<size_t>(current_size);
+            auto active_mask = _free_mask.is_valid() ? _free_mask.slice(0, 0, n).logical_not()
+                                                     : lfs::core::Tensor::ones_bool({n}, device);
+            if (auto frozen_mask = make_frozen_mask(*_splat_data, n, device); frozen_mask.is_valid()) {
+                active_mask = active_mask.logical_and(frozen_mask.logical_not());
+            }
+            const int64_t total_active = static_cast<int64_t>(active_mask.count_nonzero());
+            if (total_active == 0) {
+                return;
+            }
 
-        const int64_t candidate_budget = std::min<int64_t>(
-            total_active,
-            std::max<int64_t>(budget_for_alloc, budget_for_alloc * ERROR_CANDIDATE_FACTOR));
+            candidate_budget = std::min<int64_t>(
+                total_active,
+                std::max<int64_t>(budget_for_alloc, budget_for_alloc * ERROR_CANDIDATE_FACTOR));
 
-        const auto normalized_error = normalized_by_positive_median(error_scores);
-        const auto normalized_edge = normalized_by_positive_median(edge_scores);
-        const auto candidate_error = damp_densification_scores(normalized_error);
-        const auto device = _splat_data->means().device();
+            normalize_by_positive_median_inplace(error_scores);
+            normalize_by_positive_median_inplace(edge_scores);
 
-        auto active_mask = lfs::core::Tensor::zeros_bool({static_cast<size_t>(_splat_data->size())}, device);
-        auto true_vals = lfs::core::Tensor::ones_bool({static_cast<size_t>(active_indices.numel())}, device);
-        active_mask.index_put_(active_indices, true_vals);
+            lfs::core::Tensor candidate_mask = active_mask;
+            if (candidate_budget < total_active) {
+                const auto candidate_error = damp_densification_scores(error_scores);
+                const float threshold = lfs::training::mrnf_strategy::launch_kth_largest(
+                    candidate_error.ptr<float>(), active_mask.ptr<bool>(), n, static_cast<size_t>(candidate_budget));
+                candidate_mask = active_mask.logical_and(candidate_error >= threshold);
+            }
 
-        lfs::core::Tensor candidate_mask = active_mask;
-        if (candidate_budget < total_active) {
-            const auto active_error = candidate_error.index_select(0, active_indices);
-            auto [sorted_error, _] = active_error.sort(0, true);
-            const float threshold = sorted_error[candidate_budget - 1].item_as<float>();
-            candidate_mask = active_mask.logical_and(candidate_error >= threshold);
-        }
+            // error * (1 + w * edge) over the candidates.
+            error_scores.mul_((edge_scores * EDGE_SCORE_WEIGHT).add_(1.0f));
+            error_scores.masked_fill_(candidate_mask.logical_not(), 0.0f);
+            sampling_scores = error_scores;
 
-        auto sampling_scores = normalized_error * (normalized_edge * EDGE_SCORE_WEIGHT + 1.0f);
-        sampling_scores = sampling_scores.masked_fill(~candidate_mask, 0.0f);
-
-        int64_t selectable = static_cast<int64_t>(
-            damp_densification_scores(sampling_scores).count_nonzero());
-        if (selectable < budget_for_alloc) {
-            auto edge_fallback = normalized_edge.masked_fill(~active_mask, 0.0f);
             selectable = static_cast<int64_t>(
-                damp_densification_scores(edge_fallback).count_nonzero());
-            if (selectable > 0) {
-                sampling_scores = std::move(edge_fallback);
-            } else {
-                auto active_weights = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, device);
-                auto active_weight_vals = lfs::core::Tensor::ones({static_cast<size_t>(active_indices.numel())}, device);
-                active_weights.index_put_(active_indices, active_weight_vals);
-                sampling_scores = std::move(active_weights);
+                damp_densification_scores(sampling_scores).count_nonzero());
+            if (selectable < budget_for_alloc) {
+                edge_scores.masked_fill_(~active_mask, 0.0f);
                 selectable = static_cast<int64_t>(
-                    damp_densification_scores(sampling_scores).count_nonzero());
+                    damp_densification_scores(edge_scores).count_nonzero());
+                if (selectable > 0) {
+                    sampling_scores = edge_scores;
+                } else {
+                    sampling_scores = active_mask.to(lfs::core::DataType::Float32);
+                    selectable = static_cast<int64_t>(
+                        damp_densification_scores(sampling_scores).count_nonzero());
+                }
             }
         }
 
@@ -343,8 +345,9 @@ namespace lfs::training {
         _pending_failure_snapshot.sampled_scale_max = 0.0f;
         _pending_failure_snapshot.sampled_scale_exp_max = 0.0f;
 
+        sampling_scores.clamp_min_(1e-12f);
         LAS_densify(
-            damp_densification_scores(sampling_scores.clamp_min(1e-12f)),
+            damp_densification_scores(sampling_scores),
             std::min<int64_t>(budget_for_alloc, selectable));
     }
 
@@ -397,40 +400,6 @@ namespace lfs::training {
 
         const lfs::core::Device device = _splat_data->means().device();
         const size_t K = static_cast<size_t>(budget_for_alloc);
-
-        // reusable densify child workspace (grow-only).
-        _densify_ws.ensure(K, layout_rest, use_shN, /*sh0_flat_layout=*/true, device);
-        auto second_positions = _densify_ws.means_view(K);
-        auto second_rotations = _densify_ws.rotations_view(K);
-        auto second_scales = _densify_ws.scales_view(K);
-        auto second_sh0 = _densify_ws.sh0_view(K);
-        lfs::core::Tensor second_shN = use_shN ? _densify_ws.shN_view(K) : lfs::core::Tensor();
-        auto second_opacities = _densify_ws.opacities_view(K);
-
-        // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
-        // SH, then gather selected child SH rows below.
-        kernels::launch_long_axis_split_gaussians_inplace(
-            _splat_data->means().ptr<float>(),
-            _splat_data->rotation_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->sh0().ptr<float>(),
-            nullptr,
-            _splat_data->opacity_raw().ptr<float>(),
-            second_positions.ptr<float>(),
-            second_rotations.ptr<float>(),
-            second_scales.ptr<float>(),
-            second_sh0.ptr<float>(),
-            nullptr,
-            second_opacities.ptr<float>(),
-            sampled_idxs.ptr<int64_t>(),
-            static_cast<int>(budget_for_alloc),
-            0,
-            nullptr);
-
-        if (use_shN) {
-            lfs::training::sh_value::gather_shN_to_canonical(
-                *_splat_data, sampled_idxs, second_shN);
-        }
 
         // Merge: joint-codec state must reset via the optimizer API (fused scale-zero is a
         // no-op for joint state — no scales exist); legacy codec keeps the fused fast path.
@@ -491,83 +460,134 @@ namespace lfs::training {
             zero_adam_grads_at_indices(*_optimizer, sampled_idxs, layout_rest_u32);
         }
 
-        // Now place second split results: fill free slots first, then append.
-        // One q16 batch so fill dests and the append tail share a single
-        // decode/overlay/encode per touched 256-splat block.
-        lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
-        auto [filled_indices, remaining] = fill_free_slots_with_data(
-            second_positions, second_rotations, second_scales,
-            second_sh0, second_shN, second_opacities, budget_for_alloc, &shn_batch);
+        // Children are staged in canonical fp32 (the SH rest dominates), in
+        // chunks so the staging rows and the SH re-encode batch stay bounded
+        // instead of scaling with every new child; they live only for this
+        // refine. Parents (active rows) and child destinations (free slots or
+        // appended rows) are disjoint, so each chunk splits its own parents
+        // and places its own children. A q16 SH block touched by several
+        // chunks is re-encoded once per chunk, so its values may differ from
+        // a single pass by one quantization step.
+        constexpr size_t CHILD_CHUNK_BYTES = 256ull << 20;
+        const size_t child_row_bytes = (3 + 4 + 3 + 3 + 1 + (use_shN ? layout_rest * 3 : 0)) * sizeof(float);
+        const size_t chunk_rows = std::max<size_t>(1, CHILD_CHUNK_BYTES / child_row_bytes);
+        DensifyChildWorkspace densify_ws;
+        densify_ws.ensure(std::min(K, chunk_rows), layout_rest, use_shN, /*sh0_flat_layout=*/true, device);
+        int64_t num_filled = 0;
+        int64_t num_appended = 0;
+        for (size_t first = 0; first < K; first += chunk_rows) {
+            const size_t count = std::min(chunk_rows, K - first);
+            const auto chunk_count = static_cast<int64_t>(count);
+            const auto chunk_idxs = sampled_idxs.slice(0, first, first + count);
+            auto second_positions = densify_ws.means_view(count);
+            auto second_rotations = densify_ws.rotations_view(count);
+            auto second_scales = densify_ws.scales_view(count);
+            auto second_sh0 = densify_ws.sh0_view(count);
+            lfs::core::Tensor second_shN = use_shN ? densify_ws.shN_view(count) : lfs::core::Tensor();
+            auto second_opacities = densify_ws.opacities_view(count);
 
-        const int64_t num_filled = budget_for_alloc - remaining;
-        if (_pending_failure_snapshot.valid) {
-            _pending_failure_snapshot.num_filled = num_filled;
-            _pending_failure_snapshot.num_appended = remaining;
-        }
-
-        // Append remaining second results
-        if (remaining > 0) {
-            const size_t old_size = static_cast<size_t>(_splat_data->size());
-            const size_t n_remaining = static_cast<size_t>(remaining);
-
-            // preflight before multi-param append so a
-            // capacity-ensure failure cannot leave partial row growth.
-            if (!_optimizer->preflight_grow_capacity(n_remaining)) {
-                LOG_ERROR(
-                    "ImprovedGS+ densify aborted: capacity-ensure failed for {} -> {} rows "
-                    "(no params mutated)",
-                    old_size, old_size + n_remaining);
-                return;
-            }
-
-            // Get the remaining data
-            const auto append_positions = second_positions.slice(0, num_filled, budget_for_alloc);
-            const auto append_rotations = second_rotations.slice(0, num_filled, budget_for_alloc);
-            const auto append_scales = second_scales.slice(0, num_filled, budget_for_alloc);
-            const auto append_sh0_flat = second_sh0.slice(0, num_filled, budget_for_alloc);
-            const auto append_opacities = second_opacities.slice(0, num_filled, budget_for_alloc);
-
-            // Create indices for new rows
-            std::vector<int> new_indices_vec(n_remaining);
-            for (size_t i = 0; i < n_remaining; ++i) {
-                new_indices_vec[i] = static_cast<int>(old_size + i);
-            }
-            const auto new_indices = lfs::core::Tensor::from_vector(
-                new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
-
-            // Grow params first, then pad deleted mask to the new size.
-            _splat_data->means().append_zeros(n_remaining);
-            _splat_data->means().index_put_(new_indices, append_positions);
-
-            _splat_data->rotation_raw().append_zeros(n_remaining);
-            _splat_data->rotation_raw().index_put_(new_indices, append_rotations);
-
-            _splat_data->scaling_raw().append_zeros(n_remaining);
-            _splat_data->scaling_raw().index_put_(new_indices, append_scales);
-
-            const auto append_sh0_reshaped = append_sh0_flat.reshape(
-                lfs::core::TensorShape({n_remaining, 1, 3}));
-            _splat_data->sh0().append_zeros(n_remaining);
-            _splat_data->sh0().index_put_(new_indices, append_sh0_reshaped);
-
-            _splat_data->opacity_raw().append_zeros(n_remaining);
-            _splat_data->opacity_raw().index_put_(new_indices, append_opacities);
-            append_live_deleted_rows(*_splat_data, _free_mask);
+            // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
+            // SH, then gather selected child SH rows below.
+            kernels::launch_long_axis_split_gaussians_inplace(
+                _splat_data->means().ptr<float>(),
+                _splat_data->rotation_raw().ptr<float>(),
+                _splat_data->scaling_raw().ptr<float>(),
+                _splat_data->sh0().ptr<float>(),
+                nullptr,
+                _splat_data->opacity_raw().ptr<float>(),
+                second_positions.ptr<float>(),
+                second_rotations.ptr<float>(),
+                second_scales.ptr<float>(),
+                second_sh0.ptr<float>(),
+                nullptr,
+                second_opacities.ptr<float>(),
+                chunk_idxs.ptr<int64_t>(),
+                static_cast<int>(count),
+                0,
+                nullptr);
 
             if (use_shN) {
-                auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
-                shn_batch.append(append_shN, old_size);
+                lfs::training::sh_value::gather_shN_to_canonical(
+                    *_splat_data, chunk_idxs, second_shN);
             }
 
-            // Update optimizer states
-            _optimizer->extend_state_for_new_params(ParamType::Means, n_remaining);
-            _optimizer->extend_state_for_new_params(ParamType::Rotation, n_remaining);
-            _optimizer->extend_state_for_new_params(ParamType::Scaling, n_remaining);
-            _optimizer->extend_state_for_new_params(ParamType::Sh0, n_remaining);
-            _optimizer->extend_state_for_new_params(ParamType::ShN, n_remaining);
-            _optimizer->extend_state_for_new_params(ParamType::Opacity, n_remaining);
+            // Fill free slots first, then append. One q16 batch so fill dests and the
+            // append tail share a single decode/overlay/encode per touched 256-splat block.
+            lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
+            auto [filled_indices, remaining] = fill_free_slots_with_data(
+                second_positions, second_rotations, second_scales,
+                second_sh0, second_shN, second_opacities, chunk_count, &shn_batch);
+            const int64_t chunk_filled = chunk_count - remaining;
+            num_filled += chunk_filled;
+            num_appended += remaining;
+            if (_pending_failure_snapshot.valid) {
+                _pending_failure_snapshot.num_filled = num_filled;
+                _pending_failure_snapshot.num_appended = num_appended;
+            }
+
+            if (remaining > 0) {
+                const size_t old_size = static_cast<size_t>(_splat_data->size());
+                const size_t n_remaining = static_cast<size_t>(remaining);
+
+                // preflight before multi-param append so a
+                // capacity-ensure failure cannot leave partial row growth.
+                if (!_optimizer->preflight_grow_capacity(n_remaining)) {
+                    LOG_ERROR(
+                        "ImprovedGS+ densify stopped: capacity-ensure failed for {} -> {} rows "
+                        "(this chunk's appends skipped)",
+                        old_size, old_size + n_remaining);
+                    return;
+                }
+
+                // Get the remaining data
+                const auto append_positions = second_positions.slice(0, chunk_filled, chunk_count);
+                const auto append_rotations = second_rotations.slice(0, chunk_filled, chunk_count);
+                const auto append_scales = second_scales.slice(0, chunk_filled, chunk_count);
+                const auto append_sh0_flat = second_sh0.slice(0, chunk_filled, chunk_count);
+                const auto append_opacities = second_opacities.slice(0, chunk_filled, chunk_count);
+
+                // Create indices for new rows
+                std::vector<int> new_indices_vec(n_remaining);
+                for (size_t i = 0; i < n_remaining; ++i) {
+                    new_indices_vec[i] = static_cast<int>(old_size + i);
+                }
+                const auto new_indices = lfs::core::Tensor::from_vector(
+                    new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
+
+                // Grow params first, then pad deleted mask to the new size.
+                _splat_data->means().append_zeros(n_remaining);
+                _splat_data->means().index_put_(new_indices, append_positions);
+
+                _splat_data->rotation_raw().append_zeros(n_remaining);
+                _splat_data->rotation_raw().index_put_(new_indices, append_rotations);
+
+                _splat_data->scaling_raw().append_zeros(n_remaining);
+                _splat_data->scaling_raw().index_put_(new_indices, append_scales);
+
+                const auto append_sh0_reshaped = append_sh0_flat.reshape(
+                    lfs::core::TensorShape({n_remaining, 1, 3}));
+                _splat_data->sh0().append_zeros(n_remaining);
+                _splat_data->sh0().index_put_(new_indices, append_sh0_reshaped);
+
+                _splat_data->opacity_raw().append_zeros(n_remaining);
+                _splat_data->opacity_raw().index_put_(new_indices, append_opacities);
+                append_live_deleted_rows(*_splat_data, _free_mask);
+
+                if (use_shN) {
+                    auto append_shN = second_shN.slice(0, chunk_filled, chunk_count);
+                    shn_batch.append(append_shN, old_size);
+                }
+
+                // Update optimizer states
+                _optimizer->extend_state_for_new_params(ParamType::Means, n_remaining);
+                _optimizer->extend_state_for_new_params(ParamType::Rotation, n_remaining);
+                _optimizer->extend_state_for_new_params(ParamType::Scaling, n_remaining);
+                _optimizer->extend_state_for_new_params(ParamType::Sh0, n_remaining);
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_remaining);
+                _optimizer->extend_state_for_new_params(ParamType::Opacity, n_remaining);
+            }
+            shn_batch.flush();
         }
-        shn_batch.flush();
     }
 
     void ImprovedGSPlus::reset_opacity() {
@@ -668,17 +688,16 @@ namespace lfs::training {
         {
             const size_t n = static_cast<size_t>(_splat_data->size());
             ensure_densification_info_shape_inplace(
-                _splat_data->_densification_info, n, _splat_data->means().device());
+                _splat_data->_densification_info, n, _splat_data->means().device(), 1);
             ensure_error_score_shape();
 
             const auto& accum = _splat_data->_densification_info;
-            if (accum.is_valid() &&
-                accum.ndim() == 2 &&
-                accum.shape()[0] >= 2 &&
-                accum.shape()[1] == _error_score_max.numel()) {
+            const auto rows = _splat_data->densification_rows(_error_score_max.numel());
+            if (rows.error != nullptr && accum.shape()[accum.ndim() - 1] == _error_score_max.numel()) {
                 lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
+                    rows.error,
+                    rows.weight,
                     _error_score_max.numel());
                 zero_frozen_scores_inplace(*_splat_data, _error_score_max);
             } else if (accum.is_valid() && accum.numel() > 0) {
@@ -687,6 +706,7 @@ namespace lfs::training {
         }
 
         if (is_refining(iter)) {
+            const RefineVramWindow vram_window(*_splat_data);
             _pending_failure_snapshot = {};
             // No edge scores reach the strategy while PPISP distillation freezes the Gaussians.
             if (_precompute_valid)
@@ -725,7 +745,7 @@ namespace lfs::training {
             ensure_densification_info_shape_inplace(
                 _splat_data->_densification_info,
                 static_cast<size_t>(_splat_data->size()),
-                _splat_data->means().device());
+                _splat_data->means().device(), 1);
             _splat_data->_densification_info.zero_();
             ensure_error_score_shape();
             _error_score_max.zero_();
@@ -845,8 +865,12 @@ namespace lfs::training {
         if (iter >= _params->stop_refine) {
             return;
         }
-        auto prune_mask = (_splat_data->get_opacity() < _params->prune_opacity)
-                              .logical_or(compute_near_zero_rotation_mask(_splat_data->rotation_raw()));
+        // sigmoid(x) < t exactly when x < logit(t): the fused test reads the
+        // raw logits, with no activated copy.
+        const float t = _params->prune_opacity;
+        const float below_logit = std::nextafter(std::log(t / (1.0f - t)), -std::numeric_limits<float>::infinity());
+        auto prune_mask = compute_dead_mask_from_opacity_and_rotation(
+            _splat_data->opacity_raw(), _splat_data->rotation_raw(), below_logit);
         if (_free_mask.is_valid() && prune_mask.numel() > 0) {
             auto active_mask = _free_mask.slice(0, 0, prune_mask.numel()).logical_not();
             prune_mask = prune_mask.logical_and(active_mask);

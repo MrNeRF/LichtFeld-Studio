@@ -5,6 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/export.hpp"
 
 #include <cuda_runtime.h>
 
@@ -16,13 +17,25 @@
 
 namespace lfs::core {
 
+    // Device memory pressure relief for an allocation made outside the tensor
+    // pool, such as kernel scratch; true when a retry may now succeed.
+    [[nodiscard]] LFS_CORE_API bool relieve_device_allocation_failure(size_t bytes, cudaStream_t stream);
+
     struct DirectCudaAllocator {
         [[nodiscard]] void* allocate(const size_t bytes,
-                                     cudaStream_t,
+                                     const cudaStream_t stream,
                                      const std::string_view label) const {
             void* ptr = nullptr;
-            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                               "CUDA allocation '{}' ({} bytes)", label, bytes);
+            const cudaError_t status = cudaMalloc(&ptr, bytes);
+            if (status == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+                (void)relieve_device_allocation_failure(bytes, stream);
+            }
+            if (status != cudaSuccess) {
+                ptr = nullptr;
+                LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
+                                   "CUDA allocation '{}' ({} bytes)", label, bytes);
+            }
             return ptr;
         }
 
@@ -43,11 +56,18 @@ namespace lfs::core {
                                      const std::string_view label) const {
             void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
-                               "stream-ordered CUDA allocation '{}' ({} bytes)", label, bytes);
+            const cudaError_t status = cudaMallocAsync(&ptr, bytes, stream);
+            if (status == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+                (void)relieve_device_allocation_failure(bytes, stream);
+            }
+            if (status != cudaSuccess) {
+                ptr = nullptr;
+                LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
+                                   "stream-ordered CUDA allocation '{}' ({} bytes)", label, bytes);
+            }
 #else
-            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                               "CUDA allocation '{}' ({} bytes)", label, bytes);
+            ptr = DirectCudaAllocator{}.allocate(bytes, stream, label);
 #endif
             return ptr;
         }
