@@ -755,6 +755,9 @@ namespace lfs::mcp {
                          {"serialize_and_issue_ms",
                           project_capture
                               .serialize_and_issue_ms},
+                         {"device_hold_bytes",
+                          project_capture
+                              .device_hold_bytes},
                          {"last_d2h_wait_ms",
                           project_capture
                               .last_d2h_wait_ms},
