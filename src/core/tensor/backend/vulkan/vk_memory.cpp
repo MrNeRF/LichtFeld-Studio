@@ -773,6 +773,9 @@ namespace lfs::core::internal {
             update(storage, true);
     }
 
+    // Every upload goes through the staging ring, so the caller has its source back once the bytes are there. A
+    // synchronous upload owes no more (CopyRequest::synchronous): later GPU work and host reads of the destination
+    // come after the staged copy, so the host doesn't wait for it.
     void VulkanMemory::copy_host_to_device(const CopyRequest& request) {
         if (request.bytes == 0) {
             return;
@@ -780,14 +783,13 @@ namespace lfs::core::internal {
         std::lock_guard staging_lock(staging_mutex_);
         const auto* source = static_cast<const std::byte*>(request.src.data) +
                              request.src.byte_offset;
-        uint64_t value = 0;
         for (size_t offset = 0; offset < request.bytes; offset += kTransferChunk) {
             const StagingSlice slice = acquire_staging(std::min(kTransferChunk, request.bytes - offset), 16);
             std::memcpy(slice.mapped, source + offset, slice.size);
             auto destination = request.dst;
             destination.byte_offset += offset;
             const std::array writes{destination};
-            value = context_.recorders().record(
+            const uint64_t value = context_.recorders().record(
                 {}, writes, [&](const VkCommandBuffer command) {
                     const VkBufferCopy region{
                         .srcOffset = slice.offset,
@@ -801,11 +803,6 @@ namespace lfs::core::internal {
             staging_retire_value_ = std::max(staging_retire_value_, value);
             if (request.bytes > kTransferChunk)
                 context_.recorders().flush_current();
-        }
-        if (request.synchronous) {
-            context_.recorders().flush_storage(request.dst);
-            context_.wait(value);
-            context_.check_fault_buffer();
         }
     }
 

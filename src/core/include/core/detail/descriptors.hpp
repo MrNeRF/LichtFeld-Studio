@@ -386,6 +386,12 @@ namespace lfs::core {
             StorageRef src;
             StorageRef dst;
             size_t bytes = 0;
+            // What a copy promises when the call returns. Either way it is ordered on its queue: GPU work queued
+            // after it, and host reads of a device destination through its backend, see the bytes.
+            // - Asynchronous: nothing more. A host source has to stay valid until the copy has run.
+            // - Synchronous: the caller also has its source back, so a host source may be freed or reused, and a
+            //   host destination holds the bytes. A device destination need not hold them yet: a backend may stage
+            //   an upload into storage the GPU still uses instead of waiting for that use, as Metal and Vulkan do.
             bool synchronous = false;
             ExecContext context{};
             const char* operation = "tensor.copy";
