@@ -532,6 +532,10 @@ namespace lfs::training {
         };
         enum class RetryDecision : std::uint8_t { DoNotRetry,
                                                   RetryForwardOnce };
+        // What is left of a training step that ran out of memory.
+        enum class StepOomRecovery : std::uint8_t { Fail,
+                                                    RetryIteration,
+                                                    SkipRest };
 
         // epoch here is a trainer-lifetime persistent-commit counter
         // (mutation_epoch_), NOT a dataset/sampler epoch. The main training
@@ -576,7 +580,9 @@ namespace lfs::training {
 
         [[nodiscard]] static RetryDecision classify_forward_retry(
             const lfs::Error& forward_error, MutationStamp stamp, unsigned attempts) noexcept;
-        [[nodiscard]] lfs::Status recover_forward_oom(const lfs::Error& cause);
+        [[nodiscard]] static StepOomRecovery classify_step_oom(
+            const lfs::Error& step_error, MutationStamp failed, unsigned recovered_in_a_row, bool popspa) noexcept;
+        [[nodiscard]] lfs::Status recover_from_oom(const lfs::Error& cause);
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
         int get_regular_iterations() const;
@@ -1085,6 +1091,8 @@ namespace lfs::training {
         // Monotonic, never rolls back. Incremented at the frozen persistent
         // commit boundaries and embedded in terminal MutationStamp context.
         std::uint64_t mutation_epoch_ = 0;
+        // Where the last failed train_step stopped.
+        MutationStamp failed_step_{};
 
         // Async callback system
         std::function<void()> callback_;

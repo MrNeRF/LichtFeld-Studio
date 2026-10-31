@@ -26,6 +26,7 @@
 #include "core/image_io.hpp"
 #include "core/lazy_direct_storage.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
 #include "core/path_utils.hpp"
@@ -120,8 +121,10 @@
 namespace lfs::training {
 
     namespace {
-        // Extra free VRAM densification keeps after each recovered forward OOM.
+        // Extra free VRAM densification keeps after each recovered OOM.
         constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
+        // Steps in a row that may run out of memory before training gives up.
+        constexpr unsigned kMaxStepOomRecoveries = 3;
 
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
@@ -6115,14 +6118,33 @@ namespace lfs::training {
         return RetryDecision::RetryForwardOnce;
     }
 
-    lfs::Status Trainer::recover_forward_oom(const lfs::Error& cause) {
+    Trainer::StepOomRecovery Trainer::classify_step_oom(
+        const lfs::Error& step_error,
+        const MutationStamp failed,
+        const unsigned recovered_in_a_row,
+        const bool popspa) noexcept {
+        if (step_error.code() != lfs::ErrorCode::ResourceExhausted || popspa ||
+            recovered_in_a_row >= kMaxStepOomRecoveries) {
+            return StepOomRecovery::Fail;
+        }
+        if (!failed.persistent_commit) {
+            return StepOomRecovery::RetryIteration;
+        }
+        // Optimizer and refinement commits can stop halfway through the model;
+        // evaluation and saves after them can be dropped.
+        return failed.phase == StepPhase::Publish || failed.phase == StepPhase::TerminalCleanup
+                   ? StepOomRecovery::SkipRest
+                   : StepOomRecovery::Fail;
+    }
+
+    lfs::Status Trainer::recover_from_oom(const lfs::Error& cause) {
         if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
             const auto info = arena->get_memory_info();
             lfs::core::log_arena_failure_vram_snapshot(
-                "trainer.recover_forward_oom", info.arena_capacity, info.peak_usage);
+                "trainer.recover_from_oom", info.arena_capacity, info.peak_usage);
         } else {
             lfs::core::log_arena_failure_vram_snapshot(
-                "trainer.recover_forward_oom", 0, 0);
+                "trainer.recover_from_oom", 0, 0);
         }
         const auto synchronize = [this] {
             return recovery_sync_for_testing_ ? recovery_sync_for_testing_()
@@ -6842,7 +6864,7 @@ namespace lfs::training {
                                     LOG_ERROR(
                                         "GUT forward exhausted a resource (attempt {}): {}",
                                         forward_attempts, forward_error.detail());
-                                    if (lfs::Status recovery = recover_forward_oom(forward_error);
+                                    if (lfs::Status recovery = recover_from_oom(forward_error);
                                         !recovery) {
                                         nvtxRangePop(); // rasterize_forward
                                         nvtxRangePop(); // tile
@@ -6913,11 +6935,11 @@ namespace lfs::training {
                                 LOG_ERROR(
                                     "FastGS forward exhausted a resource (attempt {}): {}",
                                     forward_attempts, forward_error.detail());
-                                if (lfs::Status recovery = recover_forward_oom(forward_error);
+                                if (lfs::Status recovery = recover_from_oom(forward_error);
                                     !recovery) {
                                     nvtxRangePop();
                                     nvtxRangePop();
-                                    // recover_forward_oom is the sole attachment point for
+                                    // recover_from_oom is the sole attachment point for
                                     // the initiating OOM; do not suppress it a second time.
                                     return std::move(recovery).error();
                                 }
@@ -8815,6 +8837,8 @@ namespace lfs::training {
                 }
             } catch (const lfs::Exception& e) {
                 return e.error();
+            } catch (const lfs::core::MemoryAllocationError& e) {
+                return lfs::core::to_error(e.failure(), LFS_SOURCE_SITE_CURRENT());
             } catch (const std::exception& e) {
                 return lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::Internal,
@@ -8840,6 +8864,8 @@ namespace lfs::training {
                 }
                 return "Unknown";
             };
+            failed_step_ = MutationStamp{static_cast<std::uint64_t>(iter), mutation_epoch_,
+                                         current_phase, persistent_commit};
             lfs::SmallFields fields;
             fields.add("iteration", static_cast<std::int64_t>(iter))
                 .add("mutation_epoch", static_cast<std::int64_t>(mutation_epoch_))
@@ -9262,6 +9288,7 @@ namespace lfs::training {
                 train_dataset_ ? train_dataset_->size() * size_t{2} : size_t{0};
             std::optional<POPSpaPhase> popspa_sampler_phase;
             const auto popspa_project_hook = getParams().save_project_at_iteration;
+            unsigned oom_steps_in_a_row = 0;
             while (iter <= get_total_iterations() ||
                    (popspa_enabled() && (!popspa_controller_.is_initialized() ||
                                          popspa_controller_.phase() != POPSpaPhase::Complete))) {
@@ -9415,16 +9442,45 @@ namespace lfs::training {
                         std::chrono::steady_clock::now() -
                         training_step_begin)
                         .count();
+                bool repeat_iteration = false;
                 if (!step_result) {
-                    terminal_error = std::move(step_result).error();
-                    break;
+                    const auto recovery = classify_step_oom(
+                        step_result.error(), failed_step_, oom_steps_in_a_row, popspa_enabled());
+                    if (recovery == StepOomRecovery::Fail) {
+                        terminal_error = std::move(step_result).error();
+                        break;
+                    }
+                    if (auto recovered = recover_from_oom(step_result.error()); !recovered) {
+                        terminal_error = std::move(recovered).error();
+                        break;
+                    }
+                    ++oom_steps_in_a_row;
+                    repeat_iteration = recovery == StepOomRecovery::RetryIteration;
+                    if (repeat_iteration) {
+                        // Backward may have written part of the gradients.
+                        active_gaussian_optimizer().zero_grad(iter);
+                        if (ppisp_)
+                            ppisp_->zero_grad();
+                        if (bilateral_grid_)
+                            bilateral_grid_->zero_grad();
+                        LOG_WARN("Iteration {} ran out of VRAM; retrying it on another view", iter);
+                    } else {
+                        LOG_WARN("Iteration {} ran out of VRAM after its update; skipped its evaluation and saves",
+                                 iter);
+                    }
+                    step_result = repeat_iteration || (iter < get_total_iterations() && !stop_requested_.load() &&
+                                                       !stop_token.stop_requested())
+                                      ? StepDisposition::Continue
+                                      : StepDisposition::Stop;
+                } else {
+                    oom_steps_in_a_row = 0;
+                    observe_training_step_duration(
+                        iter, training_step_ms,
+                        strategy_ &&
+                            strategy_->is_refining(iter));
+                    train_dataloader->observe_training_iteration(
+                        training_step_ms, dl_wait_ms, iter);
                 }
-                observe_training_step_duration(
-                    iter, training_step_ms,
-                    strategy_ &&
-                        strategy_->is_refining(iter));
-                train_dataloader->observe_training_iteration(
-                    training_step_ms, dl_wait_ms, iter);
 
                 // Transition to safe control phase and execute deferred Python callbacks
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -9453,6 +9509,8 @@ namespace lfs::training {
                     }
                 }
 
+                if (repeat_iteration)
+                    continue;
                 ++iter;
                 if (iter == params_.optimization.stop_refine)
                     lfs::diagnostics::VramProfiler::instance().mark("densification_stop");
