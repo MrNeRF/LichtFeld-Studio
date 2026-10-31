@@ -4751,6 +4751,9 @@ namespace lfs::training {
             .relaxed_host_memory_gate =
                 cpu_write_kind == ProjectSnapshotWriteKind::Explicit,
             .release_host_memory = release_image_cache_for_snapshot(),
+            .training_resumes = !saving_model_.load(std::memory_order_acquire) &&
+                                !stop_requested_.load() &&
+                                iteration < get_total_iterations(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
