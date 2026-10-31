@@ -197,7 +197,7 @@ def test_recent_project_entry_uses_compact_parent_hint_and_full_path_tooltip(
         windows_path,
     )
 
-    recent_item = file_menu.FileMenu().menu_items()[2]["items"][0]
+    recent_item = _open_recent_items(file_menu)[0]
     assert recent_item["label"] == "project (scans/garden)"
     assert recent_item["tooltip"] == recent_path
 
@@ -208,7 +208,7 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     cleared = []
     file_menu.lf.project_clear_recent_files = lambda: cleared.append(True)
 
-    populated = file_menu.FileMenu().menu_items()[2]["items"]
+    populated = _open_recent_items(file_menu)
     assert populated[0]["label"] == "project (scans/garden)"
     assert populated[1]["type"] == "separator"
     assert populated[2]["label"] == "tr:menu.file.clear_recent_projects"
@@ -217,15 +217,22 @@ def test_open_recent_submenu_appends_clear_only_when_entries_exist(monkeypatch):
     assert cleared == [True]
 
     file_menu.lf.project_recent_files = lambda: []
-    empty = file_menu.FileMenu().menu_items()[2]["items"]
+    empty = _open_recent_items(file_menu)
     assert len(empty) == 1
     assert empty[0]["label"] == "tr:menu.file.no_recent_projects"
     assert empty[0]["enabled"] is False
     assert empty[0].get("type", "item") == "item"
 
 
+def _open_recent_items(file_menu):
+    for entry in file_menu.FileMenu().menu_items():
+        if entry.get("label") == "tr:menu.file.open_recent":
+            return entry["items"]
+    raise AssertionError("Open Recent submenu not found")
+
+
 def _recent_item_callback(file_menu):
-    return file_menu.FileMenu().menu_items()[2]["items"][0]["callback"]
+    return _open_recent_items(file_menu)[0]["callback"]
 
 
 def _thumbnail_item(file_menu):
