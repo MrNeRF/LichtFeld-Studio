@@ -24,6 +24,7 @@
 #include "core/events.hpp"
 #include "core/exif.hpp"
 #include "core/image_io.hpp"
+#include "core/lazy_direct_storage.hpp"
 #include "core/logger.hpp"
 #include "core/native_fs.hpp"
 #include "core/number_format.hpp"
@@ -119,6 +120,9 @@
 namespace lfs::training {
 
     namespace {
+        // Extra free VRAM densification keeps after each recovered forward OOM.
+        constexpr size_t kOomRecoveryReserveBytes = size_t{256} << 20;
+
         [[nodiscard]] float camera_derived_frame_scale(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
             std::vector<lfs::core::CameraPoseForScale> poses;
@@ -558,7 +562,7 @@ namespace lfs::training {
                 }
             }
 
-            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+            return tensor.committed_rows() * row_elems * lfs::core::dtype_size(tensor.dtype());
         }
 
         template <typename Entries>
@@ -2106,6 +2110,10 @@ namespace lfs::training {
             LOG_WARN("--crop: the training model has no active crop box or polygon, nothing is removed");
             return;
         }
+        // Removing rows rebuilds each per-splat buffer beside the old one; a
+        // model grown to the VRAM limit needs the idle rasterizer memory back.
+        resize_rasterizer_arena_at_boundary("B3 crop", true);
+        lfs::core::Tensor::trim_memory_pool();
         std::unique_lock render_lock(render_mutex_);
         std::unique_lock model_lock(model_access_mutex_);
         waitForModelReaders();
@@ -3412,6 +3420,8 @@ namespace lfs::training {
 
     Trainer::~Trainer() {
         shutdown();
+        // The step measurement must not outlive the training that made it.
+        lfs::core::set_measured_frame_headroom_bytes(0);
     }
 
     void Trainer::prewarm_image_decoders() {
@@ -4994,6 +5004,21 @@ namespace lfs::training {
                                 "Captured CKPT and CPU chapter stamps disagree",
                                 LFS_SOURCE_SITE_CURRENT());
                         }
+                        // Compress once on this writer thread, freeing the
+                        // staged bytes as they go; every staging attempt
+                        // below shares the stored form.
+                        auto checkpoint =
+                            lfs::io::project::LazyChunkValue::from_owned_checkpoint(
+                                std::move(*captured->checkpoint_bytes),
+                                captured->snapshot_uuid);
+                        captured->checkpoint_bytes.reset();
+                        if (!checkpoint) {
+                            return std::move(checkpoint)
+                                .error()
+                                .with_context(
+                                    "compress captured CKPT bytes",
+                                    LFS_SOURCE_SITE_CURRENT());
+                        }
 
                         std::error_code ec;
                         if (!path.parent_path()
@@ -5324,19 +5349,13 @@ namespace lfs::training {
                                             "stage project parameter snapshot",
                                             LFS_SOURCE_SITE_CURRENT()));
                             }
-                            auto lazy =
-                                lfs::io::project::
-                                    LazyChunkValue::from_owned(
-                                        captured
-                                            ->checkpoint_bytes,
-                                        captured
-                                            ->snapshot_uuid);
+                            auto lazy = checkpoint->share();
                             if (!lazy) {
                                 return lfs::Status::failure(
                                     std::move(lazy)
                                         .error()
                                         .with_context(
-                                            "own captured CKPT bytes",
+                                            "share captured CKPT bytes",
                                             LFS_SOURCE_SITE_CURRENT()));
                             }
                             auto checkpoint_status =
@@ -6147,6 +6166,7 @@ namespace lfs::training {
         if (auto loader = getActiveImageLoader())
             loader->reclaim_idle_decoded_frames();
         lfs::core::Tensor::trim_memory_pool();
+        lfs::core::release_lazy_direct_storage_ahead();
 
         const cudaError_t final_status = synchronize();
         if (final_status != cudaSuccess) {
@@ -6154,6 +6174,9 @@ namespace lfs::training {
                 final_status, "cudaDeviceSynchronize after OOM recovery reset"));
         }
         static_cast<void>(cudaGetLastError());
+        // Densification planned for less than this view needed; stop it from
+        // taking the room the retry relies on.
+        raise_vram_growth_reserve(kOomRecoveryReserveBytes);
         return {};
     }
 
@@ -6175,6 +6198,7 @@ namespace lfs::training {
         lfs::core::Camera* cam,
         lfs::core::Tensor gt_image,
         std::stop_token stop_token) {
+        const FrameVramProbe vram_probe(iter);
         StepPhase current_phase = StepPhase::Forward;
         bool persistent_commit = false;
         const int prof_start = params_.optimization.profile_start_iter;
@@ -9543,6 +9567,9 @@ namespace lfs::training {
         }
         if (!terminal_error && params_.save_project_at_iteration &&
             !params_.save_project_path.empty()) {
+            // The requested save may still be writing; its outcome is only
+            // known once it ends, and the terminal save would clear it.
+            wait_for_project_writer();
             std::optional<lfs::Error> save_error;
             std::string save_error_message;
             {
@@ -9587,6 +9614,11 @@ namespace lfs::training {
         if (authorize_terminal_save &&
             terminal_project_path) {
             saving_model_.store(true, std::memory_order_release);
+            if (terminal_error) {
+                // The save can take long or fail on its own: report why training stopped first.
+                LOG_ERROR("Training stopped at iteration {}: {}", terminal_iteration,
+                          lfs::format_for_developer(*terminal_error));
+            }
             try {
                 LOG_INFO("Saving {} project at iteration {}...",
                          terminal_error ? "emergency" : (user_stopped ? "stopped" : "final"),

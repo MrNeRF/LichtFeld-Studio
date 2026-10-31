@@ -10,6 +10,7 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include <cassert>
+#include <limits>
 #include <memory>
 
 class CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
@@ -75,13 +76,24 @@ namespace lfs::training {
         lfs::core::Tensor multinomial_sample(const lfs::core::Tensor& weights, int n, bool replacement = true);
         int relocate_gs();
         int add_new_gs();
+        // Appends a copy of each sampled row, then splits each source's
+        // opacity and scale over it and its copies.
+        void append_relocated_copies(const lfs::core::Tensor& sampled_idxs, const lfs::core::Tensor& ratios);
         void inject_noise();
         void update_optimizer_for_relocate(const lfs::core::Tensor& sampled_indices,
                                            const lfs::core::Tensor& dead_indices,
                                            ParamType param_type);
         lfs::core::Tensor get_sampling_weights() const;
+        // What the sampler reads: the error scores, floored at 1e-12 as they
+        // are read. Only frozen rows, crop damping or an ROI share make it
+        // materialize get_sampling_weights().
+        struct SamplingWeights {
+            lfs::core::Tensor materialized;
+            const float* data = nullptr;
+            float min_weight = -std::numeric_limits<float>::infinity();
+        };
+        SamplingWeights sampling_weights() const;
         void ensure_densification_info_shape();
-        void ensure_ratio_workspace_size(size_t required);
 
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
@@ -92,8 +104,7 @@ namespace lfs::training {
         static constexpr float NOISE_LR = 5e5f;
 
         // State variables
-        int _n_max = 0;                // max relocation ratio
-        lfs::core::Tensor _ones_int32; // Cached ones for ratio counting; grows with the live model.
+        int _n_max = 0; // max relocation ratio
         lfs::core::Tensor _error_score_max;
         int _error_score_windows = 0;
         int _current_iteration = 0;

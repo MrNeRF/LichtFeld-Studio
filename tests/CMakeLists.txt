@@ -797,6 +797,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_percentile_bounds.cpp
     test_tensor_inplace_capacity.cpp
+    test_lazy_direct_storage.cpp
     test_sog_format.cpp
     test_ssog_format.cpp
     test_splat_decimate.cpp

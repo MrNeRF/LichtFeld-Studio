@@ -55,6 +55,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -91,33 +92,105 @@ TEST(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
     opacity_values[3] = -0.0f;
     edge_values[4] = std::numeric_limits<float>::quiet_NaN();
     edge_values[5] = -0.0f;
+    edge_values[6] = -2.0f;
 
-    const auto opacities = Tensor::from_vector(opacity_values, TensorShape({n}), Device::CUDA);
+    const auto raw_opacities = Tensor::from_vector(opacity_values, TensorShape({n}), Device::CUDA);
     const auto visibility = Tensor::from_vector(visibility_values, TensorShape({n}), Device::CUDA);
     const auto active = Tensor::from_vector(active_values, TensorShape({n}), Device::CUDA);
     const auto trainable = Tensor::from_vector(trainable_values, TensorShape({n}), Device::CUDA);
     const auto edge = Tensor::from_vector(edge_values, TensorShape({n}), Device::CUDA);
+    // Reference: the factor built from a normalized copy of the scores.
+    auto edge_factor = edge.clone();
+    kernels::launch_normalize_by_positive_median(edge_factor.ptr<float>(), n);
+    edge_factor.mul_(0.25f).add_(1.0f);
+    const mrnf_strategy::EdgeGuidance guidance{
+        .scores = edge.ptr<float>(),
+        .median = kernels::launch_select_positive_median(edge.ptr<float>(), n, nullptr),
+        .weight = 0.25f,
+    };
 
     for (int options = 0; options < 8; ++options) {
-        auto expected = opacities * (visibility > 0.0f);
+        auto expected = raw_opacities.sigmoid() * (visibility > 0.0f);
         if (options & 1)
             expected = expected * active;
         if (options & 2)
             expected = expected * trainable;
         if (options & 4)
-            expected = expected * edge;
+            expected = expected * edge_factor;
 
         auto actual = Tensor::empty({n}, Device::CUDA);
         mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(),
+            raw_opacities.ptr<float>(), visibility.ptr<float>(),
             options & 1 ? active.ptr<bool>() : nullptr,
             options & 2 ? trainable.ptr<bool>() : nullptr,
-            options & 4 ? edge.ptr<float>() : nullptr,
+            options & 4 ? guidance : mrnf_strategy::EdgeGuidance{},
             actual.ptr<float>(), n);
         const auto actual_host = actual.cpu();
         const auto expected_host = expected.cpu();
         EXPECT_EQ(std::memcmp(actual_host.ptr<float>(), expected_host.ptr<float>(), n * sizeof(float)), 0)
             << "options=" << options;
+    }
+
+    auto scaled = Tensor::full({n}, 3.0f, Device::CUDA);
+    mrnf_strategy::launch_apply_edge_guidance(scaled.ptr<float>(), guidance, n);
+    const auto scaled_host = scaled.cpu();
+    const auto expected_scaled = (Tensor::full({n}, 3.0f, Device::CUDA) * edge_factor).cpu();
+    EXPECT_EQ(std::memcmp(scaled_host.ptr<float>(), expected_scaled.ptr<float>(), n * sizeof(float)), 0);
+}
+
+// The growth exchange ranks rows by the later of their positions in the two
+// importance orders. The radix ranking must give up exactly the rows the
+// comparator sorts (Tensor::sort) did, with ties, NaN, -0 and +inf present.
+TEST(MRNFStrategyTest, ExchangeRanksMatchComparatorSorts) {
+    constexpr size_t n = 300007;
+    constexpr size_t count = n / 7;
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    const std::vector<float> palette{0.0f, -0.0f, 0.25f, 0.5f, 1.0f, 3.0f, inf, nan, 1e-30f};
+    std::vector<float> primary(n), secondary(n), eligible(n);
+    uint32_t state = 4321u;
+    const auto next = [&state] {
+        state = state * 1664525u + 1013904223u;
+        return state >> 8;
+    };
+    for (size_t i = 0; i < n; ++i) {
+        const uint32_t r = next();
+        primary[i] = r % 3 == 0 ? palette[r % palette.size()] : static_cast<float>(r % 997) * 0.01f;
+        secondary[i] = palette[next() % palette.size()];
+        eligible[i] = next() % 5 != 0 ? 1.0f : 0.0f;
+    }
+    const auto primary_d = Tensor::from_vector(primary, TensorShape({n}), Device::CUDA);
+    const auto secondary_d = Tensor::from_vector(secondary, TensorShape({n}), Device::CUDA);
+    const auto eligible_d = Tensor::from_vector(eligible, TensorShape({n}), Device::CUDA) > 0.5f;
+
+    for (const bool with_secondary : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "secondary=" << with_secondary);
+        const auto order_of = [&](const Tensor& importance) {
+            return importance.masked_fill(eligible_d.logical_not(), inf).sort(0, false).second.to_vector_int64();
+        };
+        std::vector<int64_t> ranks(n, 0);
+        for (const auto* importance : {&primary_d, with_secondary ? &secondary_d : nullptr}) {
+            if (importance == nullptr)
+                continue;
+            const auto order = order_of(*importance);
+            for (size_t position = 0; position < n; ++position)
+                ranks[order[position]] = std::max<int64_t>(ranks[order[position]], static_cast<int64_t>(position));
+        }
+        std::vector<int64_t> expected(n);
+        for (size_t i = 0; i < n; ++i)
+            expected[i] = static_cast<int64_t>(i);
+        std::stable_sort(expected.begin(), expected.end(), [&](const int64_t a, const int64_t b) {
+            const int64_t rank_a = eligible[a] > 0.5f ? ranks[a] : INT_MAX;
+            const int64_t rank_b = eligible[b] > 0.5f ? ranks[b] : INT_MAX;
+            return rank_a < rank_b;
+        });
+        expected.resize(count);
+
+        auto rows = Tensor::empty({count}, Device::CUDA, DataType::Int64);
+        mrnf_strategy::launch_rank_exchange_rows(
+            primary_d.ptr<float>(), with_secondary ? secondary_d.ptr<float>() : nullptr,
+            eligible_d.ptr<bool>(), n, count, rows.ptr<int64_t>());
+        EXPECT_EQ(rows.to_vector_int64(), expected);
     }
 }
 
@@ -407,7 +480,9 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
         Tensor::from_vector(edge_scores_data, TensorShape({10}), Device::CUDA);
     strategy._edge_precompute_valid = true;
 
-    const auto guidance = strategy.edge_guidance_factor().cpu();
+    auto factors = Tensor::ones({10}, Device::CUDA);
+    mrnf_strategy::launch_apply_edge_guidance(factors.ptr<float>(), strategy.edge_guidance(), 10);
+    const auto guidance = factors.cpu();
     const float* guidance_ptr = guidance.ptr<float>();
 
     EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
@@ -543,7 +618,7 @@ TEST(CropDampingStrategyTest, RoiGrowthShareSplitsPicksAndSpillsLeftovers) {
     EXPECT_EQ(split(0.0f, 10), (std::pair<int64_t, int64_t>{0, 6}));
 
     optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
-    const auto picks = strategy.sample_with_roi_share(weights, 4, 7, 10).cpu().to_vector_int64();
+    const auto picks = strategy.sample_with_roi_share(weights, 4, 7).cpu().to_vector_int64();
     ASSERT_EQ(picks.size(), 4u);
     for (const auto index : picks)
         EXPECT_LT(index, 4) << "a 100 % share picked a row outside the box";
@@ -560,9 +635,6 @@ TEST(CropDampingStrategyTest, RoiGrowthSplitCountsOnlySelectableWeights) {
     auto& optimizer = strategy.get_optimizer();
     optimizer.set_crop_roi_rows(roi_rows({0, 1, 2, 3}, 10), 1.0f);
 
-    // Leaves rows 0..3 in the scratch the next draw reuses.
-    ASSERT_EQ(strategy.sample_with_roi_share(Tensor::ones({10}, Device::CUDA), 4, 7, 10).numel(), 4u);
-
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const auto weights = Tensor::from_vector(
         std::vector<float>{nan, 1.0f, 2.0f, -1.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f}, TensorShape({10}), Device::CUDA);
@@ -572,7 +644,7 @@ TEST(CropDampingStrategyTest, RoiGrowthSplitCountsOnlySelectableWeights) {
     EXPECT_EQ(split->rest_nnz, 6);
     EXPECT_EQ(split->roi_count, 2);
 
-    auto picks = strategy.sample_with_roi_share(weights, 8, 11, 8).cpu().to_vector_int64();
+    auto picks = strategy.sample_with_roi_share(weights, 8, 11).cpu().to_vector_int64();
     std::sort(picks.begin(), picks.end());
     EXPECT_EQ(picks, (std::vector<int64_t>{1, 2}));
 }

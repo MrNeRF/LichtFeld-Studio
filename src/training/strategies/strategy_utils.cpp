@@ -4,16 +4,23 @@
 
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/lazy_direct_storage.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <limits>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -108,7 +115,159 @@ namespace lfs::training {
         g_frozen_mask_rebuilds.store(0, std::memory_order_relaxed);
     }
 
+    namespace {
+        std::atomic<size_t> g_vram_limit_logged_n{0};
+        std::atomic<size_t> g_vram_extra_reserve{0};
+
+        // Pool allocations made while the arena is at its high-water (loss
+        // workspaces, images, densify scratch) and views heavier than any seen.
+        constexpr size_t kPoolReserveBytes = size_t{256} << 20;
+
+        // Planned before any refine was measured (a run resumed near the
+        // limit); measured refines take over as this decays.
+        constexpr size_t kDefaultRefineTransientBytesPerGaussian = 64;
+        std::atomic<size_t> g_refine_transient_per_gaussian{kDefaultRefineTransientBytesPerGaussian};
+        std::atomic<bool> g_refine_window_open{false};
+        std::atomic<size_t> g_refine_window_start{0};
+        std::atomic<size_t> g_pool_reserved_high_closed{0};
+        std::atomic<size_t> g_pool_used_high_closed{0};
+        std::atomic<size_t> g_refine_windows{0};
+
+        constexpr int kFrameProbeInterval = 64;
+        constexpr size_t kFrameHeadroomMarginBytes = size_t{256} << 20;
+        std::atomic<size_t> g_frame_transient{0};
+
+        [[nodiscard]] cudaMemPool_t default_device_pool() {
+            int device = 0;
+            cudaMemPool_t pool = nullptr;
+            if (cudaGetDevice(&device) != cudaSuccess ||
+                cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess) {
+                (void)cudaGetLastError();
+                return nullptr;
+            }
+            return pool;
+        }
+
+        [[nodiscard]] size_t pool_attribute(const cudaMemPool_t pool, const cudaMemPoolAttr attr) {
+            std::uint64_t value = 0;
+            if (!pool || cudaMemPoolGetAttribute(pool, attr, &value) != cudaSuccess) {
+                (void)cudaGetLastError();
+                return 0;
+            }
+            return static_cast<size_t>(value);
+        }
+
+        void fold_high(std::atomic<size_t>& closed, const size_t bytes) {
+            size_t high = closed.load(std::memory_order_relaxed);
+            while (bytes > high && !closed.compare_exchange_weak(high, bytes, std::memory_order_relaxed)) {
+            }
+        }
+
+        // Pool bytes the open refine window reserved beyond its start.
+        [[nodiscard]] size_t refine_window_transient_bytes() {
+            if (!g_refine_window_open.load(std::memory_order_relaxed)) {
+                return 0;
+            }
+            const size_t high = pool_attribute(default_device_pool(), cudaMemPoolAttrReservedMemHigh);
+            const size_t start = g_refine_window_start.load(std::memory_order_relaxed);
+            return high > start ? high - start : 0;
+        }
+    } // namespace
+
+    RefineVramWindow::RefineVramWindow(const lfs::core::SplatData& splat_data)
+        : splat_data_(splat_data),
+          pressure_episodes_(lfs::core::MemoryPressureCoordinator::instance().episode_count()) {
+        const cudaMemPool_t pool = default_device_pool();
+        if (!pool) {
+            return;
+        }
+        fold_high(g_pool_reserved_high_closed, pool_attribute(pool, cudaMemPoolAttrReservedMemHigh));
+        std::uint64_t reset = 0;
+        if (cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &reset) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return;
+        }
+        g_refine_window_start.store(pool_attribute(pool, cudaMemPoolAttrReservedMemCurrent),
+                                    std::memory_order_relaxed);
+        g_refine_window_open.store(true, std::memory_order_relaxed);
+        g_refine_windows.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    RefineVramWindow::~RefineVramWindow() {
+        const size_t transient = refine_window_transient_bytes();
+        g_refine_window_open.store(false, std::memory_order_relaxed);
+        // Relief took the idle arena, which the next frame commits again, so
+        // the next refine would run short the same way.
+        if (lfs::core::MemoryPressureCoordinator::instance().episode_count() != pressure_episodes_) {
+            raise_vram_growth_reserve(kPoolReserveBytes);
+        }
+        const size_t n = static_cast<size_t>(splat_data_.size());
+        if (n == 0) {
+            return;
+        }
+        // The reserve growth always keeps covers a refine's fixed-size
+        // staging; only the rest scales with the model. Keep the largest
+        // recent refine: one that relocates or splits little must not hide the
+        // next one that does a lot. Decays by 1/8 a refine.
+        const size_t scaling = transient > kPoolReserveBytes ? transient - kPoolReserveBytes : 0;
+        const size_t previous = g_refine_transient_per_gaussian.load(std::memory_order_relaxed);
+        g_refine_transient_per_gaussian.store(std::max(scaling / n, previous - previous / 8),
+                                              std::memory_order_relaxed);
+    }
+
+    FrameVramProbe::FrameVramProbe(const int iter) {
+        if (iter % kFrameProbeInterval != 0) {
+            return;
+        }
+        const cudaMemPool_t pool = default_device_pool();
+        if (!pool) {
+            return;
+        }
+        fold_high(g_pool_used_high_closed, pool_attribute(pool, cudaMemPoolAttrUsedMemHigh));
+        std::uint64_t reset = 0;
+        if (cudaMemPoolSetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &reset) != cudaSuccess) {
+            (void)cudaGetLastError();
+            return;
+        }
+        start_used_ = pool_attribute(pool, cudaMemPoolAttrUsedMemCurrent);
+        refines_ = g_refine_windows.load(std::memory_order_relaxed);
+        active_ = true;
+    }
+
+    FrameVramProbe::~FrameVramProbe() {
+        // A step that refined measures the refine; RefineVramWindow has it.
+        if (!active_ || g_refine_windows.load(std::memory_order_relaxed) != refines_) {
+            return;
+        }
+        const size_t high = pool_attribute(default_device_pool(), cudaMemPoolAttrUsedMemHigh);
+        const size_t transient = high > start_used_ ? high - start_used_ : 0;
+        // Keep the largest recent step, decaying by 1/8 a sample.
+        const size_t previous = g_frame_transient.load(std::memory_order_relaxed);
+        const size_t planned = std::max(transient, previous - previous / 8);
+        g_frame_transient.store(planned, std::memory_order_relaxed);
+        lfs::core::set_measured_frame_headroom_bytes(planned + kFrameHeadroomMarginBytes);
+    }
+
+    size_t refine_transient_bytes_per_gaussian() {
+        return g_refine_transient_per_gaussian.load(std::memory_order_relaxed);
+    }
+
+    size_t tensor_pool_reserved_high_bytes() {
+        return std::max(g_pool_reserved_high_closed.load(std::memory_order_relaxed),
+                        pool_attribute(default_device_pool(), cudaMemPoolAttrReservedMemHigh));
+    }
+
+    size_t tensor_pool_used_high_bytes() {
+        return std::max(g_pool_used_high_closed.load(std::memory_order_relaxed),
+                        pool_attribute(default_device_pool(), cudaMemPoolAttrUsedMemHigh));
+    }
+
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap) {
+        g_vram_extra_reserve.store(0, std::memory_order_relaxed);
+        g_frame_transient.store(0, std::memory_order_relaxed);
+        lfs::core::set_measured_frame_headroom_bytes(0);
+        g_vram_limit_logged_n.store(0, std::memory_order_relaxed);
+        g_refine_transient_per_gaussian.store(kDefaultRefineTransientBytesPerGaussian, std::memory_order_relaxed);
         // Tensors are already on GPU in the new framework (created with Device::CUDA by default)
         // Gradients are now owned by AdamOptimizer, not SplatData
 
@@ -175,6 +334,158 @@ namespace lfs::training {
         const double gamma = std::pow(0.01, 1.0 / params.iterations);
 
         return std::make_unique<ExponentialLR>(optimizer, gamma, std::vector<ParamType>{ParamType::Means});
+    }
+
+    namespace {
+        // Per-Gaussian strategy buffers the ledger does not count (refine
+        // weights, screen share, edge scores, densify scratch).
+        constexpr size_t kStrategyBytesPerGaussian = 32;
+        // The arena's per-Gaussian bytes vary with the view.
+        constexpr double kArenaViewVariance = 1.05;
+
+    } // namespace
+
+    void raise_vram_growth_reserve(const size_t bytes) {
+        const size_t reserve = g_vram_extra_reserve.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+        LOG_WARN("Training ran out of VRAM; densification now keeps {} MiB more free", reserve >> 20);
+    }
+
+    size_t vram_growth_limit(const lfs::core::SplatData& splat_data,
+                             const AdamOptimizer* optimizer,
+                             const size_t transient_bytes_per_gaussian) {
+        // Blocks the pool caches without using would otherwise look taken.
+        lfs::core::Tensor::trim_device_memory_pool();
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || total_bytes == 0) {
+            (void)cudaGetLastError();
+            return std::numeric_limits<size_t>::max();
+        }
+        const size_t n = static_cast<size_t>(splat_data.size());
+        if (n == 0) {
+            return std::numeric_limits<size_t>::max();
+        }
+
+        size_t arena_bytes = 0;
+        size_t arena_recommit = 0;
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            const auto info = arena->get_memory_info();
+            arena_bytes = std::max(info.arena_capacity + info.recommit_bytes, info.peak_usage);
+            arena_recommit = info.recommit_bytes;
+        }
+        const auto ledger = compute_training_state_ledger(splat_data, optimizer);
+        // Refines peak above the steady state; the grown model's refines
+        // must fit too. A refine already under way counts what it took so far.
+        const size_t transient = std::max({transient_bytes_per_gaussian,
+                                           g_refine_transient_per_gaussian.load(std::memory_order_relaxed),
+                                           refine_window_transient_bytes() / n});
+        const double per_gaussian =
+            static_cast<double>(ledger.total_bytes) / static_cast<double>(n) +
+            static_cast<double>(kStrategyBytesPerGaussian) +
+            kArenaViewVariance * static_cast<double>(arena_bytes) / static_cast<double>(n);
+
+        // The arena's growth headroom is needed while it commits in forward;
+        // a refine's transient comes after, with the arena already grown. The
+        // two never coexist, so the larger one is kept free, not their sum.
+        const double reserve =
+            static_cast<double>(kPoolReserveBytes + g_vram_extra_reserve.load(std::memory_order_relaxed));
+        const double arena_headroom =
+            static_cast<double>(lfs::core::RasterizerMemoryArena::growth_headroom_bytes(total_bytes));
+        // Arena memory a refine took under pressure is free only until the next frame.
+        double available = -static_cast<double>(arena_recommit);
+        // What the open refine holds is already part of its transient.
+        if (g_refine_window_open.load(std::memory_order_relaxed)) {
+            const size_t held = pool_attribute(default_device_pool(), cudaMemPoolAttrReservedMemCurrent);
+            const size_t start = g_refine_window_start.load(std::memory_order_relaxed);
+            available += static_cast<double>(held > start ? held - start : 0);
+        }
+        // Rows the viewer-shared parameter block keeps committed past live N
+        // need no new memory.
+        if (const auto& means = splat_data.means(); means.external_storage_kind() == "splat.exportable" &&
+                                                    means.capacity() > n) {
+            available += static_cast<double>(means.capacity() - n) *
+                         static_cast<double>(ledger.params_bytes) / static_cast<double>(n);
+        }
+        const auto rooms = [&](const size_t free_now) {
+            const double usable = static_cast<double>(free_now) + available - reserve;
+            return std::pair{usable - arena_headroom, usable - static_cast<double>(transient) * static_cast<double>(n)};
+        };
+        // Lazy tensors' commit-ahead pages serve only the tensor that mapped
+        // them, and a small growth leaves most of them unused, so they are not
+        // counted as free. Once they matter for the room left, hand them back.
+        auto [room_after_arena, room_after_refine] = rooms(free_bytes);
+        if (const size_t ahead = lfs::core::lazy_direct_storage_ahead_bytes();
+            ahead > 0 && std::min(room_after_arena, room_after_refine) < 2.0 * static_cast<double>(ahead)) {
+            lfs::core::release_lazy_direct_storage_ahead();
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+                (void)cudaGetLastError();
+                return 0;
+            }
+            std::tie(room_after_arena, room_after_refine) = rooms(free_bytes);
+        }
+        // Growth by d needs room - d * per_gaussian to stay positive: the
+        // reserve plus both the arena headroom and the grown model's refine
+        // transient remain free.
+        if (room_after_arena <= 0.0 || room_after_refine <= 0.0) {
+            return 0;
+        }
+        return static_cast<size_t>(std::min(room_after_arena / per_gaussian,
+                                            room_after_refine / (per_gaussian + static_cast<double>(transient))));
+    }
+
+    void note_vram_growth_limit(const lfs::core::SplatData& splat_data,
+                                const AdamOptimizer* optimizer,
+                                const size_t granted,
+                                const size_t requested) {
+        // One line per 1% of model growth, not one per refine.
+        const size_t n = static_cast<size_t>(splat_data.size());
+        const size_t logged = g_vram_limit_logged_n.load(std::memory_order_relaxed);
+        if (n <= logged + logged / 100 && n + n / 100 >= logged) {
+            return;
+        }
+        g_vram_limit_logged_n.store(n, std::memory_order_relaxed);
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        (void)cudaMemGetInfo(&free_bytes, &total_bytes);
+        size_t arena_bytes = 0;
+        if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+            arena_bytes = arena->get_memory_info().arena_capacity;
+        }
+        const size_t state_bytes = compute_training_state_ledger(splat_data, optimizer).total_bytes;
+        // Every per-Gaussian buffer (model, optimizer, strategy) is direct storage.
+        const size_t direct_bytes = std::max(lfs::core::Tensor::cuda_direct_storage_live_bytes(), state_bytes);
+        const size_t pool_bytes = pool_attribute(default_device_pool(), cudaMemPoolAttrReservedMemCurrent);
+        const size_t used_bytes = total_bytes - std::min(free_bytes, total_bytes);
+        const size_t accounted = direct_bytes + arena_bytes + pool_bytes;
+        constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+        const size_t step_headroom = lfs::core::RasterizerMemoryArena::growth_headroom_bytes(total_bytes);
+        const size_t refine_plan = g_refine_transient_per_gaussian.load(std::memory_order_relaxed) * n;
+        LOG_INFO("VRAM limits densification at {} Gaussians (+{} of {} requested): Gaussians {:.2f} GiB "
+                 "({:.2f} GiB model and optimizer), rasterizer {:.2f} GiB, tensor pool {:.2f} GiB, "
+                 "other {:.2f} GiB, free {:.2f} GiB (keeps the larger of {:.2f} GiB step headroom and "
+                 "{:.2f} GiB refine peak, plus {:.2f} GiB reserve)",
+                 n, granted, requested, static_cast<double>(direct_bytes) / kGiB,
+                 static_cast<double>(state_bytes) / kGiB, static_cast<double>(arena_bytes) / kGiB,
+                 static_cast<double>(pool_bytes) / kGiB,
+                 static_cast<double>(used_bytes - std::min(used_bytes, accounted)) / kGiB,
+                 static_cast<double>(free_bytes) / kGiB, static_cast<double>(step_headroom) / kGiB,
+                 static_cast<double>(refine_plan) / kGiB,
+                 static_cast<double>(kPoolReserveBytes + g_vram_extra_reserve.load(std::memory_order_relaxed)) / kGiB);
+    }
+
+    size_t clamp_growth_to_vram(const size_t requested,
+                                const lfs::core::SplatData& splat_data,
+                                const AdamOptimizer* optimizer,
+                                const size_t transient_bytes_per_gaussian) {
+        if (requested == 0) {
+            return 0;
+        }
+        const size_t limit = vram_growth_limit(splat_data, optimizer, transient_bytes_per_gaussian);
+        if (limit >= requested) {
+            return requested;
+        }
+        note_vram_growth_limit(splat_data, optimizer, limit, requested);
+        return limit;
     }
 
     lfs::core::Tensor make_frozen_mask(
@@ -331,6 +642,14 @@ namespace lfs::training {
         split.roi_count = share > 0.0f ? std::min(split.roi_nnz, roi_first + (rest_quota - rest_first)) : roi_first;
         split.rest_count = share < 1.0f ? std::min(split.rest_nnz, rest_first + (roi_quota - roi_first)) : rest_first;
         return split;
+    }
+
+    bool reshapes_sampling_scores(const lfs::core::SplatData& splat_data,
+                                  const AdamOptimizer& optimizer) {
+        const auto& crop_mask = optimizer.crop_score_mask();
+        return splat_data.has_frozen_ranges() ||
+               (crop_mask.is_valid() && crop_mask.numel() > 0 && optimizer.cropbox_lr_scale() != 1.0f) ||
+               optimizer.crop_roi_rows().is_valid();
     }
 
     lfs::core::Tensor roi_share_sampling_weights(
@@ -586,18 +905,41 @@ namespace lfs::training {
         const size_t n_rows) {
         using namespace lfs::core;
         // densification_info is row-major [n_rows, N]: row k starts at offset k*N.
-        // Growing N cannot use append_zeros (that grows dim0). When shape already
-        // matches, reuse the buffer (caller zeros). On mismatch, allocate exact
-        // [n_rows,n]. Pre-sizing columns would break the rasterizer's row offsets.
-        const size_t rows = n_rows >= 2 ? n_rows : 2;
-        if (densification_info.is_valid() &&
-            densification_info.ndim() == 2 &&
-            densification_info.shape()[0] == rows &&
-            densification_info.shape()[1] == n) {
+        // One row is kept as [N]: the error row alone. Growing N cannot use
+        // append_zeros (that grows dim0). When shape already matches, reuse the
+        // buffer (caller zeros). On mismatch, allocate exact [n_rows,n] or [n].
+        // Pre-sizing columns would break the rasterizer's row offsets.
+        const bool error_row_only = n_rows == 1;
+        const size_t rows = error_row_only ? 1 : std::max<size_t>(n_rows, 2);
+        auto& info = densification_info;
+        if (info.is_valid() &&
+            (error_row_only ? info.ndim() == 1 && info.shape()[0] == n
+                            : info.ndim() == 2 && info.shape()[0] == rows && info.shape()[1] == n)) {
             return;
         }
-        densification_info = Tensor::zeros({rows, n}, device);
-        densification_info.set_name("splat.densification_info");
+        // The error row over the same splats survives a layout change: a
+        // resumed checkpoint can hold the last view before it was folded.
+        const float* error_row = nullptr;
+        if (info.is_valid() && info.dtype() == lfs::core::DataType::Float32 && n > 0) {
+            if (info.ndim() == 2 && info.shape()[0] >= 2 && info.shape()[1] == n)
+                error_row = info.ptr<float>() + n;
+            else if (info.ndim() == 1 && info.shape()[0] == n)
+                error_row = info.ptr<float>();
+        }
+        if (error_row == nullptr) {
+            // Release the old buffer first so both never hold VRAM at once.
+            info = Tensor();
+        }
+        Tensor resized = error_row_only ? Tensor::zeros({n}, device) : Tensor::zeros({rows, n}, device);
+        if (error_row != nullptr) {
+            const auto stream = resized.stream();
+            info.sync_to_stream(stream);
+            LFS_CUDA_CHECK(cudaMemcpyAsync(resized.ptr<float>() + (error_row_only ? 0 : n), error_row,
+                                           n * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+        }
+        info = std::move(resized);
+        info.set_name("splat.densification_info");
     }
 
     void ensure_score_buffer_inplace(

@@ -25,6 +25,7 @@
 #include <memory>
 #include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -265,7 +266,7 @@ namespace lfs::training::sh_value {
                 stream);
         }
 
-        void encode_gathered_q16(
+        [[nodiscard]] std::pair<Tensor, Tensor> gathered_q16(
             core::SplatData& splat,
             const Tensor& perm,
             std::size_t n_src,
@@ -325,8 +326,18 @@ namespace lfs::training::sh_value {
                 rest,
                 stream);
 
-            live = std::move(dest_u16);
-            bounds = std::move(dest_bounds);
+            return {std::move(dest_u16), std::move(dest_bounds)};
+        }
+
+        void encode_gathered_q16(
+            core::SplatData& splat,
+            const Tensor& perm,
+            std::size_t n_src,
+            std::size_t n_dst,
+            std::size_t dest_cap_prims,
+            cudaStream_t stream) {
+            std::tie(splat.shN(), splat.shN_value_bounds()) =
+                gathered_q16(splat, perm, n_src, n_dst, dest_cap_prims, stream);
         }
 
         void reencode_touched_q16_blocks(
@@ -1011,6 +1022,19 @@ namespace lfs::training::sh_value {
             rest);
         fresh.set_name("splat.shN");
         splat.shN() = std::move(fresh);
+    }
+
+    std::pair<Tensor, Tensor> gather_shN_q16(core::SplatData& splat, const Tensor& keep_indices) {
+        LFS_ASSERT_LIVE_MODEL_MUTATION_LOCK_HELD();
+        LiveModelMutationGuard mutation_guard("gather_shN_q16");
+        LFS_ASSERT_MSG(splat.shN_value_quantized() && layout_rest(splat) > 0 && keep_indices.is_valid() &&
+                           keep_indices.numel() > 0,
+                       "gather_shN_q16 needs q16 SH-rest and rows to keep");
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        Tensor keep = as_i64_indices(keep_indices, stream);
+        auto gathered = gathered_q16(splat, keep, static_cast<std::size_t>(splat.size()), keep.numel(), 0, stream);
+        sync_codec_stream(stream);
+        return gathered;
     }
 
     ShNCommitGuard::~ShNCommitGuard() noexcept {

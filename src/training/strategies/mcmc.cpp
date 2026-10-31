@@ -37,6 +37,17 @@ namespace lfs::training {
             return value ^ (value >> 31);
         }
 
+        // Per sampled row: one for the row itself plus the times it was drawn.
+        // The ones are per call, not a max_cap buffer held through training.
+        [[nodiscard]] lfs::core::Tensor sampled_row_counts(const lfs::core::Tensor& sampled_idxs,
+                                                           const size_t n) {
+            using namespace lfs::core;
+            auto counts = Tensor::ones({n}, sampled_idxs.device(), DataType::Int32);
+            counts.index_add_(0, sampled_idxs,
+                              Tensor::ones({sampled_idxs.numel()}, sampled_idxs.device(), DataType::Int32));
+            return counts.index_select(0, sampled_idxs);
+        }
+
         [[nodiscard]] inline bool has_zero_dimension(const lfs::core::TensorShape& shape) {
             for (size_t i = 0; i < shape.rank(); ++i) {
                 if (shape[i] == 0) {
@@ -166,8 +177,9 @@ namespace lfs::training {
         // reuse densification_info / score buffers in place when possible.
         const size_t reserve =
             (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
+        // MCMC reads only the error row.
         ensure_densification_info_shape_inplace(
-            _splat_data->_densification_info, n, _splat_data->means().device());
+            _splat_data->_densification_info, n, _splat_data->means().device(), 1);
         if (_params) {
             ensure_max_screen_share_shape(*_splat_data, n, reserve);
             publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
@@ -199,11 +211,15 @@ namespace lfs::training {
         return roi_share_sampling_weights(*_optimizer, apply_crop_damping_to_scores(*_optimizer, weights));
     }
 
-    void MCMC::ensure_ratio_workspace_size(const size_t required) {
-        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
-            _ones_int32 = lfs::core::Tensor::ones(
-                {required}, _splat_data->means().device(), lfs::core::DataType::Int32);
+    MCMC::SamplingWeights MCMC::sampling_weights() const {
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() == n &&
+            !reshapes_sampling_scores(*_splat_data, *_optimizer)) {
+            return {.data = _error_score_max.ptr<float>(), .min_weight = 1e-12f};
         }
+        SamplingWeights weights{.materialized = get_sampling_weights()};
+        weights.data = weights.materialized.ptr<float>();
+        return weights;
     }
 
     int MCMC::relocate_gs() {
@@ -242,116 +258,50 @@ namespace lfs::training {
 
         if (n_dead == 0)
             return 0;
+        const size_t N = opacities.numel();
+        // Relocation reads opacity and scale from the copied rows below.
+        opacities = {};
 
-        Tensor alive_indices;
+        Tensor sampled_idxs;
         {
-            LOG_TIMER("relocate_find_alive");
-            Tensor alive_mask = dead_mask.logical_not();
-            alive_indices = alive_mask.nonzero().squeeze(-1);
-        }
+            LOG_TIMER("relocate_multinomial_sample");
 
-        if (alive_indices.numel() == 0)
-            return 0;
-
-        Tensor sampled_idxs, sampled_opacities, sampled_scales;
-        {
-            LOG_TIMER("relocate_multinomial_sample_and_gather_FUSED");
-            const size_t N = opacities.numel();
-
-            // Get source tensors (contiguous)
-            Tensor opacities_contig = opacities.contiguous();
-            const Tensor sampling_weights = get_sampling_weights();
-            const auto alive_weights = sampling_weights.index_select(0, alive_indices);
-            if (alive_weights.count_nonzero() == 0) {
-                return 0;
-            }
-            Tensor scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
-
-            // Allocate outputs
+            const auto weights = sampling_weights();
             sampled_idxs = Tensor::empty({n_dead}, Device::CUDA, DataType::Int64);
-            sampled_opacities = Tensor::empty({n_dead}, Device::CUDA, DataType::Float32);
-            sampled_scales = Tensor::empty({n_dead, 3}, Device::CUDA, DataType::Float32);
-
             const uint64_t seed = deterministic_mcmc_seed(_current_iteration, 0x52454c4f43415445ULL);
 
-            // does multinomial sampling + gathering in one pass
-            mcmc::launch_multinomial_sample_and_gather(
-                sampling_weights.ptr<float>(),
-                opacities_contig.ptr<float>(),
-                scaling_raw_contig.ptr<float>(), // Pass raw scaling
-                alive_indices.ptr<int64_t>(),
-                alive_indices.numel(),
-                n_dead,
-                seed,
-                sampled_idxs.ptr<int64_t>(),
-                sampled_opacities.ptr<float>(),
-                sampled_scales.ptr<float>(),
-                N);
+            // Samples alive rows only; the dead rows being refilled are excluded
+            // from the CDF instead of compacting the alive rows into a list.
+            if (!mcmc::launch_multinomial_sample_all(
+                    weights.data,
+                    weights.min_weight,
+                    dead_mask.ptr<uint8_t>(),
+                    N,
+                    n_dead,
+                    seed,
+                    sampled_idxs.ptr<int64_t>())) {
+                return 0;
+            }
         }
+        // The per-Gaussian sampling inputs are done; drop them before the
+        // per-relocation buffers below so the two sets never coexist.
+        dead_mask = {};
 
         // Count occurrences of each sampled index (how many times each was sampled)
         Tensor ratios;
         {
             LOG_TIMER("relocate_count_occurrences");
-            ensure_ratio_workspace_size(opacities.numel());
-            auto ones_N = _ones_int32.slice(0, 0, opacities.numel()).clone();
-            ratios = ones_N.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
-            ratios = ratios.index_select(0, sampled_idxs).contiguous();
+            ratios = sampled_row_counts(sampled_idxs, N).contiguous();
 
             // Clamp ratios to [1, n_max]
             const int n_max = _n_max;
             ratios = ratios.clamp(1, n_max);
         }
 
-        // Allocate output tensors and call CUDA kernel
-        Tensor new_opacities, new_scales;
-        {
-            LOG_TIMER("relocate_cuda_kernel");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
-
-            mcmc::launch_relocation_kernel(
-                sampled_opacities.ptr<float>(),
-                sampled_scales.ptr<float>(),
-                ratios.ptr<int32_t>(),
-                _params->min_opacity,
-                new_opacities.ptr<float>(),
-                new_scales.ptr<float>(),
-                sampled_opacities.numel());
-        }
-
-        // Clamp new opacities and compute raw values
-        Tensor new_opacity_raw;
-        {
-            LOG_TIMER("relocate_compute_raw_values");
-            new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = new_opacities.logit(1e-7f);
-
-            if (_splat_data->opacity_raw().ndim() == 2) {
-                new_opacity_raw = new_opacity_raw.unsqueeze(-1);
-            }
-        }
-
         // Update parameters
         {
             LOG_TIMER("relocate_update_params");
             const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
-            const size_t N = _splat_data->means().shape()[0]; // Total number of Gaussians
-
-            // Compute log(scales) for the new scales
-            Tensor new_scales_log = new_scales.log();
-
-            // Update sampled indices with new opacity/scaling using direct CUDA kernel
-            // This preserves tensor capacity (unlike index_put_ which creates new tensors)
-            mcmc::launch_update_scaling_opacity(
-                sampled_idxs.ptr<int64_t>(),
-                new_scales_log.ptr<float>(),
-                new_opacity_raw.ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->opacity_raw().ptr<float>(),
-                sampled_idxs.numel(),
-                opacity_dim,
-                N);
 
             // Copy sampled params to dead slots. shN is stored swizzled, so the legacy
             // kernel skips it and the selected rows are copied below.
@@ -368,20 +318,41 @@ namespace lfs::training {
                 /*sh_coeffs=*/0,
                 opacity_dim,
                 N);
+            // Split each source's opacity and scale over its copies.
+            mcmc::launch_relocate_copies(
+                sampled_idxs.ptr<int64_t>(),
+                dead_indices.ptr<int64_t>(),
+                0,
+                ratios.ptr<int32_t>(),
+                _params->min_opacity,
+                _splat_data->scaling_raw().ptr<float>(),
+                _splat_data->opacity_raw().ptr<float>(),
+                n_dead,
+                N);
 
             // Copy sampled shN onto dead slots. q16 stays packed: gather-decode
             // the source rows and re-encode only the dest 256-splat blocks.
+            // Staged in chunks so the fp32 rows and the re-encode batch stay
+            // bounded instead of scaling with every dead Gaussian. A q16 block
+            // touched by several chunks is re-encoded once per chunk, so its
+            // values may differ from a single pass by one quantization step.
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
                 _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
                 using namespace lfs::core;
-                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                constexpr size_t STAGE_CHUNK_BYTES = 64ull << 20;
+                const auto layout_rest = static_cast<size_t>(_splat_data->max_sh_coeffs_rest());
                 const size_t n_pairs = dead_indices.numel();
-                Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
+                const size_t chunk_rows = std::max<size_t>(1, STAGE_CHUNK_BYTES / (layout_rest * 3 * sizeof(float)));
+                Tensor staged = Tensor::empty({std::min(n_pairs, chunk_rows), layout_rest, 3},
                                               _splat_data->shN().device());
-                lfs::training::sh_value::gather_shN_to_canonical(
-                    *_splat_data, sampled_idxs, staged);
-                lfs::training::sh_value::scatter_canonical_into_shN(
-                    *_splat_data, dead_indices, staged);
+                for (size_t first = 0; first < n_pairs; first += chunk_rows) {
+                    const size_t count = std::min(chunk_rows, n_pairs - first);
+                    Tensor rows = staged.slice(0, 0, count);
+                    lfs::training::sh_value::gather_shN_to_canonical(
+                        *_splat_data, sampled_idxs.slice(0, first, first + count), rows);
+                    lfs::training::sh_value::scatter_canonical_into_shN(
+                        *_splat_data, dead_indices.slice(0, first, first + count), rows);
+                }
             }
         }
 
@@ -403,6 +374,28 @@ namespace lfs::training {
         return n_dead;
     }
 
+    void MCMC::append_relocated_copies(const lfs::core::Tensor& sampled_idxs, const lfs::core::Tensor& ratios) {
+        LOG_TIMER("add_new_append_gather");
+        const auto first_copy = static_cast<int64_t>(_splat_data->size());
+        _optimizer->add_new_params_gather(ParamType::Means, sampled_idxs);
+        _optimizer->add_new_params_gather(ParamType::Sh0, sampled_idxs);
+        _optimizer->add_new_params_gather(ParamType::ShN, sampled_idxs);
+        _optimizer->add_new_params_gather(ParamType::Rotation, sampled_idxs);
+        _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs);
+        _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
+        // Split each source's opacity and scale over it and its new copies.
+        mcmc::launch_relocate_copies(
+            sampled_idxs.ptr<int64_t>(),
+            nullptr,
+            first_copy,
+            ratios.ptr<int32_t>(),
+            _params->min_opacity,
+            _splat_data->scaling_raw().ptr<float>(),
+            _splat_data->opacity_raw().ptr<float>(),
+            sampled_idxs.numel(),
+            static_cast<size_t>(_splat_data->size()));
+    }
+
     int MCMC::add_new_gs() {
         LOG_TIMER("MCMC::add_new_gs");
         LFS_TRACE("kernel.densify.duplicate");
@@ -420,101 +413,42 @@ namespace lfs::training {
 
         const int current_n = _splat_data->size();
         const int n_target = std::min(_params->max_cap, static_cast<int>(1.05f * current_n));
-        const size_t n_new = std::max(0, n_target - current_n);
+        const size_t n_new = clamp_growth_to_vram(
+            static_cast<size_t>(std::max(0, n_target - current_n)), *_splat_data, _optimizer.get());
 
         if (n_new == 0)
             return 0;
 
-        // Get opacities (handle both [N] and [N, 1] shapes)
-        Tensor opacities;
-        {
-            LOG_TIMER("add_new_get_opacities");
-            opacities = _splat_data->get_opacity();
-            if (opacities.ndim() == 2 && opacities.shape()[1] == 1) {
-                opacities = opacities.squeeze(-1);
-            }
-        }
-
+        const auto N = static_cast<size_t>(current_n);
         Tensor sampled_idxs;
-        Tensor sampled_opacities;
-        Tensor sampled_scales;
         {
-            LOG_TIMER("add_new_multinomial_sample_and_gather");
+            LOG_TIMER("add_new_multinomial_sample");
 
-            const size_t N = opacities.numel();
-
-            // Get raw scaling and ensure contiguity
-            auto scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
-            auto opacities_contig = opacities.contiguous();
-            const auto sampling_weights = get_sampling_weights();
-            if (sampling_weights.count_nonzero() == 0) {
+            const auto weights = sampling_weights();
+            sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
+            const auto seed = deterministic_mcmc_seed(_current_iteration, 0x4144445f4e4557ULL);
+            if (!mcmc::launch_multinomial_sample_all(
+                    weights.data,
+                    weights.min_weight,
+                    nullptr,
+                    N,
+                    n_new,
+                    seed,
+                    sampled_idxs.ptr<int64_t>())) {
                 return 0;
             }
-
-            // Allocate output tensors
-            sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
-            sampled_opacities = Tensor::empty({n_new}, Device::CUDA, DataType::Float32);
-            sampled_scales = Tensor::empty({n_new, 3}, Device::CUDA, DataType::Float32);
-
-            // Generate random seed
-            const auto seed = deterministic_mcmc_seed(_current_iteration, 0x4144445f4e4557ULL);
-
-            // Call fused CUDA kernel
-            mcmc::launch_multinomial_sample_all(
-                sampling_weights.ptr<float>(),
-                opacities_contig.ptr<float>(),
-                scaling_raw_contig.ptr<float>(), // Pass raw scaling
-                N,
-                n_new,
-                seed,
-                sampled_idxs.ptr<int64_t>(),
-                sampled_opacities.ptr<float>(),
-                sampled_scales.ptr<float>());
         }
 
         // Count occurrences as int32 to avoid float->int conversions in the hot path.
         Tensor ratios;
         {
             LOG_TIMER("add_new_count_occurrences");
-            ensure_ratio_workspace_size(opacities.numel());
-            ratios = _ones_int32.slice(0, 0, opacities.numel()).clone();
-            ratios = ratios.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
-            ratios = ratios.index_select(0, sampled_idxs);
+            ratios = sampled_row_counts(sampled_idxs, N);
 
             // Clamp in int32 domain
             const int n_max = _n_max;
             ratios = ratios.clamp(1, n_max);
             ratios = ratios.contiguous();
-        }
-
-        // Allocate output tensors and call CUDA kernel
-        Tensor new_opacities, new_scales;
-        {
-            LOG_TIMER("add_new_relocation_kernel");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
-
-            mcmc::launch_relocation_kernel(
-                sampled_opacities.ptr<float>(),
-                sampled_scales.ptr<float>(),
-                ratios.ptr<int32_t>(),
-                _params->min_opacity,
-                new_opacities.ptr<float>(),
-                new_scales.ptr<float>(),
-                sampled_opacities.numel());
-        }
-
-        // Clamp new opacities and prepare raw values
-        Tensor new_opacity_raw, new_scaling_raw;
-        {
-            LOG_TIMER("add_new_compute_raw_values");
-            new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = new_opacities.logit(1e-7f);
-            new_scaling_raw = new_scales.log();
-
-            if (_splat_data->opacity_raw().ndim() == 2) {
-                new_opacity_raw = new_opacity_raw.unsqueeze(-1);
-            }
         }
 
         // preflight exportable capacity BEFORE parent-row
@@ -527,35 +461,7 @@ namespace lfs::training {
             return 0;
         }
 
-        // Update existing Gaussians first (before concatenation)
-        {
-            LOG_TIMER("add_new_update_original");
-            const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
-            const size_t N = _splat_data->means().shape()[0];
-
-            // Use direct CUDA kernel to preserve tensor capacity
-            mcmc::launch_update_scaling_opacity(
-                sampled_idxs.ptr<int64_t>(),
-                new_scaling_raw.ptr<float>(),
-                new_opacity_raw.ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->opacity_raw().ptr<float>(),
-                sampled_idxs.numel(),
-                opacity_dim,
-                N);
-        }
-
-        // Use add_new_params_gather() to leverage reserved capacity
-        {
-            LOG_TIMER("add_new_append_gather");
-            // Gather and append parameters for new Gaussians (done after updating opacity/scaling)
-            _optimizer->add_new_params_gather(ParamType::Means, sampled_idxs);
-            _optimizer->add_new_params_gather(ParamType::Sh0, sampled_idxs);
-            _optimizer->add_new_params_gather(ParamType::ShN, sampled_idxs);
-            _optimizer->add_new_params_gather(ParamType::Rotation, sampled_idxs);
-            _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs);
-            _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
-        }
+        append_relocated_copies(sampled_idxs, ratios);
 
         append_live_deleted_rows(*_splat_data);
         if (_splat_data->has_frozen_ranges()) {
@@ -594,54 +500,13 @@ namespace lfs::training {
         if (n_new == 0)
             return 0;
 
-        // Get opacities
-        auto opacities = _splat_data->get_opacity();
-
-        // Get parameters for sampled Gaussians
-        auto sampled_opacities = opacities.index_select(0, sampled_idxs_i64);
-        auto sampled_scales = _splat_data->get_scaling().index_select(0, sampled_idxs_i64);
-
-        ensure_ratio_workspace_size(required);
-
         // Count occurrences in int32 and keep +1 baseline.
-        auto ratios = _ones_int32.slice(0, 0, required).clone();
-        ratios.index_add_(0, sampled_idxs_i64, _ones_int32.slice(0, 0, sampled_idxs_i64.numel()));
-        ratios = ratios.index_select(0, sampled_idxs_i64);
+        auto ratios = sampled_row_counts(sampled_idxs_i64, required);
 
         // Clamp in int32 domain
         const int n_max = _n_max;
         ratios = ratios.clamp(1, n_max);
         ratios = ratios.contiguous();
-
-        // Call the CUDA relocation function
-        Tensor new_opacities, new_scales;
-        {
-            LOG_TIMER("add_new_relocation");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
-
-            mcmc::launch_relocation_kernel(
-                sampled_opacities.ptr<float>(),
-                sampled_scales.ptr<float>(),
-                ratios.ptr<int32_t>(),
-                _params->min_opacity,
-                new_opacities.ptr<float>(),
-                new_scales.ptr<float>(),
-                sampled_opacities.numel());
-        }
-
-        // Clamp new opacities and prepare raw values
-        Tensor new_opacity_raw, new_scaling_raw;
-        {
-            LOG_TIMER("add_new_compute_raw_values");
-            new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = new_opacities.logit(1e-7f);
-            new_scaling_raw = new_scales.log();
-
-            if (_splat_data->opacity_raw().ndim() == 2) {
-                new_opacity_raw = new_opacity_raw.unsqueeze(-1);
-            }
-        }
 
         if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
             LOG_ERROR(
@@ -650,35 +515,7 @@ namespace lfs::training {
             return 0;
         }
 
-        // Update existing Gaussians first
-        {
-            LOG_TIMER("add_new_update_original");
-            const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
-            const size_t N = _splat_data->means().shape()[0];
-
-            // Use direct CUDA kernel to preserve tensor capacity
-            mcmc::launch_update_scaling_opacity(
-                sampled_idxs_i64.ptr<int64_t>(),
-                new_scaling_raw.ptr<float>(),
-                new_opacity_raw.ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->opacity_raw().ptr<float>(),
-                sampled_idxs_i64.numel(),
-                opacity_dim,
-                N);
-        }
-
-        // Use fused append_gather() operation
-        {
-            LOG_TIMER("add_new_params_gather");
-            // Gather opacity/scaling after updating them
-            _optimizer->add_new_params_gather(ParamType::Means, sampled_idxs_i64);
-            _optimizer->add_new_params_gather(ParamType::Sh0, sampled_idxs_i64);
-            _optimizer->add_new_params_gather(ParamType::ShN, sampled_idxs_i64);
-            _optimizer->add_new_params_gather(ParamType::Rotation, sampled_idxs_i64);
-            _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs_i64);
-            _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs_i64);
-        }
+        append_relocated_copies(sampled_idxs_i64, ratios);
 
         append_live_deleted_rows(*_splat_data);
 
@@ -734,16 +571,15 @@ namespace lfs::training {
         if (iter < _params->stop_refine) {
             ensure_densification_info_shape();
 
-            // One training iteration corresponds to one camera view, so info[1] is E_k^pi.
+            // One training iteration corresponds to one camera view, so the error row is E_k^pi.
             // Keep the max over views as the densification priority.
             const auto& info = _splat_data->_densification_info;
-            if (info.is_valid() &&
-                info.ndim() == 2 &&
-                info.shape()[0] >= 2 &&
-                info.shape()[1] == _error_score_max.numel()) {
+            const auto rows = _splat_data->densification_rows(_error_score_max.numel());
+            if (rows.error != nullptr && info.shape()[info.ndim() - 1] == _error_score_max.numel()) {
                 lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
+                    rows.error,
+                    rows.weight,
                     _error_score_max.numel());
             } else if (info.is_valid() && info.numel() > 0) {
                 _splat_data->_densification_info.zero_();
@@ -752,6 +588,7 @@ namespace lfs::training {
 
         // Refine Gaussians
         if (is_refining(iter)) {
+            const RefineVramWindow vram_window(*_splat_data);
             if (_splat_data->_max_screen_share.is_valid() &&
                 _splat_data->_max_screen_share.numel() > 0) {
                 LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
@@ -814,7 +651,7 @@ namespace lfs::training {
             }
 
             ensure_densification_info_shape_inplace(
-                _splat_data->_densification_info, n, _splat_data->means().device());
+                _splat_data->_densification_info, n, _splat_data->means().device(), 1);
             _splat_data->_densification_info.zero_();
             if (_params) {
                 const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
@@ -979,10 +816,6 @@ namespace lfs::training {
         _n_max = 51;
         mcmc::init_relocation_coefficients(_n_max);
 
-        if (_params->max_cap > 0) {
-            _ones_int32 = Tensor::ones({static_cast<size_t>(_params->max_cap)}, Device::CUDA, DataType::Int32);
-        }
-
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
         _scheduler = create_scheduler(*_params, *_optimizer);
@@ -1088,7 +921,6 @@ namespace lfs::training {
         _params.swap(source._params);
         std::swap(_n_max, source._n_max);
 
-        std::swap(_ones_int32, source._ones_int32);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_error_score_windows, source._error_score_windows);
     }
