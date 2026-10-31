@@ -30,6 +30,7 @@ namespace lfs::training {
         std::vector<glm::vec2> polygon;
 
         [[nodiscard]] bool is_polygon() const { return !polygon.empty(); }
+        bool operator==(const TrainingCropBoxGeometry&) const = default;
     };
 
     [[nodiscard]] std::optional<TrainingCropBoxGeometry> resolve_training_cropbox_geom(
