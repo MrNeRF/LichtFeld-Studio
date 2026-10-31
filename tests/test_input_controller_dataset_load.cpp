@@ -230,36 +230,43 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().environment_map_path, restored.environment_map_path);
     }
 
-    TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoShowsVideoExtractor) {
+    // A single dropped video opens the New Project dialog, which offers both "Create"
+    // (video-to-splat pipeline) and "Extract frames only"; the extractor is not opened directly.
+    TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoOpensNewProjectDialog) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
 
-        std::optional<std::filesystem::path> requested_video_path;
-        core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
-            requested_video_path = e.video_path;
+        std::optional<std::filesystem::path> requested_source_path;
+        bool video_extractor_requested = false;
+        core::events::cmd::ShowNewProjectDialog::when([&](const auto& e) {
+            requested_source_path = e.source_path;
+        });
+        core::events::cmd::ShowVideoExtractor::when([&](const auto&) {
+            video_extractor_requested = true;
         });
 
         const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_video.mp4";
         controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
 
-        ASSERT_TRUE(requested_video_path.has_value());
-        EXPECT_EQ(*requested_video_path, drop_path);
+        ASSERT_TRUE(requested_source_path.has_value());
+        EXPECT_EQ(*requested_source_path, drop_path);
+        EXPECT_FALSE(video_extractor_requested);
     }
 
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoExtensionIsCaseInsensitive) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
 
-        std::optional<std::filesystem::path> requested_video_path;
-        core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
-            requested_video_path = e.video_path;
+        std::optional<std::filesystem::path> requested_source_path;
+        core::events::cmd::ShowNewProjectDialog::when([&](const auto& e) {
+            requested_source_path = e.source_path;
         });
 
         const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_video.MP4";
         controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
 
-        ASSERT_TRUE(requested_video_path.has_value());
-        EXPECT_EQ(*requested_video_path, drop_path);
+        ASSERT_TRUE(requested_source_path.has_value());
+        EXPECT_EQ(*requested_source_path, drop_path);
     }
 
     TEST_F(InputControllerDatasetLoadTest, VideoMixedWithOtherDropDoesNotShowVideoExtractor) {
@@ -269,9 +276,13 @@ namespace lfs::vis {
         services().set(&rendering_manager);
 
         bool video_extractor_requested = false;
+        bool new_project_requested = false;
         std::optional<core::events::state::FileDropFailed> failure;
         core::events::cmd::ShowVideoExtractor::when([&](const auto&) {
             video_extractor_requested = true;
+        });
+        core::events::cmd::ShowNewProjectDialog::when([&](const auto&) {
+            new_project_requested = true;
         });
         core::events::state::FileDropFailed::when([&](const auto& e) { failure = e; });
 
@@ -283,6 +294,7 @@ namespace lfs::vis {
         });
 
         EXPECT_FALSE(video_extractor_requested);
+        EXPECT_FALSE(new_project_requested);
         ASSERT_TRUE(failure.has_value());
         EXPECT_EQ(failure->files, std::vector<std::string>{lfs::core::path_to_utf8(video_path)});
         EXPECT_NE(failure->error.find("separately"), std::string::npos);

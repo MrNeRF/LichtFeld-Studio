@@ -3389,8 +3389,9 @@ namespace lfs::vis {
                 return;
             }
             if (lfs::io::video::is_supported_video_extension(extension)) {
-                cmd::ShowVideoExtractor{.video_path = dropped_path}.emit();
-                LOG_INFO("Opening video extractor via drag-and-drop: {}",
+                // The New Project dialog offers both "Create" (video-to-splat) and "Extract frames only".
+                cmd::ShowNewProjectDialog{.source_path = dropped_path}.emit();
+                LOG_INFO("Opening New Project dialog for dropped video: {}",
                          lfs::core::path_to_utf8(dropped_path.filename()));
                 return;
             }
