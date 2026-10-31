@@ -96,8 +96,9 @@ TEST(CrashHandlerTest, InstallationReportsUnicodeCrashLogPathAsUtf8) {
     const auto root = std::filesystem::temp_directory_path() /
                       lfs::core::utf8_to_path("lfs_crash_診断");
     std::error_code ec;
+    // Best effort: on Windows the death-test child runs this body again while its logger, opened
+    // by test_main under the inherited LFS_HOME, holds a file under root that cannot be deleted.
     std::filesystem::remove_all(root, ec);
-    ASSERT_FALSE(ec) << ec.message();
     const ScopedLfsHome home(lfs::core::path_to_utf8(root));
 
     EXPECT_EXIT(([] {

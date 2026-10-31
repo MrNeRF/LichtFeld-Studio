@@ -319,6 +319,7 @@ TEST(NormalAutoGenerateIntegration, OverwritesExistingMapWhenCameraHasNone) {
     std::string body;
     in >> body;
     EXPECT_EQ(body, "fresh");
+    in.close(); // Windows cannot remove a file that is still open.
 
     fs::remove_all(root);
 }
@@ -464,6 +465,7 @@ TEST(PriorAutoGenerateIntegration, OneJobPerImageCarriesOnlyMissingMaps) {
     std::string body;
     kept >> body;
     EXPECT_EQ(body, "normal");
+    kept.close(); // Windows cannot remove a file that is still open.
 
     fs::remove_all(root);
 }

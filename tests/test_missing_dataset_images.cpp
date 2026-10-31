@@ -395,12 +395,19 @@ TEST_F(MissingDatasetImagesTest, TransformsImagePathResolvesUppercasePngWithoutE
     write_text_file(dataset_dir / "images_8/frame-one.PNG", "image");
     write_text_file(dataset_dir / "images_8/frame-two.PNG", "image");
 
-    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-one"),
-              dataset_dir / "images_8/frame-one.PNG");
-    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8/frame-two"),
-              dataset_dir / "images_8/frame-two.PNG");
-    EXPECT_EQ(lfs::io::GetTransformImagePath(dataset_dir, "images_8\\frame-one"),
-              dataset_dir / "images_8/frame-one.PNG");
+    // On a case-insensitive volume (NTFS, default APFS) the ".png" probe already finds
+    // frame-one.PNG and returns the probe's spelling, so only the file can be compared.
+    const bool case_sensitive = !fs::exists(dataset_dir / "images_8/FRAME-ONE.PNG");
+    const auto expect_resolves = [&](const std::string& frame, const fs::path& expected) {
+        const auto actual = lfs::io::GetTransformImagePath(dataset_dir, frame);
+        if (case_sensitive)
+            EXPECT_EQ(actual, expected);
+        else
+            EXPECT_TRUE(fs::exists(actual) && fs::equivalent(actual, expected)) << lfs::core::path_to_utf8(actual);
+    };
+    expect_resolves("images_8/frame-one", dataset_dir / "images_8/frame-one.PNG");
+    expect_resolves("images_8/frame-two", dataset_dir / "images_8/frame-two.PNG");
+    expect_resolves("images_8\\frame-one", dataset_dir / "images_8/frame-one.PNG");
 }
 
 TEST_F(MissingDatasetImagesTest, TransformsImagePathKeepsExistingResolutionPrecedence) {

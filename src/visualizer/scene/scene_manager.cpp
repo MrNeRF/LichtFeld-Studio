@@ -4169,7 +4169,17 @@ namespace lfs::vis {
             info.num_nodes = scene_.getNodeCount();
             info.source_type = "Splat";
             if (!splat_paths_.empty()) {
-                info.source_path = splat_paths_.begin()->second;
+                // splat_paths_ is unordered; node ids grow as nodes are added, so the
+                // highest id is the most recently added node.
+                auto newest = splat_paths_.begin();
+                core::NodeId newest_id = scene_.getNodeIdByUuid(newest->first);
+                for (auto it = std::next(newest); it != splat_paths_.end(); ++it) {
+                    if (const core::NodeId id = scene_.getNodeIdByUuid(it->first); id > newest_id) {
+                        newest = it;
+                        newest_id = id;
+                    }
+                }
+                info.source_path = newest->second;
                 // Determine specific type from extension
                 auto ext = lfs::core::path_to_utf8(info.source_path.extension());
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);

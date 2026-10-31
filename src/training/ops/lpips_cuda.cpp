@@ -43,15 +43,15 @@ namespace lfs::training {
         }
         void rgb_conv(const Tensor& input, const Tensor& weight, const Tensor& bias, Tensor& output,
                       const gpu_ops::RGBConvParams& p) {
-            validate_operand(input, DataType::Float32, "input");
-            validate_operand(weight, DataType::Float16, "weight");
-            validate_operand(bias, DataType::Float16, "bias");
-            validate_operand(output, DataType::Float16, "output");
+            validate_operand(input, DataType::Float32, "RGB input");
+            validate_operand(weight, DataType::Float16, "RGB weight");
+            validate_operand(bias, DataType::Float16, "RGB bias");
+            validate_operand(output, DataType::Float16, "RGB output");
             LFS_ASSERT_MSG(input.ndim() == 4 && input.shape()[1] == 3,
                            std::format("CUDA LPIPS RGB input must have shape [N, 3, H, W] (shape={})", input.shape().str()));
-            validate_shape(weight, {64, 3, 3, 3}, "weight");
-            validate_shape(bias, {64}, "bias");
-            validate_shape(output, {input.shape()[0], 64, input.shape()[2], input.shape()[3]}, "output");
+            validate_shape(weight, {64, 3, 3, 3}, "RGB weight");
+            validate_shape(bias, {64}, "RGB bias");
+            validate_shape(output, {input.shape()[0], 64, input.shape()[2], input.shape()[3]}, "RGB output");
             core::nn::kernels::lpips_rgb_conv3x3(input.ptr<float>(), weight.data_ptr(), bias.data_ptr(),
                                                  output.data_ptr(), p.shift.data(), p.scale.data(), p.official_scaling,
                                                  input.shape()[0], input.shape()[2], input.shape()[3], core::getCurrentCUDAStream());
@@ -60,9 +60,9 @@ namespace lfs::training {
                          Tensor& output, Tensor& scratch, const gpu_ops::ConvParams& p) {
             LFS_ASSERT_MSG(input.dtype() == DataType::Float16 || input.dtype() == DataType::Float32,
                            std::format("CUDA LPIPS convolution input must be float16 or float32 (dtype={})", core::dtype_name(input.dtype())));
-            validate_operand(input, input.dtype(), "input");
-            validate_operand(weight, input.dtype(), "weight");
-            validate_operand(output, input.dtype(), "output");
+            validate_operand(input, input.dtype(), "convolution input");
+            validate_operand(weight, input.dtype(), "convolution weight");
+            validate_operand(output, input.dtype(), "convolution output");
             LFS_ASSERT_MSG(input.ndim() == 4 && weight.ndim() == 4 &&
                                weight.shape()[1] == input.shape()[1] && weight.shape()[2] == 3 && weight.shape()[3] == 3,
                            std::format("CUDA LPIPS convolution needs [N, C_in, H, W] input and [C_out, C_in, 3, 3] weight "
@@ -77,17 +77,17 @@ namespace lfs::training {
             const int64_t out_w = static_cast<int64_t>(input.shape()[3]) + 2LL * p.pad_w - 2;
             LFS_ASSERT_MSG(out_h > 0 && out_w > 0 && out_h <= std::numeric_limits<int>::max() && out_w <= std::numeric_limits<int>::max(),
                            std::format("CUDA LPIPS convolution output dimensions must be positive int values (height={}, width={})", out_h, out_w));
-            validate_shape(output, {input.shape()[0], weight.shape()[0], static_cast<size_t>(out_h), static_cast<size_t>(out_w)}, "output");
+            validate_shape(output, {input.shape()[0], weight.shape()[0], static_cast<size_t>(out_h), static_cast<size_t>(out_w)}, "convolution output");
             if (bias.is_valid()) {
-                validate_operand(bias, input.dtype(), "bias");
-                validate_shape(bias, {weight.shape()[0]}, "bias");
+                validate_operand(bias, input.dtype(), "convolution bias");
+                validate_shape(bias, {weight.shape()[0]}, "convolution bias");
             }
             if (taps.is_valid()) {
-                validate_operand(taps, DataType::Float16, "taps");
-                validate_shape(taps, {9, weight.shape()[0], weight.shape()[1]}, "taps");
+                validate_operand(taps, DataType::Float16, "convolution taps");
+                validate_shape(taps, {9, weight.shape()[0], weight.shape()[1]}, "convolution taps");
             }
             if (scratch.is_valid()) {
-                validate_operand(scratch, DataType::Float16, "scratch");
+                validate_operand(scratch, DataType::Float16, "convolution scratch");
                 LFS_ASSERT_MSG(taps.is_valid() || input.dtype() != DataType::Float16 || scratch.numel() >= weight.numel(),
                                std::format("CUDA LPIPS convolution scratch must hold every weight tap when taps are absent "
                                            "(scratch_elements={}, weight_elements={})",
@@ -103,26 +103,26 @@ namespace lfs::training {
         }
         void pool_reduce(const Tensor& x, const Tensor& y, const Tensor& weight, Tensor& score,
                          Tensor& pooled_x, Tensor& pooled_y, const gpu_ops::PoolReduceParams& p) {
-            validate_operand(x, DataType::Float16, "x");
-            validate_operand(y, DataType::Float16, "y");
-            validate_operand(weight, DataType::Float16, "weight");
-            validate_operand(score, DataType::Float32, "score");
+            validate_operand(x, DataType::Float16, "pooling x");
+            validate_operand(y, DataType::Float16, "pooling y");
+            validate_operand(weight, DataType::Float16, "pooling weight");
+            validate_operand(score, DataType::Float32, "pooling score");
             LFS_ASSERT_MSG(x.ndim() == 4 && x.shape()[1] % 8 == 0,
                            std::format("CUDA LPIPS pooling features must have shape [N, C, H, W] with C divisible by 8 (shape={})", x.shape().str()));
-            validate_shape(y, x.shape(), "y");
+            validate_shape(y, x.shape(), "pooling y");
             LFS_ASSERT_MSG(weight.numel() == x.shape()[1],
                            std::format("CUDA LPIPS pooling needs one weight per channel (weight_elements={}, channels={})", weight.numel(), x.shape()[1]));
             LFS_ASSERT_MSG(pooled_x.is_valid() == pooled_y.is_valid(),
                            std::format("CUDA LPIPS pooling outputs must both be present or absent (pooled_x={}, pooled_y={})", pooled_x.is_valid(), pooled_y.is_valid()));
             if (pooled_x.is_valid()) {
-                validate_operand(pooled_x, DataType::Float16, "pooled_x");
-                validate_operand(pooled_y, DataType::Float16, "pooled_y");
+                validate_operand(pooled_x, DataType::Float16, "pooling pooled_x");
+                validate_operand(pooled_y, DataType::Float16, "pooling pooled_y");
                 const core::TensorShape shape{x.shape()[0], x.shape()[1], x.shape()[2] / 2, x.shape()[3] / 2};
-                validate_shape(pooled_x, shape, "pooled_x");
-                validate_shape(pooled_y, shape, "pooled_y");
+                validate_shape(pooled_x, shape, "pooling pooled_x");
+                validate_shape(pooled_y, shape, "pooling pooled_y");
             }
             if (p.weights && p.weights->is_valid())
-                validate_operand(*p.weights, DataType::Float32, "weights");
+                validate_operand(*p.weights, DataType::Float32, "pooling weights");
             const auto region_error = gpu_ops::pool_reduce_region_error(x, p);
             LFS_ASSERT_MSG(region_error.empty(), region_error);
             core::nn::kernels::lpips_pool_reduce(x.data_ptr(), y.data_ptr(), weight.data_ptr(), score.ptr<float>(),

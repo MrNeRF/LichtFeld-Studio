@@ -57,13 +57,10 @@ namespace {
             return static_cast<std::uint16_t>(sign | round(fraction | 0x800000u, 126u - exponent));
         if (exponent > 142u)
             return static_cast<std::uint16_t>(sign | 0x7c00u);
+        // `rounded` keeps the implicit bit (0x400), so adding it carries into the exponent:
+        // once for every normal value, and once more when rounding overflows to 0x800.
         const auto rounded = round(fraction | 0x800000u, 13u);
-        if (rounded == 0x400u) {
-            const auto half_exponent = exponent - 111u;
-            return static_cast<std::uint16_t>(sign | (half_exponent << 10u));
-        }
-        const auto half_exponent = exponent - 112u;
-        return static_cast<std::uint16_t>(sign | (half_exponent << 10u) | rounded);
+        return static_cast<std::uint16_t>(sign | (((exponent - 113u) << 10u) + rounded));
 #endif
     }
 

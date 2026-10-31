@@ -36,25 +36,33 @@ namespace {
     class HomeDirectoryGuard {
     public:
         explicit HomeDirectoryGuard(const fs::path& home) {
+            // LFS_HOME takes precedence over the home directory for user storage.
+            if (const char* existing = std::getenv("LFS_HOME"))
+                old_lfs_home_ = existing;
 #ifdef _WIN32
             if (const char* existing = std::getenv("USERPROFILE"))
                 old_value_ = existing;
             _putenv_s("USERPROFILE", home.string().c_str());
+            _putenv_s("LFS_HOME", "");
 #else
             if (const char* existing = std::getenv("HOME"))
                 old_value_ = existing;
             setenv("HOME", home.string().c_str(), 1);
+            unsetenv("LFS_HOME");
 #endif
         }
 
         ~HomeDirectoryGuard() {
 #ifdef _WIN32
             _putenv_s("USERPROFILE", old_value_.value_or("").c_str());
+            _putenv_s("LFS_HOME", old_lfs_home_.value_or("").c_str());
 #else
             if (old_value_)
                 setenv("HOME", old_value_->c_str(), 1);
             else
                 unsetenv("HOME");
+            if (old_lfs_home_)
+                setenv("LFS_HOME", old_lfs_home_->c_str(), 1);
 #endif
         }
 
@@ -63,6 +71,7 @@ namespace {
 
     private:
         std::optional<std::string> old_value_;
+        std::optional<std::string> old_lfs_home_;
     };
 
     nlohmann::json read_json(const fs::path& path) {

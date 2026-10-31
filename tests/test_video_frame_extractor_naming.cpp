@@ -6,6 +6,7 @@
 #include "cuda_backend_test.hpp"
 #include "gui/windows/video_extractor_dialog.hpp"
 
+#include "core/path_utils.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/media_studio_backends.hpp"
 #include "io/video/video_encoder.hpp"
@@ -1997,7 +1998,10 @@ namespace {
         ASSERT_NE(first, nullptr);
         const auto tooltip = first->GetAttribute<Rml::String>("title", "");
         EXPECT_NE(tooltip.find("capture_a/clip.mp4"), std::string::npos);
-        EXPECT_NE(tooltip.find("batch_output/clip"), std::string::npos);
+        // The output folder is joined with operator/, so Windows shows a backslash.
+        EXPECT_NE(tooltip.find(lfs::core::path_to_utf8(std::filesystem::path("batch_output") / "clip")),
+                  std::string::npos)
+            << tooltip;
     }
 
     TEST_F(VideoExtractorNamingUiTest, BatchProgressIsGlobalAcrossVideos) {

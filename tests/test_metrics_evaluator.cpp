@@ -262,6 +262,7 @@ TEST(MetricsReporter, VulkanRunRecordsCpuJpegDecoding) {
     std::ifstream report(tmp / "metrics_report.txt");
     const std::string text{std::istreambuf_iterator<char>(report), std::istreambuf_iterator<char>()};
     EXPECT_NE(text.find("JPEG Decoder: CPU\n"), std::string::npos) << text;
+    report.close(); // Windows cannot remove a file that is still open.
     std::filesystem::remove_all(tmp);
 }
 
@@ -1795,6 +1796,7 @@ TEST(ViewEvaluationJson, OneFileKeyedByImageNameInTheOutputFolder) {
     }
     EXPECT_FALSE(std::filesystem::exists(tmp / "eval"));
     EXPECT_FALSE(std::filesystem::exists(tmp / "per_image_metrics.json.tmp"));
+    in.close(); // Windows cannot remove a file that is still open.
     std::filesystem::remove_all(tmp);
 }
 
@@ -1976,6 +1978,7 @@ TEST(MetricsEvaluatorControlTest, StopDuringPausedFinalEvaluationCancelsWithoutP
     std::ifstream csv(params.dataset.output_path / "metrics.csv");
     ASSERT_TRUE(csv.good());
     EXPECT_EQ(std::count(std::istreambuf_iterator<char>(csv), std::istreambuf_iterator<char>(), '\n'), 1);
+    csv.close(); // Windows cannot remove a file that is still open.
     std::filesystem::remove_all(tmp);
 }
 
