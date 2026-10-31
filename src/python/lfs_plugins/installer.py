@@ -32,6 +32,16 @@ logger = logging.getLogger(__name__)
 
 from .http import urlopen
 from .plugin import PluginInstance
+from .process_runner import (
+    OUTPUT_TAIL_LINES as PROCESS_OUTPUT_TAIL_LINES,
+    PROCESS_POLL_SECONDS,
+    PROCESS_TERMINATE_GRACE_SECONDS,
+    ProcessCancelled,
+    process_group_popen_kwargs,
+    run_cancellable_process,
+    terminate_process_tree,
+    wait_for_process,
+)
 from .errors import PluginDependencyError, PluginError, PluginLoadCancelled
 try:
     import tomllib
@@ -42,9 +52,6 @@ except ImportError:
 PLUGIN_SOURCE_METADATA_NAME = ".lichtfeld-source.json"
 GITHUB_API_URL = "https://api.github.com/repos"
 HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
-PROCESS_POLL_SECONDS = 0.05
-PROCESS_TERMINATE_GRACE_SECONDS = 0.5
-PROCESS_OUTPUT_TAIL_LINES = 100
 
 
 def __getattr__(name):
@@ -118,67 +125,9 @@ def _cancel_requested(should_cancel: Optional[Callable[[], bool]]) -> bool:
     return bool(should_cancel and should_cancel())
 
 
-def _wait_for_process(proc: subprocess.Popen, timeout: float) -> bool:
-    try:
-        proc.wait(timeout=timeout)
-        return True
-    except subprocess.TimeoutExpired:
-        return False
-
-
-def _terminate_process_tree(proc: subprocess.Popen) -> None:
-    """Best-effort termination of a process and descendants on supported hosts."""
-    if proc.poll() is not None:
-        return
-
-    if sys.platform == "win32":
-        # CREATE_NEW_PROCESS_GROUP gives uv its own console group. taskkill /T is
-        # the best portable stdlib-only tree termination available on Windows;
-        # a Job Object would provide stronger guarantees but is not used here.
-        try:
-            tree_kill = subprocess.Popen(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if not _wait_for_process(tree_kill, PROCESS_TERMINATE_GRACE_SECONDS):
-                tree_kill.kill()
-                _wait_for_process(tree_kill, PROCESS_TERMINATE_GRACE_SECONDS)
-        except OSError:
-            pass
-        if proc.poll() is None:
-            proc.terminate()
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except OSError:
-            proc.terminate()
-
-    if _wait_for_process(proc, PROCESS_TERMINATE_GRACE_SECONDS):
-        return
-
-    if sys.platform == "win32":
-        proc.kill()
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except OSError:
-            proc.kill()
-    _wait_for_process(proc, PROCESS_TERMINATE_GRACE_SECONDS)
-
-
-def _process_group_popen_kwargs() -> dict:
-    if sys.platform == "win32":
-        return {
-            "creationflags": getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
-            )
-        }
-    return {"start_new_session": True}
+_wait_for_process = wait_for_process
+_terminate_process_tree = terminate_process_tree
+_process_group_popen_kwargs = process_group_popen_kwargs
 
 
 def _run_cancellable_process(
@@ -188,66 +137,15 @@ def _run_cancellable_process(
     on_output: Optional[Callable[[str], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> subprocess.CompletedProcess:
-    """Run a child in its own process group while streaming bounded output."""
-    if _cancel_requested(should_cancel):
-        raise PluginLoadCancelled("Plugin loading cancelled before starting dependency process")
+    """Run a child in its own process group while streaming bounded output.
 
-    popen_kwargs = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.STDOUT,
-        "text": True,
-        "bufsize": 1,
-        "env": env,
-    }
-    popen_kwargs.update(_process_group_popen_kwargs())
-    popen_kwargs.update(executable_kwargs(cmd))
-
-    proc = subprocess.Popen(cmd, **popen_kwargs)
-    output_queue: queue.Queue[Optional[str]] = queue.Queue()
-    output_tail: deque[str] = deque(maxlen=PROCESS_OUTPUT_TAIL_LINES)
-
-    def read_output() -> None:
-        try:
-            if proc.stdout is not None:
-                for line in proc.stdout:
-                    output_queue.put(line.rstrip())
-        finally:
-            output_queue.put(None)
-
-    reader = threading.Thread(target=read_output, name="plugin-process-output", daemon=True)
-    reader.start()
-    output_finished = False
-
+    Thin wrapper over the shared process runner that keeps the installer's
+    PluginLoadCancelled contract.
+    """
     try:
-        while not output_finished or proc.poll() is None:
-            if _cancel_requested(should_cancel):
-                _terminate_process_tree(proc)
-                raise PluginLoadCancelled("Plugin dependency process cancelled")
-
-            try:
-                line = output_queue.get(timeout=PROCESS_POLL_SECONDS)
-            except queue.Empty:
-                continue
-
-            if line is None:
-                output_finished = True
-            else:
-                output_tail.append(line)
-                if line and on_output:
-                    on_output(line)
-
-        returncode = proc.wait()
-        if _cancel_requested(should_cancel):
-            raise PluginLoadCancelled("Plugin dependency process cancelled")
-        return subprocess.CompletedProcess(cmd, returncode, "\n".join(output_tail), "")
-    except BaseException:
-        if proc.poll() is None:
-            _terminate_process_tree(proc)
-        raise
-    finally:
-        reader.join(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
-        if proc.stdout is not None:
-            proc.stdout.close()
+        return run_cancellable_process(cmd, env=env, on_output=on_output, should_cancel=should_cancel)
+    except ProcessCancelled as exc:
+        raise PluginLoadCancelled(f"Plugin dependency process cancelled ({exc})") from exc
 
 
 @dataclass(frozen=True)
