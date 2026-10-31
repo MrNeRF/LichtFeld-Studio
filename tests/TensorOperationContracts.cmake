@@ -38,8 +38,14 @@ endif()
 if(LFS_TENSOR_METAL)
     list(APPEND _tensor_contract_backends Metal)
 endif()
+if(LFS_TENSOR_HIP)
+    list(APPEND _tensor_contract_backends HIP)
+endif()
 foreach(_backend IN LISTS _tensor_contract_backends)
     set(_tensor_backend_filter "Backends/TensorOperationContracts.*/${_backend}:Backends/TensorBackendSemantics.*/${_backend}")
+    if(_backend STREQUAL "HIP")
+        string(APPEND _tensor_backend_filter ":Backends/HipReadbackSnapshots.*/HIP")
+    endif()
     add_test(NAME TensorOperationContracts.${_backend}
         COMMAND tensor_operation_contracts "--require-tensor-backend=${_backend}"
         "--gtest_filter=${_tensor_backend_filter}")
@@ -74,6 +80,47 @@ if(WIN32)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:GTest::gtest>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
 endif()
 
+if(LFS_TENSOR_HIP)
+    # Compile the production Tensor bridge without linking the application module.
+    nanobind_add_module(tensor_binding_contracts NB_STATIC
+        ${CMAKE_CURRENT_LIST_DIR}/python_tensor_contracts.cpp
+        ${CMAKE_SOURCE_DIR}/src/python/lfs/py_tensor.cpp)
+    set_target_properties(tensor_binding_contracts PROPERTIES
+        EXCLUDE_FROM_ALL TRUE OUTPUT_NAME _tensor_binding_contracts)
+    target_include_directories(tensor_binding_contracts PRIVATE ${LFS_CORE_ABI_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(tensor_binding_contracts PRIVATE lfs_core)
+    if(LFS_HAS_CUDA)
+        target_link_libraries(tensor_binding_contracts PRIVATE CUDA::cudart)
+    endif()
+    foreach(_mode CPU HIP)
+        set(_args)
+        set(_label cpu)
+        if(_mode STREQUAL "HIP")
+            set(_args --hip)
+            set(_label gpu)
+        endif()
+        add_test(NAME TensorPythonBindings.${_mode}
+            COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/hip/test_python_tensor_bindings.py
+            $<TARGET_FILE_DIR:tensor_binding_contracts>
+            --runtime-directory $<TARGET_FILE_DIR:lfs_core> ${_args})
+        set_tests_properties(TensorPythonBindings.${_mode} PROPERTIES LABELS "${_label};tensor;python" TIMEOUT 120)
+    endforeach()
+
+    set(LFS_HIP_ADAPTER_FAULT_MODULE "" CACHE FILEPATH "Explicit instrumented runtime for adapter GPU recovery tests")
+    if(LFS_HIP_ADAPTER_FAULT_MODULE)
+        add_executable(hip_adapter_recovery EXCLUDE_FROM_ALL hip/test_tensor_hip_adapter_recovery.cpp)
+        target_compile_features(hip_adapter_recovery PRIVATE cxx_std_23)
+        target_compile_definitions(hip_adapter_recovery PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+        target_include_directories(hip_adapter_recovery PRIVATE ${LFS_CORE_ABI_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
+        target_link_libraries(hip_adapter_recovery PRIVATE lfs_core GTest::gtest ${CMAKE_DL_LIBS})
+        add_test(NAME HipAdapter.Recovery COMMAND hip_adapter_recovery "${LFS_HIP_ADAPTER_FAULT_MODULE}")
+        set_tests_properties(HipAdapter.Recovery PROPERTIES LABELS "gpu;tensor;hip" TIMEOUT 120)
+        if(WIN32)
+            set_tests_properties(HipAdapter.Recovery PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:GTest::gtest>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+        endif()
+    endif()
+endif()
 
 # Reuse the existing timeline/queue regressions without building the full app.
 if(LFS_TENSOR_VULKAN)
