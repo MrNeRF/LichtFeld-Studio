@@ -308,9 +308,11 @@ namespace {
 
     TEST_P(NodesCore, ImplicitBoolToSelectionAndStructuralPropagation) {
         NodeTree tree(registry_);
-        Node& flag = tree.add_node("lfs.boolean", "Flag");
+        // add_node can reallocate tree.nodes, so look nodes up after the last one is added.
+        tree.add_node("lfs.boolean", "Flag");
+        const Node& remove = tree.add_node("lfs.delete_geometry", "Delete");
+        Node& flag = *tree.find_node("Flag");
         flag.input_values["Value"] = true;
-        Node& remove = tree.add_node("lfs.delete_geometry", "Delete");
         EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", remove.name, "Geometry"}));
         EXPECT_TRUE(tree.add_link({flag.name, "Value", remove.name, "Selection"}));
         EXPECT_TRUE(tree.add_link({remove.name, "Geometry", tree.output_node().name, "Geometry"}));
@@ -841,8 +843,10 @@ namespace {
 
     TEST_P(NodesCore, DeleteSeparateAndStoredSelectionCarryAttributes) {
         NodeTree tree(registry_);
-        Node &stored = tree.add_node("lfs.stored_selection"),
-             &separate = tree.add_node("lfs.separate_geometry");
+        // add_node can reallocate tree.nodes, so look nodes up after the last one is added.
+        const std::string stored_name = tree.add_node("lfs.stored_selection").name;
+        const Node& separate = tree.add_node("lfs.separate_geometry");
+        Node& stored = *tree.find_node(stored_name);
         Tensor mask = Tensor::from_vector(std::vector<bool>{true, false, true}, {3}, Device::CPU);
         if (device() == Device::GPU)
             mask = mask.to(device());
@@ -965,7 +969,10 @@ namespace {
         };
         ASSERT_TRUE(registry_.register_type(std::move(info)));
         NodeTree tree(registry_);
-        Node &counter = tree.add_node("test.counter"), &opacity = tree.add_node("lfs.set_opacity");
+        // add_node can reallocate tree.nodes, so look nodes up after the last one is added.
+        const std::string counter_name = tree.add_node("test.counter").name;
+        Node& opacity = tree.add_node("lfs.set_opacity");
+        const Node& counter = *tree.find_node(counter_name);
         EXPECT_TRUE(tree.add_link({tree.input_node().name, "Geometry", counter.name, "Geometry"}));
         EXPECT_TRUE(tree.add_link({counter.name, "Geometry", opacity.name, "Geometry"}));
         EXPECT_TRUE(tree.add_link({opacity.name, "Geometry", tree.output_node().name, "Geometry"}));
@@ -1447,10 +1454,12 @@ namespace {
 
     TEST_P(NodesCore, ConsumersKeepTheSelectionTheyEvaluated) {
         NodeTree tree(registry_);
-        Node& box = tree.add_node("lfs.box_selection");
+        // add_node can reallocate tree.nodes, so look nodes up after the last one is added.
+        const std::string box_name = tree.add_node("lfs.box_selection").name;
+        const Node& opacity = tree.add_node("lfs.set_opacity");
+        Node& box = *tree.find_node(box_name);
         box.input_values["Centre"] = glm::vec3(1, 0, 0);
         box.input_values["Size"] = glm::vec3(0.5f);
-        const Node& opacity = tree.add_node("lfs.set_opacity");
         ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", opacity.name, "Geometry"}));
         ASSERT_TRUE(tree.add_link({box.name, "Selection", opacity.name, "Selection"}));
         ASSERT_TRUE(tree.add_link({opacity.name, "Geometry", tree.output_node().name, "Geometry"}));
@@ -1477,10 +1486,12 @@ namespace {
         registry_.unregister_type(info.id);
         ASSERT_TRUE(registry_.register_type(std::move(info)));
         NodeTree tree(registry_);
-        Node& box = tree.add_node("lfs.box_selection");
+        // add_node can reallocate tree.nodes, so look nodes up after the last one is added.
+        const std::string box_name = tree.add_node("lfs.box_selection").name;
+        const Node& node = tree.add_node("test.select_moved");
+        Node& box = *tree.find_node(box_name);
         box.input_values["Centre"] = glm::vec3(1, 0, 0);
         box.input_values["Size"] = glm::vec3(0.5f);
-        const Node& node = tree.add_node("test.select_moved");
         ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", node.name, "Geometry"}));
         ASSERT_TRUE(tree.add_link({box.name, "Selection", node.name, "Selection"}));
         ASSERT_TRUE(tree.add_link({node.name, "Geometry", tree.output_node().name, "Geometry"}));
@@ -2760,11 +2771,12 @@ namespace {
         EXPECT_NEAR(distance[0], glm::length(glm::vec3(0.2f, -0.1f, -2.7f)), 1e-5);
         camera_host.views.clear();
         NodeTree tree(registry_);
-        auto& camera = tree.add_node("lfs.view_distance");
-        auto& consumer = tree.add_node("lfs.delete_geometry");
-        tree.add_link({camera.name, "Distance", consumer.name, "Selection"});
-        tree.add_link({tree.input_node().name, "Geometry", consumer.name, "Geometry"});
-        tree.add_link({consumer.name, "Geometry", tree.output_node().name, "Geometry"});
+        // add_node can reallocate tree.nodes, so keep the first node's name, not a reference.
+        const std::string camera = tree.add_node("lfs.view_distance").name;
+        const auto& consumer = tree.add_node("lfs.delete_geometry");
+        ASSERT_TRUE(tree.add_link({camera, "Distance", consumer.name, "Selection"}));
+        ASSERT_TRUE(tree.add_link({tree.input_node().name, "Geometry", consumer.name, "Geometry"}));
+        ASSERT_TRUE(tree.add_link({consumer.name, "Geometry", tree.output_node().name, "Geometry"}));
         const auto missing = evaluate(tree, {geometry, {}, 2}, &camera_host);
         EXPECT_FALSE(missing.ok);
         EXPECT_TRUE(std::ranges::any_of(missing.errors, [](const auto& entry) { return entry.second.find("requires dataset cameras") != std::string::npos; }));

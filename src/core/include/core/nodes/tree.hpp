@@ -67,6 +67,7 @@ namespace lfs::nodes {
 
         [[nodiscard]] Node* find_node(std::string_view name);
         [[nodiscard]] const Node* find_node(std::string_view name) const;
+        // The reference is into `nodes`; a later add_node can reallocate it and invalidate it.
         Node& add_node(std::string type_id, std::string name = {});
         bool remove_node(std::string_view name);
         bool rename_node(std::string_view name, std::string new_name);
