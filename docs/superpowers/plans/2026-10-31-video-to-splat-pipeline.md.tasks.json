@@ -1,0 +1,80 @@
+{
+  "planPath": "docs/superpowers/plans/2026-10-31-video-to-splat-pipeline.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: Shared cancellable process runner",
+      "status": "pending",
+      "description": "**Goal:** Reusable run_cancellable_process with streaming output and process-tree kill; installer delegates to it.\n\n**Files:** src/python/lfs_plugins/process_runner.py (create), src/python/lfs_plugins/installer.py, tests/python/test_process_runner.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/process_runner.py\", \"src/python/lfs_plugins/installer.py\", \"tests/python/test_process_runner.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_process_runner.py -q\", \"acceptanceCriteria\": [\"streams lines and returns CompletedProcess\", \"cancel kills child and raises ProcessCancelled\", \"installer wrapper still raises PluginLoadCancelled\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Video metadata probe reads width, height, spherical",
+      "status": "pending",
+      "description": "**Goal:** VideoMetadata gains width, height, spherical; probe fills them from codecpar and AV_PKT_DATA_SPHERICAL.\n\n**Files:** src/io/video/video_metadata.hpp, src/io/video/video_metadata.cpp, tests/test_video_metadata_probe.cpp, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/io/video/video_metadata.hpp\", \"src/io/video/video_metadata.cpp\", \"tests/test_video_metadata_probe.cpp\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"build/tests/lichtfeld_tests --gtest_filter=VideoMetadataProbe*\", \"acceptanceCriteria\": [\"h264_420.mp4 probes as 64x48 non-spherical\", \"existing video tests pass\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: lf.video binding and lf.ui.show_video_extractor",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** lf.video.probe and lf.video.extract_frames over VideoFrameExtractor with GIL release and Python callbacks; lfs_py links lfs_video; lf.ui.show_video_extractor emits ShowVideoExtractor.\n\n**Files:** src/python/lfs/py_video.hpp, src/python/lfs/py_video.cpp, src/python/lfs/module.cpp, src/python/lfs/py_ui.cpp, src/python/CMakeLists.txt, src/python/stubs/lichtfeld/video.pyi, src/python/stubs/lichtfeld/ui/__init__.pyi, tests/python/test_video_binding_runtime.py\n\n```json:metadata\n{\"files\": [\"src/python/lfs/py_video.hpp\", \"src/python/lfs/py_video.cpp\", \"src/python/lfs/module.cpp\", \"src/python/lfs/py_ui.cpp\", \"src/python/CMakeLists.txt\", \"src/python/stubs/lichtfeld/video.pyi\", \"src/python/stubs/lichtfeld/ui/__init__.pyi\", \"tests/python/test_video_binding_runtime.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_binding_runtime.py -q -m gpu\", \"acceptanceCriteria\": [\"probe returns width/height/fps/duration/rotation/spherical\", \"extract_frames reports progress and honours cancel\", \"show_video_extractor opens the extractor\", \"app builds\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: probe.py and sfm.py planning",
+      "status": "pending",
+      "description": "**Goal:** 360 mode decision, presets, frame scale, exact COLMAP argv lists, binary model readers, largest-model picker.\n\n**Files:** src/python/lfs_plugins/video_to_splat/__init__.py, probe.py, sfm.py, tests/python/test_video_to_splat_planning.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/__init__.py\", \"src/python/lfs_plugins/video_to_splat/probe.py\", \"src/python/lfs_plugins/video_to_splat/sfm.py\", \"tests/python/test_video_to_splat_planning.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_planning.py -q\", \"acceptanceCriteria\": [\"decide_mode handles aspect, spherical flag and overrides\", \"plan_commands emits EQUIRECTANGULAR/OPENCV and loop_detection 0\", \"binary header readers and find_largest_model work\", \"SequentialMatching option names verified against colmap -h\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: toolchain.py find or download COLMAP",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** resolve_colmap: configured path, cached download, PATH, then Windows download with consent hook and SHA-256 verification; version >= 4.1.\n\n**Files:** src/python/lfs_plugins/video_to_splat/toolchain.py, tests/python/test_video_to_splat_toolchain.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/toolchain.py\", \"tests/python/test_video_to_splat_toolchain.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_toolchain.py -q\", \"acceptanceCriteria\": [\"resolution order honoured\", \"old versions rejected with message\", \"consent refused raises\", \"hash mismatch discards archive\", \"no network in tests\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: pipeline.py orchestrator with resume and cancel",
+      "status": "pending",
+      "blockedBy": [1, 4, 5],
+      "description": "**Goal:** Stage runner with injected Hooks, pipeline.json state, resume by fingerprint, weak-reconstruction prompt, cancel, disk warning.\n\n**Files:** src/python/lfs_plugins/video_to_splat/pipeline.py, tests/python/test_video_to_splat_pipeline.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/pipeline.py\", \"tests/python/test_video_to_splat_pipeline.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_pipeline.py -q\", \"acceptanceCriteria\": [\"stage order\", \"resume skips completed stages with same fingerprint\", \"<20 frames stops\", \"weak reconstruction asks and can stop\", \"cancel keeps state\", \"low disk warns\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: project_bridge.py app-side hooks",
+      "status": "pending",
+      "blockedBy": [3, 6],
+      "description": "**Goal:** Concrete Hooks: UI-thread marshal, download consent dialog, lf.video extraction, process runner, project_create + load_file + import wait, start_training.\n\n**Files:** src/python/lfs_plugins/video_to_splat/project_bridge.py, tests/python/test_video_to_splat_bridge.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/project_bridge.py\", \"tests/python/test_video_to_splat_bridge.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_bridge.py -q\", \"acceptanceCriteria\": [\"ask_on_ui_thread returns value\", \"confirm_download accept label\", \"create_project_and_wait polls import state\", \"failed import raises\", \"start_training on UI thread\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: New Project video source kind, operator, locales",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** NewProjectPanel video kind with mode/preset/progress/extract-only, pipeline thread, File menu entry, builtin registration step, keys in all 10 locales.\n\n**Files:** src/python/lfs_plugins/import_panels.py, panels.py, file_menu.py, video_to_splat/__init__.py, video_to_splat/operators.py, src/visualizer/gui/rmlui/resources/new_project_panel.rml, import_dialog.rcss, src/visualizer/gui/resources/locales/*.json, tests/python/test_new_project_panel_video.py, tests/CMakeLists.txt\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/import_panels.py\", \"src/python/lfs_plugins/panels.py\", \"src/python/lfs_plugins/file_menu.py\", \"src/python/lfs_plugins/video_to_splat/__init__.py\", \"src/python/lfs_plugins/video_to_splat/operators.py\", \"src/visualizer/gui/rmlui/resources/new_project_panel.rml\", \"src/visualizer/gui/resources/locales/en.json\", \"tests/python/test_new_project_panel_video.py\", \"tests/CMakeLists.txt\"], \"verifyCommand\": \"python -m pytest tests/python/test_new_project_panel_video.py tests/python/test_new_project_panel.py tests/python/test_import_dialog_panels.py tests/python/test_localization_contracts.py -q\", \"acceptanceCriteria\": [\"video path sets video kind\", \"do_create starts pipeline thread with progress\", \"extract_only opens extractor\", \"errors shown via message_dialog\", \"localization contracts pass\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Dropped video opens New Project dialog",
+      "status": "pending",
+      "blockedBy": [8],
+      "description": "**Goal:** handleFileDrop emits ShowNewProjectDialog for a single dropped video.\n\n**Files:** src/visualizer/input/input_controller.cpp, tests/ (drop test)\n\n```json:metadata\n{\"files\": [\"src/visualizer/input/input_controller.cpp\"], \"verifyCommand\": \"ctest --test-dir build/tests -L fast --output-on-failure\", \"acceptanceCriteria\": [\"video drop emits ShowNewProjectDialog\", \"licht and dataset drops unchanged\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Smoke script and documentation",
+      "status": "pending",
+      "blockedBy": [8],
+      "description": "**Goal:** scripts/video_to_splat_smoke.py (opt-in, in-app) and docs/docs/features/video-to-splat.md.\n\n```json:metadata\n{\"files\": [\"scripts/video_to_splat_smoke.py\", \"docs/docs/features/video-to-splat.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"script prints registered ratio and fails under 90%\", \"doc covers requirements, presets, weak reconstruction, files\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Run smoke check on real footage",
+      "status": "pending",
+      "blockedBy": [9, 10],
+      "description": "**Goal:** Prove the chain on a real 360 clip, tune presets if under 90% registration, record result for the PR.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/probe.py\", \"src/python/lfs_plugins/video_to_splat/sfm.py\"], \"verifyCommand\": \"scripts/video_to_splat_smoke.py (in-app)\", \"acceptanceCriteria\": [\">= 90% frames registered on a slow indoor clip\", \"training starts automatically\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-10-31T00:00:00Z"
+}
