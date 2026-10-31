@@ -227,13 +227,13 @@ namespace lfs::test::custom_effect {
 
     TEST_F(CustomEffectTest, ElementMovedIntoViewSurvivesCull) {
         publish(kEdit);
-        constexpr float far = 40.0f;
+        constexpr float far_offset = 40.0f;
         Arrays outside = arrays_;
         for (std::size_t i = 0; i < outside.size(); ++i)
             if (outside.nodes[i] == 0)
-                outside.means[3 * i] += far;
+                outside.means[3 * i] += far_offset;
         std::array<Parameters, kNodes> values{};
-        values[0][Offset] = glm::vec4(-far, 0.0f, 0.0f, 0.0f);
+        values[0][Offset] = glm::vec4(-far_offset, 0.0f, 0.0f, 0.0f);
         const auto scene = model(outside);
         auto r = request(Path::Survivors);
         r.sh_degree = 0; // SH is evaluated toward the stored center
