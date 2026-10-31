@@ -591,6 +591,37 @@ TEST_F(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
     }
 }
 
+// The move constructor and move assignment used to drop the model type and the alpha flag, so a
+// moved fisheye camera became a pinhole camera that still had fisheye coefficients.
+TEST(CameraMove, KeepsModelTypeAndAlpha) {
+    const auto make = [] {
+        auto camera = std::make_unique<Camera>(
+            Tensor::eye(3, Device::CPU), Tensor::from_vector({0.0f, 0.0f, 1.0f}, {3}, Device::CPU),
+            40.0f, 40.0f, 48.0f, 32.0f,
+            Tensor::from_vector({0.035f, 0.007f, 0.0006f, -0.0003f}, {4}, Device::CPU),
+            Tensor::from_vector({0.001f, -0.002f, 0.0003f, -0.0004f}, {4}, Device::CPU),
+            CameraModelType::THIN_PRISM_FISHEYE, "thin_prism", std::filesystem::path{}, std::filesystem::path{},
+            96, 64, 0);
+        camera->set_has_alpha(true);
+        return camera;
+    };
+
+    auto source = make();
+    const Camera constructed(std::move(*source));
+    EXPECT_EQ(constructed.camera_model_type(), CameraModelType::THIN_PRISM_FISHEYE);
+    EXPECT_TRUE(constructed.has_alpha());
+
+    source = make();
+    Camera assigned;
+    assigned = std::move(*source);
+    EXPECT_EQ(assigned.camera_model_type(), CameraModelType::THIN_PRISM_FISHEYE);
+    EXPECT_TRUE(assigned.has_alpha());
+
+    const Camera transformed(constructed, Tensor::eye(4, Device::CPU));
+    EXPECT_EQ(transformed.camera_model_type(), CameraModelType::THIN_PRISM_FISHEYE);
+    EXPECT_TRUE(transformed.has_alpha());
+}
+
 TEST_F(MetricsEvalMask, RgbaPreprocessingUsesExecutionQueue) {
     lfs::core::TensorWorkQueue queue(lfs::core::GpuBackend::CUDA);
     lfs::core::TensorWorkQueue::Scope scope(queue);

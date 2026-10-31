@@ -278,11 +278,13 @@ namespace lfs::core {
           _T(std::move(other._T)),
           _radial_distortion(std::move(other._radial_distortion)),
           _tangential_distortion(std::move(other._tangential_distortion)),
+          _camera_model_type(other._camera_model_type),
           _image_path(std::move(other._image_path)),
           _image_name(std::move(other._image_name)),
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
           _normal_path(std::move(other._normal_path)),
+          _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
           _camera_width(other._camera_width),
@@ -352,11 +354,13 @@ namespace lfs::core {
             _T = std::move(other._T);
             _radial_distortion = std::move(other._radial_distortion);
             _tangential_distortion = std::move(other._tangential_distortion);
+            _camera_model_type = other._camera_model_type;
             _image_path = std::move(other._image_path);
             _image_name = std::move(other._image_name);
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
             _normal_path = std::move(other._normal_path);
+            _has_alpha = other._has_alpha;
             _has_image = other._has_image;
             _split = other._split;
             _camera_width = other._camera_width;
@@ -423,6 +427,7 @@ namespace lfs::core {
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
           _normal_path(other._normal_path),
+          _has_alpha(other._has_alpha),
           _has_image(other._has_image),
           _split(other._split),
           _camera_width(other._camera_width),
