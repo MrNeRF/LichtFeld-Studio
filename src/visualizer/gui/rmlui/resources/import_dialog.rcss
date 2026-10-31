@@ -97,6 +97,11 @@
     text-align: center;
 }
 
+.impdlg-progress {
+    flex: 1 1 auto;
+    height: 8dp;
+}
+
 .impdlg-browse-btn {
     min-width: 88dp;
     text-align: center;

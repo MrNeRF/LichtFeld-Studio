@@ -28,6 +28,41 @@
       </div>
     </div>
 
+    <div class="impdlg-control-group" data-if="source_is_video">
+      <span class="impdlg-field-label text-muted">@tr:video_to_splat.mode</span>
+      <div class="impdlg-control-main">
+        <select class="impdlg-input" data-value="video_mode">
+          <option value="auto" selected>@tr:video_to_splat.mode_auto</option>
+          <option value="on">@tr:video_to_splat.mode_on</option>
+          <option value="off">@tr:video_to_splat.mode_off</option>
+        </select>
+      </div>
+    </div>
+    <div class="impdlg-control-group" data-if="source_is_video">
+      <span class="impdlg-field-label text-muted">@tr:video_to_splat.preset</span>
+      <div class="impdlg-control-main">
+        <select class="impdlg-input" data-value="video_preset">
+          <option value="fast">@tr:video_to_splat.preset_fast</option>
+          <option value="balanced" selected>@tr:video_to_splat.preset_balanced</option>
+          <option value="high">@tr:video_to_splat.preset_high</option>
+        </select>
+      </div>
+    </div>
+    <div class="impdlg-control-group" data-if="source_is_video && pipeline_running">
+      <span class="impdlg-field-label text-muted">{{pipeline_stage}}</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <progress class="impdlg-progress" max="1" data-attr-value="pipeline_fraction"></progress>
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="cancel_pipeline">@tr:common.cancel</button>
+        </div>
+        <span class="impdlg-meta text-muted">{{pipeline_percent}}% {{pipeline_message}}</span>
+      </div>
+    </div>
+    <div class="impdlg-control-row" data-if="source_is_video && !pipeline_running">
+      <span class="impdlg-note text-muted">@tr:video_to_splat.hint</span>
+      <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="extract_only">@tr:video_to_splat.extract_only</button>
+    </div>
+
     <span class="impdlg-status status-error" data-if="create_hint != ''">{{create_hint}}</span>
     <div class="impdlg-control-row">
       <span class="impdlg-note text-muted">{{location_preview}}</span>

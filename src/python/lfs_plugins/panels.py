@@ -282,6 +282,11 @@ def _build_builtin_panel_steps(lf):
         view_menu.register()
         help_menu.register()
 
+    def video_to_splat():
+        from .video_to_splat import register
+
+        register()
+
     def export_panel():
         _register_lazy_panel(lf, "export")
 
@@ -361,6 +366,7 @@ def _build_builtin_panel_steps(lf):
         ("sequencer_ops", sequencer_ops),
         ("tools", tools),
         ("menus", menus),
+        ("video_to_splat", video_to_splat),
         ("export_panel", export_panel),
         ("about_panel", about_panel),
         ("bug_report_panel", bug_report_panel),

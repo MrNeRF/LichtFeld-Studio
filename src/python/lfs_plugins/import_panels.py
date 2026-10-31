@@ -4,6 +4,7 @@
 
 import threading
 import time
+from typing import Optional
 from _lfs_path_io import Path
 
 import lichtfeld as lf
@@ -14,6 +15,13 @@ from .training_confirm import confirm_discard_work_then
 from .types import Panel
 from .panels import panel_class
 from .ui import RuntimeState
+from .video_to_splat import pipeline as v2s_pipeline
+from .video_to_splat import project_bridge as v2s_bridge
+from .video_to_splat.probe import DEFAULT_PRESET, PRESETS
+
+# Mirrors lfs::io::video::kSupportedVideoExtensions.
+_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+_VIDEO_STAGE_KEYS = {stage: f"video_to_splat.stage.{stage}" for stage in v2s_pipeline.STAGE_NAMES}
 
 _new_project_panel = None
 _resume_checkpoint_panel = None
@@ -207,6 +215,14 @@ class NewProjectPanel(_ImportDialogPanel):
         self._target_exists_cached = False
         self._dedupe_name_cache: dict[str, str] = {}
         self._name_derived_from_source = False
+        self._video_mode = "auto"
+        self._video_preset = DEFAULT_PRESET
+        self._pipeline_running = False
+        self._pipeline_stage = ""
+        self._pipeline_fraction = 0.0
+        self._pipeline_message = ""
+        self._pipeline_cancel = threading.Event()
+        self._pipeline_thread: Optional[threading.Thread] = None
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("new_project")
@@ -215,6 +231,16 @@ class NewProjectPanel(_ImportDialogPanel):
 
         model.bind_func("panel_label", lambda: lf.ui.tr("new_project.title"))
         model.bind_func("source_is_dataset", lambda: self._source_kind == "dataset")
+        model.bind_func("source_is_video", lambda: self._source_kind == "video")
+        model.bind("video_mode", lambda: self._video_mode, self._set_video_mode)
+        model.bind("video_preset", lambda: self._video_preset, self._set_video_preset)
+        model.bind_func("pipeline_running", lambda: self._pipeline_running)
+        model.bind_func("pipeline_stage", self._pipeline_stage_label)
+        model.bind_func("pipeline_fraction", lambda: self._pipeline_fraction)
+        model.bind_func("pipeline_percent", lambda: int(self._pipeline_fraction * 100))
+        model.bind_func("pipeline_message", lambda: self._pipeline_message)
+        model.bind_event("extract_only", self._on_extract_only)
+        model.bind_event("cancel_pipeline", self._on_cancel_pipeline)
         model.bind_func("embed_dataset_visible", lambda: self._source_kind == "dataset")
         model.bind_func("advanced_expanded", lambda: self._advanced_expanded)
         model.bind_func("name_valid", self._name_is_valid)
@@ -301,6 +327,11 @@ class NewProjectPanel(_ImportDialogPanel):
         self._target_exists_cached = False
         self._dedupe_name_cache = {}
         self._name_derived_from_source = False
+        self._video_mode = "auto"
+        self._video_preset = DEFAULT_PRESET
+        self._pipeline_stage = ""
+        self._pipeline_fraction = 0.0
+        self._pipeline_message = ""
         params = lf.optimization_params()
         self._ppisp_sidecar_path = ""
         self._set_source_path(source_path, derive_name=True)
@@ -333,6 +364,8 @@ class NewProjectPanel(_ImportDialogPanel):
             self._source_kind = "blank"
         elif self._is_splat_path(next_value):
             self._source_kind = "splat"
+        elif self._is_video_path(next_value):
+            self._source_kind = "video"
         else:
             self._source_kind = "checking"
             self._source_probe_due = time.monotonic() + _SOURCE_PROBE_DEBOUNCE_SECONDS
@@ -341,6 +374,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._dirty_model(
             "source_path",
             "source_is_dataset",
+            "source_is_video",
             "embed_dataset_visible",
             "images_path",
             "sparse_path",
@@ -366,6 +400,10 @@ class NewProjectPanel(_ImportDialogPanel):
             return True
         suffix = Path(path).suffix.lower()
         return suffix in {".ply", ".sog", ".ssog", ".spz", ".glb", ".rad"} or suffix.startswith(".usd")
+
+    @staticmethod
+    def _is_video_path(path: str) -> bool:
+        return Path(path).suffix.lower() in _VIDEO_EXTENSIONS
 
     def _set_source_path(self, value, derive_name=False):
         previous = self._source_path
@@ -582,8 +620,9 @@ class NewProjectPanel(_ImportDialogPanel):
     def _can_create(self) -> bool:
         return (
             self._name_is_valid()
-            and self._source_kind in {"blank", "dataset", "splat"}
+            and self._source_kind in {"blank", "dataset", "splat", "video"}
             and not self._images_missing()
+            and not self._pipeline_running
         )
 
     def _images_missing(self) -> bool:
@@ -780,6 +819,85 @@ class NewProjectPanel(_ImportDialogPanel):
         self._advanced_expanded = not self._advanced_expanded
         self._dirty_model("advanced_expanded")
 
+    # ---- video source ----
+
+    def _set_video_mode(self, value) -> None:
+        value = str(value)
+        if value in ("auto", "on", "off"):
+            self._video_mode = value
+
+    def _set_video_preset(self, value) -> None:
+        value = str(value)
+        if value in PRESETS:
+            self._video_preset = value
+
+    def _pipeline_stage_label(self) -> str:
+        key = _VIDEO_STAGE_KEYS.get(self._pipeline_stage)
+        return lf.ui.tr(key) if key else ""
+
+    def _on_extract_only(self, _handle=None, _ev=None, _args=None):
+        path = self._source_path.strip()
+        if not path or self._pipeline_running:
+            return
+        self._dialog_requested = False
+        lf.ui.set_panel_enabled(self.id, False)
+        lf.ui.show_video_extractor(path)
+
+    def _on_cancel_pipeline(self, _handle=None, _ev=None, _args=None):
+        if not self._pipeline_running:
+            return
+        self._pipeline_cancel.set()
+        self._pipeline_message = lf.ui.tr("video_to_splat.cancelling")
+        self._dirty_model("pipeline_message")
+
+    def _start_video_pipeline(self, video: Path, project: Path) -> None:
+        if self._pipeline_running:
+            return
+        if lf.is_training_active():
+            lf.ui.message_dialog(lf.ui.tr("video_to_splat.title"), lf.ui.tr("video_to_splat.training_busy"), "warning")
+            return
+        request = v2s_pipeline.Request(video=video, project=project, mode_override=self._video_mode,
+                                       preset=self._video_preset)
+        self._pipeline_cancel.clear()
+        self._pipeline_running = True
+        self._pipeline_stage, self._pipeline_fraction, self._pipeline_message = "toolchain", 0.0, ""
+        self._dirty_model()
+
+        def on_progress(stage: str, fraction: float, message: str, _tail: str) -> None:
+            def apply() -> None:
+                self._pipeline_stage, self._pipeline_fraction, self._pipeline_message = stage, fraction, message
+                self._dirty_model("pipeline_stage", "pipeline_fraction", "pipeline_percent", "pipeline_message")
+
+            lf.ui.schedule_on_ui_thread(apply)
+
+        def finish(error: Optional[str], close: bool) -> None:
+            def apply() -> None:
+                self._pipeline_running = False
+                self._dirty_model()
+                if error:
+                    lf.ui.message_dialog(lf.ui.tr("video_to_splat.title"), error, "error")
+                elif close:
+                    self._dialog_requested = False
+                    lf.ui.set_panel_enabled(self.id, False)
+
+            lf.ui.schedule_on_ui_thread(apply)
+
+        def worker() -> None:
+            try:
+                v2s_pipeline.run(request, v2s_bridge.build_hooks(), on_progress=on_progress,
+                                 should_cancel=self._pipeline_cancel.is_set)
+            except (v2s_pipeline.PipelineCancelled, v2s_pipeline.PipelineStopped):
+                finish(None, close=False)
+            except v2s_pipeline.PipelineError as exc:
+                finish(str(exc), close=False)
+            except Exception as exc:  # noqa: BLE001 - surface anything unexpected to the user
+                finish(f"{type(exc).__name__}: {exc}", close=False)
+            else:
+                finish(None, close=True)
+
+        self._pipeline_thread = threading.Thread(target=worker, daemon=True, name="VideoToSplatPipeline")
+        self._pipeline_thread.start()
+
     def _on_browse_folder(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
         if path:
@@ -817,13 +935,17 @@ class NewProjectPanel(_ImportDialogPanel):
         def _commit(stop_training: bool, overwrite: bool) -> None:
             if (
                 not self._name_is_valid()
-                or self._source_kind not in {"blank", "dataset", "splat"}
+                or self._source_kind not in {"blank", "dataset", "splat", "video"}
                 or self._target_path() != target
             ):
                 self._dirty_model()
                 return
             if self._destination_exists() and not overwrite:
                 self._confirm_overwrite(lambda: _commit(stop_training, True))
+                return
+            if source_kind == "video":
+                # The dialog stays open to show stage progress; the pipeline creates the project itself.
+                self._start_video_pipeline(Path(source_path), target)
                 return
             # Creation captures panel state; the command dialog must be closed.
             self._dialog_requested = False
@@ -882,8 +1004,13 @@ class NewProjectPanel(_ImportDialogPanel):
             confirm_discard_work_then(
                 lf.ui.tr("new_project.title"),
                 lambda stop_training: _commit(stop_training, overwrite),
+                ask_stop_training=source_kind != "video",
             )
 
+        if source_kind == "video" and lf.is_training_active():
+            # COLMAP and the trainer must not share the GPU; the user stops training first.
+            lf.ui.message_dialog(lf.ui.tr("video_to_splat.title"), lf.ui.tr("video_to_splat.training_busy"), "warning")
+            return
         if self._destination_exists():
             self._confirm_overwrite(lambda: _after_consent(True))
             return
