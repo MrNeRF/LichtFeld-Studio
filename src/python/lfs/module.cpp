@@ -48,6 +48,7 @@
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
+#include "py_video.hpp"
 #include "py_viewport.hpp"
 #include "python/viewport_overlay.hpp"
 #include "visualizer/app_store.hpp"
@@ -3404,6 +3405,9 @@ NB_MODULE(lichtfeld, m) {
     // I/O submodule
     auto io_module = m.def_submodule("io", "File I/O operations");
     lfs::python::register_io(io_module);
+
+    auto video_module = m.def_submodule("video", "Video probing and frame extraction");
+    lfs::python::register_video(video_module);
 
     auto diagnostics_module = m.def_submodule("diagnostics", "System diagnostics API");
     lfs::python::register_diagnostics(diagnostics_module);

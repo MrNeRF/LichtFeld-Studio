@@ -26,7 +26,8 @@ from . import (
     selection as selection,
     shaders as shaders,
     ui as ui,
-    undo as undo
+    undo as undo,
+    video as video
 )
 from .scene import (
     cancel_collision as cancel_collision,

@@ -2206,6 +2206,9 @@ def register_popup_draw_callback(callback: object) -> None:
 def unregister_popup_draw_callback(callback: object) -> None:
     """Unregister a legacy popup draw callback"""
 
+def show_video_extractor(path: str) -> None:
+    """Open the native video frame extractor on a video file"""
+
 def on_show_new_project_dialog(callback: object) -> None:
     """Register callback for ShowNewProjectDialog event"""
 

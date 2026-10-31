@@ -199,6 +199,7 @@ nanobind_add_module(
     lfs/py_cameras.cpp
     lfs/py_diagnostics.cpp
     lfs/py_io.cpp
+    lfs/py_video.cpp
     lfs/py_packages.cpp
     lfs/py_params.cpp
     lfs/py_plugins.cpp
@@ -258,7 +259,7 @@ target_compile_definitions(lfs_py PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer>"
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_video,lfs_rendering_tensor,lfs_sequencer>"
     )
 else()
     set(LFS_PY_INTERNAL_LINK_LIBS
@@ -271,6 +272,7 @@ else()
         lfs_python_runtime
         lfs_training
         lfs_io
+        lfs_video
         lfs_rendering_tensor
         lfs_sequencer
     )

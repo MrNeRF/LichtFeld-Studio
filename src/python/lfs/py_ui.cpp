@@ -3875,6 +3875,13 @@ namespace lfs::python {
             nb::arg("callback"), "Unregister a legacy popup draw callback");
 
         m.def(
+            "show_video_extractor",
+            [](const std::string& path) {
+                lfs::core::events::cmd::ShowVideoExtractor{.video_path = lfs::core::utf8_to_path(path)}.emit();
+            },
+            nb::arg("path"), "Open the native video frame extractor on a video file");
+
+        m.def(
             "on_show_new_project_dialog",
             [](nb::object callback) {
                 g_show_new_project_callback = callback;
