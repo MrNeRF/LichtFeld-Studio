@@ -163,11 +163,15 @@ namespace lfs::core::internal {
     }
 
     // The root without path halving, for the final labels: halving there could overwrite a label another
-    // thread already finished with an older ancestor.
-    LFS_POINT_HD inline int32_t finalComponentRoot(const int32_t* parent, int32_t node) {
-        for (int32_t ancestor = parent[node]; ancestor != node; ancestor = parent[node])
-            node = ancestor;
-        return node;
+    // thread already finished with an older ancestor. The walk uses unsigned indices (labels are never
+    // negative): for sm_100 and sm_120, nvcc 12.8.0 (V12.8.61) compiles the signed walk so that its first
+    // load reads parent[4 * node]; 12.8 Update 1 and later compile both forms correctly.
+    LFS_POINT_HD inline int32_t finalComponentRoot(const int32_t* parent, const int32_t node) {
+        uint32_t current = static_cast<uint32_t>(node);
+        for (uint32_t ancestor = static_cast<uint32_t>(parent[current]); ancestor != current;
+             ancestor = static_cast<uint32_t>(parent[current]))
+            current = ancestor;
+        return static_cast<int32_t>(current);
     }
 
     LFS_POINT_HD inline float pointNeighborSpacing(const float* points, const int32_t* heads,
