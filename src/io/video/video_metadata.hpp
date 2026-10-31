@@ -17,6 +17,9 @@ namespace lfs::io::video {
     struct VideoMetadata {
         int stream_index = -1;
         int rotation = 0;
+        int width = 0;          // coded frame width in pixels, 0 when unknown
+        int height = 0;         // coded frame height in pixels, 0 when unknown
+        bool spherical = false; // container carries spherical (360) projection metadata
         double fps = 30.0;
         double duration = 0.0;
         int64_t total_frames = 0;

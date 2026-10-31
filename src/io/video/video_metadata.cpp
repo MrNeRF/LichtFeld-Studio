@@ -115,6 +115,11 @@ namespace lfs::io::video {
 
         const AVStream* const stream = context->streams[metadata.stream_index];
         const AVCodecParameters* const parameters = stream->codecpar;
+        metadata.width = parameters->width;
+        metadata.height = parameters->height;
+        // The mov demuxer attaches this for Spherical Video V1 (uuid XMP) and V2 (sv3d) boxes,
+        // which covers stitched exports from Insta360, GoPro and DJI.
+        metadata.spherical = hasCodedSideData(parameters, AV_PKT_DATA_SPHERICAL);
         if (AVDictionaryEntry* const tag = av_dict_get(stream->metadata, "rotate", nullptr, 0);
             tag && tag->value) {
             metadata.rotation = std::atoi(tag->value);
