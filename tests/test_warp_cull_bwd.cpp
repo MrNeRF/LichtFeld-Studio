@@ -337,11 +337,13 @@ namespace {
         bool ok = false;
     };
 
-    Warp8x4Snapshot run_8x4_step() {
+    Warp8x4Snapshot run_8x4_step(const bool error_row_only = false, const bool pixel_error_map = true,
+                                 const int width = 8, const int height = 4, const size_t count = 12) {
         Warp8x4Snapshot out{};
-        Camera cam = make_camera(8, 4);
-        auto splat = make_synthetic_splat(12);
-        splat->_densification_info = Tensor::zeros({2, static_cast<size_t>(12)}, Device::CUDA);
+        Camera cam = make_camera(width, height);
+        auto splat = make_synthetic_splat(static_cast<int>(count));
+        splat->_densification_info = error_row_only ? Tensor::zeros({count}, Device::CUDA)
+                                                    : Tensor::zeros({2, count}, Device::CUDA);
         Tensor bg = Tensor::zeros({3}, Device::CUDA);
 
         set_warp_cull_mode_for_testing(0);
@@ -360,7 +362,9 @@ namespace {
         auto grad_out = r->first.image.mul(2.0f);
         auto grad_depth = Tensor::ones_like(r->first.depth);
         auto grad_normal = Tensor::ones_like(r->first.normal);
-        auto pixel_error = Tensor::ones({4, 8}, Device::CUDA);
+        auto pixel_error = pixel_error_map
+                               ? Tensor::ones({static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CUDA)
+                               : Tensor{};
         fast_rasterize_backward(
             r->second,
             grad_out,
@@ -368,7 +372,7 @@ namespace {
             *opt,
             {},
             pixel_error,
-            DensificationType::MCMC,
+            pixel_error_map ? DensificationType::MCMC : DensificationType::None,
             1,
             {},
             grad_depth,
@@ -407,4 +411,26 @@ TEST_F(WarpCullBwdTest, SingleWarp8x4_BitIdenticalAcrossRuns) {
     EXPECT_TRUE(tensors_bit_identical(a.sh0, b.sh0)) << "sh0";
     EXPECT_TRUE(tensors_bit_identical(a.scaling, b.scaling)) << "scaling";
     EXPECT_TRUE(tensors_bit_identical(a.densification, b.densification)) << "densification";
+}
+
+// [N] holds the error row alone: it must equal row 1 of [2, N], with the
+// rest of the step unchanged. Multi-warp tiles add in any order, so the
+// comparison allows atomic reordering noise.
+TEST_F(WarpCullBwdTest, ErrorRowOnlyMatchesTwoRowLayout) {
+    constexpr size_t count = 48;
+    for (const bool pixel_error_map : {true, false}) {
+        SCOPED_TRACE(pixel_error_map ? "pixel error map" : "screen gradient");
+        auto both = run_8x4_step(false, pixel_error_map, 64, 64, count);
+        auto error_only = run_8x4_step(true, pixel_error_map, 64, 64, count);
+        ASSERT_TRUE(both.ok && error_only.ok);
+        ASSERT_EQ(error_only.densification.ndim(), 1u);
+        ASSERT_EQ(both.densification.numel(), 2 * error_only.densification.numel());
+        const auto error_row = both.densification.slice(0, 1, 2).contiguous().reshape({static_cast<int>(count)});
+        const float largest = error_only.densification.abs().max_scalar();
+        EXPECT_GT(largest, 0.f);
+        EXPECT_LE(max_abs_diff(error_row, error_only.densification), 1e-5f * largest);
+        EXPECT_GT(both.densification.slice(0, 0, 1).abs().max_scalar(), 0.f) << "weight row";
+        EXPECT_LE(max_abs_diff(both.means, error_only.means), 1e-6f) << "means";
+        EXPECT_LE(max_abs_diff(both.opacity, error_only.opacity), 1e-6f) << "opacity";
+    }
 }

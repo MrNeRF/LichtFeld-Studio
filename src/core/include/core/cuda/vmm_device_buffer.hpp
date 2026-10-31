@@ -27,7 +27,10 @@ namespace lfs::core {
         [[nodiscard]] static Result<VmmDeviceBuffer> create(
             std::size_t reservation_bytes, const char* label = nullptr);
 
-        [[nodiscard]] Status commit(std::size_t required_bytes);
+        // Maps the missing prefix in chunks of at most `max_chunk_bytes`;
+        // smaller chunks let decommit_tail hand back more of a tail.
+        [[nodiscard]] Status commit(std::size_t required_bytes,
+                                    std::size_t max_chunk_bytes = kMaxChunkBytes);
         // Releases whole allocation chunks at or above the aligned target.
         // If the target falls inside the kept chunk, committed_bytes() remains
         // at that chunk's end, above the requested prefix.
@@ -56,6 +59,7 @@ namespace lfs::core {
         }
 
         static constexpr std::size_t kGranularityBytes = 2u * 1024u * 1024u;
+        static constexpr std::size_t kMaxChunkBytes = 128u * 1024u * 1024u;
 
     private:
         struct Chunk {

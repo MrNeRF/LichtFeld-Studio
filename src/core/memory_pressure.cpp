@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/memory_pressure.hpp"
+#include "core/cuda_allocation.hpp"
 
 #include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
@@ -10,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "tensor/internal/lazy_device_storage.hpp"
 #include "tensor/internal/memory_pool.hpp"
 
 #include <cuda_runtime_api.h>
@@ -222,6 +224,22 @@ namespace lfs::core {
 
     thread_local bool MemoryPressureCoordinator::Impl::in_episode = false;
 
+    bool relieve_device_allocation_failure(const size_t bytes, const cudaStream_t stream) {
+        int device = 0;
+        if (cudaGetDevice(&device) != cudaSuccess) {
+            (void)cudaGetLastError();
+        }
+        return MemoryPressureCoordinator::instance().relieve_and_should_retry(AllocationFailure{
+            .domain = MemoryDomain::CudaDevice,
+            .requested_bytes = bytes,
+            .device = device,
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .label = "cuda.scratch",
+            .operation = "cuda.scratch_allocate",
+            .native_error = cudaErrorMemoryAllocation,
+        });
+    }
+
     MemoryPressureCoordinator::MemoryPressureCoordinator()
         : impl_(new Impl()) {
         register_client(PressureClient{
@@ -234,6 +252,17 @@ namespace lfs::core {
                 CudaMemoryPool::instance().trim_cached_memory();
                 return ReclaimResult{};
             },
+        });
+        // Pages lazy tensors mapped past their rows; growth maps them again.
+        register_client(PressureClient{
+            .name = "lazy-commit-ahead",
+            .priority = 15,
+            .domain = MemoryDomain::CudaDevice,
+            .affinity = PressureAffinity::ImmediateThreadSafe,
+            .estimate = [](const PressureRequest&) -> size_t {
+                return LazyDeviceStorage::committed_ahead_bytes_total();
+            },
+            .shrink = [](const PressureRequest&) { return ReclaimResult{.logical_bytes_released = LazyDeviceStorage::release_ahead_total()}; },
         });
         register_client(PressureClient{
             .name = "pinned-host-cache",

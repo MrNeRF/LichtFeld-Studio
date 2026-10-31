@@ -19,7 +19,6 @@
 #include "kernels/gradient_residual.hpp"
 #include "kernels/thin_structure.hpp"
 #include "lfs/kernels/ssim.cuh"
-#include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"

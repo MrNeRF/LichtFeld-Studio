@@ -1483,6 +1483,51 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
     }
 }
 
+// [N] holds the error row alone: it must equal row 1 of [2, N], and dropping
+// the weight row must leave every parameter gradient unchanged.
+TEST_F(GsplatRasterizerTest, ErrorRowOnlyMatchesTwoRowLayout) {
+    constexpr size_t n = 4096;
+    auto model = make_parity_splat(n, 0xC0FFEE02u);
+    auto camera = make_extra_parity_camera(lfs::core::CameraModelType::PINHOLE, 96, 64);
+    auto bg = Tensor::full({3}, 0.25f, Device::CUDA);
+    AdamConfig config;
+    config.initial_capacity = n;
+    AdamOptimizer opt(*model, config);
+    opt.allocate_gradients(n);
+    for (const bool with_error_map : {true, false}) {
+        SCOPED_TRACE(with_error_map ? "pixel error map" : "screen gradient");
+        const auto error_map = with_error_map ? Tensor::full({64, 96}, 0.2f, Device::CUDA) : Tensor{};
+        Tensor two_rows;
+        std::vector<Tensor> gradients;
+        for (const bool error_row_only : {false, true}) {
+            opt.zero_grad(1);
+            model->_densification_info = error_row_only ? Tensor::zeros({n}, Device::CUDA)
+                                                        : Tensor::zeros({2, n}, Device::CUDA);
+            auto result = gsplat_rasterize_forward(camera, *model, bg, 0, 0, 0, 0, 1.f, false, GsplatRenderMode::RGB, true);
+            ASSERT_TRUE(result.has_value()) << result.error();
+            gsplat_rasterize_backward(result->second, Tensor::full(result->first.image.shape(), 0.7f, Device::CUDA),
+                                      Tensor::full(result->first.alpha.shape(), 0.4f, Device::CUDA), *model, opt,
+                                      error_map);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            if (!error_row_only) {
+                two_rows = model->_densification_info.clone();
+                EXPECT_GT(two_rows.slice(0, 0, 1).abs().max().item<float>(), 0.f) << "weight row";
+                for (auto param : AdamOptimizer::all_param_types())
+                    gradients.push_back(opt.get_grad(param).clone());
+                continue;
+            }
+            ASSERT_EQ(model->_densification_info.ndim(), 1u);
+            const auto error_row = two_rows.slice(0, 1, 2).contiguous().reshape({static_cast<int>(n)});
+            EXPECT_LT(max_rel_diff_tensors(error_row, model->_densification_info), 1e-4f);
+            if (with_error_map)
+                EXPECT_GT(model->_densification_info.abs().max().item<float>(), 0.f);
+            size_t i = 0;
+            for (auto param : AdamOptimizer::all_param_types())
+                EXPECT_LT(max_rel_diff_tensors(gradients[i++], opt.get_grad(param)), 1e-4f);
+        }
+    }
+}
+
 TEST(FastGSInference, PreservesTrainingStateAndScaleRefinement) {
     int device_count = 0;
     ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
@@ -2372,6 +2417,52 @@ TEST(GsplatRasterizerQuantTest, ShBackwardWithoutDirectionGradNeedsNoCoefficient
         EXPECT_EQ(gut_tensor_bytes(actual), gut_tensor_bytes(expected));
         EXPECT_EQ(gut_tensor_bytes(without_values), gut_tensor_bytes(expected));
         EXPECT_LT(max_abs_diff_tensors(actual_dirs, expected_dirs), 1e-6f);
+    }
+}
+
+// The training backward adds SH gradients straight into the optimizer's sh0
+// and swizzled shN gradients; it must match the canonical [N, K, 3] output.
+TEST(GsplatRasterizerQuantTest, ShBackwardAddsIntoSwizzledGradients) {
+    GutQuantGuard guard;
+    constexpr size_t n = 257;
+    constexpr float kPrior = 0.25f;
+    auto model = make_sh_storage_fixture(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
+    const auto reference = decoded_sh_reference(model);
+    auto dirs = Tensor::full({n, 3}, 0.3f, Device::CUDA);
+    auto v_colors = Tensor::full({n, 3}, 0.7f, Device::CUDA);
+    for (uint32_t degree = 0; degree <= 3; ++degree) {
+        SCOPED_TRACE(degree);
+        auto canonical = Tensor::zeros({n, 16, 3}, Device::CUDA);
+        gsplat_lfs::spherical_harmonics_swizzled_bwd(
+            16, degree, 3, dirs.ptr<float>(), reference.sh0().ptr<float>(), reference.shN().ptr<float>(),
+            nullptr, v_colors.ptr<float>(), n, false, canonical.ptr<float>(), nullptr);
+
+        auto sh0_grad = Tensor::full({n, 1, 3}, kPrior, Device::CUDA);
+        auto shN_grad = Tensor::full({sh_swizzled_float_count(n, kShMaxCoeffsRest)}, kPrior, Device::CUDA);
+        const gsplat_lfs::ShGradientTarget target{
+            .sh0 = sh0_grad.ptr<float>(),
+            .shN = shN_grad.ptr<float>(),
+            .shN_slots = sh_float4_slots_for_rest(kShMaxCoeffsRest),
+        };
+        gsplat_lfs::spherical_harmonics_swizzled_bwd(
+            16, degree, 3, dirs.ptr<float>(), model.sh0().ptr<float>(),
+            reinterpret_cast<const float*>(model.shN().data_ptr()), nullptr, v_colors.ptr<float>(), n,
+            false, nullptr, nullptr, 3, nullptr, model.shN_value_bounds().ptr<float>(), target);
+
+        const auto expected = canonical.cpu().to_vector();
+        const auto sh0 = sh0_grad.cpu().to_vector();
+        const auto shN = shN_grad.cpu().to_vector();
+        for (uint32_t i = 0; i < n; ++i) {
+            for (uint32_t c = 0; c < 3; ++c) {
+                ASSERT_FLOAT_EQ(sh0[i * 3 + c], kPrior + expected[i * 48 + c]);
+                for (uint32_t k = 1; k < 16; ++k) {
+                    const uint32_t offset = (k - 1) * 3 + c;
+                    const size_t at = size_t{sh_swizzled_index(i, offset / 4)} * 4 + offset % 4;
+                    ASSERT_FLOAT_EQ(shN[at], kPrior + expected[i * 48 + k * 3 + c]) << "i=" << i << " k=" << k;
+                }
+            }
+        }
     }
 }
 

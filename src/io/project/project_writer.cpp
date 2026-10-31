@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <ostream>
 #include <set>
@@ -236,49 +238,80 @@ namespace lfs::io::project {
         constexpr int ZSTD_FIXED_LEVEL = 3;
         constexpr int ZSTD_PAYLOAD_LEVEL = 1;
 
-        // f32-word byte-plane transpose: [b0 b1 b2 b3 | b0 b1 b2 b3 | ...]
-        // -> plane0 || plane1 || plane2 || plane3. Requires size % 4 == 0.
-        std::vector<std::byte>
-        byte_plane_f32_words(const std::span<const std::byte> interleaved) {
-            const std::size_t n_words = interleaved.size() / 4;
-            std::vector<std::byte> out(interleaved.size());
-            const auto* src =
-                reinterpret_cast<const std::uint8_t*>(interleaved.data());
+        // Logical payload as consecutive segments of segment_bytes each (the
+        // last may be shorter). segment_bytes is a multiple of the framed
+        // record size, or the payload is one segment, so no record spans two.
+        struct FramedInput {
+            std::span<const std::span<const std::byte>> segments;
+            std::size_t segment_bytes = 0;
+            std::size_t size = 0;
+            // Called once for each segment that no remaining record reads.
+            std::function<void(std::size_t)> release;
+        };
+        static_assert(SegmentedPayload::SEGMENT_BYTES % detail::FRAMED_RECORD_TARGET_BYTES == 0);
+
+        // Bytes [offset, offset + out.size()) of the f32-word byte-plane
+        // transpose [b0 b1 b2 b3 | b0 b1 b2 b3 | ...] -> plane0 || plane1 ||
+        // plane2 || plane3, read straight from the interleaved words.
+        // Requires input.size % 4 == 0.
+        void gather_byte_planes(const FramedInput& input,
+                                const std::size_t offset,
+                                const std::span<std::byte> out) {
+            const std::size_t n_words = input.size / 4;
+            const std::size_t segment_words = input.segment_bytes / 4;
             auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
-            const auto copy_range = [=](const std::size_t begin,
-                                        const std::size_t end) {
-                for (std::size_t w = begin; w < end; ++w) {
-                    dst[0 * n_words + w] = src[w * 4 + 0];
-                    dst[1 * n_words + w] = src[w * 4 + 1];
-                    dst[2 * n_words + w] = src[w * 4 + 2];
-                    dst[3 * n_words + w] = src[w * 4 + 3];
-                }
-            };
-            constexpr std::size_t PARALLEL_THRESHOLD_WORDS = 1ull << 20;
-            if (n_words < PARALLEL_THRESHOLD_WORDS) {
-                copy_range(0, n_words);
-                return out;
+            std::size_t done = 0;
+            while (done < out.size()) {
+                const std::size_t plane = (offset + done) / n_words;
+                const std::size_t word = (offset + done) % n_words;
+                const std::size_t first = word % segment_words;
+                const std::size_t run = std::min(
+                    {out.size() - done, n_words - word, segment_words - first});
+                const auto* in = reinterpret_cast<const std::uint8_t*>(
+                                     input.segments[word / segment_words].data()) +
+                                 first * 4 + plane;
+                for (std::size_t i = 0; i < run; ++i)
+                    dst[done + i] = in[i * 4];
+                done += run;
             }
-            const std::size_t worker_count = std::min<std::size_t>(
-                n_words,
-                std::max(1u, std::thread::hardware_concurrency()));
-            std::vector<std::jthread> workers;
-            workers.reserve(worker_count);
-            for (std::size_t worker = 0; worker < worker_count; ++worker) {
-                const std::size_t begin = n_words * worker / worker_count;
-                const std::size_t end = n_words * (worker + 1) / worker_count;
-                workers.emplace_back([=] { copy_range(begin, end); });
-            }
-            return out;
         }
 
+        // Inclusive segment ranges record `index` reads.
+        std::vector<std::pair<std::size_t, std::size_t>>
+        record_segments(const FramedInput& input, const bool byte_planes,
+                        const std::size_t index) {
+            const std::size_t begin = index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const std::size_t end =
+                std::min(begin + detail::FRAMED_RECORD_TARGET_BYTES, input.size);
+            const auto segments_of = [&](const std::size_t first, const std::size_t last) {
+                return std::pair{first / input.segment_bytes, (last - 1) / input.segment_bytes};
+            };
+            if (!byte_planes)
+                return {segments_of(begin, end)};
+            const std::size_t n_words = input.size / 4;
+            std::vector<std::pair<std::size_t, std::size_t>> ranges;
+            for (std::size_t at = begin; at < end;) {
+                const std::size_t plane = at / n_words;
+                const std::size_t plane_end = std::min(end, (plane + 1) * n_words);
+                ranges.push_back(segments_of((at - plane * n_words) * 4,
+                                             (plane_end - plane * n_words) * 4));
+                at = plane_end;
+            }
+            return ranges;
+        }
+
+        // read(offset, bytes) returns input bytes [offset, offset + bytes), at
+        // most ZSTD_STREAM_OUT_WINDOW_BYTES at a time. The calls into zstd do
+        // not depend on where those bytes live.
+        template <class Read>
         lfs::Result<std::size_t>
-        compress_zstd(const std::span<const std::byte> input,
-                      const std::span<std::byte> output,
-                      const std::filesystem::path& path,
-                      const std::string_view field,
-                      const int compression_level = ZSTD_FIXED_LEVEL) {
-            if (input.size() < ZSTD_STREAM_THRESHOLD_BYTES) {
+        compress_zstd_from(const std::size_t input_size, Read&& read,
+                           const std::span<std::byte> output,
+                           const std::filesystem::path& path,
+                           const std::string_view field,
+                           const int compression_level) {
+            if (input_size < ZSTD_STREAM_THRESHOLD_BYTES) {
+                const std::span<const std::byte> input = read(0, input_size);
                 const std::size_t bound = ZSTD_compressBound(input.size());
                 if (output.size() < bound) {
                     return writer_error(
@@ -334,7 +367,7 @@ namespace lfs::io::project {
                     field);
             }
             if (const std::size_t rc = ZSTD_CCtx_setPledgedSrcSize(
-                    cctx, input.size());
+                    cctx, input_size);
                 ZSTD_isError(rc)) {
                 free_cctx();
                 return writer_error(
@@ -347,13 +380,14 @@ namespace lfs::io::project {
 
             std::size_t output_bytes = 0;
             std::size_t in_pos = 0;
-            while (in_pos < input.size()) {
+            while (in_pos < input_size) {
                 const std::size_t chunk = std::min(ZSTD_STREAM_OUT_WINDOW_BYTES,
-                                                   input.size() - in_pos);
-                ZSTD_inBuffer zin{input.data() + in_pos, chunk, 0};
+                                                   input_size - in_pos);
+                const std::span<const std::byte> piece = read(in_pos, chunk);
+                ZSTD_inBuffer zin{piece.data(), piece.size(), 0};
                 const ZSTD_EndDirective mode =
-                    (in_pos + chunk == input.size()) ? ZSTD_e_end
-                                                     : ZSTD_e_continue;
+                    (in_pos + chunk == input_size) ? ZSTD_e_end
+                                                   : ZSTD_e_continue;
                 std::size_t remaining = 1;
                 while (zin.pos < zin.size ||
                        (mode == ZSTD_e_end && remaining != 0)) {
@@ -392,6 +426,20 @@ namespace lfs::io::project {
             return output_bytes;
         }
 
+        lfs::Result<std::size_t>
+        compress_zstd(const std::span<const std::byte> input,
+                      const std::span<std::byte> output,
+                      const std::filesystem::path& path,
+                      const std::string_view field,
+                      const int compression_level = ZSTD_FIXED_LEVEL) {
+            return compress_zstd_from(
+                input.size(),
+                [input](const std::size_t offset, const std::size_t bytes) {
+                    return input.subspan(offset, bytes);
+                },
+                output, path, field, compression_level);
+        }
+
         lfs::Result<std::vector<std::byte>> compress_zstd(
             const std::span<const std::byte> input,
             const std::filesystem::path& path, const std::string_view field,
@@ -406,63 +454,74 @@ namespace lfs::io::project {
             return compressed;
         }
 
+        // Framed header and record table, then one exactly-touched buffer per
+        // record. Records are never compacted into one allocation: that would
+        // keep up to twice the stored bytes resident.
         struct FramedPayload {
-            std::unique_ptr<std::byte[]> bytes;
+            std::vector<std::unique_ptr<std::byte[]>> buffers;
+            std::vector<std::span<const std::byte>> pieces;
             std::size_t size = 0;
-
-            [[nodiscard]] std::span<const std::byte> view() const noexcept {
-                return {bytes.get(), size};
-            }
         };
 
         lfs::Result<FramedPayload> frame_zstd(
-            const std::span<const std::byte> input,
+            const FramedInput& input, const bool byte_planes,
             const std::filesystem::path& path, const std::string_view field,
             const int compression_level = ZSTD_FIXED_LEVEL) {
             const auto started = std::chrono::steady_clock::now();
-            const std::size_t record_count = detail::framed_record_count(input.size());
+            const std::size_t record_count = detail::framed_record_count(input.size);
             if (record_count == 0) {
                 return writer_error(lfs::ErrorCode::InvalidArgument, path,
                                     "The framed project payload is empty.",
                                     "framed payloads require at least one record", field);
-            }
-            const std::size_t largest_record = std::min(
-                detail::FRAMED_RECORD_TARGET_BYTES, input.size());
-            const std::size_t record_slot_bytes =
-                ZSTD_compressBound(largest_record);
-            const auto record_slots_bytes = detail::checked_multiply(
-                record_count, record_slot_bytes, path, 0, field);
-            if (!record_slots_bytes) {
-                return std::move(record_slots_bytes).error();
             }
             const auto table_bytes = detail::checked_multiply(
                 record_count, detail::FRAMED_RECORD_BYTES, path, 0, field);
             if (!table_bytes) {
                 return std::move(table_bytes).error();
             }
-            const auto payload_offset = detail::checked_add(
+            const auto header_bytes = detail::checked_add(
                 detail::FRAMED_HEADER_BYTES, *table_bytes, path, 0, field);
-            if (!payload_offset) {
-                return std::move(payload_offset).error();
-            }
-            const auto framed_capacity = detail::checked_add(
-                *payload_offset, *record_slots_bytes, path, 0, field);
-            if (!framed_capacity ||
-                *framed_capacity > std::numeric_limits<std::size_t>::max()) {
+            if (!header_bytes ||
+                *header_bytes > std::numeric_limits<std::size_t>::max()) {
                 return writer_error(
                     lfs::ErrorCode::ResourceExhausted, path,
                     "There is not enough memory to compress this project payload.",
-                    "bounded record slots exceed size_t", field);
+                    "framed record table exceeds size_t", field);
             }
-            auto framed = std::make_unique_for_overwrite<std::byte[]>(
-                static_cast<std::size_t>(*framed_capacity));
+            FramedPayload framed;
+            framed.buffers.resize(record_count + 1);
+            framed.buffers[0] = std::make_unique_for_overwrite<std::byte[]>(
+                static_cast<std::size_t>(*header_bytes));
+            const auto header = std::span<std::byte>(
+                framed.buffers[0].get(), static_cast<std::size_t>(*header_bytes));
+            put_bytes(header, 0, detail::FRAMED_MAGIC);
+            put_u16(header, 8, detail::FRAMED_VERSION);
+            put_u16(header, 10, 0);
+            put_u32(header, 12, static_cast<std::uint32_t>(record_count));
             std::vector<std::size_t> record_sizes(record_count);
-            const auto bytes = std::span<std::byte>(
-                framed.get(), static_cast<std::size_t>(*framed_capacity));
-            put_bytes(bytes, 0, detail::FRAMED_MAGIC);
-            put_u16(bytes, 8, detail::FRAMED_VERSION);
-            put_u16(bytes, 10, 0);
-            put_u32(bytes, 12, static_cast<std::uint32_t>(record_count));
+            // Records go out in logical order, all planes of a word range
+            // together, so segments can be released behind the workers.
+            std::vector<std::size_t> order(record_count);
+            std::iota(order.begin(), order.end(), std::size_t{0});
+            if (byte_planes) {
+                const std::size_t n_words = input.size / 4;
+                const auto first_word = [&](const std::size_t index) {
+                    return index * detail::FRAMED_RECORD_TARGET_BYTES % n_words;
+                };
+                std::ranges::stable_sort(order, {}, first_word);
+            }
+            std::vector<std::vector<std::pair<std::size_t, std::size_t>>> reads;
+            std::vector<std::atomic<std::size_t>> readers;
+            if (input.release) {
+                reads.resize(record_count);
+                readers = std::vector<std::atomic<std::size_t>>(input.segments.size());
+                for (std::size_t index = 0; index < record_count; ++index) {
+                    reads[index] = record_segments(input, byte_planes, index);
+                    for (const auto [first, last] : reads[index])
+                        for (std::size_t segment = first; segment <= last; ++segment)
+                            readers[segment].fetch_add(1, std::memory_order_relaxed);
+                }
+            }
             std::atomic<std::size_t> next{0};
             std::mutex error_mutex;
             std::optional<lfs::Error> first_error;
@@ -486,10 +545,18 @@ namespace lfs::io::project {
                 for (std::size_t worker = 0; worker < worker_count; ++worker) {
                     workers.emplace_back([&] {
                         try {
+                            // Shuffled records are gathered one zstd input
+                            // window at a time instead of transposing the
+                            // whole payload first.
+                            std::unique_ptr<std::byte[]> gathered;
+                            if (byte_planes)
+                                gathered = std::make_unique_for_overwrite<std::byte[]>(
+                                    std::min(ZSTD_STREAM_OUT_WINDOW_BYTES, input.size));
                             while (true) {
-                                const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
-                                if (index >= record_count)
+                                const std::size_t position = next.fetch_add(1, std::memory_order_relaxed);
+                                if (position >= record_count)
                                     return;
+                                const std::size_t index = order[position];
                                 {
                                     std::scoped_lock lock(error_mutex);
                                     if (first_error)
@@ -497,14 +564,20 @@ namespace lfs::io::project {
                                 }
                                 const std::size_t offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
                                 const std::size_t size = std::min(
-                                    detail::FRAMED_RECORD_TARGET_BYTES, input.size() - offset);
-                                const std::size_t slot_offset =
-                                    static_cast<std::size_t>(*payload_offset) +
-                                    index * record_slot_bytes;
-                                auto compressed = compress_zstd(
-                                    input.subspan(offset, size),
-                                    std::span<std::byte>(framed.get() + slot_offset,
-                                                         record_slot_bytes),
+                                    detail::FRAMED_RECORD_TARGET_BYTES, input.size - offset);
+                                const std::size_t slot_bytes = ZSTD_compressBound(size);
+                                // Pages past the compressed size are never touched.
+                                auto slot = std::make_unique_for_overwrite<std::byte[]>(slot_bytes);
+                                const auto read = [&](const std::size_t at, const std::size_t bytes) {
+                                    if (!byte_planes)
+                                        return input.segments[offset / input.segment_bytes].subspan(
+                                            offset % input.segment_bytes + at, bytes);
+                                    const auto window = std::span<std::byte>(gathered.get(), bytes);
+                                    gather_byte_planes(input, offset + at, window);
+                                    return std::span<const std::byte>(window);
+                                };
+                                auto compressed = compress_zstd_from(
+                                    size, read, std::span<std::byte>(slot.get(), slot_bytes),
                                     path, field, compression_level);
                                 if (!compressed) {
                                     std::scoped_lock lock(error_mutex);
@@ -513,6 +586,13 @@ namespace lfs::io::project {
                                     return;
                                 }
                                 record_sizes[index] = *compressed;
+                                framed.buffers[index + 1] = std::move(slot);
+                                if (input.release) {
+                                    for (const auto [first, last] : reads[index])
+                                        for (std::size_t segment = first; segment <= last; ++segment)
+                                            if (readers[segment].fetch_sub(1, std::memory_order_acq_rel) == 1)
+                                                input.release(segment);
+                                }
                             }
                         } catch (const std::bad_alloc&) {
                             publish_worker_error(
@@ -553,36 +633,28 @@ namespace lfs::io::project {
                 return std::move(*first_error);
             const auto compressed_at = std::chrono::steady_clock::now();
 
-            std::size_t cursor = static_cast<std::size_t>(*payload_offset);
+            framed.pieces.reserve(record_count + 1);
+            framed.pieces.emplace_back(header);
+            framed.size = header.size();
             for (std::size_t index = 0; index < record_count; ++index) {
                 const std::size_t source_offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
                 const std::size_t uncompressed = std::min(
-                    detail::FRAMED_RECORD_TARGET_BYTES, input.size() - source_offset);
+                    detail::FRAMED_RECORD_TARGET_BYTES, input.size - source_offset);
                 const std::size_t table_offset = detail::FRAMED_HEADER_BYTES +
                                                  index * detail::FRAMED_RECORD_BYTES;
-                const std::size_t slot_offset =
-                    static_cast<std::size_t>(*payload_offset) +
-                    index * record_slot_bytes;
-                std::memmove(framed.get() + cursor,
-                             framed.get() + slot_offset, record_sizes[index]);
-                put_u64(bytes, table_offset, record_sizes[index]);
-                put_u64(bytes, table_offset + 8, uncompressed);
-                cursor += record_sizes[index];
+                put_u64(header, table_offset, record_sizes[index]);
+                put_u64(header, table_offset + 8, uncompressed);
+                framed.pieces.emplace_back(framed.buffers[index + 1].get(), record_sizes[index]);
+                framed.size += record_sizes[index];
             }
-            const auto assembled_at = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
                 return std::chrono::duration<double, std::milli>(end - begin).count();
             };
             LOG_DEBUG(
-                "Project payload save stages: field={} input_bytes={} records={} level={} compress={:.3f} ms assemble={:.3f} ms total={:.3f} ms stored_bytes={}",
-                field, input.size(), record_count, compression_level,
-                milliseconds(started, compressed_at),
-                milliseconds(compressed_at, assembled_at),
-                milliseconds(started, assembled_at), cursor);
-            return FramedPayload{
-                .bytes = std::move(framed),
-                .size = cursor,
-            };
+                "Project payload save stages: field={} input_bytes={} records={} level={} byte_planes={} compress={:.3f} ms stored_bytes={}",
+                field, input.size, record_count, compression_level, byte_planes,
+                milliseconds(started, compressed_at), framed.size);
+            return framed;
         }
 
         std::array<std::byte, SUPERBLOCK_BYTES>
@@ -865,36 +937,44 @@ namespace lfs::io::project {
         };
 
         PayloadCrcs calculate_payload_crcs(
-            const std::span<const std::byte> stored,
+            const std::span<const std::span<const std::byte>> stored,
             const bool with_blocks) {
             PayloadCrcs result;
-            if (stored.empty()) {
-                return result;
-            }
-            if (with_blocks) {
-                const std::uint64_t count =
-                    stored.size() / BLOCK_CRC_BYTES +
-                    (stored.size() % BLOCK_CRC_BYTES != 0 ? 1 : 0);
-                result.blocks.reserve(static_cast<std::size_t>(count));
-            }
-            std::size_t offset = 0;
-            while (offset < stored.size()) {
-                const std::size_t bytes = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(stored.size() - offset,
-                                            BLOCK_CRC_BYTES));
-                if (with_blocks) {
-                    const auto block_crc =
-                        crc32c(0, stored.data() + offset, bytes);
-                    result.blocks.push_back(block_crc);
-                    result.stored = crc32c_combine(
-                        result.stored, block_crc, bytes);
-                } else {
-                    result.stored = crc32c(
-                        result.stored, stored.data() + offset, bytes);
+            std::uint32_t block_crc = 0;
+            std::size_t block_fill = 0;
+            const auto close_block = [&] {
+                result.blocks.push_back(block_crc);
+                result.stored = crc32c_combine(result.stored, block_crc, block_fill);
+                block_crc = 0;
+                block_fill = 0;
+            };
+            for (const auto piece : stored) {
+                std::size_t offset = 0;
+                while (offset < piece.size()) {
+                    const std::size_t bytes =
+                        std::min<std::size_t>(piece.size() - offset, BLOCK_CRC_BYTES - block_fill);
+                    if (with_blocks) {
+                        block_crc = crc32c(block_crc, piece.data() + offset, bytes);
+                        block_fill += bytes;
+                        if (block_fill == BLOCK_CRC_BYTES)
+                            close_block();
+                    } else {
+                        result.stored = crc32c(result.stored, piece.data() + offset, bytes);
+                    }
+                    offset += bytes;
                 }
-                offset += bytes;
             }
+            if (with_blocks && block_fill > 0)
+                close_block();
             return result;
+        }
+
+        [[nodiscard]] std::uint64_t total_bytes(
+            const std::span<const std::span<const std::byte>> pieces) noexcept {
+            std::uint64_t total = 0;
+            for (const auto piece : pieces)
+                total += piece.size();
+            return total;
         }
 
     } // namespace
@@ -1230,7 +1310,7 @@ namespace lfs::io::project {
 
         [[nodiscard]] lfs::Result<ChunkInfo>
         place_stored_chunk(const ChunkKey& key,
-                           const std::span<const std::byte> stored,
+                           const std::span<const std::span<const std::byte>> stored,
                            const std::uint64_t uncompressed_bytes,
                            const ChunkWriteOptions& options,
                            const bool preserve_stored_crc = false,
@@ -1249,15 +1329,16 @@ namespace lfs::io::project {
                 return std::move(table_offset).error();
             }
 
+            const std::uint64_t stored_bytes = total_bytes(stored);
             const bool with_blocks =
                 options.block_crcs ||
-                stored.size() >= BLOCK_CRC_REQUIRED_AT;
+                stored_bytes >= BLOCK_CRC_REQUIRED_AT;
             const auto payload_crcs =
                 calculate_payload_crcs(stored, with_blocks);
             std::vector<std::uint32_t> entries;
             std::uint64_t table_bytes = 0;
             if (with_blocks) {
-                if (stored.empty()) {
+                if (stored_bytes == 0) {
                     return writer_error(
                         lfs::ErrorCode::InvalidArgument, destination_path,
                         "An empty project chunk cannot have a block CRC table.",
@@ -1296,7 +1377,7 @@ namespace lfs::io::project {
                 return std::move(payload_offset).error();
             }
             auto payload_end = detail::checked_add(
-                *payload_offset, stored.size(), active_path, *payload_offset,
+                *payload_offset, stored_bytes, active_path, *payload_offset,
                 "chunk.payload_end");
             if (!payload_end) {
                 return std::move(payload_end).error();
@@ -1310,8 +1391,12 @@ namespace lfs::io::project {
                 !zero) {
                 return std::move(zero).error();
             }
-            if (auto write = file->write_exact(*payload_offset, stored); !write) {
-                return std::move(write).error();
+            std::uint64_t piece_offset = *payload_offset;
+            for (const auto piece : stored) {
+                if (auto write = file->write_exact(piece_offset, piece); !write) {
+                    return std::move(write).error();
+                }
+                piece_offset += piece.size();
             }
 
             const std::uint32_t stored_crc = payload_crcs.stored;
@@ -1333,7 +1418,7 @@ namespace lfs::io::project {
                          (with_blocks ? HAS_BLOCK_CRCS : 0u),
                 .header_offset = *header_offset,
                 .payload_offset = *payload_offset,
-                .stored_bytes = stored.size(),
+                .stored_bytes = stored_bytes,
                 .uncompressed_bytes = uncompressed_bytes,
                 .source_generation = generation,
                 .payload_crc32c = stored_crc,
@@ -1344,7 +1429,7 @@ namespace lfs::io::project {
                 row.block_crc_table = BlockCrcTable{
                     .offset = *table_offset,
                     .payload_offset = *payload_offset,
-                    .stored_bytes = stored.size(),
+                    .stored_bytes = stored_bytes,
                     .block_size =
                         static_cast<std::uint32_t>(BLOCK_CRC_BYTES),
                     .entries = std::move(entries),
@@ -1374,7 +1459,7 @@ namespace lfs::io::project {
             };
             LOG_DEBUG(
                 "Project chunk write stages: chunk={} stored_bytes={} block_crc={:.3f} ms disk_write={:.3f} ms total={:.3f} ms",
-                key.fourcc.to_string(), stored.size(), milliseconds(started, crc_at),
+                key.fourcc.to_string(), stored_bytes, milliseconds(started, crc_at),
                 milliseconds(crc_at, written_at), milliseconds(started, written_at));
             cursor = *payload_end;
             mutation_started = true;
@@ -2137,54 +2222,200 @@ namespace lfs::io::project {
         return impl_->notify(CommitBoundary::PreflightComplete);
     }
 
+    namespace {
+        struct PreparedParts {
+            ChunkWriteOptions options;
+            std::optional<FramedPayload> framed;
+        };
+
+        lfs::Result<PreparedParts> prepare_parts(const FramedInput& input,
+                                                 const ChunkWriteOptions& options) {
+            PreparedParts parts{.options = options};
+            // Deterministic fallback: non-multiple-of-4 payloads cannot be
+            // f32-word plane-shuffled; emit framed Zstd instead (no knob).
+            if (options.compression == Compression::ByteShuffleZstdFramed && input.size % 4 != 0)
+                parts.options.compression = Compression::ZstdFramed;
+            const auto compression = parts.options.compression;
+            if (compression == Compression::ZstdFramed ||
+                compression == Compression::ByteShuffleZstdFramed) {
+                const bool byte_planes = compression == Compression::ByteShuffleZstdFramed;
+                auto framed = frame_zstd(input, byte_planes, std::filesystem::path{},
+                                         byte_planes ? "chunk.byteshuffle_zstd_framed" : "chunk.zstd_framed",
+                                         ZSTD_PAYLOAD_LEVEL);
+                if (!framed) {
+                    return std::move(framed).error();
+                }
+                parts.framed.emplace(std::move(*framed));
+            } else if (compression != Compression::Stored) {
+                return writer_error(
+                    lfs::ErrorCode::InvalidArgument, std::filesystem::path{},
+                    "The project chunk compression is invalid.",
+                    "compression must be STORED, ZSTD_FRAMED, or BYTESHUFFLE_ZSTD_FRAMED",
+                    "chunk.compression");
+            }
+            return parts;
+        }
+    } // namespace
+
     lfs::Result<PreparedChunk>
     ProjectWriter::prepare_chunk(const std::span<const std::byte> payload,
                                  const ChunkWriteOptions& options) {
-        std::optional<FramedPayload> compressed;
-        std::span<const std::byte> stored = payload;
-        ChunkWriteOptions placed_options = options;
-        if (options.compression == Compression::ByteShuffleZstdFramed) {
-            // Deterministic fallback: non-multiple-of-4 payloads cannot be
-            // f32-word plane-shuffled; emit framed Zstd instead (no knob).
-            if (payload.size() % 4 != 0) {
-                placed_options.compression = Compression::ZstdFramed;
-            } else {
-                const std::vector<std::byte> planes = byte_plane_f32_words(payload);
-                auto result = frame_zstd(planes, std::filesystem::path{},
-                                         "chunk.byteshuffle_zstd_framed",
-                                         ZSTD_PAYLOAD_LEVEL);
-                if (!result) {
-                    return std::move(result).error();
-                }
-                compressed.emplace(std::move(*result));
-                stored = compressed->view();
-            }
+        const std::span<const std::byte> segments[] = {payload};
+        auto parts = prepare_parts(
+            FramedInput{.segments = segments,
+                        .segment_bytes = std::max<std::size_t>(payload.size(), 1),
+                        .size = payload.size()},
+            options);
+        if (!parts) {
+            return std::move(parts).error();
         }
-        if (placed_options.compression == Compression::ZstdFramed) {
-            auto result = frame_zstd(payload, std::filesystem::path{}, "chunk.zstd_framed",
-                                     ZSTD_PAYLOAD_LEVEL);
-            if (!result) {
-                return std::move(result).error();
-            }
-            compressed.emplace(std::move(*result));
-            stored = compressed->view();
-        } else if (placed_options.compression != Compression::Stored &&
-                   placed_options.compression != Compression::ZstdFramed &&
-                   placed_options.compression != Compression::ByteShuffleZstdFramed) {
-            return writer_error(
-                lfs::ErrorCode::InvalidArgument, std::filesystem::path{},
-                "The project chunk compression is invalid.",
-                "compression must be STORED, ZSTD_FRAMED, or BYTESHUFFLE_ZSTD_FRAMED",
-                "chunk.compression");
-        }
-
         PreparedChunk prepared;
-        prepared.options_ = placed_options;
+        if (parts->framed) {
+            prepared.bytes_ = std::move(parts->framed->buffers);
+            prepared.stored_ = std::move(parts->framed->pieces);
+            prepared.stored_bytes_ = parts->framed->size;
+        } else {
+            prepared.stored_ = {payload};
+            prepared.stored_bytes_ = payload.size();
+        }
+        prepared.options_ = parts->options;
         prepared.logical_bytes_ = payload.size();
-        prepared.stored_ = stored;
-        if (compressed)
-            prepared.bytes_ = std::move(compressed->bytes);
         return prepared;
+    }
+
+    lfs::Result<PreparedChunk>
+    ProjectWriter::prepare_chunk(SegmentedPayload&& payload,
+                                 const ChunkWriteOptions& options) {
+        auto owned = std::make_shared<SegmentedPayload>(std::move(payload));
+        std::vector<std::span<const std::byte>> segments(owned->segment_count());
+        for (std::size_t index = 0; index < segments.size(); ++index)
+            segments[index] = owned->segment(index);
+        auto parts = prepare_parts(
+            FramedInput{.segments = segments,
+                        .segment_bytes = SegmentedPayload::SEGMENT_BYTES,
+                        .size = owned->size(),
+                        .release = [&owned](const std::size_t index) { owned->release(index); }},
+            options);
+        if (!parts) {
+            return std::move(parts).error();
+        }
+        PreparedChunk prepared;
+        prepared.logical_bytes_ = owned->size();
+        if (parts->framed) {
+            prepared.bytes_ = std::move(parts->framed->buffers);
+            prepared.stored_ = std::move(parts->framed->pieces);
+            prepared.stored_bytes_ = parts->framed->size;
+        } else {
+            prepared.stored_ = std::move(segments);
+            prepared.stored_bytes_ = owned->size();
+            prepared.stored_owner_ = std::move(owned);
+        }
+        prepared.options_ = parts->options;
+        return prepared;
+    }
+
+    lfs::Result<std::vector<std::byte>> PreparedChunk::decode() const {
+        std::vector<std::byte> logical(static_cast<std::size_t>(logical_bytes_));
+        if (options_.compression == Compression::Stored) {
+            std::size_t at = 0;
+            for (const auto piece : stored_) {
+                std::memcpy(logical.data() + at, piece.data(), piece.size());
+                at += piece.size();
+            }
+            return logical;
+        }
+        const bool byte_planes = options_.compression == Compression::ByteShuffleZstdFramed;
+        const std::size_t n_words = logical.size() / 4;
+        std::vector<std::byte> shuffled;
+        // stored_[0] is the framed header and table; one piece per record follows.
+        for (std::size_t index = 0; index + 1 < stored_.size(); ++index) {
+            const auto record = stored_[index + 1];
+            const std::size_t offset = index * detail::FRAMED_RECORD_TARGET_BYTES;
+            const std::size_t size =
+                std::min(detail::FRAMED_RECORD_TARGET_BYTES, logical.size() - offset);
+            if (byte_planes)
+                shuffled.resize(size);
+            auto* target = byte_planes ? shuffled.data() : logical.data() + offset;
+            const std::size_t written = ZSTD_decompress(target, size, record.data(), record.size());
+            if (ZSTD_isError(written) || written != size) {
+                return writer_error(
+                    lfs::ErrorCode::DataLoss, std::filesystem::path{},
+                    "A prepared project chunk could not be decoded.",
+                    std::format("record {} decoded to {} of {} bytes", index,
+                                ZSTD_isError(written) ? 0 : written, size),
+                    "chunk.decode");
+            }
+            if (!byte_planes)
+                continue;
+            auto* out = reinterpret_cast<std::uint8_t*>(logical.data());
+            const auto* in = reinterpret_cast<const std::uint8_t*>(shuffled.data());
+            for (std::size_t done = 0; done < size;) {
+                const std::size_t plane = (offset + done) / n_words;
+                const std::size_t word = (offset + done) % n_words;
+                const std::size_t run = std::min(size - done, n_words - word);
+                for (std::size_t i = 0; i < run; ++i)
+                    out[(word + i) * 4 + plane] = in[done + i];
+                done += run;
+            }
+        }
+        return logical;
+    }
+
+    lfs::Result<SegmentedPayload> SegmentedPayload::allocate(const std::uint64_t bytes) {
+        if (bytes > std::numeric_limits<std::size_t>::max()) {
+            return writer_error(lfs::ErrorCode::ResourceExhausted, std::filesystem::path{},
+                                "There is not enough memory to stage this project payload.",
+                                std::format("{} bytes exceed the address space", bytes), "payload.bytes");
+        }
+        SegmentedPayload payload;
+        payload.size_ = static_cast<std::size_t>(bytes);
+        const std::size_t count = (payload.size_ + SEGMENT_BYTES - 1) / SEGMENT_BYTES;
+        payload.segments_.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            const std::size_t segment_bytes = std::min(SEGMENT_BYTES, payload.size_ - index * SEGMENT_BYTES);
+            auto* segment = static_cast<std::byte*>(std::calloc(segment_bytes, 1));
+            if (segment == nullptr) {
+                return writer_error(lfs::ErrorCode::ResourceExhausted, std::filesystem::path{},
+                                    "There is not enough memory to stage this project payload.",
+                                    std::format("calloc of segment {} of {} failed", index, count),
+                                    "payload.bytes");
+            }
+            payload.segments_.emplace_back(segment);
+        }
+        return payload;
+    }
+
+    void SegmentedPayload::Free::operator()(std::byte* const bytes) const noexcept {
+        std::free(bytes);
+    }
+
+    std::span<const std::byte> SegmentedPayload::segment(const std::size_t index) const noexcept {
+        if (index >= segments_.size() || !segments_[index])
+            return {};
+        return {segments_[index].get(), std::min(SEGMENT_BYTES, size_ - index * SEGMENT_BYTES)};
+    }
+
+    std::span<std::byte> SegmentedPayload::window(const std::size_t offset) noexcept {
+        const std::size_t index = offset / SEGMENT_BYTES;
+        assert(offset < size_ && segments_[index]);
+        const std::size_t first = offset % SEGMENT_BYTES;
+        return {segments_[index].get() + first,
+                std::min(SEGMENT_BYTES, size_ - index * SEGMENT_BYTES) - first};
+    }
+
+    void SegmentedPayload::read(const std::size_t offset,
+                                const std::span<std::byte> destination) const noexcept {
+        for (std::size_t done = 0; done < destination.size();) {
+            const auto from = segment((offset + done) / SEGMENT_BYTES).subspan((offset + done) % SEGMENT_BYTES);
+            const std::size_t bytes = std::min(from.size(), destination.size() - done);
+            std::memcpy(destination.data() + done, from.data(), bytes);
+            done += bytes;
+        }
+    }
+
+    void SegmentedPayload::release(const std::size_t index) noexcept {
+        if (index < segments_.size())
+            segments_[index].reset();
     }
 
     lfs::Result<void>
@@ -2202,7 +2433,7 @@ namespace lfs::io::project {
     lfs::Result<void>
     ProjectWriter::write_prepared_chunk(const ChunkKey& key, const PreparedChunk& payload) {
         const auto& options = payload.options_;
-        const std::span<const std::byte> stored = payload.stored_;
+        const std::span<const std::span<const std::byte>> stored = payload.stored_;
         if (auto ready = impl_->require_ready(); !ready) {
             return ready;
         }

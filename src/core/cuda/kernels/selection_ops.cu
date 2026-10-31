@@ -4,8 +4,10 @@
 #include "core/cuda/selection_ops.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cfloat>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <nvtx3/nvToolsExt.h>
 #include <thrust/device_ptr.h>
@@ -418,20 +420,34 @@ namespace lfs::core::cuda {
                 "build_grid: AABB readback");
             LFS_CUDA_AWAIT(aabb_ticket, cudaStreamSynchronize(stream), "core.selection.build_grid.aabb_readback");
 
+            // Cells must be at least the search radius; beyond that, coarser
+            // cells only make the neighbour scan longer. A grid much finer
+            // than the point count spends 8 bytes on every empty cell (8 GiB
+            // at 1024^3), and one wider than MAX_DIM cells would drop the
+            // points outside it, so cells grow until neither happens.
+            constexpr int MAX_DIM = 1024;
+            const float span_x = std::max(aabb_host[3] - aabb_host[0], 0.0f);
+            const float span_y = std::max(aabb_host[4] - aabb_host[1], 0.0f);
+            const float span_z = std::max(aabb_host[5] - aabb_host[2], 0.0f);
+            const auto cells_at = [&](const float size) {
+                return (std::ceil(span_x / size) + 2.0) * (std::ceil(span_y / size) + 2.0) *
+                       (std::ceil(span_z / size) + 2.0);
+            };
+            cell_size = std::max(cell_size, std::max({span_x, span_y, span_z}) / (MAX_DIM - 4));
+            const double max_cells = std::max(4096.0, 2.0 * N);
+            while (cells_at(cell_size) > max_cells) {
+                cell_size *= 1.25f;
+            }
+
             float3 grid_min = make_float3(aabb_host[0] - cell_size, aabb_host[1] - cell_size, aabb_host[2] - cell_size);
             float3 grid_max = make_float3(aabb_host[3] + cell_size, aabb_host[4] + cell_size, aabb_host[5] + cell_size);
             float inv_cell_size = 1.0f / cell_size;
 
             int3 grid_dims = make_int3(
-                static_cast<int>(ceilf((grid_max.x - grid_min.x) * inv_cell_size)),
-                static_cast<int>(ceilf((grid_max.y - grid_min.y) * inv_cell_size)),
-                static_cast<int>(ceilf((grid_max.z - grid_min.z) * inv_cell_size)));
-
-            // Clamp grid to reasonable size
-            constexpr int MAX_DIM = 1024;
-            grid_dims.x = std::min(grid_dims.x, MAX_DIM);
-            grid_dims.y = std::min(grid_dims.y, MAX_DIM);
-            grid_dims.z = std::min(grid_dims.z, MAX_DIM);
+                std::max(1, static_cast<int>(ceilf((grid_max.x - grid_min.x) * inv_cell_size))),
+                std::max(1, static_cast<int>(ceilf((grid_max.y - grid_min.y) * inv_cell_size))),
+                std::max(1, static_cast<int>(ceilf((grid_max.z - grid_min.z) * inv_cell_size))));
+            assert(grid_dims.x <= MAX_DIM && grid_dims.y <= MAX_DIM && grid_dims.z <= MAX_DIM);
 
             const int64_t total = static_cast<int64_t>(grid_dims.x) * grid_dims.y * grid_dims.z;
             assert(total <= INT_MAX && "Grid cell count overflows int32");

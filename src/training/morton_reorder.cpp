@@ -66,6 +66,17 @@ namespace lfs::training::morton {
             }
         }
 
+        // The start of the borrow viewed with `like`'s shape and dtype, or an
+        // empty tensor when the borrow is smaller. A permute through it
+        // synchronizes before the next one reuses the borrow.
+        [[nodiscard]] Tensor borrowed_like(const IdleArenaScratch& scratch, const Tensor& like,
+                                           cudaStream_t stream) {
+            if (!like.is_contiguous() || scratch.data() == nullptr || scratch.capacity() < like.bytes()) {
+                return {};
+            }
+            return Tensor(scratch.data(), like.shape(), like.device(), like.dtype(), stream);
+        }
+
         void permute_dim0_prefix(Tensor& tensor, const Tensor& perm) {
             const std::size_t n = perm.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0) {
@@ -103,7 +114,7 @@ namespace lfs::training::morton {
         // Gather through a private scratch buffer and copy back into the live
         // tensor. The exportable allocator returns views at fixed region
         // offsets per name, so a fresh "allocation" would alias the source.
-        void permute_named_param(Tensor& tensor, const Tensor& perm) {
+        void permute_named_param(Tensor& tensor, const Tensor& perm, const IdleArenaScratch& borrow) {
             const std::size_t n = perm.numel();
             if (!tensor.is_valid() || tensor.numel() == 0 || n == 0) {
                 return;
@@ -112,10 +123,17 @@ namespace lfs::training::morton {
                 permute_dim0_prefix(tensor, perm);
                 return;
             }
-            Tensor scratch = Tensor::zeros_direct(tensor.shape(), n, tensor.device(), tensor.dtype());
-            scratch.set_stream(tensor.stream());
+            Tensor scratch = borrowed_like(borrow, tensor, tensor.stream());
+            const bool borrowed = scratch.is_valid();
+            if (!borrowed) {
+                scratch = Tensor::zeros_direct(tensor.shape(), n, tensor.device(), tensor.dtype());
+                scratch.set_stream(tensor.stream());
+            }
             tensor.index_select_into(scratch, 0, perm, BoundaryMode::Assert);
             tensor.copy_from(scratch);
+            if (borrowed) {
+                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton permute through the idle arena");
+            }
         }
 
         void permute_shN_q16(core::SplatData& splat, const Tensor& perm, cudaStream_t stream,
@@ -271,7 +289,8 @@ namespace lfs::training::morton {
 
     namespace {
 
-        void permute_optimizer(AdamOptimizer& optimizer, const Tensor& perm, cudaStream_t stream) {
+        void permute_optimizer(AdamOptimizer& optimizer, const Tensor& perm, cudaStream_t stream,
+                               const IdleArenaScratch& borrow) {
             const std::size_t n = perm.numel();
             if (n == 0) {
                 return;
@@ -317,8 +336,12 @@ namespace lfs::training::morton {
                 if (n_attr <= 0 || state->exp_avg.size(0) != n) {
                     continue;
                 }
-                Tensor dest_packed = Tensor::empty_exact(state->exp_avg.shape(), DataType::UInt8);
-                dest_packed.set_stream(stream);
+                Tensor dest_packed = borrowed_like(borrow, state->exp_avg, stream);
+                const bool borrowed = dest_packed.is_valid();
+                if (!borrowed) {
+                    dest_packed = Tensor::empty_exact(state->exp_avg.shape(), DataType::UInt8);
+                    dest_packed.set_stream(stream);
+                }
                 dest_packed.zero_();
                 const std::size_t nb = joint_adam::n_bounds_for_prims(n);
                 Tensor dest_bounds = Tensor::empty_exact({nb, std::size_t{4}}, DataType::Float32);
@@ -336,6 +359,9 @@ namespace lfs::training::morton {
                     stream);
                 state->exp_avg.copy_from(dest_packed);
                 state->joint_bounds.copy_from(dest_bounds);
+                if (borrowed) {
+                    LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "morton optimizer permute through the idle arena");
+                }
             }
         }
 
@@ -438,6 +464,72 @@ namespace lfs::training::morton {
             }
             return bytes;
         }
+
+        // Applies `visit(tensor, through_borrow)` to every row tensor the
+        // reorder copies whole, mirroring the permute calls below.
+        template <typename Visit>
+        void for_each_permuted_rows(core::SplatData& splat, const AdamOptimizer* optimizer, Visit&& visit) {
+            for (const Tensor* param : {&splat.means(), &splat.sh0(), &splat.scaling_raw(),
+                                        &splat.rotation_raw(), &splat.opacity_raw()}) {
+                visit(*param, true);
+            }
+            visit(splat._densification_info, false);
+            visit(splat._max_screen_share, false);
+            if (splat.has_deleted_mask()) {
+                visit(splat.deleted(), false);
+            }
+            if (optimizer == nullptr) {
+                return;
+            }
+            visit(optimizer->frozen_mask(), false);
+            visit(optimizer->crop_damping_mask(), false);
+            for (const auto type : AdamOptimizer::all_param_types()) {
+                const auto* state = optimizer->get_state(type);
+                if (state == nullptr) {
+                    continue;
+                }
+                visit(state->grad, false);
+                if (type != ParamType::ShN && state->is_joint()) {
+                    visit(state->exp_avg, true);
+                }
+            }
+        }
+
+        // VRAM the reorder takes outside the idle-arena borrow at its peak,
+        // one copy at a time, including the strategy rows the trainer
+        // permutes afterwards (a few floats per Gaussian).
+        [[nodiscard]] std::size_t private_permute_bytes(core::SplatData& splat, const AdamOptimizer* optimizer,
+                                                        const std::size_t borrowed) {
+            constexpr std::size_t GROUP_BYTES = 64ull << 20;
+            const auto n = static_cast<std::size_t>(splat.size());
+            std::size_t bytes = 2 * n * sizeof(float);
+            for_each_permuted_rows(splat, optimizer, [&](const Tensor& rows, const bool through_borrow) {
+                if (!rows.is_valid() || rows.numel() == 0 ||
+                    (through_borrow && rows.is_contiguous() && rows.bytes() <= borrowed)) {
+                    return;
+                }
+                // A prefix permute stages the prefix and a full copy.
+                bytes = std::max(bytes, rows.ndim() > 0 && rows.size(0) > n ? 2 * rows.bytes() : rows.bytes());
+            });
+            const auto rest = static_cast<std::uint32_t>(splat.max_sh_coeffs_rest());
+            if (rest > 0 && splat.shN().is_valid() && !splat.shN_value_quantized()) {
+                const std::size_t shN_bytes = core::sh_swizzled_float_count(n, rest) * sizeof(float);
+                if (shN_bytes > borrowed) {
+                    bytes = std::max(bytes, shN_bytes);
+                }
+            }
+            return bytes + GROUP_BYTES;
+        }
+
+        [[nodiscard]] std::size_t largest_borrowed_rows_bytes(core::SplatData& splat, const AdamOptimizer* optimizer) {
+            std::size_t bytes = 0;
+            for_each_permuted_rows(splat, optimizer, [&](const Tensor& rows, const bool through_borrow) {
+                if (through_borrow && rows.is_valid()) {
+                    bytes = std::max(bytes, rows.bytes());
+                }
+            });
+            return bytes;
+        }
     } // namespace
 
     void permute_row_tensor(Tensor& tensor, const Tensor& perm) {
@@ -478,20 +570,42 @@ namespace lfs::training::morton {
             splat.means().set_stream(stream);
         }
 
-        result.permutation = kernels::launch_morton_permutation(splat.means(), stream);
+        // Sort buffers and row copies live in the idle rasterizer arena when
+        // it is committed, so the reorder fits beside a model at the VRAM limit.
+        const std::size_t scratch_bytes = std::max({morton_scratch_bytes(splat, optimizer),
+                                                    kernels::morton_permutation_scratch_bytes(n),
+                                                    largest_borrowed_rows_bytes(splat, optimizer)});
+        const IdleArenaScratch scratch(scratch_bytes, std::min(scratch_bytes, MIN_MORTON_ARENA_BYTES), stream);
+
+        result.permutation = kernels::launch_morton_permutation(splat.means(), stream, scratch.data(),
+                                                                scratch.capacity());
         if (!result.permutation.is_valid() || result.permutation.numel() != n) {
             LOG_ERROR("Morton reorder failed to produce a permutation of length {}", n);
             return result;
         }
 
-        const std::size_t scratch_bytes = morton_scratch_bytes(splat, optimizer);
-        const IdleArenaScratch scratch(scratch_bytes, std::min(scratch_bytes, MIN_MORTON_ARENA_BYTES), stream);
+        // Nothing is permuted yet: skip this reorder rather than run out of
+        // VRAM halfway through it. It only improves memory locality.
+        {
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "morton permutation");
+            core::Tensor::trim_memory_pool();
+            std::size_t free_bytes = 0;
+            std::size_t total_bytes = 0;
+            LFS_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
+            const std::size_t needed = private_permute_bytes(splat, optimizer, scratch.capacity());
+            if (free_bytes < needed) {
+                LOG_INFO("Skipping Morton reorder at {} Gaussians: it needs {} MiB of free VRAM, {} MiB are free",
+                         n, needed >> 20, free_bytes >> 20);
+                result.permutation = {};
+                return result;
+            }
+        }
 
-        permute_named_param(splat.means(), result.permutation);
-        permute_named_param(splat.sh0(), result.permutation);
-        permute_named_param(splat.scaling_raw(), result.permutation);
-        permute_named_param(splat.rotation_raw(), result.permutation);
-        permute_named_param(splat.opacity_raw(), result.permutation);
+        permute_named_param(splat.means(), result.permutation, scratch);
+        permute_named_param(splat.sh0(), result.permutation, scratch);
+        permute_named_param(splat.scaling_raw(), result.permutation, scratch);
+        permute_named_param(splat.rotation_raw(), result.permutation, scratch);
+        permute_named_param(splat.opacity_raw(), result.permutation, scratch);
         permute_shN_impl(splat, result.permutation, stream, scratch);
 
         if (splat._densification_info.is_valid() && splat._densification_info.numel() > 0) {
@@ -511,7 +625,7 @@ namespace lfs::training::morton {
         }
 
         if (optimizer != nullptr) {
-            permute_optimizer(*optimizer, result.permutation, stream);
+            permute_optimizer(*optimizer, result.permutation, stream, scratch);
             permute_optimizer_shN(*optimizer, splat, result.permutation, stream, scratch);
         }
 

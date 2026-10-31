@@ -170,7 +170,7 @@ namespace lfs::core {
         return buffer;
     }
 
-    Status VmmDeviceBuffer::commit(const std::size_t required_bytes) {
+    Status VmmDeviceBuffer::commit(const std::size_t required_bytes, const std::size_t max_chunk_bytes) {
         const std::size_t required = align_up(required_bytes, granularity_bytes_);
         if (required == 0 && required_bytes != 0) {
             return Status::failure(host_error(ErrorCode::InvalidArgument, label_, "commit", required_bytes));
@@ -187,12 +187,11 @@ namespace lfs::core {
         prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         prop.location.id = device_;
 
-        constexpr std::size_t kMaxChunkBytes = 128u * 1024u * 1024u;
-        const std::size_t max_chunk_bytes = std::max(
-            granularity_bytes_, align_down(kMaxChunkBytes, granularity_bytes_));
+        const std::size_t chunk_limit = std::max(
+            granularity_bytes_, align_down(max_chunk_bytes, granularity_bytes_));
         while (committed_bytes_ < required) {
             const std::size_t offset = committed_bytes_;
-            const std::size_t bytes = std::min(required - offset, max_chunk_bytes);
+            const std::size_t bytes = std::min(required - offset, chunk_limit);
             CUmemGenericAllocationHandle handle = 0;
             if (const CUresult status = cuMemCreate(&handle, bytes, &prop, 0);
                 status != CUDA_SUCCESS) {

@@ -64,6 +64,12 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<LazyChunkValue>
         from_owned(std::vector<std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Compresses a CKPT payload once, consuming it: each segment is freed
+        // as soon as its records are compressed. The value then holds only
+        // the stored bytes; reads beyond the header decode them.
+        [[nodiscard]] static lfs::Result<LazyChunkValue>
+        from_owned_checkpoint(SegmentedPayload bytes,
+                              const lfs::core::Uuid& snapshot_uuid);
         // Independent owner of the same file-backed or owned bytes. Safe to
         // retain after the source ProjectDocument is closed or replaced.
         [[nodiscard]] lfs::Result<LazyChunkValue> share() const;

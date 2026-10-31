@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/memory_pressure.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "io/project_container.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -30,6 +32,7 @@
 #include <filesystem>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -41,6 +44,12 @@
 namespace {
 
     constexpr std::size_t MIB = 1024 * 1024;
+
+    std::vector<std::byte> payload_bytes(const lfs::io::project::SegmentedPayload& payload) {
+        std::vector<std::byte> bytes(payload.size());
+        payload.read(0, bytes);
+        return bytes;
+    }
 
     std::unique_ptr<lfs::core::SplatData>
     make_snapshot_test_splat(
@@ -491,7 +500,7 @@ namespace {
                   reference_bytes.size());
         EXPECT_EQ(
             std::memcmp(
-                captured->checkpoint_bytes->data(),
+                payload_bytes(*captured->checkpoint_bytes).data(),
                 reference_bytes.data(),
                 reference_bytes.size()),
             0);
@@ -553,7 +562,7 @@ namespace {
 
         const std::string captured_string(
             reinterpret_cast<const char*>(
-                captured->checkpoint_bytes->data()),
+                payload_bytes(*captured->checkpoint_bytes).data()),
             captured->checkpoint_bytes->size());
         std::istringstream captured_stream(
             captured_string,
@@ -709,7 +718,7 @@ namespace {
                   reference_bytes.size());
         EXPECT_EQ(
             std::memcmp(
-                captured->checkpoint_bytes->data(),
+                payload_bytes(*captured->checkpoint_bytes).data(),
                 reference_bytes.data(),
                 reference_bytes.size()),
             0);
@@ -719,6 +728,167 @@ namespace {
             captured->metrics.device_snapshot_bytes,
             captured->metrics.checkpoint_bytes);
         EXPECT_TRUE(captured->metrics.consistency_proven);
+    }
+
+    // q16 SH3, so held bands cover native copies and SH decodes. The model is
+    // written as soon as capture() returns: the hold must own the bytes by then.
+    void capture_through_device_hold(
+        const std::uint64_t device_hold_max_bytes,
+        const bool relieve_pressure_while_draining,
+        lfs::training::TrainingSnapshotPauseMetrics& metrics,
+        const bool training_resumes = true) {
+        lfs::training::sh_value::
+            set_sh_value_quant_enabled_for_testing(true);
+        struct QuantGuard {
+            ~QuantGuard() {
+                lfs::training::sh_value::
+                    set_sh_value_quant_enabled_for_testing(
+                        std::nullopt);
+            }
+        } quant_guard;
+
+        constexpr std::size_t GAUSSIAN_COUNT = 70000;
+        constexpr int SH_DEGREE = 3;
+        constexpr int SAVED_ITERATION = 211;
+        auto params = make_snapshot_test_params(
+            GAUSSIAN_COUNT, SH_DEGREE);
+        auto model = make_snapshot_test_splat(
+            GAUSSIAN_COUNT, SH_DEGREE);
+        ASSERT_TRUE(
+            lfs::training::sh_value::apply_shN_value_quant(
+                *model));
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+        auto* source_moments =
+            strategy.get_optimizer().get_state_mutable(
+                lfs::training::ParamType::Means);
+        ASSERT_NE(source_moments, nullptr);
+        ASSERT_TRUE(source_moments->joint_bounds.is_valid());
+        source_moments->joint_bounds.fill_(3.5f);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        std::ostringstream reference_stream(
+            std::ios::binary | std::ios::out);
+        const auto reference_result =
+            lfs::training::serialize_checkpoint(
+                reference_stream, SAVED_ITERATION,
+                strategy, params, nullptr, nullptr,
+                nullptr);
+        ASSERT_TRUE(reference_result.has_value())
+            << lfs::format_for_developer(
+                   reference_result.error());
+        const auto reference_bytes =
+            reference_stream.str();
+
+        // 1 MiB bands: the hold and the ring each carry many of them.
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 1024 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+            .device_hold_max_bytes = device_hold_max_bytes,
+        });
+        const lfs::training::TrainingSnapshotCaptureRequest
+            request{
+                .iteration = SAVED_ITERATION,
+                .snapshot_uuid =
+                    lfs::core::generate_uuid_v4(),
+                .training_resumes = training_resumes,
+                .strategy = strategy,
+                .params = params,
+            };
+        auto initialized = service.initialize(request);
+        ASSERT_TRUE(initialized.has_value())
+            << lfs::format_for_developer(
+                   initialized.error());
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared.has_value())
+            << lfs::format_for_developer(
+                   prepared.error());
+        auto capture_request = request;
+        capture_request.safe_point_entered_at =
+            std::chrono::steady_clock::now() -
+            std::chrono::milliseconds(1);
+        auto pending =
+            service.capture(
+                std::move(*prepared), capture_request);
+        ASSERT_TRUE(pending.has_value())
+            << lfs::format_for_developer(
+                   pending.error());
+
+        model->means().fill_(42.0f);
+        source_moments->joint_bounds.fill_(7.5f);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        if (relieve_pressure_while_draining) {
+            // More than any device has, so every client runs.
+            lfs::core::MemoryPressureCoordinator::instance()
+                .run_episode(lfs::core::AllocationFailure{
+                    .domain = lfs::core::MemoryDomain::CudaDevice,
+                    .requested_bytes = std::size_t{1} << 50,
+                    .label = "test.snapshot_device_hold",
+                    .operation = "test",
+                });
+        }
+
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured.has_value())
+            << lfs::format_for_developer(
+                   captured.error());
+        ASSERT_TRUE(captured->checkpoint_bytes);
+        ASSERT_EQ(captured->checkpoint_bytes->size(),
+                  reference_bytes.size());
+        EXPECT_EQ(
+            std::memcmp(
+                payload_bytes(*captured->checkpoint_bytes).data(),
+                reference_bytes.data(),
+                reference_bytes.size()),
+            0);
+        EXPECT_TRUE(captured->metrics.consistency_proven);
+        metrics = captured->metrics;
+    }
+
+    TEST(TrainingSnapshotServiceTest,
+         DeviceHoldRingSplitAndRingOnlyCapturesAreByteExact) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        lfs::training::TrainingSnapshotPauseMetrics held;
+        capture_through_device_hold(
+            std::numeric_limits<std::uint64_t>::max(), false,
+            held);
+        ASSERT_GT(held.device_snapshot_bytes, 4u * 1024 * 1024);
+        EXPECT_GE(held.device_hold_bytes,
+                  held.device_snapshot_bytes);
+
+        lfs::training::TrainingSnapshotPauseMetrics split;
+        capture_through_device_hold(
+            held.device_snapshot_bytes / 3, false, split);
+        EXPECT_GT(split.device_hold_bytes, 0u);
+        EXPECT_LE(split.device_hold_bytes,
+                  held.device_snapshot_bytes / 3);
+
+        lfs::training::TrainingSnapshotPauseMetrics ring_only;
+        capture_through_device_hold(0, false, ring_only);
+        EXPECT_EQ(ring_only.device_hold_bytes, 0u);
+
+        // A terminal save is waited on: no VRAM copy raises its peak.
+        lfs::training::TrainingSnapshotPauseMetrics terminal;
+        capture_through_device_hold(
+            std::numeric_limits<std::uint64_t>::max(), false,
+            terminal, false);
+        EXPECT_EQ(terminal.device_hold_bytes, 0u);
+    }
+
+    TEST(TrainingSnapshotServiceTest,
+         PressureReliefWhileAHoldDrainsKeepsTheCaptureExact) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        lfs::training::TrainingSnapshotPauseMetrics metrics;
+        capture_through_device_hold(
+            std::numeric_limits<std::uint64_t>::max(), true,
+            metrics);
+        EXPECT_GT(metrics.device_hold_bytes, 0u);
     }
 
     TEST(TrainingSnapshotServiceTest,
@@ -920,7 +1090,7 @@ namespace {
 
         const std::string checkpoint_string(
             reinterpret_cast<const char*>(
-                captured->checkpoint_bytes->data()),
+                payload_bytes(*captured->checkpoint_bytes).data()),
             captured->checkpoint_bytes->size());
         std::istringstream checkpoint_stream(
             checkpoint_string,
@@ -1142,7 +1312,7 @@ namespace {
         auto captured = pending->wait();
         ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
         ASSERT_EQ(captured->checkpoint_bytes->size(), bytes.size());
-        EXPECT_EQ(std::memcmp(captured->checkpoint_bytes->data(), bytes.data(), bytes.size()), 0);
+        EXPECT_EQ(std::memcmp(payload_bytes(*captured->checkpoint_bytes).data(), bytes.data(), bytes.size()), 0);
         EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 
