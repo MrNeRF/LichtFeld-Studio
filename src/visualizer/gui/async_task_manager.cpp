@@ -1972,6 +1972,7 @@ namespace lfs::vis::gui {
                 sequence.output.files.tiff16.overwrite = evt.overwrite_images;
                 sequence.output.files.jxl.overwrite = evt.overwrite_images;
                 sequence.output.files.avif.overwrite = evt.overwrite_images;
+                sequence.output.write_metadata_sidecars = evt.image_sequence_metadata_sidecars;
                 const bool bytes = format && (*format == media::FrameFileFormat::PNG || *format == media::FrameFileFormat::JPEG);
                 const bool alpha = evt.transparent_images;
                 sequence.input_color = {bytes ? media::ColorTransfer::Srgb : media::ColorTransfer::Linear, media::ColorPrimaries::Bt709, alpha ? media::AlphaMode::Independent : media::AlphaMode::None};
@@ -3631,10 +3632,13 @@ namespace lfs::vis::gui {
         if (export_options.image_sequence) {
             export_options.image_sequence->output.files.output_directory = path;
             export_options.image_sequence->output.framerate = export_options.framerate;
+            export_options.image_sequence->output.framerate_denominator = export_options.framerate_denominator;
             export_options.image_sequence->output.frame_count = total_frames;
             export_options.image_sequence->output.files.exr.provenance = core::provenance_to_json(
                 export_options.provenance ? *export_options.provenance : core::make_minimal_provenance_stamp());
             export_options.image_sequence->output.files.tiff16.provenance = export_options.image_sequence->output.files.exr.provenance;
+            if (export_options.image_sequence->output.write_metadata_sidecars)
+                export_options.image_sequence->output.provenance = export_options.image_sequence->output.files.exr.provenance;
         }
         const int width = export_options.width;
         const int height = export_options.height;

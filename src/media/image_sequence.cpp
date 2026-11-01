@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "media/image_sequence.hpp"
+#include "image_metadata.hpp"
 #include "media/media_options.hpp"
 #include "media/video_frame_extractor.hpp"
 #include <exception>
@@ -35,13 +36,18 @@ namespace lfs::media {
                 (files.numbering != FrameFileNumbering::SourceFrame && files.numbering != FrameFileNumbering::DeliveryIndex) ||
                 outputOptionName(files.format) == "unknown")
                 return sequenceError(ErrorCode::InvalidArgument, "Invalid image sequence output directory or format");
-            if (options.frame_count <= 0 || options.framerate <= 0 || options.framerate > 1000 ||
+            if (options.frame_count <= 0 || options.framerate <= 0 || options.framerate_denominator <= 0 ||
+                static_cast<int64_t>(options.framerate) > 1000LL * options.framerate_denominator ||
                 files.first_source_frame_number < 0 ||
                 options.frame_count - 1 > std::numeric_limits<int>::max() - files.first_source_frame_number)
                 return sequenceError(ErrorCode::InvalidArgument, "Invalid image sequence count, rate or numbering");
             // Keep renderer cleanup independent of extraction metadata and files.
             if (files.remove_stale_frames || files.preserve_metadata)
                 return sequenceError(ErrorCode::InvalidArgument, "Image sequences do not own extraction metadata or stale frames");
+            if (files.embed_source_metadata || files.write_source_metadata_sidecars)
+                return sequenceError(ErrorCode::InvalidArgument, "Rendered sequences require render metadata rather than source-camera metadata");
+            if (options.write_metadata_sidecars && options.provenance.size() > detail::max_render_provenance_bytes)
+                return sequenceError(ErrorCode::ResourceExhausted, "Render provenance exceeds the 64 KiB input limit");
             if (files.filename_pattern.empty() || files.filename_pattern.find_first_of("/\\:") != std::string::npos ||
                 files.filename_pattern.find('\0') != std::string::npos ||
                 io::formatFrameFilenameStem(files.filename_pattern, 1) == io::formatFrameFilenameStem(files.filename_pattern, 2))
@@ -126,6 +132,7 @@ namespace lfs::media {
                 return sequenceError(ErrorCode::Cancelled, "Image sequence cancelled before opening");
             auto files = options.files;
             files.numbering = FrameFileNumbering::DeliveryIndex;
+            files.write_source_metadata_sidecars = options.write_metadata_sidecars;
             // Preserve each writer's own callback while adding the job token.
             const auto combine = [this, job = options.cancelled](const std::function<bool()>& writer) {
                 return [this, job, writer] {
@@ -142,7 +149,8 @@ namespace lfs::media {
             files.jxl.cancelled = combine(files.jxl.cancelled);
             files.avif.cancelled = combine(files.avif.cancelled);
             sink = std::make_unique<FileFrameSink>(std::move(files));
-            return sink->begin({.output = options.layout});
+            const SinkSession session{.output = options.layout};
+            return options.write_metadata_sidecars ? sink->beginRendered(session, options.provenance) : sink->begin(session);
         }
         SinkResult write(const FrameView& input) {
             if (!sink)
@@ -161,9 +169,9 @@ namespace lfs::media {
                 return SinkResult::failure(required.error());
             auto frame = input;
             frame.info = {.delivery_index = accepted,
-                          .relative_seconds = static_cast<double>(accepted) / options.framerate,
+                          .relative_seconds = static_cast<double>(accepted) * options.framerate_denominator / options.framerate,
                           .origin = FrameOrigin::Rendered,
-                          .output_timestamp = Timestamp{static_cast<int64_t>(accepted), {1, options.framerate}}};
+                          .output_timestamp = Timestamp{static_cast<int64_t>(accepted), {options.framerate_denominator, options.framerate}}};
             if (auto written = sink->write(frame); !written)
                 return written;
             ++accepted;

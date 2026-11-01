@@ -3,6 +3,7 @@
 #pragma once
 #include "media/file_frame_sink.hpp"
 #include <memory>
+#include <string>
 
 namespace lfs::media {
     struct ImageSequenceOptions {
@@ -11,6 +12,13 @@ namespace lfs::media {
         int framerate = 30;
         int frame_count = 0;
         std::function<bool()> cancelled;
+        // Explicit render facts, independent of a source-camera observation.
+        bool write_metadata_sidecars = false;
+        // Optional JSON object, at most 64 KiB and four nested levels.
+        // Read only when sidecars are enabled; prepared once before output.
+        std::string provenance;
+        // Exact output rate is framerate / framerate_denominator.
+        int framerate_denominator = 1;
     };
     // Metadata-only preflight. Does not create directories or open a provider.
     [[nodiscard]] LFS_MEDIA_API SinkResult validateImageSequenceOptions(const ImageSequenceOptions&);

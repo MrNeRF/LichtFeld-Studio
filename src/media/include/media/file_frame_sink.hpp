@@ -6,6 +6,7 @@
 #include "media/image_output.hpp"
 #include <filesystem>
 #include <memory>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -55,8 +56,11 @@ namespace lfs::media {
         void abort(const SinkSummary&) noexcept override;
 
     private:
+        friend class ImageSequence;
         friend class detail::ResumableFileSink;
-        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::EmbeddedImageMetadata>);
+        SinkResult beginRendered(const SinkSession&, std::string_view provenance);
+        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::EmbeddedImageMetadata>,
+                                 std::shared_ptr<const detail::EmbeddedImageMetadata> sidecar = {});
         FileFrameSinkOptions options_;
         bool active_ = false;
         std::shared_ptr<const detail::EmbeddedImageMetadata> embedded_metadata_;
