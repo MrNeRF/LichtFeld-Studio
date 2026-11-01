@@ -32,6 +32,8 @@
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <vector>
 
 namespace lfs::rendering {
@@ -943,76 +945,27 @@ namespace lfs::rendering {
             }
 
             constexpr float HIT_RADIUS_PIXELS = 12.0f;
+            const auto& frustums = pickFrustums(cameras, request);
+            pick_distances_.assign(frustums.size(), HIT_RADIUS_PIXELS);
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, frustums.size(), 256), [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i)
+                    pick_distances_[i] = frustumPickDistance(frustums[i], request, HIT_RADIUS_PIXELS);
+            });
+
             int best_uid = -1;
             float best_score = HIT_RADIUS_PIXELS;
             float best_depth = std::numeric_limits<float>::max();
-            const glm::vec2 mouse = request.mouse_pos;
             const glm::vec3 viewer_position = request.viewport.translation;
-
-            for (size_t i = 0; i < cameras.size(); ++i) {
-                const auto& camera = cameras[i];
-                if (!camera) {
+            for (size_t i = 0; i < frustums.size(); ++i) {
+                const float camera_best = pick_distances_[i];
+                if (frustums[i].points.empty())
                     continue;
-                }
-                glm::mat4 scene_transform = request.scene_transform;
-                if (i < request.scene_transforms.size()) {
-                    scene_transform = request.scene_transforms[i];
-                }
-
-                const auto transform = cameraVisualizerTransform(*camera, scene_transform);
-                if (!transform) {
-                    continue;
-                }
-                const auto points = cameraFrustumWorldPoints(*camera, *transform, request.scale);
-                if (points.empty()) {
-                    continue;
-                }
-
-                float camera_best = HIT_RADIUS_PIXELS;
-                if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
-                    constexpr int SEGMENTS = 48;
-                    for (int circle = 0; circle < 3; ++circle) {
-                        const int offset = circle * SEGMENTS;
-                        if (offset + SEGMENTS > static_cast<int>(points.size())) {
-                            break;
-                        }
-                        for (int segment = 0; segment < SEGMENTS; ++segment) {
-                            const auto a = projectFrustumPoint(points[offset + segment], request);
-                            const auto b = projectFrustumPoint(points[offset + ((segment + 1) % SEGMENTS)], request);
-                            if (!a || !b) {
-                                continue;
-                            }
-                            camera_best = std::min(camera_best, pointSegmentDistance(mouse, *a, *b));
-                        }
-                    }
-                } else if (points.size() >= 5) {
-                    constexpr std::array<std::pair<int, int>, 8> EDGES{{
-                        {0, 1},
-                        {0, 2},
-                        {0, 3},
-                        {0, 4},
-                        {1, 2},
-                        {2, 3},
-                        {3, 4},
-                        {4, 1},
-                    }};
-                    for (const auto& [a_index, b_index] : EDGES) {
-                        const auto a = projectFrustumPoint(points[static_cast<size_t>(a_index)], request);
-                        const auto b = projectFrustumPoint(points[static_cast<size_t>(b_index)], request);
-                        if (!a || !b) {
-                            continue;
-                        }
-                        camera_best = std::min(camera_best, pointSegmentDistance(mouse, *a, *b));
-                    }
-                }
-
-                const glm::vec3 camera_position = glm::vec3((*transform)[3]);
-                const float depth = glm::length(camera_position - viewer_position);
+                const float depth = glm::length(frustums[i].position - viewer_position);
                 if (camera_best < best_score ||
                     (std::abs(camera_best - best_score) <= 1e-3f && depth < best_depth)) {
                     best_score = camera_best;
                     best_depth = depth;
-                    best_uid = camera->uid();
+                    best_uid = frustums[i].uid;
                 }
             }
 
@@ -1026,6 +979,111 @@ namespace lfs::rendering {
         }
 
     private:
+        struct PickFrustum {
+            std::vector<glm::vec3> points;
+            std::weak_ptr<const lfs::core::Camera> camera_owner;
+            const lfs::core::Camera* camera_identity = nullptr;
+            glm::vec3 position{0.0f};
+            int uid = -1;
+            bool equirectangular = false;
+        };
+
+        [[nodiscard]] const std::vector<PickFrustum>& pickFrustums(
+            const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
+            const CameraFrustumPickRequest& request) {
+            if (request.camera_generation != 0 && request.camera_generation == pick_generation_ &&
+                request.scale == pick_scale_ && request.scene_transform == pick_scene_transform_ &&
+                std::equal(cameras.begin(), cameras.end(), pick_frustums_.begin(), pick_frustums_.end(),
+                           [](const auto& camera, const PickFrustum& frustum) {
+                               return camera.get() == frustum.camera_identity &&
+                                      !camera.owner_before(frustum.camera_owner) &&
+                                      !frustum.camera_owner.owner_before(camera);
+                           }) &&
+                std::equal(request.scene_transforms.begin(), request.scene_transforms.end(),
+                           pick_scene_transforms_.begin(), pick_scene_transforms_.end())) {
+                return pick_frustums_;
+            }
+            pick_frustums_.assign(cameras.size(), {});
+            for (size_t i = 0; i < cameras.size(); ++i) {
+                const auto& camera = cameras[i];
+                auto& frustum = pick_frustums_[i];
+                frustum.camera_owner = camera;
+                frustum.camera_identity = camera.get();
+                if (!camera)
+                    continue;
+                const glm::mat4& scene_transform =
+                    i < request.scene_transforms.size() ? request.scene_transforms[i] : request.scene_transform;
+                const auto transform = cameraVisualizerTransform(*camera, scene_transform);
+                if (!transform)
+                    continue;
+                frustum.points = cameraFrustumWorldPoints(*camera, *transform, request.scale);
+                frustum.position = glm::vec3((*transform)[3]);
+                frustum.uid = camera->uid();
+                frustum.equirectangular = camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            }
+            pick_scene_transforms_.assign(request.scene_transforms.begin(), request.scene_transforms.end());
+            pick_generation_ = request.camera_generation;
+            pick_scale_ = request.scale;
+            pick_scene_transform_ = request.scene_transform;
+            return pick_frustums_;
+        }
+
+        [[nodiscard]] float frustumPickDistance(const PickFrustum& frustum,
+                                                const CameraFrustumPickRequest& request,
+                                                const float hit_radius) {
+            const glm::vec2 mouse = request.mouse_pos;
+            float best = hit_radius;
+            if (frustum.equirectangular) {
+                constexpr int SEGMENTS = 48;
+                for (int circle = 0; circle < 3; ++circle) {
+                    const int offset = circle * SEGMENTS;
+                    if (offset + SEGMENTS > static_cast<int>(frustum.points.size()))
+                        break;
+                    for (int segment = 0; segment < SEGMENTS; ++segment) {
+                        const auto a = projectFrustumPoint(frustum.points[offset + segment], request);
+                        const auto b = projectFrustumPoint(frustum.points[offset + ((segment + 1) % SEGMENTS)], request);
+                        if (a && b)
+                            best = std::min(best, pointSegmentDistance(mouse, *a, *b));
+                    }
+                }
+                return best;
+            }
+            if (frustum.points.size() < 5)
+                return best;
+            std::array<std::optional<glm::vec2>, 5> projected;
+            glm::vec2 low(std::numeric_limits<float>::max());
+            glm::vec2 high(std::numeric_limits<float>::lowest());
+            for (size_t k = 0; k < projected.size(); ++k) {
+                projected[k] = projectFrustumPoint(frustum.points[k], request);
+                if (projected[k]) {
+                    low = glm::min(low, *projected[k]);
+                    high = glm::max(high, *projected[k]);
+                }
+            }
+            // An edge joins two projected corners, so it lies inside their bounds: a cursor farther than the hit
+            // radius from the bounds cannot hit any edge.
+            if (mouse.x < low.x - hit_radius || mouse.x > high.x + hit_radius ||
+                mouse.y < low.y - hit_radius || mouse.y > high.y + hit_radius)
+                return best;
+            constexpr std::array<std::pair<int, int>, 8> EDGES{{
+                {0, 1},
+                {0, 2},
+                {0, 3},
+                {0, 4},
+                {1, 2},
+                {2, 3},
+                {3, 4},
+                {4, 1},
+            }};
+            for (const auto& [a_index, b_index] : EDGES) {
+                const auto& a = projected[static_cast<size_t>(a_index)];
+                const auto& b = projected[static_cast<size_t>(b_index)];
+                if (a && b)
+                    best = std::min(best, pointSegmentDistance(mouse, *a, *b));
+            }
+            return best;
+        }
+
         GpuFrame cacheTensorFrame(std::shared_ptr<lfs::core::Tensor> image,
                                   const FrameMetadata& metadata,
                                   const glm::ivec2& viewport_size) {
@@ -1047,6 +1105,12 @@ namespace lfs::rendering {
         }
 
         bool initialized_ = false;
+        std::vector<PickFrustum> pick_frustums_;
+        std::vector<glm::mat4> pick_scene_transforms_;
+        std::vector<float> pick_distances_;
+        std::uint64_t pick_generation_ = 0;
+        float pick_scale_ = 0.0f;
+        glm::mat4 pick_scene_transform_{1.0f};
         unsigned int next_tensor_frame_id_ = 1;
         unsigned int cached_tensor_frame_id_ = 0;
         std::shared_ptr<lfs::core::Tensor> cached_tensor_frame_image_;

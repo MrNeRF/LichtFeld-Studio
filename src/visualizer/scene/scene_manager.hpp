@@ -335,6 +335,7 @@ namespace lfs::vis {
         void drainGpuForTensorRelease();
 
     private:
+        friend class ViewerScaleTest;
         enum class HistoryMode : uint8_t {
             Record,
             RecordFull,
