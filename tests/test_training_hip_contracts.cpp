@@ -11,8 +11,10 @@
 #include <array>
 #include <cmath>
 #include <future>
+#include <initializer_list>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // These providers isolate the production registry from unrelated trainer
@@ -87,6 +89,18 @@ namespace {
     class HipTrainingPrimitives : public lfs::test::TensorBackendContract {
     protected:
         const ops::ExtraLossOps& regularizer() const { return *training_ops(GpuBackend::HIP).extra_loss; }
+
+        template <typename Call>
+        void expect_invalid(Call&& call, std::initializer_list<std::string_view> context) {
+            try {
+                call();
+                FAIL() << "Expected std::invalid_argument";
+            } catch (const std::invalid_argument& error) {
+                const std::string_view message(error.what());
+                for (const auto observed : context)
+                    EXPECT_NE(message.find(observed), std::string_view::npos) << message << "; missing " << observed;
+            }
+        }
 
         void check(ops::Regularizer kind, size_t n, float weight, bool backward) {
             const size_t attributes = kind == ops::Regularizer::Scale ? 3 : 1;
@@ -177,19 +191,53 @@ namespace {
         auto wrong_shape = Tensor::zeros({1, 3}, Device::GPU);
         auto wrong_loss = Tensor::zeros({2}, Device::GPU);
         const auto wrong_dtype = Tensor::zeros({3}, Device::GPU, DataType::Int32);
-        const auto strided = Tensor::zeros({2, 3}, Device::GPU).transpose(0, 1);
-        EXPECT_THROW(regularizer().regularize(cpu_raw, gradient, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(raw, cpu_gradient, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(raw, gradient, cpu_loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(raw, wrong_shape, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(raw, gradient, wrong_loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(wrong_dtype, gradient, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(strided, gradient, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
-        EXPECT_THROW(regularizer().regularize(raw, gradient, loss, scratch, static_cast<ops::Regularizer>(255), 1.f), std::invalid_argument);
+        Tensor invalid;
+        const auto reject = [&](const Tensor& input, Tensor& grad, Tensor& value,
+                                std::initializer_list<std::string_view> context, ops::Regularizer kind = ops::Regularizer::Scale) {
+            const auto gradient_before = grad.to_vector();
+            const auto loss_before = value.is_valid() ? value.to_vector() : std::vector<float>{};
+            expect_invalid([&] { regularizer().regularize(input, grad, value, scratch, kind, 1.f); }, context);
+            EXPECT_EQ(grad.to_vector(), gradient_before);
+            if (value.is_valid())
+                EXPECT_EQ(value.to_vector(), loss_before);
+        };
+        reject(cpu_raw, gradient, loss, {"HIP parameter", "valid=true", "device=cpu", "backend=none", "contiguous=true"});
+        reject(raw, cpu_gradient, loss, {"HIP gradient", "device=cpu", "backend=none"});
+        reject(raw, gradient, cpu_loss, {"HIP loss", "device=cpu", "backend=none"});
+        reject(raw, wrong_shape, loss, {"gradient_shape=" + wrong_shape.shape().str(), "parameter_shape=" + raw.shape().str()});
+        reject(raw, gradient, wrong_loss, {"loss_elements=2", "loss_shape=" + wrong_loss.shape().str()});
+        reject(wrong_dtype, gradient, loss, {"HIP parameter", "dtype=int32", "backend=HIP", "shape=" + wrong_dtype.shape().str()});
+        reject(raw, gradient, loss, {"regularizer=255", "supported=0,1"}, static_cast<ops::Regularizer>(255));
+        reject(invalid, gradient, loss, {"HIP parameter", "valid=false", "dtype=invalid", "backend=none"});
+        reject(raw, gradient, invalid, {"HIP loss", "valid=false", "dtype=invalid", "backend=none"});
         EXPECT_EQ(loss.to_vector(), std::vector<float>{-9.f});
         EXPECT_EQ(gradient.to_vector(), std::vector<float>(3, 2.f));
         EXPECT_EQ(cpu_loss.to_vector(), std::vector<float>{-9.f});
         EXPECT_EQ(cpu_gradient.to_vector(), std::vector<float>(3, 2.f));
+    }
+
+    TEST_P(HipTrainingPrimitives, RejectsNoncontiguousOperandsWithMatchingShapesBeforeWrites) {
+        const auto strided = Tensor::full({2, 3}, 0.3f, Device::GPU).transpose(0, 1);
+        const auto raw = Tensor::full(strided.shape(), 0.3f, Device::GPU);
+        auto gradient = Tensor::full(strided.shape(), 2.f, Device::GPU);
+        auto strided_gradient = Tensor::full({2, 3}, 2.f, Device::GPU).transpose(0, 1);
+        auto loss = Tensor::full({1}, -9.f, Device::GPU);
+        Tensor scratch;
+        ASSERT_FALSE(strided.is_contiguous());
+        ASSERT_FALSE(strided_gradient.is_contiguous());
+        ASSERT_TRUE(raw.is_contiguous());
+        ASSERT_TRUE(gradient.is_contiguous());
+        ASSERT_EQ(strided.shape(), gradient.shape());
+        ASSERT_EQ(raw.shape(), strided_gradient.shape());
+        expect_invalid([&] { regularizer().regularize(strided, gradient, loss, scratch, ops::Regularizer::Scale, 1.f); },
+                       {"HIP parameter", "dtype=float32", "backend=HIP", "contiguous=false", "shape=" + strided.shape().str()});
+        expect_invalid([&] { regularizer().regularize(raw, strided_gradient, loss, scratch, ops::Regularizer::Scale, 1.f); },
+                       {"HIP gradient", "dtype=float32", "backend=HIP", "contiguous=false", "shape=" + strided_gradient.shape().str()});
+        EXPECT_EQ(loss.to_vector(), std::vector<float>{-9.f});
+        EXPECT_EQ(gradient.to_vector(), std::vector<float>(6, 2.f));
+        EXPECT_EQ(strided_gradient.to_vector(), std::vector<float>(6, 2.f));
+        EXPECT_EQ(raw.to_vector(), std::vector<float>(6, 0.3f));
+        EXPECT_EQ(strided.to_vector(), std::vector<float>(6, 0.3f));
     }
 
     TEST_P(HipTrainingPrimitives, RejectsOverlappingOutputsButAcceptsDisjointViewsOfOneOwner) {
@@ -199,13 +247,18 @@ namespace {
         auto loss = arena.slice(0, 6, 7);
         Tensor scratch;
         auto alias = raw;
-        EXPECT_THROW(regularizer().regularize(raw, alias, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
+        expect_invalid([&] { regularizer().regularize(raw, alias, loss, scratch, ops::Regularizer::Scale, 1.f); },
+                       {"must not overlap", "parameter=0x", "parameter_bytes=12", "gradient=0x", "gradient_bytes=12", "loss=0x", "loss_bytes=4"});
         auto overlap = arena.slice(0, 2, 5);
         EXPECT_THROW(regularizer().regularize(raw, overlap, loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
         auto overlap_loss = arena.slice(0, 3, 4);
         EXPECT_THROW(regularizer().regularize(raw, gradient, overlap_loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
         auto input_loss = arena.slice(0, 0, 1);
         EXPECT_THROW(regularizer().regularize(raw, gradient, input_loss, scratch, ops::Regularizer::Scale, 1.f), std::invalid_argument);
+        Tensor no_gradient;
+        expect_invalid([&] { regularizer().regularize(raw, no_gradient, input_loss, scratch, ops::Regularizer::Scale, 1.f); },
+                       {"must not overlap", "gradient=0x0", "gradient_bytes=0", "loss_bytes=4"});
+        EXPECT_FALSE(no_gradient.is_valid());
         EXPECT_EQ(arena.to_vector(), std::vector<float>(7, 0.3f));
         regularizer().regularize(raw, gradient, loss, scratch, ops::Regularizer::Scale, 1.f);
         EXPECT_EQ(raw.to_vector(), std::vector<float>(3, 0.3f));

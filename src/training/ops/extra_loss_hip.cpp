@@ -17,7 +17,13 @@ namespace lfs::training {
         void require_tensor(In tensor, const char* name) {
             if (!tensor.is_valid() || tensor.dtype() != core::DataType::Float32 ||
                 core::gpu_backend_of(tensor) != core::GpuBackend::HIP || !tensor.is_contiguous()) {
-                throw std::invalid_argument(std::format("HIP regularization requires a contiguous Float32 HIP {}", name));
+                const auto backend = core::gpu_backend_of(tensor);
+                throw std::invalid_argument(std::format(
+                    "HIP regularization requires a contiguous Float32 HIP {} "
+                    "(valid={}, device={}, dtype={}, backend={}, contiguous={}, shape={})",
+                    name, tensor.is_valid(), core::device_name(tensor.device()),
+                    tensor.is_valid() ? core::dtype_name(tensor.dtype()) : "invalid",
+                    backend ? core::gpu_backend_name(*backend) : "none", tensor.is_contiguous(), tensor.shape().str()));
             }
         }
 
@@ -33,17 +39,28 @@ namespace lfs::training {
             require_tensor(raw, "parameter");
             require_tensor(loss, "loss");
             if (loss.numel() != 1 || (kind != Regularizer::Scale && kind != Regularizer::Opacity))
-                throw std::invalid_argument("HIP regularization requires one loss element and a supported regularizer");
+                throw std::invalid_argument(std::format(
+                    "HIP regularization requires one loss element and a supported regularizer "
+                    "(loss_elements={}, loss_shape={}, regularizer={}, supported={},{})",
+                    loss.numel(), loss.shape().str(), static_cast<int>(kind),
+                    static_cast<int>(Regularizer::Scale), static_cast<int>(Regularizer::Opacity)));
             if (gradient.is_valid()) {
                 require_tensor(gradient, "gradient");
                 if (gradient.shape() != raw.shape())
-                    throw std::invalid_argument("HIP regularization gradient must match the parameter shape");
+                    throw std::invalid_argument(std::format(
+                        "HIP regularization gradient must match the parameter shape (gradient_shape={}, parameter_shape={})",
+                        gradient.shape().str(), raw.shape().str()));
             }
             // Bind both backend and execution target before data_ptr() can
             // materialize deferred inputs under a foreign caller's queue.
             const core::TensorExecutionTarget::Scope scope(core::TensorExecutionTarget::default_queue(core::GpuBackend::HIP));
             if (overlaps(raw, loss) || (gradient.is_valid() && (overlaps(gradient, raw) || overlaps(gradient, loss))))
-                throw std::invalid_argument("HIP regularization parameter, gradient and loss must not overlap");
+                throw std::invalid_argument(std::format(
+                    "HIP regularization parameter, gradient and loss must not overlap "
+                    "(parameter=0x{:x}, parameter_bytes={}, gradient=0x{:x}, gradient_bytes={}, loss=0x{:x}, loss_bytes={})",
+                    reinterpret_cast<std::uintptr_t>(raw.data_ptr()), raw.bytes(),
+                    gradient.is_valid() ? reinterpret_cast<std::uintptr_t>(gradient.data_ptr()) : 0, gradient.bytes(),
+                    reinterpret_cast<std::uintptr_t>(loss.data_ptr()), loss.bytes()));
             if (raw.numel() == 0 || weight == 0.f)
                 return;
 
