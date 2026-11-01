@@ -18,6 +18,30 @@
 
 namespace lfs::training {
 
+    // Row counts of every row-indexed training tensor before a refine. Growth
+    // only appends rows, and each append is whole, so a refine that runs out of
+    // VRAM part way can be undone by cutting each tensor back to its count.
+    class RefineRowSnapshot {
+    public:
+        using StrategyRows = std::function<void(const std::function<void(lfs::core::Tensor&)>&)>;
+
+        RefineRowSnapshot(lfs::core::SplatData& splat, AdamOptimizer& optimizer, const StrategyRows& strategy_rows);
+
+        // False when a model or optimizer tensor lost rows, which growth never does.
+        [[nodiscard]] bool restore() const;
+
+    private:
+        struct Rows {
+            lfs::core::Tensor* tensor;
+            std::size_t rows;
+            bool valid;
+            bool may_shrink;
+        };
+        std::vector<Rows> tensors_;
+        std::vector<std::pair<AdamParamState*, std::size_t>> state_sizes_;
+        lfs::core::SplatData* splat_;
+    };
+
     // Initialize Gaussians (move to GPU, pre-allocate capacity, etc.)
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap = 0);
 

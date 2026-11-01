@@ -234,20 +234,42 @@ namespace lfs::core {
 
     thread_local bool MemoryPressureCoordinator::Impl::in_episode = false;
 
-    bool relieve_device_allocation_failure(const size_t bytes, const cudaStream_t stream) {
-        int device = 0;
-        if (cudaGetDevice(&device) != cudaSuccess) {
+    void* allocate_device_scratch(const size_t bytes, const cudaStream_t stream, const bool stream_ordered,
+                                  const std::string_view label) {
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        const auto try_allocate = [&](void** const ptr) {
+            *ptr = nullptr;
+            if (bytes > 0 && coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                return cudaErrorMemoryAllocation;
+            }
+            return stream_ordered ? cudaMallocAsync(ptr, bytes, stream) : cudaMalloc(ptr, bytes);
+        };
+        void* ptr = nullptr;
+        cudaError_t status = try_allocate(&ptr);
+        if (status == cudaErrorMemoryAllocation) {
             (void)cudaGetLastError();
+            int device = 0;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                (void)cudaGetLastError();
+            }
+            const AllocationFailure failure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .device = device,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = "cuda.scratch",
+                .operation = "cuda.scratch_allocate",
+                .native_error = cudaErrorMemoryAllocation,
+            };
+            (void)coordinator.relieve_and_should_retry(failure);
+            status = try_allocate(&ptr);
+            if (status == cudaErrorMemoryAllocation) {
+                (void)cudaGetLastError();
+                throw MemoryAllocationError(failure);
+            }
         }
-        return MemoryPressureCoordinator::instance().relieve_and_should_retry(AllocationFailure{
-            .domain = MemoryDomain::CudaDevice,
-            .requested_bytes = bytes,
-            .device = device,
-            .stream = reinterpret_cast<uintptr_t>(stream),
-            .label = "cuda.scratch",
-            .operation = "cuda.scratch_allocate",
-            .native_error = cudaErrorMemoryAllocation,
-        });
+        LFS_CUDA_CHECK_MSG(status, "CUDA scratch allocation '{}' ({} bytes)", label, bytes);
+        return ptr;
     }
 
     MemoryPressureCoordinator::MemoryPressureCoordinator()

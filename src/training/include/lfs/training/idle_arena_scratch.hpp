@@ -5,6 +5,8 @@
 
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_error.hpp"
+#include "core/memory_pressure.hpp"
+#include "core/tensor.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -53,6 +55,27 @@ namespace lfs::training {
         [[nodiscard]] char* data() const { return data_; }
         [[nodiscard]] std::size_t capacity() const { return bytes_; }
 
+        // Backs the scratch privately when the idle arena holds less than
+        // `bytes`. False when that allocation fails too.
+        [[nodiscard]] bool cover(const std::size_t bytes) {
+            if (bytes <= bytes_) {
+                return true;
+            }
+            try {
+                owner_ = core::Tensor::empty_exact({bytes}, core::DataType::UInt8);
+            } catch (const core::MemoryAllocationError&) {
+                return false;
+            }
+            owner_.set_stream(stream_);
+            if (arena_ != nullptr) {
+                arena_->end_frame(frame_, stream_);
+                arena_ = nullptr;
+            }
+            data_ = static_cast<char*>(owner_.data_ptr());
+            bytes_ = bytes;
+            return true;
+        }
+
         // The first `bytes` of the borrow, cleared on the scratch stream, or
         // null when the borrow is smaller.
         [[nodiscard]] void* zeroed(const std::size_t bytes) const {
@@ -69,6 +92,7 @@ namespace lfs::training {
         std::uint64_t frame_ = 0;
         char* data_ = nullptr;
         std::size_t bytes_ = 0;
+        core::Tensor owner_;
     };
 
 } // namespace lfs::training

@@ -9,7 +9,6 @@
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
@@ -773,11 +772,10 @@ namespace lfs::training {
         }
     }
 
-    void ImprovedGSPlus::permute_gaussian_rows(const lfs::core::Tensor& perm) {
-        morton::permute_row_tensor(_precomputed_scores, perm);
-        morton::permute_row_tensor(_edge_score_sum, perm);
-        morton::permute_row_tensor(_error_score_max, perm);
-        morton::permute_row_tensor(_free_mask, perm);
+    void ImprovedGSPlus::for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) {
+        for (auto* rows : {&_precomputed_scores, &_edge_score_sum, &_error_score_max, &_free_mask}) {
+            visit(*rows);
+        }
     }
 
     bool ImprovedGSPlus::is_refining(int iter) const {

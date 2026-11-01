@@ -85,10 +85,19 @@ namespace lfs::training {
                    Trainer::RetryDecision::RetryForwardOnce;
         }
 
+        using Phase = Trainer::StepPhase;
+        using Recovery = Trainer::StepOomRecovery;
+
+        static Recovery step_oom(const lfs::Error& error, const Phase phase, const bool committed,
+                                 const bool refine_undone = false) {
+            return Trainer::classify_step_oom(
+                error, Trainer::MutationStamp{.iteration = 7, .epoch = 3, .phase = phase, .persistent_commit = committed, .refine_undone = refine_undone});
+        }
+
         static lfs::Status recover_with_sync_status(
             Trainer& trainer, const lfs::Error& cause, const cudaError_t sync_status) {
             trainer.recovery_sync_for_testing_ = [sync_status] { return sync_status; };
-            auto result = trainer.recover_forward_oom(cause);
+            auto result = trainer.recover_from_oom(cause);
             trainer.recovery_sync_for_testing_ = {};
             return result;
         }
@@ -131,6 +140,27 @@ namespace {
 
         const auto invalid = make_retry_test_error(lfs::ErrorCode::InvalidArgument);
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(invalid, 1));
+    }
+
+    TEST(TrainerRetrySemantics, StepOomRetriesBeforeCommitAndDropsOnlyWorkAfterIt) {
+        using Access = lfs::training::TrainerRetryTestAccess;
+        using Phase = Access::Phase;
+        using Recovery = Access::Recovery;
+        const auto exhausted = make_retry_test_error(lfs::ErrorCode::ResourceExhausted);
+        for (const auto phase : {Phase::Forward, Phase::Loss, Phase::Backward})
+            EXPECT_EQ(Access::step_oom(exhausted, phase, false), Recovery::RetryIteration);
+        // FastGS refines at the start of a step, so its forward can follow a commit.
+        for (const auto phase : {Phase::Forward, Phase::Backward, Phase::Publish, Phase::TerminalCleanup})
+            EXPECT_EQ(Access::step_oom(exhausted, phase, true), Recovery::SkipRest);
+        EXPECT_EQ(Access::step_oom(exhausted, Phase::OptimizerCommit, true), Recovery::Fail);
+        EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, true), Recovery::Fail);
+        EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, false), Recovery::Fail);
+        // A refine cut back to the rows it started from leaves the model whole.
+        EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, true, true), Recovery::SkipRest);
+        EXPECT_EQ(Access::step_oom(make_retry_test_error(lfs::ErrorCode::Internal), Phase::Backward, false),
+                  Recovery::Fail);
+        EXPECT_EQ(Access::step_oom(make_retry_test_error(lfs::ErrorCode::Internal), Phase::RefinementCommit, true, true),
+                  Recovery::Fail);
     }
 
     TEST(TrainerPOPSpaTest, KeepsRegularStrategyHorizon) {

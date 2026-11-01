@@ -17,26 +17,17 @@
 
 namespace lfs::core {
 
-    // Device memory pressure relief for an allocation made outside the tensor
-    // pool, such as kernel scratch; true when a retry may now succeed.
-    [[nodiscard]] LFS_CORE_API bool relieve_device_allocation_failure(size_t bytes, cudaStream_t stream);
+    // Device allocation made outside the tensor pool, such as kernel scratch.
+    // When the device is full it relieves memory pressure and retries once,
+    // then throws MemoryAllocationError so training can recover.
+    [[nodiscard]] LFS_CORE_API void* allocate_device_scratch(size_t bytes, cudaStream_t stream,
+                                                             bool stream_ordered, std::string_view label);
 
     struct DirectCudaAllocator {
         [[nodiscard]] void* allocate(const size_t bytes,
                                      const cudaStream_t stream,
                                      const std::string_view label) const {
-            void* ptr = nullptr;
-            const cudaError_t status = cudaMalloc(&ptr, bytes);
-            if (status == cudaErrorMemoryAllocation) {
-                (void)cudaGetLastError();
-                (void)relieve_device_allocation_failure(bytes, stream);
-            }
-            if (status != cudaSuccess) {
-                ptr = nullptr;
-                LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                                   "CUDA allocation '{}' ({} bytes)", label, bytes);
-            }
-            return ptr;
+            return allocate_device_scratch(bytes, stream, false, label);
         }
 
         void deallocate(void* ptr, cudaStream_t) const noexcept {
@@ -54,22 +45,11 @@ namespace lfs::core {
         [[nodiscard]] void* allocate(const size_t bytes,
                                      const cudaStream_t stream,
                                      const std::string_view label) const {
-            void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaMallocAsync(&ptr, bytes, stream);
-            if (status == cudaErrorMemoryAllocation) {
-                (void)cudaGetLastError();
-                (void)relieve_device_allocation_failure(bytes, stream);
-            }
-            if (status != cudaSuccess) {
-                ptr = nullptr;
-                LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
-                                   "stream-ordered CUDA allocation '{}' ({} bytes)", label, bytes);
-            }
+            return allocate_device_scratch(bytes, stream, true, label);
 #else
-            ptr = DirectCudaAllocator{}.allocate(bytes, stream, label);
+            return allocate_device_scratch(bytes, stream, false, label);
 #endif
-            return ptr;
         }
 
         void deallocate(void* ptr, const cudaStream_t stream) const noexcept {

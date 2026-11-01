@@ -1049,4 +1049,60 @@ namespace lfs::training {
         }
     }
 
+    RefineRowSnapshot::RefineRowSnapshot(lfs::core::SplatData& splat, AdamOptimizer& optimizer,
+                                         const StrategyRows& strategy_rows)
+        : splat_(&splat) {
+        const auto record = [&](lfs::core::Tensor& tensor, const bool may_shrink) {
+            const bool valid = tensor.is_valid() && tensor.ndim() > 0;
+            tensors_.push_back({&tensor, valid ? tensor.size(0) : 0, valid, may_shrink});
+        };
+        for (auto* tensor : {&splat.means(), &splat.sh0(), &splat.shN(), &splat.shN_value_bounds(),
+                             &splat.scaling_raw(), &splat.rotation_raw(), &splat.opacity_raw()}) {
+            record(*tensor, false);
+        }
+        for (const auto type : AdamOptimizer::all_param_types()) {
+            if (auto* state = optimizer.get_state_mutable(type)) {
+                record(state->grad, false);
+                record(state->exp_avg, false);
+                record(state->joint_bounds, false);
+                state_sizes_.emplace_back(state, state->size);
+            }
+        }
+        // The deleted mask and strategy buffers may be dropped or rebuilt
+        // by a refine; one that did not exist before goes away again.
+        record(splat.deleted(), true);
+        if (strategy_rows) {
+            strategy_rows([&](lfs::core::Tensor& rows) { record(rows, true); });
+        }
+    }
+
+    bool RefineRowSnapshot::restore() const {
+        for (const auto& [tensor, rows, valid, may_shrink] : tensors_) {
+            const bool now_valid = tensor->is_valid() && tensor->ndim() > 0;
+            if (may_shrink) {
+                continue;
+            }
+            if (valid ? !now_valid || tensor->size(0) < rows || !tensor->is_contiguous() : now_valid) {
+                return false;
+            }
+        }
+        for (const auto& [tensor, rows, valid, may_shrink] : tensors_) {
+            const bool now_valid = tensor->is_valid() && tensor->ndim() > 0;
+            if (!valid) {
+                if (now_valid) {
+                    *tensor = lfs::core::Tensor();
+                }
+            } else if (now_valid && tensor->size(0) > rows && tensor->is_contiguous()) {
+                tensor->truncate_rows(rows);
+            }
+        }
+        for (const auto& [state, size] : state_sizes_) {
+            state->size = size;
+        }
+        splat_->reconcile_deleted_mask();
+        splat_->notify_deleted_mask_changed();
+        splat_->note_param_layout_changed();
+        return true;
+    }
+
 } // namespace lfs::training
