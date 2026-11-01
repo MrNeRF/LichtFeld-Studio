@@ -73,3 +73,14 @@ def test_extract_frames_missing_video_fails(tmp_path):
         video_path=str(ROOT / "tests" / "data" / "video" / "does_not_exist.mp4"), output_dir=str(tmp_path))
     assert result["outcome"] == "failed"
     assert result["error"]
+
+
+def test_extract_frames_window_mode_keeps_one_frame_per_interval(tmp_path):
+    # Window mode never empties an interval: the sharpest candidate is kept even on flat footage,
+    # where a fixed edge-ratio threshold would discard everything.
+    result = lf.video.extract_frames(
+        video_path=str(FIXTURE), output_dir=str(tmp_path), fps=5.0, sharpness_enabled=True,
+        sharpness_window_mode=True, sharpness_window_candidates=-1)
+    assert result["outcome"] == "completed", result["error"]
+    frames = sorted(tmp_path.glob("frame_*.jpg"))
+    assert 25 <= len(frames) <= 32

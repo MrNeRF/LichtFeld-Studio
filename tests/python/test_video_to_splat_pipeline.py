@@ -3,6 +3,7 @@
 """Orchestration tests for the video-to-splat pipeline with every side effect injected."""
 
 import json
+import sqlite3
 import struct
 import sys
 import threading
@@ -26,11 +27,14 @@ class Fakes:
         self.registered = registered
         self.colmap_rc = colmap_rc
         self.calls: list[str] = []
+        self.commands: list[list[str]] = []
         self.progress: list[tuple] = []
         self.cancel = threading.Event()
         self.confirmed_weak = True
         self.extract_params = None
         self.create_args = None
+        self.gpu_features_ok = True
+        self.gpu_matches_ok = True
 
     def resolve_colmap(self, on_progress):
         self.calls.append("toolchain")
@@ -47,11 +51,23 @@ class Fakes:
         images.mkdir(parents=True, exist_ok=True)
         for i in range(self.frames):
             (images / f"frame_{i:06d}.jpg").write_bytes(b"\xff\xd8")
+        # The real extractor drops its report next to the frames; COLMAP must never see it.
+        (images / "extraction_metadata.json").write_text("{}")
         on_progress(self.frames, self.frames, 0)
         return {"outcome": "completed", "error": ""}
 
     def run(self, cmd, on_output, should_cancel):
         self.calls.append(cmd[1])
+        self.commands.append(list(cmd))
+        database = Path(cmd[cmd.index("--database_path") + 1])
+        if cmd[1] == "feature_extractor":
+            gpu = cmd[cmd.index("--FeatureExtraction.use_gpu") + 1] == "1"
+            rows = 500 if (self.gpu_features_ok or not gpu) else 0
+            write_colmap_database(database, descriptor_rows=[rows] * self.frames)
+        if cmd[1] == "sequential_matcher":
+            gpu = cmd[cmd.index("--FeatureMatching.use_gpu") + 1] == "1"
+            rows = 40 if (self.gpu_matches_ok or not gpu) else 0
+            write_colmap_database(database, geometry_rows=[rows] * (self.frames - 1))
         if cmd[1] == "global_mapper":
             model = Path(cmd[cmd.index("--output_path") + 1]) / "0"
             model.mkdir(parents=True, exist_ok=True)
@@ -65,8 +81,9 @@ class Fakes:
         self.calls.append("create_project")
         self.create_args = (project, dataset, images_folder)
 
-    def train(self):
+    def train(self, mode):
         self.calls.append("train")
+        self.train_mode = mode
 
     def confirm_weak(self, ratio, registered, total):
         self.calls.append("confirm_weak")
@@ -78,6 +95,37 @@ class Fakes:
             create_project=self.create_project, train=self.train, confirm_weak=self.confirm_weak,
             free_bytes=lambda path: 100 * 1024 ** 3,
         )
+
+
+def write_colmap_database(path: Path, descriptor_rows=(), geometry_rows=()) -> None:
+    """Create or extend a database with the tables the pipeline's stage checks read."""
+    db = sqlite3.connect(path)
+    try:
+        db.execute("CREATE TABLE IF NOT EXISTS descriptors "
+                   "(image_id INTEGER PRIMARY KEY, type INTEGER, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE IF NOT EXISTS two_view_geometries "
+                   "(pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        if descriptor_rows:
+            db.execute("DELETE FROM descriptors")
+        for idx, rows in enumerate(descriptor_rows, start=1):
+            db.execute("INSERT INTO descriptors VALUES (?, 0, ?, 128, NULL)", (idx, rows))
+        if geometry_rows:
+            db.execute("DELETE FROM two_view_geometries")
+        for idx, rows in enumerate(geometry_rows, start=1):
+            db.execute("INSERT INTO two_view_geometries VALUES (?, ?, 2, NULL)", (idx, rows))
+        db.commit()
+    finally:
+        db.close()  # Windows cannot unlink a database that is still open
+
+
+def gpu_flags(fakes: "Fakes") -> list[str]:
+    """use_gpu value of every COLMAP feature/matching command, in call order."""
+    flags = []
+    for cmd in fakes.commands:
+        for option in ("--FeatureExtraction.use_gpu", "--FeatureMatching.use_gpu"):
+            if option in cmd:
+                flags.append(cmd[cmd.index(option) + 1])
+    return flags
 
 
 def make_request(project: Path, video: Path) -> pipeline.Request:
@@ -114,6 +162,7 @@ def test_full_run_order_and_state(tmp_path, clip):
     assert fakes.extract_params.scale == pytest.approx(4096 / 5760)
     assert fakes.extract_params.dataset == tmp_path / "proj" / "dataset"
     assert fakes.create_args == (project, tmp_path / "proj" / "dataset", "images")
+    assert fakes.train_mode == "equirectangular"
 
 
 def test_rerun_skips_completed_stages(tmp_path, clip):
@@ -323,3 +372,106 @@ def test_request_fingerprint_tracks_inputs(tmp_path, clip):
     assert base.fingerprint() != pipeline.Request(video=clip, project=project, use_gpu=False).fingerprint()
     assert base.work_dir == tmp_path / "proj"
     assert base.dataset == tmp_path / "proj" / "dataset"
+
+
+def test_extraction_report_is_moved_out_of_the_images_folder(tmp_path, clip):
+    # COLMAP reads every file in --image_path; its CPU feature extractor crashes on a JSON file.
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    dataset = work_dir(project) / "dataset"
+    assert not (dataset / "images" / "extraction_metadata.json").exists()
+    assert (dataset / "extraction_metadata.json").read_text() == "{}"
+
+
+def test_gpu_feature_extraction_without_features_falls_back_to_cpu(tmp_path, clip):
+    # The official CUDA build has no kernels for older GPUs: SIFT fails on every image but COLMAP exits 0.
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    fakes.gpu_features_ok = False
+    messages = []
+    pipeline.run(make_request(project, clip), fakes.hooks(),
+                 on_progress=lambda stage, frac, msg, tail: messages.append((stage, msg)), should_cancel=lambda: False)
+    assert fakes.calls == ["toolchain", "extract", "feature_extractor", "feature_extractor", "sequential_matcher",
+                           "global_mapper", "create_project", "train"]
+    assert gpu_flags(fakes) == ["1", "0", "0"]
+    assert any(stage == "features" and "CPU" in msg for stage, msg in messages)
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
+    assert saved["use_gpu"] is False
+
+
+def test_gpu_matching_without_pairs_falls_back_to_cpu(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    fakes.gpu_matches_ok = False
+    pipeline.run(make_request(project, clip), fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert fakes.calls == ["toolchain", "extract", "feature_extractor", "sequential_matcher", "sequential_matcher",
+                           "global_mapper", "create_project", "train"]
+    assert gpu_flags(fakes) == ["1", "1", "0"]
+
+
+def test_cpu_fallback_persists_across_resume(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    first = Fakes(project)
+    first.gpu_features_ok = False
+    original_run = first.run
+
+    def run(cmd, on_output, should_cancel):
+        if cmd[1] == "global_mapper":
+            first.cancel.set()
+            raise pipeline.ProcessCancelled("killed")
+        return original_run(cmd, on_output, should_cancel)
+
+    first.run = run
+    with pytest.raises(pipeline.PipelineCancelled):
+        pipeline.run(make_request(project, clip), first.hooks(), on_progress=lambda *a: None,
+                     should_cancel=first.cancel.is_set)
+    second = Fakes(project)
+    pipeline.run(make_request(project, clip), second.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert second.calls == ["toolchain", "global_mapper", "create_project", "train"]
+    # A resumed run must not go back to the GPU for a COLMAP stage that has to be redone.
+    third = Fakes(project)
+    saved = json.loads((work_dir(project) / "pipeline.json").read_text())
+    saved["completed"] = saved["completed"][:3]  # toolchain, extract, features
+    (work_dir(project) / "pipeline.json").write_text(json.dumps(saved))
+    pipeline.run(make_request(project, clip), third.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert gpu_flags(third) == ["0"]
+
+
+def test_no_features_on_cpu_is_an_error(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    original_run = fakes.run
+
+    def run(cmd, on_output, should_cancel):
+        result = original_run(cmd, on_output, should_cancel)
+        if cmd[1] == "feature_extractor":
+            write_colmap_database(Path(cmd[cmd.index("--database_path") + 1]), descriptor_rows=[0] * fakes.frames)
+        return result
+
+    fakes.run = run
+    request = pipeline.Request(video=clip, project=project, use_gpu=False)
+    with pytest.raises(pipeline.PipelineError) as err:
+        pipeline.run(request, fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert "no features" in str(err.value).lower()
+    assert fakes.calls.count("feature_extractor") == 1
+    assert "sequential_matcher" not in fakes.calls
+
+
+def test_no_verified_pairs_on_cpu_is_an_error(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    original_run = fakes.run
+
+    def run(cmd, on_output, should_cancel):
+        result = original_run(cmd, on_output, should_cancel)
+        if cmd[1] == "sequential_matcher":
+            write_colmap_database(Path(cmd[cmd.index("--database_path") + 1]), geometry_rows=[0] * 5)
+        return result
+
+    fakes.run = run
+    request = pipeline.Request(video=clip, project=project, use_gpu=False)
+    with pytest.raises(pipeline.PipelineError) as err:
+        pipeline.run(request, fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert "no matches" in str(err.value).lower()
+    assert "global_mapper" not in fakes.calls

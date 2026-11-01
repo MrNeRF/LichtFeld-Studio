@@ -6,6 +6,7 @@ Option names were checked against `colmap <command> -h` of the 4.2.1 Windows bui
 """
 from __future__ import annotations
 
+import sqlite3
 import struct
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,52 @@ def plan_commands(*, colmap: Path, dataset: Path, mode: Mode, overlap: int, use_
         *common,
     ]
     return [feature, match, mapper]
+
+
+def _count_rows_with_data(database: Path, table: str) -> int:
+    """Rows of ``table`` whose ``rows`` column is positive; 0 for a missing or unreadable database."""
+    if not database.is_file():
+        return 0
+    try:
+        db = sqlite3.connect(database)
+    except sqlite3.Error:
+        return 0
+    try:
+        return int(db.execute(f"SELECT COUNT(*) FROM {table} WHERE rows > 0").fetchone()[0])
+    except sqlite3.Error:
+        return 0
+    finally:
+        db.close()
+
+
+def count_images_with_features(database: Path) -> int:
+    """Images that got SIFT descriptors. The official CUDA build fails on every image when the GPU has no
+    kernels for it, yet feature_extractor still exits 0, so the exit code alone proves nothing."""
+    return _count_rows_with_data(database, "descriptors")
+
+
+def count_verified_pairs(database: Path) -> int:
+    """Image pairs with geometrically verified matches, which is what the mapper consumes."""
+    return _count_rows_with_data(database, "two_view_geometries")
+
+
+def clear_matches(database: Path) -> None:
+    """Drop match results so a rerun of the matcher starts clean instead of skipping stale pairs."""
+    if not database.is_file():
+        return
+    try:
+        db = sqlite3.connect(database)
+    except sqlite3.Error:
+        return
+    try:
+        for table in ("matches", "two_view_geometries"):
+            try:
+                db.execute(f"DELETE FROM {table}")
+            except sqlite3.Error:
+                pass
+        db.commit()
+    finally:
+        db.close()
 
 
 def _read_leading_uint64(path: Path) -> int:

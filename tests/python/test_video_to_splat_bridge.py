@@ -19,7 +19,8 @@ def lf_stub(monkeypatch):
         if name == "lfs_plugins" or name.startswith("lfs_plugins."):
             sys.modules.pop(name, None)
     state = SimpleNamespace(scheduled=[], dialogs=[], created=[], loaded=[], import_states=[], started=0,
-                            settings={"colmap_path": "D:/tools/colmap/bin/colmap.exe"}, extract_kwargs=None)
+                            settings={"colmap_path": "D:/tools/colmap/bin/colmap.exe"}, extract_kwargs=None,
+                            trainer_states=["starting", "running"], optimization=SimpleNamespace(gut=False))
 
     def schedule(cb):
         state.scheduled.append(cb)
@@ -56,6 +57,8 @@ def lf_stub(monkeypatch):
     stub.project_create_pending = lambda: False
     stub.load_file = lambda **kw: state.loaded.append(kw)
     stub.start_training = lambda: setattr(state, "started", state.started + 1)
+    stub.trainer_state = lambda: state.trainer_states.pop(0) if len(state.trainer_states) > 1 else state.trainer_states[0]
+    stub.optimization_params = lambda: state.optimization
     stub.is_training_active = lambda: False
     stub.plugins = SimpleNamespace(settings=lambda name: Settings())
     stub.video = SimpleNamespace(probe=lambda p: {"width": 1}, extract_frames=extract_frames)
@@ -140,11 +143,35 @@ def test_create_project_and_wait_times_out(lf_stub):
     assert "video_to_splat.import_timeout" in str(err.value)
 
 
-def test_start_training_runs_on_ui_thread(lf_stub):
+def test_start_training_runs_on_ui_thread_and_waits_for_the_trainer(lf_stub):
     bridge, state = lf_stub
-    bridge.start_training()
+    bridge.start_training("perspective", poll_seconds=0)
     assert state.started == 1
-    assert len(state.scheduled) == 1
+    assert state.scheduled  # start and every state poll go through the UI thread
+    assert state.optimization.gut is False
+
+
+def test_start_training_enables_gut_for_equirectangular_cameras(lf_stub):
+    # The trainer rejects non-pinhole cameras unless GUT (or undistortion, meaningless for 360) is on.
+    bridge, state = lf_stub
+    bridge.start_training("equirectangular", poll_seconds=0)
+    assert state.started == 1
+    assert state.optimization.gut is True
+
+
+def test_start_training_reports_a_start_that_falls_back_to_ready(lf_stub):
+    bridge, state = lf_stub
+    state.trainer_states[:] = ["starting", "starting", "ready"]
+    with pytest.raises(bridge.PipelineError) as err:
+        bridge.start_training("perspective", poll_seconds=0)
+    assert "video_to_splat.training_failed" in str(err.value)
+
+
+def test_start_training_reports_a_start_that_never_dispatches(lf_stub):
+    bridge, state = lf_stub
+    state.trainer_states[:] = ["ready"]
+    with pytest.raises(bridge.PipelineError):
+        bridge.start_training("perspective", poll_seconds=0, dispatch_timeout=0.0)
 
 
 def test_extract_forwards_params(lf_stub):
@@ -159,6 +186,11 @@ def test_extract_forwards_params(lf_stub):
     assert Path(kwargs["output_dir"]) == Path("P:/proj/dataset/images")
     assert kwargs["fps"] == 2.0 and kwargs["scale"] == 0.5 and kwargs["rotation"] == 90
     assert kwargs["sharpness_enabled"] is True
+    # Keep the sharpest frame of each interval instead of a fixed edge-ratio cutoff, which empties
+    # low-texture footage (a white room scored right at the old threshold of 10).
+    assert kwargs["sharpness_window_mode"] is True
+    assert kwargs["sharpness_window_candidates"] == -1
+    assert kwargs["sharpness_threshold"] == 0.0
 
 
 def test_build_hooks_reads_settings_and_cache(lf_stub):

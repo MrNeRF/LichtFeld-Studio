@@ -90,3 +90,46 @@ def test_find_largest_model(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert sfm.find_largest_model(empty) is None
+
+
+def _colmap_database(path: Path, descriptor_rows: list[int], geometry_rows: list[int]) -> None:
+    """Minimal COLMAP schema: enough for the stage checks to count real rows."""
+    import sqlite3
+
+    db = sqlite3.connect(path)
+    try:
+        db.execute("CREATE TABLE descriptors (image_id INTEGER PRIMARY KEY, type INTEGER, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE matches (pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE two_view_geometries (pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        for idx, rows in enumerate(descriptor_rows, start=1):
+            db.execute("INSERT INTO descriptors VALUES (?, 0, ?, 128, NULL)", (idx, rows))
+        for idx, rows in enumerate(geometry_rows, start=1):
+            db.execute("INSERT INTO matches VALUES (?, ?, 2, NULL)", (idx, rows))
+            db.execute("INSERT INTO two_view_geometries VALUES (?, ?, 2, NULL)", (idx, rows))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_stage_checks_count_images_with_features_and_verified_pairs(tmp_path):
+    database = tmp_path / "database.db"
+    _colmap_database(database, descriptor_rows=[812, 0, 455], geometry_rows=[0, 31, 7, 0])
+    assert sfm.count_images_with_features(database) == 2
+    assert sfm.count_verified_pairs(database) == 2
+
+
+def test_clear_matches_keeps_features(tmp_path):
+    database = tmp_path / "database.db"
+    _colmap_database(database, descriptor_rows=[812, 455], geometry_rows=[31, 7])
+    sfm.clear_matches(database)
+    assert sfm.count_images_with_features(database) == 2
+    assert sfm.count_verified_pairs(database) == 0
+    sfm.clear_matches(tmp_path / "missing.db")  # no-op
+
+
+def test_stage_checks_tolerate_missing_or_empty_database(tmp_path):
+    assert sfm.count_images_with_features(tmp_path / "missing.db") == 0
+    assert sfm.count_verified_pairs(tmp_path / "missing.db") == 0
+    (tmp_path / "garbage.db").write_bytes(b"not a database")
+    assert sfm.count_images_with_features(tmp_path / "garbage.db") == 0
+    assert sfm.count_verified_pairs(tmp_path / "garbage.db") == 0

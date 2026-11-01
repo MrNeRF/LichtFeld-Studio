@@ -27,6 +27,7 @@ from .toolchain import Resolved
 STAGE_NAMES = ["toolchain", "extract", "features", "match", "map", "create_project", "train"]
 COLMAP_STAGES = ("features", "match", "map")
 STATE_FILE = "pipeline.json"
+EXTRACTION_REPORT = "extraction_metadata.json"
 DATASET_DIR = "dataset"
 MIN_FRAMES = 20
 MIN_REGISTERED = 20
@@ -103,7 +104,7 @@ class Hooks:
     extract: Callable[[ExtractParams, Callable[[int, int, int], None], Callable[[], bool]], dict]
     run: Callable[[list[str], Callable[[str], None], Callable[[], bool]], CompletedProcess]
     create_project: Callable[[Path, Path, str], None]
-    train: Callable[[], None]
+    train: Callable[[str], None]  # receives the camera mode
     confirm_weak: Callable[[float, int, int], bool]
     free_bytes: Callable[[Path], int] = lambda path: shutil.disk_usage(path).free
 
@@ -116,6 +117,7 @@ class State:
     frames: int = 0
     registered: int = 0
     model_dir: str = ""
+    use_gpu: Optional[bool] = None  # set to False once a COLMAP stage had to fall back to the CPU
     version: int = STATE_VERSION
 
     def done(self) -> set[str]:
@@ -144,7 +146,8 @@ class State:
         completed = [entry for entry in raw.get("completed", []) if isinstance(entry, dict) and "name" in entry]
         return cls(fingerprint=fingerprint, completed=completed, mode=str(raw.get("mode", "")),
                    frames=int(raw.get("frames", 0) or 0), registered=int(raw.get("registered", 0) or 0),
-                   model_dir=str(raw.get("model_dir", "")))
+                   model_dir=str(raw.get("model_dir", "")),
+                   use_gpu=raw.get("use_gpu") if isinstance(raw.get("use_gpu"), bool) else None)
 
 
 def _mtime(path: Path) -> float:
@@ -152,6 +155,25 @@ def _mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def _move_extraction_report(images: Path, dataset: Path) -> None:
+    """The extractor writes its report next to the frames. COLMAP reads every file in the images folder,
+    and its CPU feature extractor crashes on a non-image, so the report lives one level up."""
+    report = images / EXTRACTION_REPORT
+    if report.is_file():
+        os.replace(report, dataset / EXTRACTION_REPORT)
+
+
+def _stage_shortfall(stage: str, database: Path) -> Optional[str]:
+    """A user-facing message when a COLMAP stage exited 0 but left nothing behind, else None."""
+    if stage == "features" and sfm.count_images_with_features(database) == 0:
+        return _tr("video_to_splat.error.no_features",
+                   "COLMAP found no features in the extracted frames. The frames may be too dark or uniform.")
+    if stage == "match" and sfm.count_verified_pairs(database) == 0:
+        return _tr("video_to_splat.error.no_matches",
+                   "COLMAP found no matches between frames. Move slower or choose the High preset.")
+    return None
 
 
 def _count_frames(images: Path) -> int:
@@ -224,50 +246,68 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
         if outcome != "completed":
             raise PipelineError(_tr("video_to_splat.error.extract_failed", "Frame extraction failed: {error}",
                                     error=result.get("error") or "unknown error"))
+        _move_extraction_report(images, request.dataset)
         frames = _count_frames(images)
         if frames < MIN_FRAMES:
             raise PipelineError(_tr(
                 "video_to_splat.error.too_few_frames",
                 "Only {frames} usable frames were extracted; at least {minimum} are needed. "
-                "Raise the frame rate or lower the sharpness threshold.",
+                "Use a longer clip or raise the frame rate.",
                 frames=frames, minimum=MIN_FRAMES))
         state.frames = frames
         state.mark("extract", frames=frames)
         state.save(request.work_dir)
     else:
+        _move_extraction_report(images, request.dataset)
         state.frames = state.frames or _count_frames(images)
     check_cancel()
 
-    # COLMAP stages
+    # COLMAP stages. A stage that exits 0 but leaves the database empty is rerun on the CPU once: the official
+    # CUDA build has no kernels for older GPUs and fails every image without a nonzero exit code.
     if colmap_pending:
         assert colmap is not None
-        commands = sfm.plan_commands(colmap=colmap.path, dataset=request.dataset, mode=mode,
-                                     overlap=preset.overlap, use_gpu=request.use_gpu)
-        for stage, cmd in zip(COLMAP_STAGES, commands):
+        use_gpu = request.use_gpu if state.use_gpu is None else state.use_gpu
+        for stage in COLMAP_STAGES:
             if stage in done:
                 continue
-            if stage == "features" and database.exists():
-                database.unlink()
-            if stage == "map":
-                if sparse.exists():
-                    shutil.rmtree(sparse)
-                sparse.mkdir(parents=True, exist_ok=True)
-            tool = cmd[1]
-            report(stage, 0.0, _tr("video_to_splat.progress.running_colmap", "Running COLMAP {tool}", tool=tool))
+            while True:
+                cmd = sfm.plan_commands(colmap=colmap.path, dataset=request.dataset, mode=mode,
+                                        overlap=preset.overlap, use_gpu=use_gpu)[COLMAP_STAGES.index(stage)]
+                if stage == "features" and database.exists():
+                    database.unlink()
+                if stage == "match":
+                    sfm.clear_matches(database)
+                if stage == "map":
+                    if sparse.exists():
+                        shutil.rmtree(sparse)
+                    sparse.mkdir(parents=True, exist_ok=True)
+                tool = cmd[1]
+                report(stage, 0.0, _tr("video_to_splat.progress.running_colmap", "Running COLMAP {tool}", tool=tool))
 
-            def on_output(line: str, _stage: str = stage, _tool: str = tool) -> None:
-                log(line)
-                report(_stage, 0.0, _tr("video_to_splat.progress.colmap", "COLMAP {tool}", tool=_tool))
+                def on_output(line: str, _stage: str = stage, _tool: str = tool) -> None:
+                    log(line)
+                    report(_stage, 0.0, _tr("video_to_splat.progress.colmap", "COLMAP {tool}", tool=_tool))
 
-            try:
-                completed = hooks.run(cmd, on_output, should_cancel)
-            except ProcessCancelled:
-                raise PipelineCancelled()
-            if completed.returncode != 0:
-                summary = _tr("video_to_splat.error.colmap_failed", "COLMAP {tool} failed with exit code {code}.",
-                              tool=tool, code=completed.returncode)
-                raise PipelineError(summary + "\n" + "\n".join(tail[-10:]))
-            state.mark(stage)
+                try:
+                    completed = hooks.run(cmd, on_output, should_cancel)
+                except ProcessCancelled:
+                    raise PipelineCancelled()
+                if completed.returncode != 0:
+                    summary = _tr("video_to_splat.error.colmap_failed", "COLMAP {tool} failed with exit code {code}.",
+                                  tool=tool, code=completed.returncode)
+                    raise PipelineError(summary + "\n" + "\n".join(tail[-10:]))
+                shortfall = _stage_shortfall(stage, database)
+                if shortfall is None:
+                    break
+                if not use_gpu:
+                    raise PipelineError(shortfall)
+                use_gpu = False
+                state.use_gpu = False
+                state.save(request.work_dir)
+                log(shortfall)
+                report(stage, 0.0, _tr("video_to_splat.progress.cpu_fallback",
+                                       "COLMAP {tool} found nothing on the GPU; retrying on the CPU", tool=tool))
+            state.mark(stage, gpu=use_gpu)
             state.save(request.work_dir)
             check_cancel()
 
@@ -303,7 +343,7 @@ def run(request: Request, hooks: Hooks, *, on_progress: ProgressFn, should_cance
 
     if "train" not in done:
         report("train", 0.0, _tr("video_to_splat.progress.starting_training", "Starting training"))
-        hooks.train()
+        hooks.train(mode)
         state.mark("train")
         state.save(request.work_dir)
     report("train", 1.0, _tr("video_to_splat.progress.done", "Done: {registered}/{total} frames registered",

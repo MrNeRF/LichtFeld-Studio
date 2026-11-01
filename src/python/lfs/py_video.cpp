@@ -98,7 +98,8 @@ namespace lfs::python {
             "extract_frames",
             [](const std::string& video_path, const std::string& output_dir, const double fps,
                const int jpg_quality, const float scale, const bool sharpness_enabled,
-               const double sharpness_threshold, const int rotation, const double start_time,
+               const double sharpness_threshold, const bool sharpness_window_mode,
+               const int sharpness_window_candidates, const int rotation, const double start_time,
                const double end_time, const bool convert_hdr_to_sdr, const std::string& filename_pattern,
                nb::object on_progress, nb::object should_cancel) {
                 lfs::io::VideoFrameExtractor::Params params;
@@ -114,6 +115,8 @@ namespace lfs::python {
                 }
                 params.sharpness.enabled = sharpness_enabled;
                 params.sharpness.threshold = sharpness_threshold;
+                params.sharpness.window_mode = sharpness_window_mode;
+                params.sharpness.window_candidates_target = sharpness_window_candidates;
                 params.sharpness.algorithm = lfs::io::SharpnessAlgorithm::COMBINED;
                 params.rotation = rotation;
                 params.start_time = start_time;
@@ -142,10 +145,13 @@ namespace lfs::python {
             },
             nb::arg("video_path"), nb::arg("output_dir"), nb::arg("fps") = 2.0, nb::arg("jpg_quality") = 95,
             nb::arg("scale") = 1.0f, nb::arg("sharpness_enabled") = true, nb::arg("sharpness_threshold") = 10.0,
+            nb::arg("sharpness_window_mode") = false, nb::arg("sharpness_window_candidates") = -1,
             nb::arg("rotation") = 0, nb::arg("start_time") = 0.0, nb::arg("end_time") = -1.0,
             nb::arg("convert_hdr_to_sdr") = true, nb::arg("filename_pattern") = "frame_%06d",
             nb::arg("on_progress") = nb::none(), nb::arg("should_cancel") = nb::none(),
-            "Extract JPEG frames at a fixed rate. Blocks with the GIL released; on_progress(current, total, "
+            "Extract JPEG frames at a fixed rate. With sharpness_window_mode the sharpest of "
+            "sharpness_window_candidates frames per interval is kept (-1 = auto) instead of discarding frames "
+            "below sharpness_threshold. Blocks with the GIL released; on_progress(current, total, "
             "discarded) and should_cancel() are called from the extraction thread. Returns {outcome, error} "
             "with outcome one of completed, cancelled, failed.");
     }

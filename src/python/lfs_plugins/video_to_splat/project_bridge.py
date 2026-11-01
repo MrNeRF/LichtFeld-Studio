@@ -22,7 +22,11 @@ from .toolchain import Resolved
 
 PLUGIN_NAME = "video_to_splat"
 SETTING_COLMAP_PATH = "colmap_path"
-SHARPNESS_THRESHOLD = 10.0
+TRAINING_START_TIMEOUT = 600.0  # trainer initialisation on a large dataset
+TRAINING_DISPATCH_TIMEOUT = 15.0  # start_training must at least report 'starting' by then
+# Keep the sharpest frame of each interval. A fixed edge-ratio cutoff empties low-texture
+# footage: a white room scored right at the old threshold of 10 on a real 360 clip.
+SHARPNESS_WINDOW_CANDIDATES = -1  # auto: ~2*sqrt(frames per interval), 5..20
 T = TypeVar("T")
 
 
@@ -133,8 +137,9 @@ def extract(params: ExtractParams, on_progress: Callable[[int, int, int], None],
             should_cancel: Callable[[], bool]) -> dict:
     return lf.video.extract_frames(
         video_path=str(params.video), output_dir=str(params.dataset / "images"), fps=params.fps,
-        scale=params.scale, rotation=params.rotation, sharpness_enabled=True,
-        sharpness_threshold=SHARPNESS_THRESHOLD, on_progress=on_progress, should_cancel=should_cancel)
+        scale=params.scale, rotation=params.rotation, sharpness_enabled=True, sharpness_threshold=0.0,
+        sharpness_window_mode=True, sharpness_window_candidates=SHARPNESS_WINDOW_CANDIDATES,
+        on_progress=on_progress, should_cancel=should_cancel)
 
 
 def run_process(cmd: list[str], on_output: Callable[[str], None], should_cancel: Callable[[], bool]):
@@ -164,8 +169,34 @@ def create_project_and_wait(project: Path, dataset: Path, images_folder: str, *,
         time.sleep(poll_seconds)
 
 
-def start_training() -> None:
-    ask_on_ui_thread(lf.start_training)
+def start_training(mode: str, *, timeout: float = TRAINING_START_TIMEOUT,
+                   dispatch_timeout: float = TRAINING_DISPATCH_TIMEOUT, poll_seconds: float = 0.25) -> None:
+    """Start training on the UI thread and block until the trainer runs.
+
+    Equirectangular cameras can only be rasterised with GUT; the trainer refuses them otherwise
+    (messages.err_non_pinhole). start_training itself returns after dispatch and reports failures
+    only through the trainer state, so a start that falls back to 'ready' is an error here."""
+
+    def start() -> None:
+        if mode == "equirectangular":
+            lf.optimization_params().gut = True
+        lf.start_training()
+
+    ask_on_ui_thread(start)
+    began = time.monotonic()
+    seen_starting = False
+    while True:
+        state = ask_on_ui_thread(lf.trainer_state)
+        if state in ("running", "paused"):
+            return
+        if state == "starting":
+            seen_starting = True
+        elif seen_starting:
+            raise PipelineError(tr("video_to_splat.training_failed"))
+        elapsed = time.monotonic() - began
+        if elapsed > timeout or (not seen_starting and elapsed > dispatch_timeout):
+            raise PipelineError(tr("video_to_splat.training_failed"))
+        time.sleep(poll_seconds)
 
 
 def build_hooks() -> Hooks:

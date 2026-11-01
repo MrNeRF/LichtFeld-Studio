@@ -15,7 +15,9 @@ COLMAP, creates the project and starts training.
 - **Linux:** install COLMAP 4.1 or later and make sure `colmap` is on `PATH`, or set the path in the plugin
   settings (`video_to_splat` → `colmap_path`). Version 4.1 is the first with the equirectangular camera model.
 - A CUDA GPU. COLMAP runs on the GPU before training starts, so the two never share memory. Creating a project
-  from video is refused while another training is active.
+  from video is refused while another training is active. When the official COLMAP build cannot run its SIFT
+  kernels on the GPU (Pascal cards, for example), the stage ends with an empty database and is rerun on the CPU
+  automatically; the dialog says so.
 
 ## Workflow
 
@@ -33,7 +35,9 @@ COLMAP, creates the project and starts training.
 4. Press **Create**. The dialog stays open and shows the current stage: locating COLMAP, extracting frames,
    detecting features, matching frames, solving cameras, creating the project, starting training. Cancel stops
    COLMAP and keeps what finished.
-5. Training starts automatically. Export with the usual exporters.
+5. Training starts automatically. For 360 video the GUT rasterizer is switched on first, because the
+   standard rasterizer only accepts pinhole cameras; note that most third-party viewers cannot display
+   GUT-trained splats. Export with the usual exporters.
 
 **Extract frames only** opens the frame extractor on the same video for a manual workflow.
 
@@ -42,9 +46,9 @@ COLMAP, creates the project and starts training.
 Stitched equirectangular MP4 or MOV from any 360 camera (export with direction lock on), or ordinary perspective
 video. Raw `.insv` dual-fisheye files are not supported; stitch them in the camera maker's software first.
 
-Frames are extracted at the preset's rate with the blur filter on, scaled down to the preset's maximum width,
-and saved as JPEG. Fewer than 20 usable frames stops the run before COLMAP with a hint to raise the frame rate
-or lower the sharpness threshold.
+Frames are extracted at the preset's rate, keeping the sharpest frame of each interval, scaled down to the
+preset's maximum width and saved as JPEG. Fewer than 20 frames stops the run before COLMAP with a hint to use a
+longer clip or raise the frame rate.
 
 ## When the reconstruction is weak
 
@@ -60,6 +64,7 @@ to it. For `D:/projects/room.licht`:
 ```
 D:/projects/room/
   dataset/images/frame_000001.jpg …   extracted frames
+  dataset/extraction_metadata.json    frame timestamps and sharpness scores
   dataset/database.db                 COLMAP features and matches
   dataset/sparse/0/{cameras,images,points3D}.bin
   pipeline.json                       finished stages and their results
