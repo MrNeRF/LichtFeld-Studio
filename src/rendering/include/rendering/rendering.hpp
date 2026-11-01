@@ -486,7 +486,7 @@ namespace lfs::rendering {
         float scale = 0.1f;
         glm::mat4 scene_transform{1.0f};
         std::span<const glm::mat4> scene_transforms;
-        // Increment when camera poses or calibration change; zero disables reuse.
+        // A new generation forces a rebuild; zero disables reuse.
         std::uint64_t camera_generation = 0;
     };
 

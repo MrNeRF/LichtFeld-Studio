@@ -21,6 +21,10 @@
 #include <string>
 #include <vector>
 
+namespace lfs::vis {
+    class ViewerScaleTest;
+}
+
 namespace lfs::core {
 
     enum class CameraSplit : uint8_t {
@@ -277,6 +281,7 @@ namespace lfs::core {
         const UndistortParams& undistort_params() const noexcept { return _undistort_params; }
 
     private:
+        friend class lfs::vis::ViewerScaleTest;
         // IDs
         float _FoVx = 0.f;
         float _FoVy = 0.f;

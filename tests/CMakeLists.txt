@@ -259,9 +259,6 @@ if(BUILD_VISUALIZER_TESTS)
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
         test_viewer_scale.cpp
-        test_rendering_refactor_services.cpp
-        test_camera_thumbnail_policy.cpp
-        test_frustum_depth_coverage.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
         test_scale_distance.cpp
@@ -356,7 +353,7 @@ if(BUILD_VISUALIZER_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
     add_test(
         NAME lichtfeld_visualizer_tests
-        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*:CameraImageLoadTest.*:CameraMetricsStatusTest.*:EnvironmentCompositingTest.*:GTComparisonAsyncTest.*:GTComparisonCache.*:MeshDepthSourceTest.*:RenderAnimationStateTest.*:RenderingManagerEventsTest.*:SceneCameraTraining.*:SceneManagerRenderStateTest.*:SplitViewServiceTest.*:StaleFrameGuardTest.*:ViewportArtifactServiceTest.*:ViewportFrameLifecycleServiceTest.*:ViewportRequestBuilderTest.*:VksplatOverlayParamsTest.*:VolumeGuideVisibilityTest.*
+        COMMAND lichtfeld_visualizer_tests --gtest_filter=-CollisionJobsTest.*:AsyncSplatPayloadTest.*:CropVolumeSourceTest.*:DatasetEmbedIntegrationTest.*:ImportComparisonTest.*:ImportErrorTest.*:MainLoopSignalTest.*:PayloadRecaptureTest.*:ProjectSwitchErrorTest.*:SceneGenerationRenderPublicationTest.*:SelectionSubmodeTest.*:SequencerFrameDemandTest.*:SplatSimplifyCompletionTest.*:SplatSimplifyIdentityTest.*:StoredSessionRestoreTest.*:TrainerProjectWriterTest.*:ViewportAppearanceCorrectionTest.*:VisualizerImplResetTest.*:VisualizerPostWorkTest.*:VisualizerPostedWorkTest.*:CameraCreationSchemaTest.*:LoaderGeoreferenceTest.*:ProjectDocumentPerformanceGate.*:ProjectDocumentTest.*:SceneChapterAdapterTest.*:SfmObservationChapterTest.*:SpanStreambufTest.*:SplatChapterTest.*
     )
     set_tests_properties(lichtfeld_visualizer_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

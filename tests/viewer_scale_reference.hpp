@@ -15,42 +15,6 @@
 namespace lfs::vis::viewer_scale_reference {
     using namespace lfs::rendering;
     using namespace lfs::vis::gui;
-    [[nodiscard]] inline std::optional<glm::mat4> cameraVisualizerTransform(
-        const lfs::core::Camera& camera,
-        const glm::mat4& scene_transform) {
-        auto rotation_tensor = camera.R();
-        auto translation_tensor = camera.T();
-        if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
-            return std::nullopt;
-        }
-        if (rotation_tensor.device() != lfs::core::Device::CPU) {
-            rotation_tensor = rotation_tensor.cpu();
-        }
-        if (translation_tensor.device() != lfs::core::Device::CPU) {
-            translation_tensor = translation_tensor.cpu();
-        }
-        if (rotation_tensor.dtype() != lfs::core::DataType::Float32 ||
-            translation_tensor.dtype() != lfs::core::DataType::Float32 ||
-            rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
-            return std::nullopt;
-        }
-
-        glm::mat4 world_to_camera(1.0f);
-        const float* const rotation = rotation_tensor.ptr<float>();
-        const float* const translation = translation_tensor.ptr<float>();
-        if (!rotation || !translation) {
-            return std::nullopt;
-        }
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                world_to_camera[col][row] = rotation[row * 3 + col];
-            }
-            world_to_camera[3][row] = translation[row];
-        }
-
-        return scene_transform * glm::inverse(world_to_camera) * DATA_TO_VISUALIZER_CAMERA_AXES_4;
-    }
-
     [[nodiscard]] inline std::vector<glm::vec3> cameraFrustumWorldPoints(
         const lfs::core::Camera& camera,
         const glm::mat4& visualizer_camera_to_world,

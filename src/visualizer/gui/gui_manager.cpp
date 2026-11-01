@@ -2205,44 +2205,6 @@ namespace lfs::vis::gui {
             return *cache;
         }
 
-        [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
-            const lfs::core::Camera& camera,
-            const glm::mat4& scene_transform) {
-            auto rotation_tensor = camera.R();
-            auto translation_tensor = camera.T();
-            if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
-                return std::nullopt;
-            }
-            if (rotation_tensor.device() != lfs::core::Device::CPU) {
-                rotation_tensor = rotation_tensor.cpu();
-            }
-            if (translation_tensor.device() != lfs::core::Device::CPU) {
-                translation_tensor = translation_tensor.cpu();
-            }
-            if (rotation_tensor.dtype() != lfs::core::DataType::Float32 ||
-                translation_tensor.dtype() != lfs::core::DataType::Float32 ||
-                rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
-                return std::nullopt;
-            }
-
-            const float* const rotation = rotation_tensor.ptr<float>();
-            const float* const translation = translation_tensor.ptr<float>();
-            if (!rotation || !translation) {
-                return std::nullopt;
-            }
-
-            glm::mat4 world_to_camera(1.0f);
-            for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 3; ++col) {
-                    world_to_camera[col][row] = rotation[row * 3 + col];
-                }
-                world_to_camera[3][row] = translation[row];
-            }
-
-            return scene_transform * glm::inverse(world_to_camera) *
-                   lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
-        }
-
         [[nodiscard]] std::vector<glm::mat4> resolveCameraSceneTransforms(
             const SceneManager& scene_manager,
             const SceneRenderState* scene_state,
@@ -2259,41 +2221,6 @@ namespace lfs::vis::gui {
                 transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
             }
             return transforms;
-        }
-
-        [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
-            const lfs::core::Camera& camera,
-            const glm::mat4& visualizer_camera_to_world,
-            const float scale) {
-            // The frustum represents the calibrated camera rather than the
-            // resolution selected for loading training images. Undistortion
-            // updates these calibration dimensions and FoVy together, while
-            // training downscaling only changes operational decode dimensions.
-            const int calibration_width = camera.camera_width();
-            const int calibration_height = camera.camera_height();
-            if (calibration_width <= 0 || calibration_height <= 0 || scale <= 0.0f) {
-                return std::nullopt;
-            }
-
-            constexpr float kEquirectangularDisplayFov = 1.0472f;
-            const bool equirectangular =
-                camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            if (!equirectangular && camera.FoVy() <= 0.0f) {
-                return std::nullopt;
-            }
-
-            const float aspect = static_cast<float>(calibration_width) /
-                                 static_cast<float>(calibration_height);
-            const float fov_y = equirectangular
-                                    ? kEquirectangularDisplayFov
-                                    : camera.FoVy();
-            const float half_height = std::tan(fov_y * 0.5f);
-            const float half_width = half_height * aspect;
-
-            const glm::mat4 fov_scale = glm::scale(
-                glm::mat4(1.0f),
-                glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
-            return visualizer_camera_to_world * fov_scale;
         }
 
         struct CachedCameraFrustum {
@@ -2461,8 +2388,6 @@ namespace lfs::vis::gui {
                 const auto disabled_uids = scene.getTrainingDisabledCameraUids();
                 cache.cameras = cameras;
                 cache.uids.resize(cameras.size(), -1);
-                cache.all_uid_list.clear();
-                cache.all_uid_list.reserve(cameras.size());
                 cache.models.resize(cameras.size(), glm::mat4(1.0f));
                 cache.positions.resize(cameras.size(), glm::vec3(0.0f));
                 cache.valid_cameras.assign(cameras.size(), 0);
@@ -2475,7 +2400,6 @@ namespace lfs::vis::gui {
                     if (!camera || camera->uid() < 0)
                         continue;
                     cache.uids[i] = camera->uid();
-                    cache.all_uid_list.push_back(cache.uids[i]);
                     cache.equirectangular_cameras[i] =
                         camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
                     cache.validation_cameras[i] = camera->image_name().find("test") != std::string::npos;

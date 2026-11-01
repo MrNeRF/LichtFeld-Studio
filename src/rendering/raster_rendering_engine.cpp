@@ -291,44 +291,81 @@ namespace lfs::rendering {
                 .orthographic = result.orthographic};
         }
 
-        [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
-            const lfs::core::Camera& camera,
-            const glm::mat4& scene_transform) {
-            auto rotation_tensor = camera.R();
-            auto translation_tensor = camera.T();
-            if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
-                return std::nullopt;
-            }
-            if (rotation_tensor.device() != lfs::core::Device::CPU) {
-                rotation_tensor = rotation_tensor.cpu();
-            }
-            if (translation_tensor.device() != lfs::core::Device::CPU) {
-                translation_tensor = translation_tensor.cpu();
-            }
-            if (rotation_tensor.dtype() != lfs::core::DataType::Float32 ||
-                translation_tensor.dtype() != lfs::core::DataType::Float32 ||
-                rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
-                return std::nullopt;
-            }
+        struct FrustumCameraState {
+            std::array<float, 9> rotation{};
+            std::array<float, 3> translation{};
+            int width = 0;
+            int height = 0;
+            float fov_y = 0.0f;
+            lfs::core::CameraModelType model = lfs::core::CameraModelType::PINHOLE;
+            int uid = -1;
+            bool valid_pose = false;
 
-            glm::mat4 world_to_camera(1.0f);
-            const float* const rotation = rotation_tensor.ptr<float>();
-            const float* const translation = translation_tensor.ptr<float>();
-            if (!rotation || !translation) {
-                return std::nullopt;
-            }
-            for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 3; ++col) {
-                    world_to_camera[col][row] = rotation[row * 3 + col];
+            bool operator==(const FrustumCameraState&) const = default;
+        };
+
+        struct FrustumPoseStorage {
+            const void* storage = nullptr;
+            const float* data = nullptr;
+            size_t offset = 0;
+        };
+
+        [[nodiscard]] FrustumCameraState frustumCameraState(const lfs::core::Camera& camera,
+                                                            FrustumPoseStorage& rotation_storage,
+                                                            FrustumPoseStorage& translation_storage) {
+            FrustumCameraState state;
+            state.width = camera.camera_width();
+            state.height = camera.camera_height();
+            state.fov_y = camera.FoVy();
+            state.model = camera.camera_model_type();
+            state.uid = camera.uid();
+            const auto read = [](const lfs::core::Tensor& tensor, auto& values, FrustumPoseStorage& cached) {
+                if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::Float32 ||
+                    tensor.numel() < values.size())
+                    return false;
+                if (tensor.device() == lfs::core::Device::CPU) {
+                    const bool cacheable = tensor.is_contiguous() && !tensor.has_zero_stride();
+                    const auto* storage = tensor.storage_ptr();
+                    const size_t offset = tensor.storage_offset();
+                    // ptr() validates CUDA pointer attributes, even for CPU storage.
+                    const auto* data = cacheable && storage == cached.storage && offset == cached.offset
+                                           ? cached.data
+                                           : tensor.ptr<float>();
+                    if (!data)
+                        return false;
+                    cached = cacheable ? FrustumPoseStorage{storage, data, offset} : FrustumPoseStorage{};
+                    std::copy_n(data, values.size(), values.begin());
+                } else {
+                    cached = {};
+                    const auto host = tensor.cpu();
+                    const auto* data = host.ptr<float>();
+                    if (!data)
+                        return false;
+                    std::copy_n(data, values.size(), values.begin());
                 }
-                world_to_camera[3][row] = translation[row];
-            }
+                return true;
+            };
+            state.valid_pose = read(camera.R(), state.rotation, rotation_storage) &&
+                               read(camera.T(), state.translation, translation_storage);
+            return state;
+        }
 
+        [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
+            const FrustumCameraState& camera,
+            const glm::mat4& scene_transform) {
+            if (!camera.valid_pose)
+                return std::nullopt;
+            glm::mat4 world_to_camera(1.0f);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col)
+                    world_to_camera[col][row] = camera.rotation[row * 3 + col];
+                world_to_camera[3][row] = camera.translation[row];
+            }
             return scene_transform * glm::inverse(world_to_camera) * DATA_TO_VISUALIZER_CAMERA_AXES_4;
         }
 
         [[nodiscard]] std::vector<glm::vec3> cameraFrustumWorldPoints(
-            const lfs::core::Camera& camera,
+            const FrustumCameraState& camera,
             const glm::mat4& visualizer_camera_to_world,
             const float scale) {
             std::vector<glm::vec3> points;
@@ -336,14 +373,14 @@ namespace lfs::rendering {
             // selected for loading training images. Undistortion updates these
             // calibration dimensions and FoVy together; training downscaling
             // only changes the operational decode dimensions.
-            const int calibration_width = camera.camera_width();
-            const int calibration_height = camera.camera_height();
+            const int calibration_width = camera.width;
+            const int calibration_height = camera.height;
             if (calibration_width <= 0 || calibration_height <= 0 || scale <= 0.0f) {
                 return points;
             }
 
             const bool equirectangular =
-                camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+                camera.model == lfs::core::CameraModelType::EQUIRECTANGULAR;
             if (equirectangular) {
                 constexpr int SEGMENTS = 48;
                 points.reserve(SEGMENTS * 3);
@@ -366,13 +403,13 @@ namespace lfs::rendering {
                 return points;
             }
 
-            if (camera.FoVy() <= 0.0f) {
+            if (camera.fov_y <= 0.0f) {
                 return points;
             }
 
             const float aspect = static_cast<float>(calibration_width) /
                                  static_cast<float>(calibration_height);
-            const float fov_y = camera.FoVy();
+            const float fov_y = camera.fov_y;
             const float half_height = std::tan(fov_y * 0.5f) * scale;
             const float half_width = half_height * aspect;
 
@@ -980,6 +1017,9 @@ namespace lfs::rendering {
 
     private:
         struct PickFrustum {
+            FrustumCameraState state;
+            FrustumPoseStorage rotation_storage;
+            FrustumPoseStorage translation_storage;
             std::vector<glm::vec3> points;
             std::weak_ptr<const lfs::core::Camera> camera_owner;
             const lfs::core::Camera* camera_identity = nullptr;
@@ -991,37 +1031,59 @@ namespace lfs::rendering {
         [[nodiscard]] const std::vector<PickFrustum>& pickFrustums(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
             const CameraFrustumPickRequest& request) {
-            if (request.camera_generation != 0 && request.camera_generation == pick_generation_ &&
-                request.scale == pick_scale_ && request.scene_transform == pick_scene_transform_ &&
-                std::equal(cameras.begin(), cameras.end(), pick_frustums_.begin(), pick_frustums_.end(),
-                           [](const auto& camera, const PickFrustum& frustum) {
-                               return camera.get() == frustum.camera_identity &&
-                                      !camera.owner_before(frustum.camera_owner) &&
-                                      !frustum.camera_owner.owner_before(camera);
-                           }) &&
-                std::equal(request.scene_transforms.begin(), request.scene_transforms.end(),
-                           pick_scene_transforms_.begin(), pick_scene_transforms_.end())) {
-                return pick_frustums_;
-            }
-            pick_frustums_.assign(cameras.size(), {});
-            for (size_t i = 0; i < cameras.size(); ++i) {
+            const bool can_reuse = request.camera_generation != 0 && request.camera_generation == pick_generation_ &&
+                                   request.scale == pick_scale_ && request.scene_transform == pick_scene_transform_ &&
+                                   cameras.size() == pick_frustums_.size() &&
+                                   std::equal(request.scene_transforms.begin(), request.scene_transforms.end(),
+                                              pick_scene_transforms_.begin(), pick_scene_transforms_.end());
+            pick_frustums_.resize(cameras.size());
+            const auto update = [&](const size_t i) {
                 const auto& camera = cameras[i];
                 auto& frustum = pick_frustums_[i];
+                const bool same_camera = camera.get() == frustum.camera_identity &&
+                                         !camera.owner_before(frustum.camera_owner) && !frustum.camera_owner.owner_before(camera);
+                if (!same_camera) {
+                    frustum.rotation_storage = {};
+                    frustum.translation_storage = {};
+                }
+                const auto state = camera ? frustumCameraState(*camera, frustum.rotation_storage, frustum.translation_storage)
+                                          : FrustumCameraState{};
+                if (can_reuse && same_camera && state == frustum.state)
+                    return;
+                frustum.state = state;
                 frustum.camera_owner = camera;
                 frustum.camera_identity = camera.get();
-                if (!camera)
-                    continue;
+                frustum.points.clear();
                 const glm::mat4& scene_transform =
                     i < request.scene_transforms.size() ? request.scene_transforms[i] : request.scene_transform;
-                const auto transform = cameraVisualizerTransform(*camera, scene_transform);
+                const auto transform = cameraVisualizerTransform(state, scene_transform);
                 if (!transform)
-                    continue;
-                frustum.points = cameraFrustumWorldPoints(*camera, *transform, request.scale);
+                    return;
+                frustum.points = cameraFrustumWorldPoints(state, *transform, request.scale);
                 frustum.position = glm::vec3((*transform)[3]);
-                frustum.uid = camera->uid();
-                frustum.equirectangular = camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            }
-            pick_scene_transforms_.assign(request.scene_transforms.begin(), request.scene_transforms.end());
+                frustum.uid = state.uid;
+                frustum.equirectangular = state.model == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            };
+            const auto needs_serial_read = [](const lfs::core::Tensor& tensor) {
+                return tensor.device() != lfs::core::Device::CPU || tensor.is_deferred() || tensor.has_zero_stride();
+            };
+            std::vector<uint8_t> serial_updates(cameras.size(), 0);
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, cameras.size(), 256), [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const auto& camera = cameras[i];
+                    if (camera && (needs_serial_read(camera->R()) || needs_serial_read(camera->T()))) {
+                        serial_updates[i] = 1;
+                    } else {
+                        update(i);
+                    }
+                }
+            });
+            // Materialization can mutate a tensor shared by several camera entries.
+            for (size_t i = 0; i < cameras.size(); ++i)
+                if (serial_updates[i])
+                    update(i);
+            if (!can_reuse)
+                pick_scene_transforms_.assign(request.scene_transforms.begin(), request.scene_transforms.end());
             pick_generation_ = request.camera_generation;
             pick_scale_ = request.scale;
             pick_scene_transform_ = request.scene_transform;

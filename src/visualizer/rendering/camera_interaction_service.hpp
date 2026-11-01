@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "rendering_types.hpp"
 #include "viewport_interaction_context.hpp"
 #include <chrono>
@@ -23,7 +24,7 @@ namespace lfs::rendering {
 namespace lfs::vis {
     class SceneManager;
 
-    class CameraInteractionService {
+    class LFS_VIS_API CameraInteractionService {
     public:
         static constexpr auto PICK_THROTTLE_INTERVAL = std::chrono::milliseconds(50);
 

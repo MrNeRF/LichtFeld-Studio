@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include "core/camera.hpp"
 #include "internal/viewport.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/environment_math.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering.hpp"
@@ -21,6 +23,79 @@
 #include <vector>
 
 namespace lfs::vis::gui {
+    [[nodiscard]] inline std::optional<glm::mat4> cameraVisualizerTransform(
+        const lfs::core::Camera& camera,
+        const glm::mat4& scene_transform) {
+        auto rotation_tensor = camera.R();
+        auto translation_tensor = camera.T();
+        if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
+            return std::nullopt;
+        }
+        if (rotation_tensor.device() != lfs::core::Device::CPU) {
+            rotation_tensor = rotation_tensor.cpu();
+        }
+        if (translation_tensor.device() != lfs::core::Device::CPU) {
+            translation_tensor = translation_tensor.cpu();
+        }
+        if (rotation_tensor.dtype() != lfs::core::DataType::Float32 ||
+            translation_tensor.dtype() != lfs::core::DataType::Float32 ||
+            rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
+            return std::nullopt;
+        }
+
+        const float* const rotation = rotation_tensor.ptr<float>();
+        const float* const translation = translation_tensor.ptr<float>();
+        if (!rotation || !translation) {
+            return std::nullopt;
+        }
+
+        glm::mat4 world_to_camera(1.0f);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                world_to_camera[col][row] = rotation[row * 3 + col];
+            }
+            world_to_camera[3][row] = translation[row];
+        }
+
+        return scene_transform * glm::inverse(world_to_camera) *
+               lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+    }
+
+    [[nodiscard]] inline std::optional<glm::mat4> cameraFrustumModelMatrix(
+        const lfs::core::Camera& camera,
+        const glm::mat4& visualizer_camera_to_world,
+        const float scale) {
+        // The frustum represents the calibrated camera rather than the
+        // resolution selected for loading training images. Undistortion
+        // updates these calibration dimensions and FoVy together, while
+        // training downscaling only changes operational decode dimensions.
+        const int calibration_width = camera.camera_width();
+        const int calibration_height = camera.camera_height();
+        if (calibration_width <= 0 || calibration_height <= 0 || scale <= 0.0f) {
+            return std::nullopt;
+        }
+
+        constexpr float kEquirectangularDisplayFov = 1.0472f;
+        const bool equirectangular =
+            camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+        if (!equirectangular && camera.FoVy() <= 0.0f) {
+            return std::nullopt;
+        }
+
+        const float aspect = static_cast<float>(calibration_width) /
+                             static_cast<float>(calibration_height);
+        const float fov_y = equirectangular
+                                ? kEquirectangularDisplayFov
+                                : camera.FoVy();
+        const float half_height = std::tan(fov_y * 0.5f);
+        const float half_width = half_height * aspect;
+
+        const glm::mat4 fov_scale = glm::scale(
+            glm::mat4(1.0f),
+            glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
+        return visualizer_camera_to_world * fov_scale;
+    }
+
     struct VulkanGuidePanelTarget {
         SplitViewPanelId panel = SplitViewPanelId::Left;
         const Viewport* viewport = nullptr;
@@ -195,7 +270,6 @@ namespace lfs::vis::gui {
 
     struct CameraFrustumGeometry {
         std::vector<int> uids;
-        std::vector<int> all_uid_list;
         std::vector<glm::mat4> models;
         std::vector<glm::vec3> positions;
         std::vector<std::uint8_t> valid_cameras;
@@ -283,6 +357,8 @@ namespace lfs::vis::gui {
         cache.emitted.assign(camera_count, FrustumEmit::None);
         tbb::parallel_for(tbb::blocked_range<size_t>(0, camera_count, 512), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t camera_index = range.begin(); camera_index != range.end(); ++camera_index) {
+                const size_t projected_index = panel_index * camera_count + camera_index;
+                cache.projected_visible[projected_index] = 0;
                 if (!cache.valid_cameras[camera_index])
                     continue;
                 const bool disabled = cache.disabled_cameras[camera_index] != 0;
@@ -304,7 +380,6 @@ namespace lfs::vis::gui {
                     emphasized);
                 if (color.a <= 0.01f)
                     continue;
-                const size_t projected_index = panel_index * camera_count + camera_index;
                 cache.camera_colors[projected_index] = color;
                 if (cache.equirectangular_cameras[camera_index]) {
                     cache.emitted[camera_index] = FrustumEmit::Equirectangular;

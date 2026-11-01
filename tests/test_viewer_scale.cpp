@@ -10,9 +10,13 @@
 #include "scene/scene_manager.hpp"
 #include "viewer_scale_reference.hpp"
 #include <filesystem>
+#include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <gtest/gtest.h>
+#include <map>
 #include <memory>
+#include <stdexcept>
 #include <tbb/global_control.h>
 #include <thread>
 #include <tuple>
@@ -30,24 +34,123 @@ namespace lfs::vis {
     protected:
         static inline std::vector<std::shared_ptr<const Camera>> cameras;
 
-        static void SetUpTestSuite() {
-            const auto model = lfs::core::environment::value("LFS_TEST_COLMAP_MODEL");
-            if (!model)
+        static std::shared_ptr<Camera> cpuCamera(const glm::mat3& rotation, const glm::vec3& translation,
+                                                 const float fx, const float fy, const int width, const int height,
+                                                 const int uid, const lfs::core::CameraModelType model) {
+            auto camera = std::make_shared<Camera>();
+            std::vector<float> values(9);
+            for (int row = 0; row < 3; ++row)
+                for (int col = 0; col < 3; ++col)
+                    values[row * 3 + col] = rotation[col][row];
+            camera->_R = Tensor::from_vector(values, {3, 3}, Device::CPU);
+            camera->_T = Tensor::from_vector({translation.x, translation.y, translation.z}, {3}, Device::CPU);
+            camera->_uid = uid;
+            camera->_camera_model_type = model;
+            camera->_focal_x = fx;
+            camera->_focal_y = fy;
+            camera->_center_x = width * 0.5f;
+            camera->_center_y = height * 0.5f;
+            camera->_camera_width = width;
+            camera->_camera_height = height;
+            camera->_FoVx = 2.0f * std::atan(width / (2.0f * fx));
+            camera->_FoVy = 2.0f * std::atan(height / (2.0f * fy));
+            return camera;
+        }
+
+        template <typename T>
+        static T readBinary(std::istream& stream) {
+            T value{};
+            if (!stream.read(reinterpret_cast<char*>(&value), sizeof(value)))
+                throw std::runtime_error("Truncated COLMAP camera fixture");
+            return value;
+        }
+
+        static void loadRealCameras(const std::filesystem::path& model) {
+            using Model = lfs::core::CameraModelType;
+            if (!std::filesystem::exists(model / "cameras.bin")) {
+                auto loaded = lfs::io::read_colmap_cameras_only(model);
+                ASSERT_TRUE(loaded.has_value()) << loaded.error().format();
+                const auto& source = std::get<0>(*loaded);
+                ASSERT_GE(source.size(), 4u);
+                RecordProperty("source_camera_count", static_cast<int>(source.size()));
+                for (size_t i = 0, count = std::min(size_t{4096}, source.size()); i < count; ++i)
+                    cameras.push_back(copyCamera(*source[i * source.size() / count], static_cast<int>(i),
+                                                 source[i * source.size() / count]->camera_model_type()));
                 return;
-            auto loaded = lfs::io::read_colmap_cameras_only(std::filesystem::path(*model));
+            }
+            std::ifstream stream(model / "cameras.bin", std::ios::binary);
+            const auto count = readBinary<std::uint64_t>(stream);
+            ASSERT_LT(count, 1000000u);
+            std::map<std::uint32_t, std::shared_ptr<Camera>> calibrations;
+            constexpr std::array parameter_counts{3, 4, 4, 5, 8, 8, 12, 5, 4, 5, 12};
+            for (std::uint64_t i = 0; i < count; ++i) {
+                const auto id = readBinary<std::uint32_t>(stream);
+                const auto type = readBinary<std::int32_t>(stream);
+                const auto width = readBinary<std::uint64_t>(stream);
+                const auto height = readBinary<std::uint64_t>(stream);
+                ASSERT_TRUE(type == 17 || (type >= 0 && type < static_cast<int>(parameter_counts.size())));
+                std::vector<double> params(type == 17 ? 2 : parameter_counts[type]);
+                for (auto& value : params)
+                    value = readBinary<double>(stream);
+                const bool shared_focal = type == 0 || type == 2 || type == 3 || type == 8 || type == 9;
+                const auto camera_model = type == 17                            ? Model::EQUIRECTANGULAR
+                                          : type == 10                          ? Model::THIN_PRISM_FISHEYE
+                                          : type == 5 || type == 8 || type == 9 ? Model::FISHEYE
+                                                                                : Model::PINHOLE;
+                auto camera = cpuCamera(glm::mat3(1.0f), glm::vec3(0.0f),
+                                        type == 17 ? 1.0f : static_cast<float>(params[0]),
+                                        type == 17 ? 1.0f : static_cast<float>(params[shared_focal ? 0 : 1]),
+                                        static_cast<int>(width), static_cast<int>(height), -1, camera_model);
+                if (type != 17) {
+                    camera->_center_x = params[shared_focal ? 1 : 2];
+                    camera->_center_y = params[shared_focal ? 2 : 3];
+                }
+                calibrations.emplace(id, std::move(camera));
+            }
+            auto loaded = lfs::io::read_colmap_images_binary(model / "images.bin");
             ASSERT_TRUE(loaded.has_value()) << loaded.error().format();
-            const auto& source = std::get<0>(*loaded);
-            ASSERT_GE(source.size(), 32u);
-            RecordProperty("source_camera_count", static_cast<int>(source.size()));
-            const size_t count = std::min(size_t{4096}, source.size());
-            RecordProperty("sample_camera_count", static_cast<int>(count));
-            for (size_t i = 0; i < count; ++i)
-                cameras.push_back(source[i * source.size() / count]);
+            const auto& images = loaded->value;
+            ASSERT_GE(images.size(), 4u);
+            RecordProperty("source_camera_count", static_cast<int>(images.size()));
+            for (size_t i = 0, samples = std::min(size_t{4096}, images.size()); i < samples; ++i) {
+                const auto& image = images[i * images.size() / samples];
+                ASSERT_TRUE(calibrations.contains(image.camera_id));
+                const auto& calibration = *calibrations.at(image.camera_id);
+                const auto& q = image.qvec;
+                auto camera = cpuCamera(glm::mat3_cast(glm::quat(q[0], q[1], q[2], q[3])),
+                                        {image.tvec[0], image.tvec[1], image.tvec[2]},
+                                        calibration.focal_x(), calibration.focal_y(),
+                                        calibration.camera_width(), calibration.camera_height(),
+                                        static_cast<int>(i), calibration.camera_model_type());
+                camera->_center_x = calibration.center_x();
+                camera->_center_y = calibration.center_y();
+                cameras.push_back(std::move(camera));
+            }
+        }
+
+        static void SetUpTestSuite() {
+            const auto requested = lfs::core::environment::value("LFS_TEST_COLMAP_MODEL");
+            const auto model = requested ? std::filesystem::path(*requested)
+                                         : std::filesystem::path(PROJECT_ROOT_PATH) / "data/bicycle/sparse/0";
+            if (requested || std::filesystem::exists(model / "cameras.bin") || std::filesystem::exists(model / "cameras.txt")) {
+                ASSERT_NO_FATAL_FAILURE(loadRealCameras(model));
+                RecordProperty("fixture_source", requested ? "optional_colmap_model" : "repository_colmap_model");
+            } else {
+                for (int i = 0; i < 1024; ++i)
+                    cameras.push_back(cpuCamera(glm::mat3(1.0f),
+                                                {0.12f * (i % 32), 0.12f * ((i / 32) % 32),
+                                                 i != 0 && i % 11 == 0 ? 6.0f : -0.1f * (i % 7)},
+                                                1000.0f, 1000.0f, 1280, 960, i,
+                                                i != 0 && i % 31 == 0 ? lfs::core::CameraModelType::EQUIRECTANGULAR
+                                                                      : lfs::core::CameraModelType::PINHOLE));
+                RecordProperty("source_camera_count", static_cast<int>(cameras.size()));
+                RecordProperty("fixture_source", "deterministic_cpu_fallback");
+            }
+            RecordProperty("sample_camera_count", static_cast<int>(cameras.size()));
         }
 
         void SetUp() override {
-            if (cameras.empty())
-                GTEST_SKIP() << "Set LFS_TEST_COLMAP_MODEL to a real COLMAP sparse model";
+            ASSERT_GE(cameras.size(), 4u);
             lfs::event::EventBridge::instance().clear_all();
             services().clear();
         }
@@ -61,11 +164,13 @@ namespace lfs::vis {
 
         static std::shared_ptr<Camera> copyCamera(const Camera& camera, const int uid,
                                                   const lfs::core::CameraModelType model = lfs::core::CameraModelType::PINHOLE) {
-            return std::make_shared<Camera>(
-                camera.R().clone(), camera.T().clone(), camera.focal_x(), camera.focal_y(),
-                camera.center_x(), camera.center_y(), camera.radial_distortion(), camera.tangential_distortion(),
-                model, "camera", std::filesystem::path{}, std::filesystem::path{},
-                camera.camera_width(), camera.camera_height(), uid);
+            auto copy = cpuCamera(glm::mat3(1.0f), glm::vec3(0.0f), camera.focal_x(), camera.focal_y(),
+                                  camera.camera_width(), camera.camera_height(), uid, model);
+            copy->_R = camera.R().cpu().clone();
+            copy->_T = camera.T().cpu().clone();
+            copy->_center_x = camera.center_x();
+            copy->_center_y = camera.center_y();
+            return copy;
         }
 
         static CameraFrustumPickRequest requestForFirstCamera() {
@@ -77,7 +182,7 @@ namespace lfs::vis {
             request.viewport.rotation = glm::mat3(1.0f);
             request.viewport.translation = {0.0f, 0.0f, 3.0f};
             request.scale = 0.4f;
-            request.scene_transform = glm::inverse(*ref::cameraVisualizerTransform(*cameras.front(), glm::mat4(1.0f)));
+            request.scene_transform = glm::inverse(*gui::cameraVisualizerTransform(*cameras.front(), glm::mat4(1.0f)));
             request.camera_generation = 1;
             request.mouse_pos = request.viewport_pos + request.viewport_size * 0.5f;
             return request;
@@ -87,10 +192,43 @@ namespace lfs::vis {
             return manager.cached_render_state_;
         }
 
+        static void setCameraModel(Camera& camera, const lfs::core::CameraModelType model) {
+            camera._camera_model_type = model;
+        }
+
+        static void setCameraTranslation(Camera& camera, Tensor translation) {
+            camera._T = std::move(translation);
+        }
+
+        static gui::CameraFrustumGeometry geometryForCameras() {
+            gui::CameraFrustumGeometry inputs;
+            const auto request = requestForFirstCamera();
+            for (size_t i = 0; i < cameras.size(); ++i) {
+                const auto& camera = *cameras[i];
+                const auto transform = *gui::cameraVisualizerTransform(camera, request.scene_transform);
+                inputs.models.push_back(*gui::cameraFrustumModelMatrix(camera, transform, request.scale));
+                inputs.positions.push_back(glm::vec3(transform[3]));
+                inputs.uids.push_back(camera.uid());
+                inputs.valid_cameras.push_back(i % 13 != 1);
+                inputs.equirectangular_cameras.push_back(i % 31 == 0);
+                inputs.validation_cameras.push_back(i % 3 == 0);
+                inputs.disabled_cameras.push_back(i % 5 == 0);
+                inputs.emphasized_cameras.push_back(i % 7 == 0);
+                inputs.thumbnail_indices.push_back(i % 4 == 0 ? -1 : static_cast<int>(i));
+                inputs.thumbnail_placements.push_back({.texture_id = i + 1, .uv_min = {0.1f, 0.2f}, .uv_max = {0.8f, 0.9f}});
+                inputs.loss_colors.push_back(i % 2 ? glm::vec3(0.2f, 0.3f, 0.4f) : glm::vec3(std::numeric_limits<float>::quiet_NaN()));
+            }
+            inputs.projected_points.resize(2 * cameras.size());
+            inputs.projected_depths.resize(2 * cameras.size());
+            inputs.projected_visible.resize(2 * cameras.size(), 0);
+            inputs.camera_colors.resize(2 * cameras.size());
+            return inputs;
+        }
+
         static std::shared_ptr<lfs::core::PointCloud> pointCloud() {
             std::vector<float> positions;
             for (size_t i = 0; i < 4; ++i) {
-                const glm::vec3 position((*ref::cameraVisualizerTransform(*cameras[i], glm::mat4(1.0f)))[3]);
+                const glm::vec3 position((*gui::cameraVisualizerTransform(*cameras[i], glm::mat4(1.0f)))[3]);
                 positions.insert(positions.end(), {position.x, position.y, position.z});
             }
             return std::make_shared<lfs::core::PointCloud>(
@@ -104,7 +242,7 @@ namespace lfs::vis {
         auto engine = RenderingEngine::create();
         std::vector<std::shared_ptr<const Camera>> sample(cameras.begin(), cameras.begin() + std::min(size_t{512}, cameras.size()));
         sample.insert(sample.begin() + 3, nullptr);
-        sample.push_back(copyCamera(*cameras[7], 1000000, lfs::core::CameraModelType::EQUIRECTANGULAR));
+        sample.push_back(copyCamera(*cameras[3], 1000000, lfs::core::CameraModelType::EQUIRECTANGULAR));
         RecordProperty("pick_camera_count", static_cast<int>(sample.size()));
         RecordProperty("parallelism_limit", 4);
         auto request = requestForFirstCamera();
@@ -131,10 +269,10 @@ namespace lfs::vis {
                         request.mouse_pos = request.viewport_pos + glm::vec2(x * 67.0f, y * 83.0f);
                         ASSERT_NO_FATAL_FAILURE(check());
                     }
-                for (size_t i = 0; i < 16; ++i) {
+                for (size_t i = 0; i < std::min(size_t{16}, sample.size()); ++i) {
                     if (!sample[i])
                         continue;
-                    const auto transform = ref::cameraVisualizerTransform(*sample[i], transforms[i]);
+                    const auto transform = gui::cameraVisualizerTransform(*sample[i], transforms[i]);
                     ASSERT_TRUE(transform);
                     for (const auto& point : ref::cameraFrustumWorldPoints(*sample[i], *transform, request.scale)) {
                         const auto projected = ref::projectFrustumPoint(point, request);
@@ -166,7 +304,7 @@ namespace lfs::vis {
             request.scene_transform,
             glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 1.0f)) * request.scene_transform};
         request.scene_transforms = transforms;
-        const auto transform = ref::cameraVisualizerTransform(*sample[0], transforms[0]);
+        const auto transform = gui::cameraVisualizerTransform(*sample[0], transforms[0]);
         const auto points = ref::cameraFrustumWorldPoints(*sample[0], *transform, request.scale);
         const auto top = ref::projectFrustumPoint(points[2], request);
         const auto bottom = ref::projectFrustumPoint(points[3], request);
@@ -177,7 +315,7 @@ namespace lfs::vis {
         EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
     }
 
-    TEST_F(ViewerScaleTest, EqualGenerationReusesFrustumsAndNewGenerationReadsMovedPose) {
+    TEST_F(ViewerScaleTest, CachedPicksTrackInPlacePoseAndGenerationChanges) {
         auto engine = RenderingEngine::create();
         auto camera = copyCamera(*cameras.front(), 10);
         std::vector<std::shared_ptr<const Camera>> sample{camera};
@@ -186,7 +324,20 @@ namespace lfs::vis {
         auto translation = camera->T();
         translation.add_(10000.0f);
         ASSERT_EQ(ref::pickCameraFrustum(sample, request), -1);
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        translation.copy_(cameras.front()->T());
         EXPECT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        const auto transform = gui::cameraVisualizerTransform(*camera, request.scene_transform);
+        const auto points = ref::cameraFrustumWorldPoints(*camera, *transform, request.scale);
+        request.mouse_pos = (*ref::projectFrustumPoint(points[1], request) + *ref::projectFrustumPoint(points[2], request)) * 0.5f;
+        ASSERT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        auto rotation = camera->R();
+        for (int i = 3; i < 9; ++i)
+            rotation.ptr<float>()[i] *= -1.0f;
+        ASSERT_EQ(ref::pickCameraFrustum(sample, request), -1);
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        rotation.copy_(cameras.front()->R());
+        translation.add_(10000.0f);
         ++request.camera_generation;
         EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
         translation.copy_(cameras.front()->T());
@@ -194,13 +345,69 @@ namespace lfs::vis {
         EXPECT_EQ(*engine->pickCameraFrustum(sample, request), 10);
         translation.add_(10000.0f);
         EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        request.camera_generation = 1;
+        setCameraTranslation(*camera, cameras.front()->T().clone());
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        setCameraTranslation(*camera, translation.clone());
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        const auto joined = Tensor::cat({translation, cameras.front()->T()}, 0);
+        setCameraTranslation(*camera, joined.slice(0, 3, 6));
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        setCameraTranslation(*camera, joined.slice(0, 0, 3));
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        setCameraTranslation(*camera, Tensor::from_vector({10000.0f}, {1}, Device::CPU).expand({3}));
+        ASSERT_TRUE(camera->T().has_zero_stride());
+        sample.assign(512, camera);
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        EXPECT_EQ(ref::pickCameraFrustum(sample, request), -1);
+    }
+
+    TEST_F(ViewerScaleTest, SameGenerationTracksPreparedUndistortion) {
+        const auto camera = copyCamera(*cameras.front(), 10);
+        const std::vector<std::shared_ptr<const Camera>> sample{camera};
+        auto request = requestForFirstCamera();
+        const auto transform = gui::cameraVisualizerTransform(*camera, request.scene_transform);
+        const auto points = ref::cameraFrustumWorldPoints(*camera, *transform, request.scale);
+        request.mouse_pos = *ref::projectFrustumPoint(points[2], request);
+        auto engine = RenderingEngine::create();
+        ASSERT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        const auto old_fov = camera->FoVy();
+        lfs::core::UndistortParams calibration{};
+        calibration.dst_width = camera->camera_width() * 2;
+        calibration.dst_height = camera->camera_height();
+        calibration.dst_fx = camera->focal_x() * 10.0f;
+        calibration.dst_fy = camera->focal_y() * 10.0f;
+        calibration.dst_cx = calibration.dst_width * 0.5f;
+        calibration.dst_cy = calibration.dst_height * 0.5f;
+        camera->adopt_undistortion(calibration, Camera::UndistortDestination::Explicit);
+        camera->prepare_undistortion();
+        ASSERT_TRUE(camera->is_undistort_prepared());
+        ASSERT_NE(camera->FoVy(), old_fov);
+        ASSERT_EQ(camera->camera_width(), calibration.dst_width);
+        ASSERT_EQ(ref::pickCameraFrustum(sample, request), -1);
+        EXPECT_EQ(*engine->pickCameraFrustum(sample, request), -1);
+        EXPECT_EQ(request.camera_generation, 1u);
+    }
+
+    TEST_F(ViewerScaleTest, SameGenerationTracksCameraModelChanges) {
+        const auto camera = copyCamera(*cameras.front(), 10);
+        const std::vector<std::shared_ptr<const Camera>> sample{camera};
+        auto request = requestForFirstCamera();
+        auto engine = RenderingEngine::create();
+        ASSERT_EQ(*engine->pickCameraFrustum(sample, request), 10);
+        setCameraModel(*camera, lfs::core::CameraModelType::EQUIRECTANGULAR);
+        for (int y = 250; y < 550; y += 11)
+            for (int x = 350; x < 650; x += 13) {
+                request.mouse_pos = request.viewport_pos + glm::vec2(x, y);
+                EXPECT_EQ(*engine->pickCameraFrustum(sample, request), ref::pickCameraFrustum(sample, request));
+            }
     }
 
     TEST_F(ViewerScaleTest, ScaleAndBothKindsOfSceneTransformInvalidateCache) {
         auto engine = RenderingEngine::create();
         const std::vector<std::shared_ptr<const Camera>> sample{cameras.front()};
         auto request = requestForFirstCamera();
-        const auto transform = ref::cameraVisualizerTransform(*sample.front(), request.scene_transform);
+        const auto transform = gui::cameraVisualizerTransform(*sample.front(), request.scene_transform);
         const auto points = ref::cameraFrustumWorldPoints(*sample.front(), *transform, request.scale);
         request.mouse_pos = *ref::projectFrustumPoint(points[2], request);
         ASSERT_EQ(*engine->pickCameraFrustum(sample, request), sample.front()->uid());
@@ -328,29 +535,10 @@ namespace lfs::vis {
     } // namespace
 
     TEST_F(ViewerScaleTest, ParallelOverlayMatchesSequentialInstancesThumbnailsAndLineOrder) {
-        gui::CameraFrustumGeometry inputs;
+        const auto inputs = geometryForCameras();
+
         const auto request = requestForFirstCamera();
-        for (size_t i = 0; i < cameras.size(); ++i) {
-            const auto& camera = *cameras[i];
-            const auto transform = *ref::cameraVisualizerTransform(camera, request.scene_transform);
-            const float half_height = std::tan(camera.FoVy() * 0.5f) * request.scale;
-            const float half_width = half_height * camera.camera_width() / camera.camera_height();
-            inputs.models.push_back(transform * glm::scale(glm::mat4(1.0f), glm::vec3(2.0f * half_width, 2.0f * half_height, request.scale)));
-            inputs.positions.push_back(glm::vec3(transform[3]));
-            inputs.uids.push_back(camera.uid());
-            inputs.valid_cameras.push_back(i % 13 != 1);
-            inputs.equirectangular_cameras.push_back(i % 31 == 0);
-            inputs.validation_cameras.push_back(i % 3 == 0);
-            inputs.disabled_cameras.push_back(i % 5 == 0);
-            inputs.emphasized_cameras.push_back(i % 7 == 0);
-            inputs.thumbnail_indices.push_back(i % 4 == 0 ? -1 : static_cast<int>(i));
-            inputs.thumbnail_placements.push_back({.texture_id = i + 1, .uv_min = {0.1f, 0.2f}, .uv_max = {0.8f, 0.9f}});
-            inputs.loss_colors.push_back(i % 2 ? glm::vec3(0.2f, 0.3f, 0.4f) : glm::vec3(std::numeric_limits<float>::quiet_NaN()));
-        }
-        inputs.projected_points.resize(2 * cameras.size());
-        inputs.projected_depths.resize(2 * cameras.size());
-        inputs.projected_visible.resize(2 * cameras.size(), 0);
-        inputs.camera_colors.resize(2 * cameras.size());
+
         size_t instances = 0, thumbnails = 0, lines = 0;
         for (const size_t workers : {size_t{1}, size_t{4}}) {
             tbb::global_control control(tbb::global_control::max_allowed_parallelism, workers);
@@ -396,6 +584,40 @@ namespace lfs::vis {
         EXPECT_GT(instances, 0u);
         EXPECT_GT(thumbnails, 0u);
         EXPECT_GT(lines, 0u);
+    }
+
+    TEST_F(ViewerScaleTest, ReusedOverlayClearsVisibilityForCulledCameras) {
+        const auto request = requestForFirstCamera();
+        Viewport viewport(1000, 800);
+        viewport.setViewMatrix(request.viewport.rotation, request.viewport.translation);
+        const gui::VulkanGuidePanelTarget panel{
+            .viewport = &viewport,
+            .pos = {0, 0},
+            .size = {1000, 800},
+            .render_size = {1000, 800}};
+        VulkanViewportPassParams params;
+        params.viewport_size = panel.size;
+        RenderSettings settings;
+        settings.camera_frustum_scale = request.scale;
+        for (int reason = 0; reason < 3; ++reason) {
+            auto geometry = geometryForCameras();
+            std::fill(geometry.projected_visible.begin(), geometry.projected_visible.end(), 1);
+            if (reason == 0) {
+                std::fill(geometry.valid_cameras.begin(), geometry.valid_cameras.end(), 0);
+            } else if (reason == 1) {
+                std::fill(geometry.positions.begin(), geometry.positions.end(), request.viewport.translation);
+            } else {
+                std::fill(geometry.equirectangular_cameras.begin(), geometry.equirectangular_cameras.end(), 0);
+                for (auto& model : geometry.models)
+                    model = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 100));
+            }
+            gui::appendCameraFrustumPanel(params, geometry, panel, 1, settings, -1,
+                                          [](const auto&, const auto&, const auto&) {});
+            const auto middle = geometry.projected_visible.begin() + cameras.size();
+            EXPECT_TRUE(std::all_of(geometry.projected_visible.begin(), middle, [](auto value) { return value == 1; }));
+            EXPECT_TRUE(std::all_of(middle, geometry.projected_visible.end(), [](auto value) { return value == 0; }));
+            EXPECT_TRUE(geometry.data->textured_overlays.empty());
+        }
     }
 
     TEST_F(ViewerScaleTest, SinglePointCloudReusesStateAndReflectsInPlaceEdits) {
