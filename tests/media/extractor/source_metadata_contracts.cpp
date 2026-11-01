@@ -59,7 +59,7 @@ namespace {
             const char* name() const noexcept override { return "native-test"; }
             std::string message(int) const override { return "non-UTF8 \xff"; }
         } category;
-        const auto native_error = lfs::media::detail::sidecarIoError({32, category}, "Open XMP sidecar");
+        const auto native_error = lfs::media::detail::sidecarIoError({32, category}, "Open metadata file", lfs::core::native_fs::from_utf8("image é 日本語.jpg"));
         require(native_error.native().has_value(), "native I/O error retains its native record");
         const nlohmann::json native_json{{"message", native_error.detail()}, {"category", native_error.native()->name}};
         require(nlohmann::json::parse(native_json.dump()).at("category") == "native-test" && native_error.native()->code == 32,
@@ -482,7 +482,7 @@ int runSourceMetadataContracts() {
         summary->facts.push_back({.semantic = "untrusted \"bytes\":null", .value = std::string("quote\" slash\\ control\n")});
         const auto reference = lfs::media::json_detail::sourceSidecarMetadataResult(*bound, *summary);
         const auto encoded = lfs::media::json_detail::sourceSidecarMetadataJson(*bound, *summary);
-        require(encoded == lfs::media::json_detail::dump(reference), "chunked JSON matches legacy escaping and schema byte for byte");
+        require(encoded == lfs::media::json_detail::dump(reference), "sidecar JSON matches shared escaping and schema byte for byte");
         std::ostringstream stream;
         require(lfs::media::json_detail::writeSourceSidecarMetadataJson(stream, *bound, *summary) && stream.str() == encoded, "CLI and string serialization share identical output");
         require(lfs::media::json_detail::sourceMetadata(bound->catalog).at("scope") == "static_xmp_sidecar", "shared serializer preserves sidecar provenance without wrapper patch");
@@ -492,9 +492,6 @@ int runSourceMetadataContracts() {
         } rejecting;
         std::ostream failed_stream(&rejecting);
         require(!lfs::media::json_detail::writeSourceSidecarMetadataJson(failed_stream, *bound, *summary), "stream errors are reported instead of accepted");
-        const auto plan = lfs::media::json_detail::prepareSidecarJson(*bound, *summary);
-        std::size_t writes = 0;
-        require(!lfs::media::json_detail::emitSidecarJson(plan, [&](std::string_view) { ++writes; return false; }) && writes == 1, "failed output stops before hex work continues");
         {
             lfs::media::detail::SidecarFile pinned_image;
             lfs::media::detail::SidecarFile pinned_sidecar;
@@ -509,31 +506,6 @@ int runSourceMetadataContracts() {
             std::filesystem::remove(image);
             std::filesystem::rename(moved, image);
 #endif
-        }
-        {
-            SourceXmp large;
-            large.status = MetadataStatus::Collected;
-            XmpBlock block;
-            block.envelope = XmpEnvelope::SidecarFile;
-            block.bytes.resize(32u * 1024 * 1024, 0x7f);
-            large.blocks.push_back(std::move(block));
-            auto catalog = catalogSourceMetadata({}, {}, std::nullopt, std::move(large));
-            require(catalog.has_value(), "maximum packet retained once");
-            SourceSidecarMetadata maximum{{}, XmpSidecarNaming::ImageFilename, std::move(*catalog)};
-            MetadataSummary limited;
-            limited.limited = true;
-            const auto output = lfs::media::json_detail::prepareSidecarJson(maximum, limited);
-            std::size_t text_bytes = 0, binary_bytes = 0;
-            for (const auto& part : output.parts) {
-                if (const auto* text = std::get_if<std::string>(&part))
-                    text_bytes += text->size();
-                else {
-                    const auto span = std::get<std::span<const std::uint8_t>>(part);
-                    require(span.data() == maximum.catalog.imageXmp().blocks[0].bytes.data(), "large JSON fields borrow the same original allocation");
-                    binary_bytes += span.size();
-                }
-            }
-            require(text_bytes < 16384 && binary_bytes == 64u * 1024 * 1024 && output.bytes == text_bytes + binary_bytes * 2, "maximum JSON plan retains bounded text instead of duplicate hex packets");
         }
         auto owned = bound->catalog;
         std::filesystem::remove(sidecar);

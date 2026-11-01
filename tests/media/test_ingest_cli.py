@@ -2046,10 +2046,13 @@ class IngestCLI(unittest.TestCase):
         image = self.root / "external-paths.jpg"
         source_exif_fixture.write_jpeg(image)
         sidecar = Path(str(image) + ".xmp")
-        self.invoke("source-sidecar-metadata", image, sidecar, code=3)
+        result, _ = self.invoke("source-sidecar-metadata", image, sidecar, code=3)
+        self.assertIn(str(sidecar), result["error"]["message"])
         foreign = self.root / "unrelated.xmp"
         foreign.write_bytes(b"opaque")
-        self.invoke("source-sidecar-metadata", image, foreign, code=2)
+        result, _ = self.invoke("source-sidecar-metadata", image, foreign, code=2)
+        for path in (image, foreign):
+            self.assertIn(str(path), result["error"]["message"])
         other = self.root / "other-sidecar-dir"
         other.mkdir()
         (other / sidecar.name).write_bytes(b"opaque")
@@ -2061,6 +2064,8 @@ class IngestCLI(unittest.TestCase):
             stream.truncate(32 * 1024 * 1024 + 1)
         result, _ = self.invoke("source-sidecar-metadata", image, sidecar, code=4)
         self.assertEqual(result["error"]["code"], "ResourceExhausted")
+        for observed in (str(sidecar), "size=33554433", "limit=33554432"):
+            self.assertIn(observed, result["error"]["message"])
         sidecar.unlink()
         if hasattr(os, "mkfifo"):
             os.mkfifo(sidecar)
@@ -2070,6 +2075,29 @@ class IngestCLI(unittest.TestCase):
         self.invoke("source-sidecar-metadata", image, sidecar, code=2)
         sidecar.unlink()
         self.assertEqual(foreign.read_bytes(), b"opaque")
+
+    @unittest.skipIf(os.name == "nt" or not hasattr(os, "geteuid"), "requires POSIX permissions")
+    def test_source_sidecar_metadata_read_permissions(self):
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses file read permissions")
+        image = self.root / "denied image é 日本語.jpg"
+        sidecar = Path(str(image) + ".xmp")
+        image.write_bytes(b"identity only")
+        sidecar.write_bytes(b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>')
+        for denied in (image, sidecar):
+            with self.subTest(denied=denied):
+                denied.chmod(0)
+                try:
+                    if denied == image and sys.platform.startswith("linux"):
+                        result, _ = self.invoke("source-sidecar-metadata", image, sidecar)
+                        self.assertTrue(result["success"])
+                    else:
+                        result, _ = self.invoke("source-sidecar-metadata", image, sidecar, code=3)
+                        self.assertEqual(result["error"]["code"], "PermissionDenied")
+                        self.assertIn(str(denied), result["error"]["message"])
+                        self.assertIn("Open metadata file", result["error"]["message"])
+                finally:
+                    denied.chmod(0o600)
 
     def test_source_sidecar_metadata_symlinks_and_directory_aliases(self):
         folder = self.root / "sidecar-real-directory"

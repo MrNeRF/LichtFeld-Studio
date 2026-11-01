@@ -146,7 +146,7 @@ namespace lfs::media::detail {
             std::error_code error;
             core::native_fs::remove(path_, error);
             if (error)
-                return SinkResult::failure(sidecarIoError(error, "Remove superseded source XMP"));
+                return SinkResult::failure(sidecarIoError(error, "Remove superseded source XMP", path_));
         }
         observation_.reset();
         return {};

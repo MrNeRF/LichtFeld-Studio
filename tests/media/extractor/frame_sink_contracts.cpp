@@ -290,6 +290,31 @@ int runFrameSinkUnitContracts() {
         no_replace.abort({SinkOutcome::Failed, 0, {}});
         require(std::filesystem::exists(directory / "frame_1.png.xmp"), "failed image replacement retains its source XMP");
         seed_options.image_output.overwrite = true;
+        auto other_policy = packet;
+        const auto policy = other_policy.find("image-static-source-xmp-v1");
+        require(policy != std::string::npos, "producer packet declares its policy");
+        other_policy[policy] = 'X';
+        const std::string foreign_xml = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\"><!--" +
+                                        std::string(packet.size(), 'x') + "--></rdf:Description></rdf:RDF>";
+        for (const auto& foreign : {std::string(packet.size(), 'x'), other_policy, foreign_xml}) {
+            std::ofstream(directory / "frame_1.png.xmp", std::ios::binary) << foreign;
+            FileFrameSink preserve_foreign(seed_options);
+            require(preserve_foreign.begin({}).has_value() && preserve_foreign.write(file_view).has_value(),
+                    "plain replacement accepts an unrelated companion longer than the recognition prefix");
+            preserve_foreign.abort({SinkOutcome::Cancelled, 1, {}});
+            std::ifstream retained(directory / "frame_1.png.xmp", std::ios::binary);
+            require(std::string(std::istreambuf_iterator<char>(retained), {}) == foreign,
+                    "full-length foreign XML, equal-size foreign bytes and changed policy survive replacement");
+        }
+        // Edits made before begin retain generated ownership if the canonical
+        // prefix and policy remain intact; they are not edits during output.
+        std::ofstream(directory / "frame_1.png.xmp", std::ios::binary) << packet << "\n";
+        FileFrameSink edited_before(seed_options);
+        require(edited_before.begin({}).has_value() && edited_before.write(file_view).has_value() &&
+                    !std::filesystem::exists(directory / "frame_1.png.xmp"),
+                "pre-existing edits with an intact generated prefix follow generated cleanup policy");
+        edited_before.abort({SinkOutcome::Cancelled, 1, {}});
+        std::ofstream(directory / "frame_1.png.xmp", std::ios::binary) << packet;
         seed_options.image_output.cancelled = [] { return true; };
         FileFrameSink cancel_replace(seed_options);
         require(cancel_replace.begin({}).has_value() && !cancel_replace.write(file_view), "cancelled image replacement refuses");
@@ -346,12 +371,20 @@ int runFrameSinkUnitContracts() {
         seed_options.image_output.cancelled = {};
         std::ofstream(directory / "frame_8.png") << "old pixels";
         std::ofstream(directory / "frame_8.png.xmp", std::ios::binary) << packet;
+        std::ofstream(directory / "frame_9.png") << "old pixels";
+        std::ofstream(directory / "frame_9.png.xmp", std::ios::binary) << packet;
         FileFrameSink plain_cleanup(replacement);
-        require(plain_cleanup.begin({}).has_value() && plain_cleanup.write(file_view).has_value() &&
+        require(plain_cleanup.begin({}).has_value(), "snapshot stale image and unchanged companion");
+        std::ofstream(directory / "frame_9.png", std::ios::app) << " changed after begin";
+        require(plain_cleanup.write(file_view).has_value() &&
                     plain_cleanup.complete({SinkOutcome::Completed, 1, {}}).has_value(),
                 "plain stale cleanup completes with the sidecar option disabled");
         require(!std::filesystem::exists(directory / "frame_8.png") && !std::filesystem::exists(directory / "frame_8.png.xmp"),
                 "plain stale cleanup removes obsolete images and their generated XMP");
+        require(std::filesystem::exists(directory / "frame_9.png"), "changed stale image survives completion");
+        std::ifstream retained_stale(directory / "frame_9.png.xmp", std::ios::binary);
+        require(std::string(std::istreambuf_iterator<char>(retained_stale), {}) == packet,
+                "unchanged generated companion survives when its changed stale image was not removed");
     }
     {
         MediaDescription observed;

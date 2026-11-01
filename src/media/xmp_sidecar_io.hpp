@@ -3,6 +3,7 @@
 #pragma once
 #include "core/image_codecs.hpp"
 #include "core/native_fs.hpp"
+#include "core/path_utils.hpp"
 #include "media/frame_sink.hpp"
 #include <algorithm>
 #include <array>
@@ -18,14 +19,14 @@ namespace lfs::media::detail {
     inline Error sidecarError(ErrorCode code, std::string message) {
         return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::move(message), .detection = LFS_SOURCE_SITE_CURRENT()});
     }
-    inline Error sidecarIoError(std::error_code error, const char* operation) {
+    inline Error sidecarIoError(std::error_code error, const char* operation, const std::filesystem::path& path) {
         const auto code = error == std::errc::no_such_file_or_directory       ? ErrorCode::NotFound
                           : error == std::errc::permission_denied             ? ErrorCode::PermissionDenied
                           : error == std::errc::too_many_symbolic_link_levels ? ErrorCode::FailedPrecondition
                                                                               : ErrorCode::Unavailable;
         // Windows category messages may use the active code page. Keep the
-        // transport diagnostic ASCII and retain the exact native code/category.
-        return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::string(operation) + " failed (native=" + std::to_string(error.value()) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, error.value(), error.category().name()}})
+        // transport diagnostic UTF-8 and retain the exact native code/category.
+        return make_error({.code = code, .domain = ErrorDomain::IO, .detail = std::string(operation) + " failed (path=" + core::path_to_utf8(path) + ", native=" + std::to_string(error.value()) + ")", .detection = LFS_SOURCE_SITE_CURRENT(), .native = NativeError{ErrorDomain::IO, error.value(), error.category().name()}})
             .with_context(operation, LFS_SOURCE_SITE_CURRENT());
     }
     struct SidecarObservation {
@@ -82,21 +83,23 @@ namespace lfs::media::detail {
 #ifdef _WIN32
             if (handle_ != INVALID_HANDLE_VALUE)
                 return sidecarError(ErrorCode::FailedPrecondition, "Metadata reader already owns an open file");
+            path_ = path;
             handle_ = CreateFileW(core::native_fs::native_path(path).c_str(), metadata_only ? FILE_READ_ATTRIBUTES : GENERIC_READ,
                                   metadata_only ? FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE : FILE_SHARE_READ, nullptr,
                                   OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
             if (handle_ == INVALID_HANDLE_VALUE)
-                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Open XMP sidecar");
+                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Open metadata file", path);
             if (GetFileType(handle_) != FILE_TYPE_DISK)
-                return sidecarError(ErrorCode::FailedPrecondition, "XMP sidecar must be a regular non-symlink file");
+                return sidecarError(ErrorCode::FailedPrecondition, "Metadata file must be regular and non-symlink (path=" + core::path_to_utf8(path) + ")");
             if (!GetFileInformationByHandle(handle_, &initial_))
-                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Inspect XMP sidecar");
+                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Inspect metadata file", path);
             if (initial_.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))
-                return sidecarError(ErrorCode::FailedPrecondition, "XMP sidecar must be a regular non-symlink file");
+                return sidecarError(ErrorCode::FailedPrecondition, "Metadata file must be regular and non-symlink (path=" + core::path_to_utf8(path) + ")");
             const auto size = (std::uint64_t(initial_.nFileSizeHigh) << 32) | initial_.nFileSizeLow;
 #else
             if (descriptor_ >= 0)
                 return sidecarError(ErrorCode::FailedPrecondition, "Metadata reader already owns an open file");
+            path_ = path;
             int access = O_RDONLY;
 #if defined(__linux__)
             if (metadata_only)
@@ -107,22 +110,22 @@ namespace lfs::media::detail {
 #endif
             descriptor_ = ::open(core::native_fs::native_path(path).c_str(), access | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
             if (descriptor_ < 0)
-                return sidecarIoError({errno, std::generic_category()}, "Open XMP sidecar");
+                return sidecarIoError({errno, std::generic_category()}, "Open metadata file", path);
             if (::fstat(descriptor_, &initial_) != 0)
-                return sidecarIoError({errno, std::generic_category()}, "Inspect XMP sidecar");
+                return sidecarIoError({errno, std::generic_category()}, "Inspect metadata file", path);
             if (!S_ISREG(initial_.st_mode) || initial_.st_size < 0)
-                return sidecarError(ErrorCode::FailedPrecondition, "XMP sidecar must be a regular non-symlink file");
+                return sidecarError(ErrorCode::FailedPrecondition, "Metadata file must be regular and non-symlink (path=" + core::path_to_utf8(path) + ")");
             const auto size = static_cast<std::uintmax_t>(initial_.st_size);
 #endif
             if (size > limit)
-                return sidecarError(ErrorCode::ResourceExhausted, "XMP sidecar exceeds its byte limit");
+                return sidecarError(ErrorCode::ResourceExhausted, "Metadata file exceeds its byte limit (path=" + core::path_to_utf8(path) + ", size=" + std::to_string(size) + ", limit=" + std::to_string(limit) + ")");
             return static_cast<std::size_t>(size);
         }
         Result<std::size_t> read(std::span<std::uint8_t> output) {
 #ifdef _WIN32
             DWORD count = 0;
             if (!ReadFile(handle_, output.data(), static_cast<DWORD>(output.size()), &count, nullptr))
-                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Read XMP sidecar");
+                return sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Read metadata file", path_);
             return static_cast<std::size_t>(count);
 #else
             ssize_t count;
@@ -130,7 +133,7 @@ namespace lfs::media::detail {
                 count = ::read(descriptor_, output.data(), output.size());
             } while (count < 0 && errno == EINTR);
             if (count < 0)
-                return sidecarIoError({errno, std::generic_category()}, "Read XMP sidecar");
+                return sidecarIoError({errno, std::generic_category()}, "Read metadata file", path_);
             return static_cast<std::size_t>(count);
 #endif
         }
@@ -146,19 +149,20 @@ namespace lfs::media::detail {
 #ifdef _WIN32
             BY_HANDLE_FILE_INFORMATION current{};
             if (!GetFileInformationByHandle(handle_, &current))
-                return SinkResult::failure(sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Inspect XMP sidecar after read"));
+                return SinkResult::failure(sidecarIoError({static_cast<int>(GetLastError()), std::system_category()}, "Inspect metadata file after read", path_));
 #else
             struct stat current {};
             if (::fstat(descriptor_, &current) != 0)
-                return SinkResult::failure(sidecarIoError({errno, std::generic_category()}, "Inspect XMP sidecar after read"));
+                return SinkResult::failure(sidecarIoError({errno, std::generic_category()}, "Inspect metadata file after read", path_));
 #endif
             if (!observation().sameVersion({current}))
-                return SinkResult::failure(sidecarError(ErrorCode::DataLoss, "XMP sidecar changed while being read"));
+                return SinkResult::failure(sidecarError(ErrorCode::DataLoss, "Metadata file changed while being read (path=" + core::path_to_utf8(path_) + ")"));
             // The Windows handle excludes writers and replacement while open.
             return {};
         }
 
     private:
+        std::filesystem::path path_;
 #ifdef _WIN32
         HANDLE handle_ = INVALID_HANDLE_VALUE;
         BY_HANDLE_FILE_INFORMATION initial_{};
@@ -173,7 +177,7 @@ namespace lfs::media::detail {
     template <class Reader>
     Result<std::vector<std::uint8_t>> readSidecarBytes(Reader& file, std::size_t size) {
         if (size > core::image_codecs::max_xmp_packet_bytes)
-            return sidecarError(ErrorCode::ResourceExhausted, "XMP sidecar exceeds its byte limit");
+            return sidecarError(ErrorCode::ResourceExhausted, "XMP sidecar exceeds its byte limit (size=" + std::to_string(size) + ", limit=" + std::to_string(core::image_codecs::max_xmp_packet_bytes) + ")");
         try {
             std::vector<std::uint8_t> bytes(size);
             std::size_t offset = 0;

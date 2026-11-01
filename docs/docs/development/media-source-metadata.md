@@ -812,6 +812,10 @@ The bounded prefix check uses the existing native reader and does not parse
 foreign XML. Other names, foreign/unreadable/nonregular companions and symlinks
 are preserved. Identity, size and timestamps are compared with the pre-write
 observation; a companion changed or replaced during image output is preserved.
+Edits made before the run still count as generated output when the canonical
+prefix and policy remain intact; a later sidecars-disabled replacement can
+remove that edited companion. Preserve manual edits under a different filename
+or outside the output directory.
 No handle is retained across the image write, so other writers remain able to
 replace the companion on Windows. These checks do not lock a hostile directory
 or establish an atomic image/XMP transaction.
@@ -912,11 +916,18 @@ External entities and DTDs are not resolved. Unknown properties, including the
 exported LichtFeld source-catalog property, stay in the retained packet; reading
 a sidecar does not recursively import that property's serialized catalog.
 
-Sidecar JSON keeps both original and payload hex fields for schema compatibility.
-CLI output emits them in bounded chunks borrowed from the original allocation;
-it does not construct whole-packet hex strings or a complete output string.
-The Python JSON API still returns one complete string and reserves its final
-size before emitting. Escaping and scalar formatting use the shared JSON library.
-The small text/structure plan is prepared before stream output, and output errors
-stop emission. Sidecar scope classification is shared with the generic catalog
-serializer, so it does not depend on a CLI/Python wrapper correction.
+Sidecar scope classification is shared with the generic catalog serializer,
+so it does not depend on a CLI/Python wrapper correction. JSON formatting and
+escaping use the existing metadata serializer, and CLI output errors are
+reported instead of accepted as successful output.
+
+Explicit sidecar association pins the opened image identity without decoding its
+pixels. On macOS the metadata-only `O_EVTONLY` open still requires read permission
+on the image; Linux uses `O_PATH` and does not require image read permission.
+Reading the sidecar itself requires read permission on both platforms. A denied
+open reports the actual file path and native error code.
+
+Sidecar JSON uses the shared metadata DOM serializer, including hexadecimal
+original packet and payload fields. The 32 MiB input ceiling is not a process
+memory ceiling: hex expansion, DOM values and the serialized result require
+additional memory, as with the existing source-metadata command.
