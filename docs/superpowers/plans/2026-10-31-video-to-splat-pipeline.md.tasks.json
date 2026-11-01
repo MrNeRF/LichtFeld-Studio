@@ -71,10 +71,10 @@
     {
       "id": 11,
       "subject": "Task 11: Run smoke check on real footage",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [9, 10],
       "description": "**Goal:** Prove the chain on a real 360 clip, tune presets if under 90% registration, record result for the PR.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/probe.py\", \"src/python/lfs_plugins/video_to_splat/sfm.py\"], \"verifyCommand\": \"scripts/video_to_splat_smoke.py (in-app)\", \"acceptanceCriteria\": [\">= 90% frames registered on a slow indoor clip\", \"training starts automatically\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-01T11:50:00Z"
+  "lastUpdated": "2026-11-01T15:40:00Z"
 }
