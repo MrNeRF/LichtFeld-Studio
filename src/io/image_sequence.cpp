@@ -37,7 +37,9 @@ namespace lfs::io {
         if (components > options.readback_budget / sizeof(float) || components > std::numeric_limits<std::size_t>::max() / sizeof(float))
             return fail(ErrorCode::ResourceExhausted, "Tensor sequence exceeds the per-frame readback budget");
         try {
-            options_ = options;
+            layout_ = layout;
+            input_linear_ = color.transfer == media::ColorTransfer::Linear;
+            cancelled_ = options.output.cancelled;
             linear_.clear();
             bytes_.clear();
             return sequence_.open(options.output);
@@ -55,19 +57,18 @@ namespace lfs::io {
         const auto write = [&]() -> media::SinkResult {
             if (!sequence_.isOpen())
                 return fail(ErrorCode::FailedPrecondition, "Tensor image sequence is not open");
-            const auto& output = options_.output;
-            const auto& layout = output.layout;
+            const auto& layout = layout_;
             const size_t channels = layout.format == media::FramePixelFormat::RGBAFloat32 ? 4 : 3;
             if (!image.is_valid() || image.ndim() != 3 ||
                 (image.dtype() != core::DataType::Float32 && image.dtype() != core::DataType::Float16) ||
                 image.size(0) != static_cast<size_t>(layout.height) || image.size(1) != static_cast<size_t>(layout.width) || image.size(2) != channels)
                 return fail(ErrorCode::InvalidArgument, "Tensor sequence frame requires matching HWC Float16/Float32 RGB/RGBA");
-            if ((output.cancelled && output.cancelled()) || !sequence_.isOpen())
+            if ((cancelled_ && cancelled_()) || !sequence_.isOpen())
                 return fail(ErrorCode::Cancelled, "Tensor image sequence cancelled before readback");
             const auto pixels = image.to(core::DataType::Float32).cpu().contiguous();
             const float* samples = pixels.ptr<float>();
             const auto count = pixels.numel();
-            const bool input_linear = options_.input_color.transfer == media::ColorTransfer::Linear;
+            const bool input_linear = input_linear_;
             const bool rgb8 = layout.format == media::FramePixelFormat::RGB8;
             if (rgb8)
                 bytes_.resize(count);

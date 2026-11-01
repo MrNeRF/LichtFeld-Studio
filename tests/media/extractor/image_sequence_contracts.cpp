@@ -311,6 +311,77 @@ int main() {
             const auto partial_image = metadata.files.output_directory / ("render_0007" + extension);
             require(fs::is_regular_file(partial_image) && !fs::exists(metadata.files.output_directory / ("render_0007" + extension + ".xmp")),
                     "sidecar cancellation did not preserve only the completed image");
+
+            // Cancellation must not leave the previous render's provenance on
+            // a newly published image. Use the visible image commit as the
+            // boundary, independent of internal cancellation poll counts.
+            for (const bool replace_companion : {false, true}) {
+                metadata.files.output_directory = root / ("existing-pair-" + std::to_string(int(format)) + (replace_companion ? "-foreign" : "-owned"));
+                metadata.files.image_output.cancelled = {};
+                metadata.files.exr.cancelled = {};
+                metadata.files.tiff16.cancelled = {};
+                metadata.files.jxl.cancelled = {};
+                metadata.files.avif.cancelled = {};
+                metadata.provenance = R"({"export_id":"previous-render"})";
+                std::fill(pixels.begin(), pixels.end(), uint8_t(40));
+                std::fill(linear.begin(), linear.end(), .25f);
+                good(sequence.open(metadata));
+                good(sequence.write(render));
+                good(sequence.close());
+                const auto replaced_image = metadata.files.output_directory / ("render_0007" + extension);
+                const auto replaced_companion = metadata.files.output_directory / ("render_0007" + extension + ".xmp");
+                const auto previous_pixels = read(replaced_image);
+                const auto previous_packet = read(replaced_companion);
+                metadata.provenance = R"({"export_id":"current-render"})";
+                std::fill(pixels.begin(), pixels.end(), uint8_t(200));
+                std::fill(linear.begin(), linear.end(), .75f);
+                bool replaced = false;
+                const auto interrupt_replacement = [&] {
+                    if (read(replaced_image) == previous_pixels)
+                        return false;
+                    if (replace_companion && !replaced) {
+                        std::ofstream foreign(replaced_companion, std::ios::binary | std::ios::trunc);
+                        foreign << "foreign replacement";
+                        foreign.close();
+                        require(!foreign.fail(), "foreign companion replacement failed");
+                        replaced = true;
+                    }
+                    return true;
+                };
+                metadata.files.image_output.cancelled = interrupt_replacement;
+                metadata.files.exr.cancelled = interrupt_replacement;
+                metadata.files.tiff16.cancelled = interrupt_replacement;
+                metadata.files.jxl.cancelled = interrupt_replacement;
+                metadata.files.avif.cancelled = interrupt_replacement;
+                good(sequence.open(metadata));
+                const auto result = sequence.write(render);
+                require(!result && result.error().code() == ErrorCode::Cancelled && !sequence.close() && sequence.framesAccepted() == 0,
+                        "interrupted pair replacement was accepted");
+                require(read(replaced_image) != previous_pixels, "replacement image was not committed");
+                if (replace_companion)
+                    require(read(replaced_companion) == "foreign replacement", "failure cleanup removed another writer's companion");
+                else
+                    require(!fs::exists(replaced_companion), "failure cleanup left the previous render XMP on new pixels");
+            }
+            metadata.files.output_directory = root / ("orphan-no-replace-" + std::to_string(int(format)));
+            metadata.files.image_output.cancelled = {};
+            metadata.files.exr.cancelled = {};
+            metadata.files.tiff16.cancelled = {};
+            metadata.files.jxl.cancelled = {};
+            metadata.files.avif.cancelled = {};
+            good(sequence.open(metadata));
+            good(sequence.write(render));
+            good(sequence.close());
+            const auto orphan_image = metadata.files.output_directory / ("render_0007" + extension);
+            const auto orphan_companion = metadata.files.output_directory / ("render_0007" + extension + ".xmp");
+            const auto orphan_packet = read(orphan_companion);
+            fs::remove(orphan_image);
+            metadata.files.image_output.overwrite = metadata.files.exr.overwrite = metadata.files.tiff16.overwrite = metadata.files.jxl.overwrite = metadata.files.avif.overwrite = false;
+            good(sequence.open(metadata));
+            require(!sequence.write(render) && !sequence.close() && sequence.framesAccepted() == 0,
+                    "orphan no-replace companion did not refuse output");
+            require(fs::is_regular_file(orphan_image) && read(orphan_companion) == orphan_packet,
+                    "failure cleanup bypassed no-replace for an existing generated companion");
         }
         media::ImageSequenceOptions invalid_metadata;
         invalid_metadata.files.output_directory = root / "invalid-metadata";
@@ -319,6 +390,8 @@ int main() {
         invalid_metadata.write_metadata_sidecars = true;
         for (const std::string& invalid : std::vector<std::string>{"not JSON", "[]", "{\"a\":[[[[[[0]]]]]]}", std::string("{\"a\":\"\xff\"}")}) {
             invalid_metadata.provenance = invalid;
+            const auto preflight = media::validateImageSequenceOptions(invalid_metadata);
+            require(!preflight && preflight.error().code() == ErrorCode::InvalidArgument, "preflight accepted invalid render provenance");
             const auto result = sequence.open(invalid_metadata);
             require(!result && result.error().code() == ErrorCode::InvalidArgument, "invalid render provenance accepted");
             require(!fs::exists(invalid_metadata.files.output_directory), "invalid provenance created output");

@@ -24,12 +24,6 @@ namespace lfs::media {
     SinkResult FileFrameSink::begin(const SinkSession& session) {
         return beginPrepared(session, {});
     }
-    SinkResult FileFrameSink::beginRendered(const SinkSession& session, std::string_view provenance) {
-        auto prepared = detail::prepareRenderedMetadata(options_.format, provenance);
-        if (!prepared)
-            return SinkResult::failure(prepared.error());
-        return beginPrepared(session, {}, std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*prepared)));
-    }
     SinkResult FileFrameSink::beginPrepared(const SinkSession& session, std::shared_ptr<const detail::EmbeddedImageMetadata> prepared_metadata,
                                             std::shared_ptr<const detail::EmbeddedImageMetadata> sidecar) {
         if (active_)
@@ -229,17 +223,22 @@ namespace lfs::media {
                                                              options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
             return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
         };
-        auto previous_sidecar = options_.write_source_metadata_sidecars ? detail::PreviousSourceSidecar{}
-                                                                        : detail::PreviousSourceSidecar::inspect(filename);
+        auto previous_sidecar = !options_.write_source_metadata_sidecars || sidecar_options.overwrite
+                                    ? detail::PreviousSourceSidecar::inspect(filename)
+                                    : detail::PreviousSourceSidecar{};
         if (auto written = write_image(); !written)
             return written;
-        if (auto removed = previous_sidecar.removeUnchanged(); !removed)
-            return removed;
+        if (!options_.write_source_metadata_sidecars)
+            if (auto removed = previous_sidecar.removeUnchanged(); !removed)
+                return removed;
         if (sidecar_metadata_) {
             auto sidecar = filename;
             sidecar += detail::sidecar_metadata_suffix;
-            if (auto written = core::writeTextFileAtomically(sidecar, sidecar_packet, sidecar_options); !written)
+            if (auto written = core::writeTextFileAtomically(sidecar, sidecar_packet, sidecar_options); !written) {
+                if (auto removed = previous_sidecar.removeUnchanged(); !removed)
+                    return removed;
                 return written;
+            }
             // Companion paths are only needed for stale-output cleanup; image
             // names already provide duplicate detection for this fixed format.
             if (options_.remove_stale_frames)

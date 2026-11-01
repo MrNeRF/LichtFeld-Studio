@@ -61,6 +61,27 @@ int main(int argc, char** argv) {
         options.output.provenance = R"({"app_version":"tensor-test","build_commit":"test"})";
         options.output.layout = {3, 5, 9, media::FramePixelFormat::RGB8, {media::ColorTransfer::Srgb, media::ColorPrimaries::Bt709}};
         options.input_color = options.output.layout.color;
+        {
+            auto rejected = options;
+            rejected.output.files.output_directory = root / "oversized-provenance";
+            rejected.output.provenance.assign(32 * 1024 * 1024, 'x');
+            const auto result = output.open(rejected);
+            require(!result && result.error().code() == ErrorCode::ResourceExhausted && !fs::exists(rejected.output.files.output_directory),
+                    "Tensor producer did not reject oversized provenance before output");
+            rejected.output.provenance = "not JSON";
+            const auto malformed = output.open(rejected);
+            require(!malformed && malformed.error().code() == ErrorCode::InvalidArgument && !fs::exists(rejected.output.files.output_directory),
+                    "Tensor producer accepted malformed provenance");
+            rejected.output.write_metadata_sidecars = false;
+            rejected.output.frame_count = 1;
+            rejected.output.provenance.assign(32 * 1024 * 1024, 'x');
+            good(output.open(rejected));
+            std::vector<float> sample_pixels(45, .25f);
+            auto sample = core::Tensor::from_blob(sample_pixels.data(), {5, 3, 3}, core::Device::CPU, core::DataType::Float32);
+            good(output.write(sample));
+            good(output.close());
+            require(!fs::exists(rejected.output.files.output_directory / "frame_0000.png.xmp"), "disabled Tensor metadata wrote a companion");
+        }
         good(output.open(options));
         for (int index = 0; index < 3; ++index) {
             std::vector<float> samples(5 * 6 * 3, (31 + index * 40) / 255.f);

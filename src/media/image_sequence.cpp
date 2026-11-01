@@ -28,7 +28,7 @@ namespace lfs::media {
                 return sequenceError(ErrorCode::Internal, "Image sequence failed with a nonstandard exception");
             }
         }
-        SinkResult validate(const ImageSequenceOptions& options) {
+        SinkResult validate(const ImageSequenceOptions& options, std::shared_ptr<const detail::EmbeddedImageMetadata>* prepared = nullptr) {
             const auto& files = options.files;
             const auto& layout = options.layout;
             if (files.output_directory.empty() ||
@@ -78,12 +78,22 @@ namespace lfs::media {
             if (row_bytes > std::numeric_limits<std::size_t>::max() || layout.row_stride < row_bytes ||
                 static_cast<std::uint64_t>(layout.height) > std::numeric_limits<std::size_t>::max() / layout.row_stride)
                 return sequenceError(ErrorCode::InvalidArgument, "Invalid image sequence stride or byte extent");
+            SinkResult format_valid;
             switch (files.format) {
-            case FrameFileFormat::EXR: return validateExrOutputOptions(files.exr);
-            case FrameFileFormat::TIFF16: return validateTiff16OutputOptions(files.tiff16);
-            case FrameFileFormat::JXL: return validateJxlOutputOptions(files.jxl);
-            case FrameFileFormat::AVIF: return validateAvifOutputOptions(files.avif);
+            case FrameFileFormat::EXR: format_valid = validateExrOutputOptions(files.exr); break;
+            case FrameFileFormat::TIFF16: format_valid = validateTiff16OutputOptions(files.tiff16); break;
+            case FrameFileFormat::JXL: format_valid = validateJxlOutputOptions(files.jxl); break;
+            case FrameFileFormat::AVIF: format_valid = validateAvifOutputOptions(files.avif); break;
             default: break;
+            }
+            if (!format_valid)
+                return format_valid;
+            if (options.write_metadata_sidecars) {
+                auto metadata = detail::prepareRenderedMetadata(files.format, options.provenance);
+                if (!metadata)
+                    return SinkResult::failure(metadata.error());
+                if (prepared)
+                    *prepared = std::make_shared<const detail::EmbeddedImageMetadata>(std::move(*metadata));
             }
             return {};
         }
@@ -95,7 +105,11 @@ namespace lfs::media {
 
     class ImageSequence::Impl {
     public:
-        ImageSequenceOptions options;
+        FrameLayout layout;
+        int framerate = 30;
+        int framerate_denominator = 1;
+        int frame_count = 0;
+        std::function<bool()> cancelled_callback;
         std::unique_ptr<FileFrameSink> sink;
         std::size_t accepted = 0;
         std::optional<Error> failure;
@@ -106,7 +120,7 @@ namespace lfs::media {
         bool cancelled() {
             if (abort_requested)
                 return true;
-            const bool requested = options.cancelled && options.cancelled();
+            const bool requested = cancelled_callback && cancelled_callback();
             // A callback can call abort() and still return false.
             return requested || abort_requested;
         }
@@ -121,20 +135,25 @@ namespace lfs::media {
         SinkResult open(const ImageSequenceOptions& request) {
             if (sink)
                 return sequenceError(ErrorCode::FailedPrecondition, "Image sequence already open");
-            if (auto valid = validate(request); !valid)
+            std::shared_ptr<const detail::EmbeddedImageMetadata> metadata;
+            if (auto valid = validate(request, &metadata); !valid)
                 return valid;
-            options = request;
+            layout = request.layout;
+            framerate = request.framerate;
+            framerate_denominator = request.framerate_denominator;
+            frame_count = request.frame_count;
+            cancelled_callback = request.cancelled;
             accepted = 0;
             failure.reset();
             aborted = false;
             abort_requested = false;
             if (cancelled())
                 return sequenceError(ErrorCode::Cancelled, "Image sequence cancelled before opening");
-            auto files = options.files;
+            auto files = request.files;
             files.numbering = FrameFileNumbering::DeliveryIndex;
-            files.write_source_metadata_sidecars = options.write_metadata_sidecars;
+            files.write_source_metadata_sidecars = request.write_metadata_sidecars;
             // Preserve each writer's own callback while adding the job token.
-            const auto combine = [this, job = options.cancelled](const std::function<bool()>& writer) {
+            const auto combine = [this, job = request.cancelled](const std::function<bool()>& writer) {
                 return [this, job, writer] {
                     if (abort_requested)
                         return true;
@@ -149,18 +168,17 @@ namespace lfs::media {
             files.jxl.cancelled = combine(files.jxl.cancelled);
             files.avif.cancelled = combine(files.avif.cancelled);
             sink = std::make_unique<FileFrameSink>(std::move(files));
-            const SinkSession session{.output = options.layout};
-            return options.write_metadata_sidecars ? sink->beginRendered(session, options.provenance) : sink->begin(session);
+            return sink->beginPrepared({.output = layout}, {}, std::move(metadata));
         }
         SinkResult write(const FrameView& input) {
             if (!sink)
                 return sequenceError(ErrorCode::FailedPrecondition, "Image sequence is not open");
-            if (accepted >= static_cast<std::size_t>(options.frame_count))
+            if (accepted >= static_cast<std::size_t>(frame_count))
                 return sequenceError(ErrorCode::BoundsViolation, "Image sequence has received all requested frames");
             if (cancelled())
                 return sequenceError(ErrorCode::Cancelled, "Image sequence cancelled before writing");
             const auto& actual = input.layout;
-            const auto& expected = options.layout;
+            const auto& expected = layout;
             if (actual.width != expected.width || actual.height != expected.height || actual.format != expected.format ||
                 actual.color.transfer != expected.color.transfer || actual.color.primaries != expected.color.primaries ||
                 actual.color.alpha != expected.color.alpha || actual.color.units != expected.color.units)
@@ -169,9 +187,9 @@ namespace lfs::media {
                 return SinkResult::failure(required.error());
             auto frame = input;
             frame.info = {.delivery_index = accepted,
-                          .relative_seconds = static_cast<double>(accepted) * options.framerate_denominator / options.framerate,
+                          .relative_seconds = static_cast<double>(accepted) * framerate_denominator / framerate,
                           .origin = FrameOrigin::Rendered,
-                          .output_timestamp = Timestamp{static_cast<int64_t>(accepted), {options.framerate_denominator, options.framerate}}};
+                          .output_timestamp = Timestamp{static_cast<int64_t>(accepted), {framerate_denominator, framerate}}};
             if (auto written = sink->write(frame); !written)
                 return written;
             ++accepted;
@@ -186,7 +204,7 @@ namespace lfs::media {
                 return {};
             if (cancelled())
                 return sequenceError(ErrorCode::Cancelled, "Image sequence cancelled before completion");
-            if (accepted != static_cast<std::size_t>(options.frame_count))
+            if (accepted != static_cast<std::size_t>(frame_count))
                 return sequenceError(ErrorCode::FailedPrecondition, "Image sequence is incomplete");
             const SinkSummary summary{.outcome = SinkOutcome::Completed, .frames_accepted = accepted};
             if (auto prepared = sink->prepareComplete(summary); !prepared)
