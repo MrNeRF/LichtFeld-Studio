@@ -49,8 +49,6 @@ namespace lfs::vis {
                 transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
             }
             camera_snapshot_ = cameras;
-            if (++transforms_generation_ == 0)
-                ++transforms_generation_;
         }
 
         const lfs::rendering::CameraFrustumPickRequest request{
@@ -59,8 +57,7 @@ namespace lfs::vis {
             .viewport_size = panel->viewport_size,
             .viewport = panel->viewport_data,
             .scale = settings.camera_frustum_scale,
-            .scene_transforms = scene_transforms_,
-            .camera_generation = transforms_generation_};
+            .scene_transforms = scene_transforms_};
 
         const auto pick_result = engine->pickCameraFrustum(*cameras, request);
 

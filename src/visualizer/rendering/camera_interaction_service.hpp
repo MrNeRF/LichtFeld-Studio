@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include "core/export.hpp"
 #include "rendering_types.hpp"
 #include "viewport_interaction_context.hpp"
 #include <chrono>
-#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
@@ -24,7 +22,7 @@ namespace lfs::rendering {
 namespace lfs::vis {
     class SceneManager;
 
-    class LFS_VIS_API CameraInteractionService {
+    class CameraInteractionService {
     public:
         static constexpr auto PICK_THROTTLE_INTERVAL = std::chrono::milliseconds(50);
 
@@ -64,7 +62,6 @@ namespace lfs::vis {
         int hovered_camera_id_ = -1;
         std::chrono::steady_clock::time_point last_pick_time_{};
         std::weak_ptr<const std::vector<std::shared_ptr<const lfs::core::Camera>>> camera_snapshot_;
-        std::uint64_t transforms_generation_ = 0;
         std::vector<glm::mat4> scene_transforms_;
     };
 

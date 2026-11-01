@@ -486,8 +486,6 @@ namespace lfs::rendering {
         float scale = 0.1f;
         glm::mat4 scene_transform{1.0f};
         std::span<const glm::mat4> scene_transforms;
-        // A new generation forces a rebuild; zero disables reuse.
-        std::uint64_t camera_generation = 0;
     };
 
     // Main rendering engine

@@ -258,7 +258,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_keymap_layout_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
-        test_viewer_scale.cpp
+        test_camera_frustum_pick.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
         test_scale_distance.cpp
@@ -319,7 +319,6 @@ if(BUILD_VISUALIZER_TESTS)
         lfs_training
         lfs_io
         lfs_rendering
-        TBB::tbb
         lfs_sequencer
         lfs_visualizer
         lfs_core
@@ -942,7 +941,6 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
-    test_viewer_scale.cpp
     test_crop_polygon.cpp
     test_higs_exact_depth.cpp
     test_higs_deterministic_export.cpp
