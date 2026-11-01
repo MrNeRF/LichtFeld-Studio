@@ -95,6 +95,44 @@ namespace {
         }
     };
 
+    TEST(ZepRmlFontTest, ResolvesPrimaryAndFallbackFacesWithNormalizedFamilies) {
+        struct FontEngine : Rml::FontEngineInterface {
+            Rml::String available_family;
+            int resolved_faces = 0;
+            Rml::FontFaceHandle GetFontFaceHandle(const Rml::String& family, Rml::Style::FontStyle,
+                                                  Rml::Style::FontWeight, int) override {
+                EXPECT_EQ(family, Rml::StringUtilities::ToLower(family));
+                if (family != available_family)
+                    return {};
+                ++resolved_faces;
+                return Rml::FontFaceHandle{1};
+            }
+            int GetStringWidth(Rml::FontFaceHandle, Rml::StringView text,
+                               const Rml::TextShapingContext&, Rml::Character) override {
+                return static_cast<int>(text.size()) * 8;
+            }
+        };
+        struct FontEnvironment {
+            FontEngine engine;
+            bool initialized = false;
+            FontEnvironment() { Rml::SetFontEngineInterface(&engine); }
+            ~FontEnvironment() {
+                if (initialized)
+                    Rml::Shutdown();
+                Rml::SetFontEngineInterface(nullptr);
+            }
+        };
+        for (const auto* family : {"jetbrains mono", "inter"}) {
+            SCOPED_TRACE(family);
+            FontEnvironment environment;
+            environment.engine.available_family = family;
+            environment.initialized = Rml::Initialise();
+            ASSERT_TRUE(environment.initialized);
+            PythonEditor editor;
+            EXPECT_GT(environment.engine.resolved_faces, 0);
+        }
+    }
+
     TEST_F(ShaderEditorTest, EditorChangesAndClosureWakeObserversWithoutShaderWork) {
         editor.setShaderChanges(service.changes());
         const auto doc = editor.newDocument("draft", DocumentKind::Shader);
