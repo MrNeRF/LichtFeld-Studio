@@ -32,8 +32,9 @@ namespace lfs::vis {
             return hovered_camera_id_;
         }
 
-        auto cameras = scene_manager->getScene().getVisibleCameras();
-        if (cameras.empty()) {
+        const auto& scene = scene_manager->getScene();
+        const auto cameras = scene.getVisibleCamerasCached();
+        if (!cameras || cameras->empty()) {
             return -1;
         }
 
@@ -42,9 +43,12 @@ namespace lfs::vis {
             return hovered_camera_id_;
         }
 
-        auto scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
-        for (auto& transform : scene_transforms) {
-            transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+        if (cameras != camera_snapshot_.lock()) {
+            scene_transforms_ = scene.getVisibleCameraSceneTransforms();
+            for (auto& transform : scene_transforms_) {
+                transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+            }
+            camera_snapshot_ = cameras;
         }
 
         const lfs::rendering::CameraFrustumPickRequest request{
@@ -53,9 +57,9 @@ namespace lfs::vis {
             .viewport_size = panel->viewport_size,
             .viewport = panel->viewport_data,
             .scale = settings.camera_frustum_scale,
-            .scene_transforms = std::move(scene_transforms)};
+            .scene_transforms = scene_transforms_};
 
-        const auto pick_result = engine->pickCameraFrustum(cameras, request);
+        const auto pick_result = engine->pickCameraFrustum(*cameras, request);
 
         int cam_id = -1;
         if (pick_result) {

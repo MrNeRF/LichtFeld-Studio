@@ -258,6 +258,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_keymap_layout_contract.cpp
         test_sidebar_input_dispatch.cpp
         test_point_cloud_vulkan_projection.cpp
+        test_camera_frustum_pick.cpp
         test_viewport_grid.cpp
         test_align_transform.cpp
         test_scale_distance.cpp
@@ -317,6 +318,7 @@ if(BUILD_VISUALIZER_TESTS)
     target_link_libraries(lichtfeld_visualizer_tests PRIVATE
         lfs_training
         lfs_io
+        lfs_rendering
         lfs_sequencer
         lfs_visualizer
         lfs_core

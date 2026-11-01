@@ -121,6 +121,8 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -2490,6 +2492,12 @@ namespace lfs::vis::gui {
             return *cache;
         }
 
+        enum class FrustumEmit : std::uint8_t {
+            None,
+            Instance,
+            Equirectangular,
+        };
+
         struct CachedFrustumOverlay {
             FrustumOverlayInputKey key{};
             bool valid = false;
@@ -2521,6 +2529,7 @@ namespace lfs::vis::gui {
             std::vector<glm::vec4> camera_colors;
             std::vector<std::uint32_t> instance_camera_indices;
             std::vector<std::uint32_t> textured_camera_indices;
+            std::vector<FrustumEmit> emitted;
             bool has_equirectangular_lines = false;
             std::shared_ptr<VulkanViewportFrustumOverlayData> data =
                 std::make_shared<VulkanViewportFrustumOverlayData>();
@@ -2896,15 +2905,15 @@ namespace lfs::vis::gui {
                         panel.render_size, settings.focal_length_mm);
                     const std::uint32_t first_instance =
                         static_cast<std::uint32_t>(cache.data->frustum_instances.size());
-                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                    const auto project_camera = [&](const size_t camera_index) {
                         if (!cache.valid_cameras[camera_index])
-                            continue;
+                            return FrustumEmit::None;
                         const bool disabled = cache.disabled_cameras[camera_index] != 0;
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], translation,
                             settings.camera_frustum_scale, disabled);
                         if (alpha <= 0.01f)
-                            continue;
+                            return FrustumEmit::None;
                         const bool emphasized = cache.emphasized_cameras[camera_index] != 0;
                         const bool focused = cache.uids[camera_index] == hovered_camera_id;
                         const glm::vec4 color = cachedCameraFrustumColor(
@@ -2917,15 +2926,11 @@ namespace lfs::vis::gui {
                             disabled,
                             emphasized);
                         if (color.a <= 0.01f)
-                            continue;
+                            return FrustumEmit::None;
                         const size_t projected_index = panel_index * camera_count + camera_index;
                         cache.camera_colors[projected_index] = color;
-                        if (cache.equirectangular_cameras[camera_index]) {
-                            appendEquirectangularCameraFrustum(
-                                line_params, panel, settings, cache.models[camera_index], color);
-                            cache.has_equirectangular_lines = true;
-                            continue;
-                        }
+                        if (cache.equirectangular_cameras[camera_index])
+                            return FrustumEmit::Equirectangular;
 
                         constexpr std::array image_corners{
                             glm::vec3(-0.5f, -0.5f, -1.0f),
@@ -2944,7 +2949,7 @@ namespace lfs::vis::gui {
                                                         glm::dot(glm::vec3(cache.models[camera_index][2]), glm::vec3(cache.models[camera_index][2])));
                         const glm::vec3 center_view = world_to_panel_rotation * (center - translation);
                         if (!settings.equirectangular && center_view.z - radius >= -1e-4f) {
-                            continue;
+                            return FrustumEmit::None;
                         }
                         if (!settings.equirectangular && center_view.z + radius < -1e-4f) {
                             if (settings.orthographic &&
@@ -2956,7 +2961,7 @@ namespace lfs::vis::gui {
                                     projected_x - projected_radius > width ||
                                     projected_y + projected_radius < 0.0f ||
                                     projected_y - projected_radius > height) {
-                                    continue;
+                                    return FrustumEmit::None;
                                 }
                             } else if (!settings.orthographic && fx > 0.0f && fy > 0.0f) {
                                 const float depth = -center_view.z;
@@ -2968,7 +2973,7 @@ namespace lfs::vis::gui {
                                 const float vertical_limit = std::atan2(cy, fy);
                                 if (std::abs(horizontal_angle) - angular_radius > horizontal_limit ||
                                     std::abs(vertical_angle) - angular_radius > vertical_limit) {
-                                    continue;
+                                    return FrustumEmit::None;
                                 }
                             }
                         }
@@ -3009,18 +3014,41 @@ namespace lfs::vis::gui {
                         cache.projected_points[projected_index] = screen_points;
                         cache.projected_depths[projected_index] = depths;
                         cache.projected_visible[projected_index] = quad_visible;
-                        if (quad_visible && cache.thumbnail_indices[camera_index] >= 0) {
+                        return FrustumEmit::Instance;
+                    };
+                    // Cameras are culled and projected in parallel, each into its own slots; appending runs in camera
+                    // order below, so the instances, thumbnails and lines are those of a sequential pass.
+                    cache.emitted.resize(camera_count);
+                    tbb::parallel_for(tbb::blocked_range<size_t>(0, camera_count, 512), [&](const tbb::blocked_range<size_t>& range) {
+                        for (size_t camera_index = range.begin(); camera_index != range.end(); ++camera_index)
+                            cache.emitted[camera_index] = project_camera(camera_index);
+                    });
+                    for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
+                        const size_t projected_index = panel_index * camera_count + camera_index;
+                        const glm::vec4 color = cache.camera_colors[projected_index];
+                        if (cache.emitted[camera_index] == FrustumEmit::Equirectangular) {
+                            appendEquirectangularCameraFrustum(
+                                line_params, panel, settings, cache.models[camera_index], color);
+                            cache.has_equirectangular_lines = true;
+                            continue;
+                        }
+                        if (cache.emitted[camera_index] != FrustumEmit::Instance)
+                            continue;
+                        if (cache.projected_visible[projected_index] && cache.thumbnail_indices[camera_index] >= 0) {
                             const auto& placement = cache.thumbnail_placements[camera_index];
                             appendTexturedOverlayQuad(
                                 params,
                                 cache.data->textured_overlays,
                                 placement.texture_id,
-                                screen_points,
+                                cache.projected_points[projected_index],
                                 placement.uv_min,
                                 placement.uv_max,
                                 {color.r, color.g, color.b, std::clamp(color.a * 0.8f, 0.0f, 0.8f)},
-                                {emphasized ? 0.18f : 0.0f, disabled ? 0.5f : 0.0f, 0.0f, 0.0f},
-                                depths);
+                                {cache.emphasized_cameras[camera_index] != 0 ? 0.18f : 0.0f,
+                                 cache.disabled_cameras[camera_index] != 0 ? 0.5f : 0.0f,
+                                 0.0f,
+                                 0.0f},
+                                cache.projected_depths[projected_index]);
                             cache.textured_camera_indices.push_back(
                                 static_cast<std::uint32_t>(projected_index));
                         }

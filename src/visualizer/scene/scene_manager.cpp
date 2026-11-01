@@ -3800,7 +3800,12 @@ namespace lfs::vis {
         const bool point_cloud_fallback = !options.metadata_only &&
                                           !hasRenderableGaussians(current_model) &&
                                           !visible_point_cloud_nodes.empty();
-        if (!point_cloud_fallback && cached_render_state_ &&
+        // A single visible point cloud is referenced, not copied, so its state stays valid; only a merge owns a copy.
+        const bool point_cloud_shared = point_cloud_fallback && visible_point_cloud_nodes.size() == 1;
+        if ((!point_cloud_fallback ||
+             (point_cloud_shared && cached_render_state_ &&
+              cached_render_state_->point_cloud == visible_point_cloud_nodes.front()->point_cloud.get())) &&
+            cached_render_state_ &&
             cached_render_scene_generation_ == scene_generation &&
             cached_render_selection_generation_ == selection_generation &&
             cached_render_gaussian_selection_generation_ == gaussian_selection_generation &&

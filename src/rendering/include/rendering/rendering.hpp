@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -484,7 +485,7 @@ namespace lfs::rendering {
         ViewportData viewport;
         float scale = 0.1f;
         glm::mat4 scene_transform{1.0f};
-        std::vector<glm::mat4> scene_transforms;
+        std::span<const glm::mat4> scene_transforms;
     };
 
     // Main rendering engine
