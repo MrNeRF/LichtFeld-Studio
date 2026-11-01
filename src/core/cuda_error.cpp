@@ -8,6 +8,7 @@
 #include "core/error_codes.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 
 #include <algorithm>
 #include <array>
@@ -814,6 +815,24 @@ namespace lfs::core {
         emit_cuda_failure_report(
             completion.effective_error, state, expression, message, location,
             completion.post_sync_error, completion.post_peek_error, true);
+        // Running out of VRAM is recoverable: training retries or skips work on
+        // a typed allocation failure. The error is consumed so the next launch
+        // check does not report it again.
+        if (completion.effective_error == cudaErrorMemoryAllocation) {
+            (void)cudaGetLastError();
+            int device = 0;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                (void)cudaGetLastError();
+            }
+            throw MemoryAllocationError(AllocationFailure{
+                .domain = MemoryDomain::CudaDevice,
+                .device = device,
+                .stream = state.stream,
+                .label = "cuda.check",
+                .operation = "cuda.call",
+                .native_error = cudaErrorMemoryAllocation,
+            });
+        }
         throw std::runtime_error(std::format(
             "CUDA call failed: {} at {}:{}", expression, location.file_name(), location.line()));
     }

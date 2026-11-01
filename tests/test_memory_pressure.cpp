@@ -339,6 +339,23 @@ TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromTensorPath) {
     });
 }
 
+// Kernel scratch such as a refine's sampling keys must fail the same typed way
+// as tensor storage, or a full device stops training instead of skipping a step.
+TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromScratchPath) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "no CUDA device";
+    }
+    constexpr size_t kBytes = size_t{1} << 20;
+    coordinator().set_allocation_probe([](MemoryDomain domain, size_t) { return domain == MemoryDomain::CudaDevice; });
+    EXPECT_THROW((UniqueCudaAllocation<StreamOrderedCudaAllocator>(kBytes, nullptr, "test.scratch")),
+                 MemoryAllocationError);
+    EXPECT_THROW((UniqueCudaAllocation<DirectCudaAllocator>(kBytes, nullptr, "test.scratch")), MemoryAllocationError);
+    coordinator().set_allocation_probe(nullptr);
+    EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+    EXPECT_NO_THROW((UniqueCudaAllocation<StreamOrderedCudaAllocator>(kBytes, nullptr, "test.scratch")));
+}
+
 TEST_F(MemoryPressureTest, TrainingFailureDoesNotDegradePreview) {
     coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 0; });
     coordinator().run_episode(device_failure(1024), PressureContext::TrainingThread);
