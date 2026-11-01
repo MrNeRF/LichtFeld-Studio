@@ -33,6 +33,7 @@ class MRNFStrategyTest_GrowthExchangeCosineQuotaAtStartMiddleAndEnd_Test;
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
@@ -1339,6 +1340,87 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     EXPECT_EQ(splat_data.size(), initial_size);
     EXPECT_EQ(strategy.active_count(), initial_size - 1);
     EXPECT_EQ(strategy.free_count(), 1u);
+}
+
+// A refine that runs out of VRAM at any allocation must be undone to the rows
+// it started from, and the next refine must grow that model cleanly.
+TEST(MRNFStrategyTest, RefineOutOfVramIsUndoneToTheRowsItStartedFrom) {
+    auto& pressure = lfs::core::MemoryPressureCoordinator::instance();
+    const auto prepare = [](MRNF& strategy, SplatData& splat) {
+        strategy.ensure_densification_info_shape();
+        strategy._refine_weight_max = Tensor::full({static_cast<size_t>(splat.size())}, 1.0f, Device::CUDA);
+        auto visibility = strategy.visibility_accumulator();
+        visibility.fill_(1.0f);
+    };
+    const auto expect_whole = [](MRNF& strategy, SplatData& splat) {
+        const size_t n = splat.size();
+        for (const auto* rows : {&splat.sh0(), &splat.scaling_raw(), &splat.rotation_raw(), &splat.opacity_raw()})
+            EXPECT_EQ(rows->size(0), n);
+        EXPECT_TRUE(!splat.has_deleted_mask() || splat.deleted_mask_matches_size());
+        // The free mask spans the reserved capacity, not just the live rows.
+        EXPECT_GE(strategy._free_mask.numel(), n);
+        for (const auto type : {ParamType::Means, ParamType::Sh0, ParamType::Scaling, ParamType::Rotation,
+                                ParamType::Opacity}) {
+            const auto* state = strategy.get_optimizer().get_state(type);
+            ASSERT_NE(state, nullptr);
+            EXPECT_EQ(state->size, n) << static_cast<int>(type);
+        }
+    };
+
+    bool completed = false;
+    int undone = 0;
+    for (int allowed = 0; !completed && allowed < 256; ++allowed) {
+        SCOPED_TRACE(::testing::Message() << "allocations allowed: " << allowed);
+        auto splat = create_mrnf_test_splat_data(300);
+        MRNF strategy(splat);
+        auto params = vanilla_mrnf_params();
+        params.iterations = 10'000;
+        params.sh_degree_interval = 10'000;
+        params.max_cap = 1000;
+        params.growth_grad_threshold = 0.5f;
+        params.grow_fraction = 1.0f;
+        params.grow_until_iter = 10'000;
+        strategy.initialize(params);
+        prepare(strategy, splat);
+        const size_t before = splat.size();
+        const auto shN_before = splat.shN().numel();
+        const RefineRowSnapshot rows_before(
+            splat, strategy.get_optimizer(),
+            [&](const std::function<void(Tensor&)>& visit) { strategy.for_each_gaussian_row(visit); });
+
+        int calls = 0;
+        pressure.set_allocation_probe([&](const lfs::core::MemoryDomain domain, size_t) {
+            return domain == lfs::core::MemoryDomain::CudaDevice && ++calls > allowed;
+        });
+        bool failed = false;
+        try {
+            strategy.grow_and_split(1, 0);
+        } catch (const lfs::core::MemoryAllocationError&) {
+            failed = true;
+        }
+        pressure.set_allocation_probe(nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        if (failed) {
+            ++undone;
+            ASSERT_TRUE(rows_before.restore());
+            EXPECT_EQ(splat.size(), before);
+            EXPECT_EQ(splat.shN().numel(), shN_before);
+        } else {
+            completed = true;
+            EXPECT_GT(splat.size(), before);
+        }
+        expect_whole(strategy, splat);
+
+        const size_t grown_from = splat.size();
+        prepare(strategy, splat);
+        ASSERT_NO_THROW(strategy.grow_and_split(2, 0));
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_GT(splat.size(), grown_from);
+        expect_whole(strategy, splat);
+    }
+    EXPECT_TRUE(completed);
+    EXPECT_GT(undone, 0);
 }
 
 TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {

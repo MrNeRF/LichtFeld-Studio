@@ -88,9 +88,10 @@ namespace lfs::training {
         using Phase = Trainer::StepPhase;
         using Recovery = Trainer::StepOomRecovery;
 
-        static Recovery step_oom(const lfs::Error& error, const Phase phase, const bool committed) {
+        static Recovery step_oom(const lfs::Error& error, const Phase phase, const bool committed,
+                                 const bool refine_undone = false) {
             return Trainer::classify_step_oom(
-                error, Trainer::MutationStamp{.iteration = 7, .epoch = 3, .phase = phase, .persistent_commit = committed});
+                error, Trainer::MutationStamp{.iteration = 7, .epoch = 3, .phase = phase, .persistent_commit = committed, .refine_undone = refine_undone});
         }
 
         static lfs::Status recover_with_sync_status(
@@ -154,7 +155,11 @@ namespace {
         EXPECT_EQ(Access::step_oom(exhausted, Phase::OptimizerCommit, true), Recovery::Fail);
         EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, true), Recovery::Fail);
         EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, false), Recovery::Fail);
+        // A refine cut back to the rows it started from leaves the model whole.
+        EXPECT_EQ(Access::step_oom(exhausted, Phase::RefinementCommit, true, true), Recovery::SkipRest);
         EXPECT_EQ(Access::step_oom(make_retry_test_error(lfs::ErrorCode::Internal), Phase::Backward, false),
+                  Recovery::Fail);
+        EXPECT_EQ(Access::step_oom(make_retry_test_error(lfs::ErrorCode::Internal), Phase::RefinementCommit, true, true),
                   Recovery::Fail);
     }
 

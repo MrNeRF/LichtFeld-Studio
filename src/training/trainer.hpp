@@ -545,6 +545,8 @@ namespace lfs::training {
             std::uint64_t epoch;
             StepPhase phase;
             bool persistent_commit;
+            // A refine that ran out of VRAM was cut back to the rows it started from.
+            bool refine_undone = false;
         };
 
         // Returns the background color to use at a given iteration
@@ -583,6 +585,7 @@ namespace lfs::training {
         [[nodiscard]] static StepOomRecovery classify_step_oom(
             const lfs::Error& step_error, MutationStamp failed) noexcept;
         [[nodiscard]] lfs::Status recover_from_oom(const lfs::Error& cause);
+        void post_backward_or_undo(int iter, RenderOutput& render_output, bool& refine_undone);
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
         int get_regular_iterations() const;

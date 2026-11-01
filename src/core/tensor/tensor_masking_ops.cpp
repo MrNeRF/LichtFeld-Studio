@@ -2612,4 +2612,22 @@ namespace lfs::core {
         return *this;
     }
 
+    Tensor& Tensor::truncate_rows(const size_t n_rows) {
+        materialize_if_deferred();
+        LFS_ASSERT_MSG(is_valid() && shape_.rank() > 0 && n_rows <= shape_[0] && is_contiguous(),
+                       std::format("truncate_rows({}) needs a contiguous tensor with at least that many rows "
+                                   "(shape={})",
+                                   n_rows, shape_.str()));
+        if (n_rows == shape_[0]) {
+            return *this;
+        }
+        if (state_->logical_size > 0) {
+            state_->logical_size = n_rows;
+        }
+        auto new_shape = shape_.dims();
+        new_shape[0] = n_rows;
+        shape_ = TensorShape(new_shape);
+        return *this;
+    }
+
 } // namespace lfs::core

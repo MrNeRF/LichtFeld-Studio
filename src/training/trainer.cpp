@@ -6119,13 +6119,32 @@ namespace lfs::training {
     Trainer::StepOomRecovery Trainer::classify_step_oom(
         const lfs::Error& step_error,
         const MutationStamp failed) noexcept {
+        if (step_error.code() != lfs::ErrorCode::ResourceExhausted) {
+            return StepOomRecovery::Fail;
+        }
+        if (failed.refine_undone) {
+            return StepOomRecovery::SkipRest;
+        }
         // Optimizer and refinement commits can stop halfway through the model.
-        if (step_error.code() != lfs::ErrorCode::ResourceExhausted ||
-            failed.phase == StepPhase::OptimizerCommit || failed.phase == StepPhase::RefinementCommit) {
+        if (failed.phase == StepPhase::OptimizerCommit || failed.phase == StepPhase::RefinementCommit) {
             return StepOomRecovery::Fail;
         }
         // Repeating a step that already committed would repeat its commit.
         return failed.persistent_commit ? StepOomRecovery::SkipRest : StepOomRecovery::RetryIteration;
+    }
+
+    // Splits shrink their parents before the children land, so an undone
+    // refine is not repeated; the step is dropped and the next refine grows.
+    void Trainer::post_backward_or_undo(const int iter, RenderOutput& render_output, bool& refine_undone) {
+        const RefineRowSnapshot rows_before(
+            strategy_->get_model(), strategy_->get_optimizer(),
+            [this](const std::function<void(lfs::core::Tensor&)>& visit) { strategy_->for_each_gaussian_row(visit); });
+        try {
+            strategy_->post_backward(iter, render_output);
+        } catch (const lfs::core::MemoryAllocationError&) {
+            refine_undone = rows_before.restore();
+            throw;
+        }
     }
 
     lfs::Status Trainer::recover_from_oom(const lfs::Error& cause) {
@@ -6217,6 +6236,7 @@ namespace lfs::training {
         const FrameVramProbe vram_probe(iter);
         StepPhase current_phase = StepPhase::Forward;
         bool persistent_commit = false;
+        bool refine_undone = false;
         const int prof_start = params_.optimization.profile_start_iter;
         const int prof_stop = params_.optimization.profile_stop_iter;
         const bool profile_window_active =
@@ -6546,7 +6566,7 @@ namespace lfs::training {
                     const size_t model_size_before = static_cast<size_t>(model.size());
                     ++mutation_epoch_;
                     persistent_commit = true;
-                    strategy_->post_backward(iter, r_output);
+                    post_backward_or_undo(iter, r_output, refine_undone);
                     maybe_morton_reorder(iter);
                     fastgs_strategy_hooks_at_start = true;
 
@@ -8473,7 +8493,7 @@ namespace lfs::training {
                             current_phase = StepPhase::RefinementCommit;
                             ++mutation_epoch_;
                             persistent_commit = true;
-                            strategy_->post_backward(iter, r_output);
+                            post_backward_or_undo(iter, r_output, refine_undone);
                             maybe_morton_reorder(iter);
                         }
                         if (!fastgs_path && !in_popspa) {
@@ -8856,12 +8876,13 @@ namespace lfs::training {
                 return "Unknown";
             };
             failed_step_ = MutationStamp{static_cast<std::uint64_t>(iter), mutation_epoch_,
-                                         current_phase, persistent_commit};
+                                         current_phase, persistent_commit, refine_undone};
             lfs::SmallFields fields;
             fields.add("iteration", static_cast<std::int64_t>(iter))
                 .add("mutation_epoch", static_cast<std::int64_t>(mutation_epoch_))
                 .add("step_phase", phase_name(current_phase))
-                .add("persistent_commit", persistent_commit);
+                .add("persistent_commit", persistent_commit)
+                .add("refine_undone", refine_undone);
             return std::move(result).error().with_context(
                 "train_step", LFS_SOURCE_SITE_CURRENT(), std::move(fields));
         }
@@ -9456,15 +9477,19 @@ namespace lfs::training {
                     }
                     ++oom_steps_in_a_row;
                     repeat_iteration = recovery == StepOomRecovery::RetryIteration;
+                    // Backward may have written gradients no update consumed.
+                    active_gaussian_optimizer().zero_grad(iter);
+                    if (ppisp_)
+                        ppisp_->zero_grad();
+                    if (bilateral_grid_)
+                        bilateral_grid_->zero_grad();
                     if (repeat_iteration) {
-                        // Backward may have written part of the gradients.
-                        active_gaussian_optimizer().zero_grad(iter);
-                        if (ppisp_)
-                            ppisp_->zero_grad();
-                        if (bilateral_grid_)
-                            bilateral_grid_->zero_grad();
                         LOG_WARN("Iteration {} ran out of VRAM ({} in a row); retrying it on another view", iter,
                                  oom_steps_in_a_row);
+                    } else if (failed_step_.refine_undone) {
+                        LOG_WARN("Refinement at iteration {} ran out of VRAM; dropped its new Gaussians and "
+                                 "skipped the rest of the step",
+                                 iter);
                     } else {
                         LOG_WARN("Iteration {} ran out of VRAM after its update; skipped the rest of it", iter);
                     }

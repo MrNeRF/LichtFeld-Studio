@@ -2939,6 +2939,10 @@ namespace lfs::core {
          */
         Tensor& append_zeros(size_t n_rows);
 
+        // Drops the rows past n_rows without freeing or moving them; append_zeros
+        // grows into them again. Undoes appends that a failed mutation left behind.
+        Tensor& truncate_rows(size_t n_rows);
+
         // Lazy indexing operations (returns expression template)
         auto gather_lazy(const Tensor& indices) const -> PermutationExpr<TensorLeaf, TensorLeaf>;
 

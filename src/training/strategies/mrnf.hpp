@@ -22,6 +22,7 @@ namespace lfs::training::sh_value {
 }
 
 class MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
+class MRNFStrategyTest_RefineOutOfVramIsUndoneToTheRowsItStartedFrom_Test;
 class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
 class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
 class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
@@ -115,6 +116,7 @@ namespace lfs::training {
 
     private:
         friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
+        friend class ::MRNFStrategyTest_RefineOutOfVramIsUndoneToTheRowsItStartedFrom_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
