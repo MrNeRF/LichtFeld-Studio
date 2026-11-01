@@ -80,13 +80,17 @@ namespace lfs::training::morton {
         }
 
         // Bump allocator over block-bound buffers taken before the reorder
-        // starts, so re-encoding needs no VRAM once rows move.
+        // starts, so re-encoding needs no VRAM once rows move. Each buffer
+        // starts on a float4 boundary: the q16 SH bounds are two floats per
+        // block, and an odd block count would misalign the Adam bounds after them.
         class BoundsScratch {
         public:
             BoundsScratch() = default;
             explicit BoundsScratch(Tensor storage) : storage_(std::move(storage)) {}
 
             [[nodiscard]] Tensor take(TensorShape shape, cudaStream_t stream) {
+                constexpr std::size_t FLOAT4 = 4;
+                used_ = (used_ + FLOAT4 - 1) / FLOAT4 * FLOAT4;
                 const std::size_t floats = shape.elements();
                 if (!storage_.is_valid() || used_ + floats > storage_.numel()) {
                     Tensor own = Tensor::empty_exact(std::move(shape), DataType::Float32);
