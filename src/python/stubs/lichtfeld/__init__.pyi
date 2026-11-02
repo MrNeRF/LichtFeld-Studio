@@ -520,14 +520,9 @@ def set_node_visibility(name: str, visible: bool) -> None:
 def set_camera_training_enabled(name: str, enabled: bool) -> None:
     """Enable or disable a camera for training by name"""
 
-def select_cameras(operation: str, percentage: float = 25.0, every_n: int = 2) -> None:
+def camera_selection_start(operation: str, camera_group_id: int, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
     """
-    Apply a synchronous global camera-training selection operation. Prefer camera_selection_start for GUI-safe asynchronous work.
-    """
-
-def camera_selection_start(operation: str, percentage: float = 25.0, every_n: int = 2, overlap: float = 65.0, coverage: float = 40.0, cropbox_id: int = 0) -> dict:
-    """
-    Start a cancellable camera-selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
+    Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.
     """
 
 def camera_selection_status() -> dict:

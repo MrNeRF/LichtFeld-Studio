@@ -441,6 +441,7 @@ namespace lfs::python {
         std::function<std::string()> g_splat_simplify_error;
         std::mutex g_camera_selection_operation_mutex;
         std::string g_camera_selection_operation;
+        uint64_t g_camera_selection_group_id = 0;
     } // namespace
 
     void set_splat_simplify_callbacks(SplatSimplifyStartFn start,
@@ -480,6 +481,16 @@ namespace lfs::python {
     std::string get_camera_selection_operation() {
         const std::lock_guard lock(g_camera_selection_operation_mutex);
         return g_camera_selection_operation;
+    }
+
+    void set_camera_selection_group_id(const uint64_t group_id) {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        g_camera_selection_group_id = group_id;
+    }
+
+    uint64_t get_camera_selection_group_id() {
+        const std::lock_guard lock(g_camera_selection_operation_mutex);
+        return g_camera_selection_group_id;
     }
 
     namespace {

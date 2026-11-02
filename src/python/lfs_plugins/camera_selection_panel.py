@@ -26,6 +26,7 @@ class CameraSelectionPanel(Panel):
     def __init__(self):
         self._handle = None
         self._operation = "random"
+        self._camera_group_id = 0
         self._percentage, self._every_n = 25, 2
         self._overlap, self._coverage, self._cropbox_id = 65, 40, ""
         self._local_error = ""
@@ -90,9 +91,10 @@ class CameraSelectionPanel(Panel):
 
     def _refresh(self):
         operation = lf.ui.get_camera_selection_operation() or "random"
-        if operation == self._operation:
+        group_id = lf.ui.get_camera_selection_group_id()
+        if operation == self._operation and group_id == self._camera_group_id:
             return False
-        self._operation, self._local_error = operation, ""
+        self._operation, self._camera_group_id, self._local_error = operation, group_id, ""
         self._dirty("panel_label", "is_random", "is_every_n", "is_distinct", "is_cropbox", "cropboxes", "message")
         return True
 
@@ -153,8 +155,8 @@ class CameraSelectionPanel(Panel):
         try:
             if self._operation == "cropbox_visibility" and not self._cropbox_id:
                 raise RuntimeError(lf.ui.tr("scene.camera_selection_cropbox_required"))
-            lf.camera_selection_start(self._operation, self._percentage, self._every_n, self._overlap,
-                                      self._coverage, int(self._cropbox_id or 0))
+            lf.camera_selection_start(self._operation, self._camera_group_id, self._percentage, self._every_n,
+                                      self._overlap, self._coverage, int(self._cropbox_id or 0))
         except Exception as error:
             self._local_error = str(error)
             self._dirty("message")

@@ -3240,19 +3240,19 @@ namespace lfs::vis::gui {
                         tr(string_keys::Scene::DISABLE_ALL_TRAINING),
                         prefixedAction(std::format("disable_all_train:{}", node_id))));
                     items.push_back(makeAction(tr("scene.invert_camera_selection"),
-                                               prefixedAction("invert_all_train"), true));
+                                               prefixedAction(std::format("invert_group_train:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.enable_all_cameras"),
-                                               prefixedAction("enable_all_scene_train")));
+                                               prefixedAction(std::format("enable_group_train:{}", node_id))));
                     items.push_back(makeAction(tr("scene.disable_all_cameras"),
-                                               prefixedAction("disable_all_scene_train")));
+                                               prefixedAction(std::format("disable_group_train:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_random_cameras") + "...",
-                                               prefixedAction("camera_selection:random"), true));
+                                               prefixedAction(std::format("camera_selection:random:{}", node_id)), true));
                     items.push_back(makeAction(tr("scene.select_every_n_cameras") + "...",
-                                               prefixedAction("camera_selection:every_n")));
+                                               prefixedAction(std::format("camera_selection:every_n:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_distinct_cameras") + "...",
-                                               prefixedAction("camera_selection:distinct")));
+                                               prefixedAction(std::format("camera_selection:distinct:{}", node_id))));
                     items.push_back(makeAction(tr("scene.select_cropbox_cameras") + "...",
-                                               prefixedAction("camera_selection:cropbox_visibility")));
+                                               prefixedAction(std::format("camera_selection:cropbox_visibility:{}", node_id))));
                 }
                 break;
             case core::NodeType::DATASET:
@@ -3476,15 +3476,20 @@ namespace lfs::vis::gui {
             core::NodeId group_id = core::NULL_NODE;
             if (parseNodeId(parts[1], group_id))
                 toggleChildrenTraining(group_id, kind == "enable_all_train");
-        } else if (kind == "enable_all_scene_train" || kind == "disable_all_scene_train" || kind == "invert_all_train") {
-            if (auto* gui = services().guiOrNull()) {
-                const auto operation = kind == "enable_all_scene_train" ? AsyncTaskManager::CameraSelectionOperation::EnableAll
-                                     : kind == "disable_all_scene_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
+        } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
+            core::NodeId group_id = core::NULL_NODE;
+            if (auto* gui = services().guiOrNull(); parseNodeId(parts[1], group_id)) {
+                const auto operation = kind == "enable_group_train" ? AsyncTaskManager::CameraSelectionOperation::EnableAll
+                                     : kind == "disable_group_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
                                                                           : AsyncTaskManager::CameraSelectionOperation::Invert;
-                static_cast<void>(gui->asyncTasks().startCameraSelection({.operation = operation}));
+                static_cast<void>(gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}));
             }
-        } else if (kind == "camera_selection" && parts.size() >= 2) {
+        } else if (kind == "camera_selection" && parts.size() >= 3) {
+            core::NodeId group_id = core::NULL_NODE;
+            if (!parseNodeId(parts[2], group_id))
+                return;
             lfs::python::set_camera_selection_operation(parts[1]);
+            lfs::python::set_camera_selection_group_id(group_id);
             auto& panels = PanelRegistry::instance();
             if (const auto panel = panels.get_panel_instance("lfs.camera_selection"))
                 panel->on_content_changed();

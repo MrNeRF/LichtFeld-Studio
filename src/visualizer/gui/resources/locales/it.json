@@ -926,6 +926,7 @@
     "camera_coverage": "Copertura minima del fotogramma",
     "camera_selection_no_scene": "Nessuna scena disponibile.",
     "camera_selection_cropbox_required": "Scegli una casella di ritaglio valida.",
+    "camera_selection_group_required": "Scegli un gruppo di fotocamere valido.",
     "camera_selection_pinhole_required": "La visibilità della casella di ritaglio richiede fotocamere stenopeiche.",
     "camera_selection_stale": "La scena è cambiata durante la selezione delle fotocamere.",
     "camera_selection_progress": "Avanzamento selezione",

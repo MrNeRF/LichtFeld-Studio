@@ -65,7 +65,7 @@ def test_camera_selection_uses_viewer_thread_and_safe_crop_projection():
     scene_graph = (root / "src/visualizer/gui/rmlui/elements/scene_graph_element.cpp").read_text(encoding="utf-8")
     interaction = (root / "src/visualizer/rendering/camera_interaction_service.cpp").read_text(encoding="utf-8")
 
-    assert '"python.select_cameras"' in module
+    assert '"python.camera_selection_start"' in module
     assert '"python.camera_selection_status"' in module
     assert '"python.camera_selection_cancel"' in module
     assert "post_guarded_and_wait" in module
@@ -78,9 +78,29 @@ def test_camera_selection_uses_viewer_thread_and_safe_crop_projection():
     assert "enabled_cameras" in interaction
 
 
+def test_camera_selection_is_group_scoped_and_reports_validation_errors():
+    root = Path(__file__).parents[2]
+    module = (root / "src/python/lfs/module.cpp").read_text(encoding="utf-8")
+    tasks = (root / "src/visualizer/gui/async_task_manager.cpp").read_text(encoding="utf-8")
+    header = (root / "src/visualizer/gui/async_task_manager.hpp").read_text(encoding="utf-8")
+    scene = (root / "src/core/scene.cpp").read_text(encoding="utf-8")
+    graph = (root / "src/visualizer/gui/rmlui/elements/scene_graph_element.cpp").read_text(encoding="utf-8")
+    mcp = (root / "src/app/mcp_gui_tools.cpp").read_text(encoding="utf-8")
+
+    assert "camera_group_id" in module
+    assert "camera_group_id" in header
+    assert "setCameraGroupTrainingSelection" in scene
+    assert "cropbox_world_to_local" in tasks
+    assert "camera_group" in mcp
+    assert '"enum", json::array' in mcp
+    assert "set_camera_selection_group_id" in graph
+    assert '"select_cameras"' not in module
+
+
 if __name__ == "__main__":
     test_distinct_and_cropbox_controls_use_editable_scrub_fields()
     test_cropbox_popup_registers_its_record_list_and_keeps_coverage_retained()
     test_popup_title_tracks_the_selected_operation_with_i18n_keys()
     test_panel_rebind_refreshes_cropboxes_and_preserves_local_validation_errors()
     test_camera_selection_uses_viewer_thread_and_safe_crop_projection()
+    test_camera_selection_is_group_scoped_and_reports_validation_errors()

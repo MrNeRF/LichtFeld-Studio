@@ -913,6 +913,7 @@
     "camera_coverage": "最小画面覆盖",
     "camera_selection_no_scene": "没有可用场景。",
     "camera_selection_cropbox_required": "请选择有效的裁剪框。",
+    "camera_selection_group_required": "请选择有效的相机组。",
     "camera_selection_pinhole_required": "裁剪框可见性需要针孔相机。",
     "camera_selection_stale": "相机选择期间场景已更改。",
     "camera_selection_progress": "选择进度",

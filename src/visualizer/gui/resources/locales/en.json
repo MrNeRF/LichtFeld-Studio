@@ -922,6 +922,7 @@
     "camera_coverage": "Minimum frame coverage",
     "camera_selection_no_scene": "No scene is available.",
     "camera_selection_cropbox_required": "Choose a valid crop box.",
+    "camera_selection_group_required": "Choose a valid camera group.",
     "camera_selection_pinhole_required": "Crop box visibility requires pinhole cameras.",
     "camera_selection_stale": "The scene changed during camera selection.",
     "camera_selection_progress": "Selection progress",

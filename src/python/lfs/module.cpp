@@ -2503,67 +2503,9 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
 
     m.def(
-        "select_cameras", [](const std::string& operation, const double percentage, const int every_n) {
-            const auto apply = [&]() -> lfs::Result<void> {
-                auto* scene = get_scene_internal();
-                if (!scene)
-                    throw std::runtime_error("No scene available");
-                if (operation == "enable_all") {
-                    scene->setAllCameraTrainingEnabled(true);
-                    return {};
-                }
-                if (operation == "disable_all") {
-                    scene->setAllCameraTrainingEnabled(false);
-                    return {};
-                }
-                if (operation == "invert") {
-                    scene->invertAllCameraTrainingEnabled();
-                    return {};
-                }
-                std::vector<lfs::core::NodeId> cameras;
-                for (const auto* node : scene->getNodes()) {
-                    if (node && node->type == lfs::core::NodeType::CAMERA && node->camera)
-                        cameras.push_back(node->id);
-                }
-                if (operation == "random") {
-                    const auto count = static_cast<size_t>(std::clamp(
-                        std::floor(std::clamp(percentage, 0.0, 100.0) * cameras.size() / 100.0 + 0.5),
-                        0.0, static_cast<double>(cameras.size())));
-                    std::shuffle(cameras.begin(), cameras.end(), std::mt19937{std::random_device{}()});
-                    std::unordered_set<lfs::core::NodeId> selected(cameras.begin(), cameras.begin() + count);
-                    static_cast<void>(scene->setCameraTrainingSelection(selected));
-                    return {};
-                }
-                if (operation == "every_n") {
-                    const size_t step = static_cast<size_t>(std::max(1, every_n));
-                    std::unordered_set<lfs::core::NodeId> selected;
-                    for (size_t index = 0; index < cameras.size(); ++index) {
-                        if (index % step == 0)
-                            selected.insert(cameras[index]);
-                    }
-                    static_cast<void>(scene->setCameraTrainingSelection(selected));
-                    return {};
-                }
-                throw std::invalid_argument("Unknown camera selection operation: " + operation);
-            };
-            auto* const viewer = lfs::python::get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                if (const auto result = apply(); !result)
-                    throw std::runtime_error(lfs::format_for_developer(result.error()));
-                return;
-            }
-            nb::gil_scoped_release release;
-            const lfs::core::TaskContext context{.name = "python.select_cameras", .domain = lfs::ErrorDomain::Python,
-                                                  .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
-            if (const auto result = lfs::vis::post_guarded_and_wait<void>(*viewer, context, apply, python_viewer_shutdown_error()); !result)
-                throw std::runtime_error(lfs::format_for_developer(result.error()));
-        },
-        nb::arg("operation"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2,
-        "Apply a synchronous global camera-training selection operation. Prefer camera_selection_start for GUI-safe asynchronous work.");
-
-    m.def(
-        "camera_selection_start", [](const std::string& operation, const double percentage, const int every_n,
-                                       const double overlap, const double coverage, const int cropbox_id) -> nb::dict {
+        "camera_selection_start", [](const std::string& operation, const int camera_group_id, const double percentage, const int every_n,
+                                       const double overlap, const double coverage,
+                                       const int cropbox_id) -> nb::dict {
             using Task = lfs::vis::gui::AsyncTaskManager;
             const auto type = [&]() -> Task::CameraSelectionOperation {
                 if (operation == "enable_all") return Task::CameraSelectionOperation::EnableAll;
@@ -2578,28 +2520,31 @@ NB_MODULE(lichtfeld, m) {
             auto* viewer = lfs::python::get_visualizer();
             if (!viewer) throw std::runtime_error("Viewer not available");
             const Task::CameraSelectionOptions options{.operation = type, .percentage = static_cast<float>(percentage), .every_n = every_n,
-                                                        .overlap = static_cast<float>(overlap), .coverage = static_cast<float>(coverage), .cropbox_id = static_cast<lfs::core::NodeId>(cropbox_id)};
-            const auto start = [&]() -> std::optional<lfs::vis::JobHandle> {
+                                                        .overlap = static_cast<float>(overlap), .coverage = static_cast<float>(coverage),
+                                                        .camera_group_id = static_cast<lfs::core::NodeId>(camera_group_id), .cropbox_id = static_cast<lfs::core::NodeId>(cropbox_id)};
+            const auto start = [&]() -> std::expected<lfs::vis::JobHandle, std::string> {
                 auto* gui = lfs::python::get_gui_manager();
-                return gui ? gui->asyncTasks().startCameraSelection(options) : std::nullopt;
+                if (!gui)
+                    return std::unexpected("GUI is unavailable");
+                return gui->asyncTasks().startCameraSelection(options);
             };
-            std::optional<lfs::vis::JobHandle> handle;
+            std::expected<lfs::vis::JobHandle, std::string> handle = std::unexpected("GUI is unavailable");
             if (viewer->isOnViewerThread()) handle = start();
             else {
                 nb::gil_scoped_release release;
                 const lfs::core::TaskContext context{.name = "python.camera_selection_start", .domain = lfs::ErrorDomain::Python,
                                                       .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
-                auto result = lfs::vis::post_guarded_and_wait<std::optional<lfs::vis::JobHandle>>(*viewer, context, start, python_viewer_shutdown_error());
+                auto result = lfs::vis::post_guarded_and_wait<std::expected<lfs::vis::JobHandle, std::string>>(*viewer, context, start, python_viewer_shutdown_error());
                 if (!result) throw std::runtime_error(lfs::format_for_developer(result.error()));
                 handle = *result;
             }
-            if (!handle) throw std::runtime_error("Camera selection is already running or the GUI is unavailable");
+            if (!handle) throw std::runtime_error(handle.error());
             nb::dict result;
             result["job_id"] = "camera.selection"; result["handle"] = handle->id; result["operation"] = operation;
             return result;
-        }, nb::arg("operation"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2, nb::arg("overlap") = 65.0,
-        nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0,
-        "Start a cancellable camera-selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.");
+        }, nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2,
+        nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0,
+        "Start a cancellable camera-group selection job. Returns its runtime id and opaque handle; no training selection changes until it finishes.");
 
     m.def(
         "camera_selection_status", []() -> nb::dict {

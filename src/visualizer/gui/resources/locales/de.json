@@ -913,6 +913,7 @@
     "camera_coverage": "Minimale Bildabdeckung",
     "camera_selection_no_scene": "Keine Szene verfügbar.",
     "camera_selection_cropbox_required": "Eine gültige Crop-Box auswählen.",
+    "camera_selection_group_required": "Eine gültige Kameragruppe auswählen.",
     "camera_selection_pinhole_required": "Die Sichtbarkeit der Crop-Box erfordert Lochkameras.",
     "camera_selection_stale": "Die Szene hat sich während der Kameraselektion geändert.",
     "camera_selection_progress": "Auswahlfortschritt",

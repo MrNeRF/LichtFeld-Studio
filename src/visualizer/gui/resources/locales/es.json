@@ -913,6 +913,7 @@
     "camera_coverage": "Cobertura mínima del fotograma",
     "camera_selection_no_scene": "No hay escena disponible.",
     "camera_selection_cropbox_required": "Elija una caja de recorte válida.",
+    "camera_selection_group_required": "Seleccione un grupo de cámaras válido.",
     "camera_selection_pinhole_required": "La visibilidad de la caja de recorte requiere cámaras estenopeicas.",
     "camera_selection_stale": "La escena cambió durante la selección de cámaras.",
     "camera_selection_progress": "Progreso de selección",

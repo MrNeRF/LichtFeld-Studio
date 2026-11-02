@@ -768,6 +768,9 @@ namespace lfs::core {
         // Sets the global training selection in one scene mutation.  A camera
         // is enabled exactly when its id occurs in enabled_camera_ids.
         [[nodiscard]] bool setCameraTrainingSelection(const std::unordered_set<NodeId>& enabled_camera_ids);
+        // Sets the direct camera children of a camera group in one scene mutation.
+        [[nodiscard]] bool setCameraGroupTrainingSelection(NodeId camera_group_id,
+                                                           const std::unordered_set<NodeId>& enabled_camera_ids);
         void setAllCameraTrainingEnabled(bool enabled);
         void invertAllCameraTrainingEnabled();
 

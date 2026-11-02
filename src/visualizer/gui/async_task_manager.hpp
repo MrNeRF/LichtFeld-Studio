@@ -274,9 +274,10 @@ namespace lfs::vis {
                 int every_n = 2;
                 float overlap = 65.0F;
                 float coverage = 40.0F;
+                core::NodeId camera_group_id = core::NULL_NODE;
                 core::NodeId cropbox_id = core::NULL_NODE;
             };
-            [[nodiscard]] std::optional<JobHandle> startCameraSelection(CameraSelectionOptions options);
+            [[nodiscard]] std::expected<JobHandle, std::string> startCameraSelection(CameraSelectionOptions options);
             void pollCameraSelectionCompletion();
             void cancelCameraSelection();
             [[nodiscard]] std::optional<JobSnapshot> cameraSelectionStatus() const { return jobs_.peek(camera_selection_state_.job); }
@@ -514,8 +515,12 @@ namespace lfs::vis {
                 uint64_t scene_generation = 0;
                 std::vector<core::Uuid> camera_uuids;
                 std::vector<CameraSnapshot> cameras;
+                core::Uuid camera_group_uuid;
                 core::Uuid cropbox_uuid;
                 std::vector<glm::vec3> cropbox_points;
+                glm::mat4 cropbox_world_to_local{1.0F};
+                glm::vec3 cropbox_min{0.0F};
+                glm::vec3 cropbox_max{0.0F};
                 bool has_cropbox = false;
                 std::vector<size_t> selected_indices;
                 std::optional<std::jthread> thread;

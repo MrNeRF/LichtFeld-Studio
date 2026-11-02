@@ -4425,9 +4425,16 @@ namespace lfs::vis::gui {
 
         template <class Snapshot>
         float camera_selection_crop_coverage(const Snapshot& camera,
-                                             const std::vector<glm::vec3>& points) {
+                                             const std::vector<glm::vec3>& points,
+                                             const glm::mat4& cropbox_world_to_local,
+                                             const glm::vec3 cropbox_min,
+                                             const glm::vec3 cropbox_max) {
             if (!camera.pose_valid || points.empty())
                 return 0.0F;
+            const glm::vec3 local_center = glm::vec3(cropbox_world_to_local * glm::vec4(camera.center, 1.0F));
+            if (glm::all(glm::greaterThanEqual(local_center, cropbox_min)) &&
+                glm::all(glm::lessThanEqual(local_center, cropbox_max)))
+                return 100.0F;
             float min_x = camera.width, max_x = 0.0F, min_y = camera.height, max_y = 0.0F;
             bool projected = false;
             for (const auto& point : points) {
@@ -4475,22 +4482,25 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
-    std::optional<JobHandle> AsyncTaskManager::startCameraSelection(const CameraSelectionOptions options) {
+    std::expected<JobHandle, std::string> AsyncTaskManager::startCameraSelection(const CameraSelectionOptions options) {
         if (camera_selection_state_.thread && camera_selection_state_.thread->joinable()) {
             if (const auto prior = cameraSelectionStatus(); prior && prior->running())
-                return std::nullopt;
+                return std::unexpected("Camera selection is already running");
             camera_selection_state_.thread->join();
             camera_selection_state_.thread.reset();
         }
         auto* const manager = viewer_->getSceneManager();
         if (!manager || !viewer_->project_lifecycle_)
-            return std::nullopt;
+            return std::unexpected("Scene manager is not initialized");
         auto& scene = manager->getScene();
+        const auto* group = scene.getNodeById(options.camera_group_id);
+        if (!group || group->type != core::NodeType::CAMERA_GROUP)
+            return std::unexpected(LOC("scene.camera_selection_group_required"));
         std::vector<core::Uuid> uuids;
         std::vector<bool> enabled;
         std::vector<CameraSelectionState::CameraSnapshot> cameras;
-        for (const auto* node : scene.getNodes()) {
-            if (node && node->type == core::NodeType::CAMERA && node->camera) {
+        for (const core::NodeId child_id : group->children) {
+            if (const auto* node = scene.getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera) {
                 uuids.push_back(node->uuid);
                 enabled.push_back(node->training_enabled);
                 CameraSelectionState::CameraSnapshot snapshot{.uuid = node->uuid};
@@ -4525,16 +4535,16 @@ namespace lfs::vis::gui {
         std::vector<glm::vec3> cropbox_points;
         core::Uuid cropbox_uuid;
         bool has_cropbox = false;
+        const auto* cropbox = scene.getNodeById(options.cropbox_id);
         if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
-            const auto* cropbox = scene.getNodeById(options.cropbox_id);
             if (!cropbox || !cropbox->cropbox)
-                return std::nullopt;
+                return std::unexpected("A valid crop box is required");
             if (std::ranges::any_of(cameras, [](const auto& camera) {
                     return camera.model != core::CameraModelType::PINHOLE;
                 })) {
                 if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
                               LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
-                    return std::nullopt;
+                    return std::unexpected("Camera selection is already running");
                 jobs_.failed(camera_selection_state_.job,
                              LOC("scene.camera_selection_pinhole_required"),
                              LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS));
@@ -4547,7 +4557,7 @@ namespace lfs::vis::gui {
         }
         if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
                       LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
-            return std::nullopt;
+            return std::unexpected("Camera selection is already running");
         publishCameraSelectionState();
         camera_selection_state_.completion.store(CameraSelectionState::Completion::Idle, std::memory_order_release);
         {
@@ -4556,8 +4566,14 @@ namespace lfs::vis::gui {
             camera_selection_state_.scene_generation = scene.renderGeneration();
             camera_selection_state_.camera_uuids = std::move(uuids);
             camera_selection_state_.cameras = std::move(cameras);
+            camera_selection_state_.camera_group_uuid = group->uuid;
             camera_selection_state_.cropbox_uuid = cropbox_uuid;
             camera_selection_state_.cropbox_points = std::move(cropbox_points);
+            if (has_cropbox) {
+                camera_selection_state_.cropbox_world_to_local = glm::inverse(scene.getWorldTransform(cropbox->id));
+                camera_selection_state_.cropbox_min = cropbox->cropbox->min;
+                camera_selection_state_.cropbox_max = cropbox->cropbox->max;
+            }
             camera_selection_state_.has_cropbox = has_cropbox;
             camera_selection_state_.selected_indices.clear();
         }
@@ -4565,12 +4581,17 @@ namespace lfs::vis::gui {
         std::vector<bool> snapshot_enabled = std::move(enabled);
         std::vector<CameraSelectionState::CameraSnapshot> snapshot_cameras;
         std::vector<glm::vec3> snapshot_cropbox_points;
+        glm::mat4 snapshot_cropbox_world_to_local(1.0F);
+        glm::vec3 snapshot_cropbox_min(0.0F), snapshot_cropbox_max(0.0F);
         {
             const std::lock_guard lock(camera_selection_state_.mutex);
             snapshot_cameras = camera_selection_state_.cameras;
             snapshot_cropbox_points = camera_selection_state_.cropbox_points;
+            snapshot_cropbox_world_to_local = camera_selection_state_.cropbox_world_to_local;
+            snapshot_cropbox_min = camera_selection_state_.cropbox_min;
+            snapshot_cropbox_max = camera_selection_state_.cropbox_max;
         }
-        camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points)](std::stop_token stop) mutable {
+        camera_selection_state_.thread.emplace([this, job, options, snapshot_enabled = std::move(snapshot_enabled), cameras = std::move(snapshot_cameras), cropbox_points = std::move(snapshot_cropbox_points), snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max](std::stop_token stop) mutable {
             jobs_.work(job);
             std::vector<size_t> selected;
             std::string error;
@@ -4654,7 +4675,7 @@ namespace lfs::vis::gui {
                     if (cropbox_points.empty()) error = LOC("scene.camera_selection_cropbox_required");
                     else for (size_t index = 0; index < count; ++index) {
                         if (cancelled()) break;
-                        if (camera_selection_crop_coverage(cameras[index], cropbox_points) >= std::clamp(options.coverage, 0.0F, 100.0F)) selected.push_back(index);
+                        if (camera_selection_crop_coverage(cameras[index], cropbox_points, snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max) >= std::clamp(options.coverage, 0.0F, 100.0F)) selected.push_back(index);
                         if ((index & 63U) == 0U) jobs_.report(job, 0.9F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
                     }
                 }
@@ -4691,6 +4712,7 @@ namespace lfs::vis::gui {
             std::vector<size_t> selected_indices;
             uint64_t epoch = 0;
             uint64_t scene_generation = 0;
+            core::Uuid camera_group_uuid;
             core::Uuid cropbox_uuid;
             std::vector<glm::vec3> cropbox_points;
             bool has_cropbox = false;
@@ -4700,6 +4722,7 @@ namespace lfs::vis::gui {
                 selected_indices = camera_selection_state_.selected_indices;
                 epoch = camera_selection_state_.document_epoch;
                 scene_generation = camera_selection_state_.scene_generation;
+                camera_group_uuid = camera_selection_state_.camera_group_uuid;
                 cropbox_uuid = camera_selection_state_.cropbox_uuid;
                 cropbox_points = camera_selection_state_.cropbox_points;
                 has_cropbox = camera_selection_state_.has_cropbox;
@@ -4712,11 +4735,14 @@ namespace lfs::vis::gui {
                          !cancel_requested;
             std::unordered_set<core::NodeId> selected;
             if (valid) {
+                const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);
                 std::unordered_set<core::Uuid> current;
-                for (const auto* node : manager->getScene().getNodes())
-                    if (node && node->type == core::NodeType::CAMERA && node->camera)
+                if (!group || group->type != core::NodeType::CAMERA_GROUP)
+                    valid = false;
+                else for (const core::NodeId child_id : group->children)
+                    if (const auto* node = manager->getScene().getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera)
                         current.insert(node->uuid);
-                valid = current.size() == uuids.size() &&
+                valid = valid && current.size() == uuids.size() &&
                         std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
             }
             if (valid && has_cropbox) {
@@ -4742,7 +4768,8 @@ namespace lfs::vis::gui {
                 jobs_.failed(camera_selection_state_.job, LOC("scene.camera_selection_stale"),
                              LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
             } else {
-                static_cast<void>(manager->getScene().setCameraTrainingSelection(selected));
+                const auto* group = manager->getScene().getNodeByUuid(camera_group_uuid);
+                static_cast<void>(manager->getScene().setCameraGroupTrainingSelection(group->id, selected));
                 jobs_.completed(camera_selection_state_.job);
             }
             publishCameraSelectionState();

@@ -6810,6 +6810,27 @@ namespace lfs::core {
         return true;
     }
 
+    bool Scene::setCameraGroupTrainingSelection(const NodeId camera_group_id,
+                                                const std::unordered_set<NodeId>& enabled_camera_ids) {
+        const auto* group = getNodeById(camera_group_id);
+        if (!group || group->type != NodeType::CAMERA_GROUP)
+            return false;
+        bool changed = false;
+        for (const NodeId child_id : group->children) {
+            auto* child = getNodeById(child_id);
+            if (!child || child->type != NodeType::CAMERA || child->training_enabled == enabled_camera_ids.contains(child_id))
+                continue;
+            child->training_enabled = enabled_camera_ids.contains(child_id);
+            changed = true;
+        }
+        if (!changed)
+            return false;
+        if (!restore_staging_)
+            pending_mutations_ |= static_cast<uint32_t>(MutationType::CAMERA_TRAINING_CHANGED);
+        notifyMutation(MutationType::VISIBILITY_CHANGED);
+        return true;
+    }
+
     void Scene::setAllCameraTrainingEnabled(const bool enabled) {
         std::unordered_set<NodeId> selected;
         for (const auto& candidate : nodes_) {

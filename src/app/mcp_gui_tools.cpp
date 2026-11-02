@@ -2467,14 +2467,15 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "camera_selection.start",
-                .description = "Start a cancellable global camera-training selection job",
+                .description = "Start a cancellable camera-group training selection job",
                 .input_schema = {.type = "object", .properties = json{
-                    {"operation", {{"type", "string"}}},
+                    {"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility"})}}},
+                    {"camera_group", {{"type", "string"}}},
                     {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
                     {"every_n", {{"type", "integer"}, {"minimum", 1}}},
                     {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
                     {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
-                    {"cropbox", {{"type", "string"}}}}, .required = {"operation"}},
+                    {"cropbox", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
                 .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
@@ -2492,17 +2493,26 @@ namespace lfs::app {
                                     : operation == "every_n" ? Selection::CameraSelectionOperation::EveryN
                                     : operation == "distinct" ? Selection::CameraSelectionOperation::Distinct
                                     : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
-                                    : throw std::invalid_argument("Unsupported camera selection operation");
+                                    : Selection::CameraSelectionOperation::Random;
+                    if (operation != "enable_all" && operation != "disable_all" && operation != "invert" &&
+                        operation != "random" && operation != "every_n" && operation != "distinct" && operation != "cropbox_visibility")
+                        return mcp::invalid_argument_result("Unsupported camera selection operation", "operation");
+                    const auto group_id = scene.getNodeIdByName(args.value("camera_group", ""));
+                    const auto* group = scene.getNodeById(group_id);
+                    if (!group || group->type != core::NodeType::CAMERA_GROUP)
+                        return mcp::invalid_argument_result(LOC("scene.camera_selection_group_required"), "camera_group");
                     core::NodeId cropbox_id = core::NULL_NODE;
                     if (type == Selection::CameraSelectionOperation::CropBoxVisibility) {
                         cropbox_id = scene.getNodeIdByName(args.value("cropbox", ""));
-                        if (cropbox_id == core::NULL_NODE)
-                            return json{{"error", "A valid crop box is required"}};
+                        const auto* cropbox = scene.getNodeById(cropbox_id);
+                        if (!cropbox || !cropbox->cropbox)
+                            return mcp::invalid_argument_result("A valid crop box is required", "cropbox");
                     }
                     const auto handle = gui->asyncTasks().startCameraSelection({.operation = type,
                         .percentage = args.value("percentage", 25.0F), .every_n = args.value("every_n", 2),
-                        .overlap = args.value("overlap", 65.0F), .coverage = args.value("coverage", 40.0F), .cropbox_id = cropbox_id});
-                    if (!handle) return json{{"error", "Camera selection is already running"}};
+                        .overlap = args.value("overlap", 65.0F), .coverage = args.value("coverage", 40.0F),
+                        .camera_group_id = group_id, .cropbox_id = cropbox_id});
+                    if (!handle) return json{{"error", handle.error()}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
                 });
             });
