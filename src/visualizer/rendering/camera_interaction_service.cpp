@@ -6,7 +6,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "scene/scene_manager.hpp"
-#include <unordered_set>
 
 namespace lfs::vis {
 
@@ -33,8 +32,9 @@ namespace lfs::vis {
             return hovered_camera_id_;
         }
 
-        auto cameras = scene_manager->getScene().getVisibleCameras();
-        if (cameras.empty()) {
+        const auto& scene = scene_manager->getScene();
+        const auto cameras = scene.getVisibleCamerasCached();
+        if (!cameras || cameras->empty()) {
             return -1;
         }
 
@@ -43,41 +43,45 @@ namespace lfs::vis {
             return hovered_camera_id_;
         }
 
-        auto scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
-        const auto disabled = settings.hide_disabled_camera_frustums
-                                  ? scene_manager->getScene().getTrainingDisabledCameraUids()
-                                  : std::unordered_set<int>{};
-        std::vector<std::shared_ptr<const lfs::core::Camera>> enabled_cameras;
-        std::vector<glm::mat4> enabled_transforms;
-        enabled_cameras.reserve(cameras.size());
-        enabled_transforms.reserve(scene_transforms.size());
-        for (size_t index = 0; index < cameras.size() && index < scene_transforms.size(); ++index) {
-            if (!disabled.contains(cameras[index]->uid())) {
-                enabled_cameras.push_back(cameras[index]);
-                enabled_transforms.push_back(scene_transforms[index]);
+        if (cameras != camera_snapshot_.lock()) {
+            scene_transforms_ = scene.getVisibleCameraSceneTransforms();
+            for (auto& transform : scene_transforms_) {
+                transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
             }
-        }
-        if (enabled_cameras.empty())
-            return -1;
-        cameras = std::move(enabled_cameras);
-        scene_transforms = std::move(enabled_transforms);
-        for (auto& transform : scene_transforms) {
-            transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+            camera_snapshot_ = cameras;
         }
 
-        const lfs::rendering::CameraFrustumPickRequest request{
-            .mouse_pos = mouse_pos,
-            .viewport_pos = panel->viewport_pos,
-            .viewport_size = panel->viewport_size,
-            .viewport = panel->viewport_data,
-            .scale = settings.camera_frustum_scale,
-            .scene_transforms = std::move(scene_transforms)};
-
-        const auto pick_result = engine->pickCameraFrustum(cameras, request);
+        const auto pick = [&](const auto& pick_cameras, const auto& transforms) {
+            const lfs::rendering::CameraFrustumPickRequest request{
+                .mouse_pos = mouse_pos,
+                .viewport_pos = panel->viewport_pos,
+                .viewport_size = panel->viewport_size,
+                .viewport = panel->viewport_data,
+                .scale = settings.camera_frustum_scale,
+                .scene_transforms = transforms};
+            return engine->pickCameraFrustum(pick_cameras, request);
+        };
 
         int cam_id = -1;
-        if (pick_result)
+        if (settings.hide_disabled_camera_frustums) {
+            const auto disabled = scene.getTrainingDisabledCameraUids();
+            std::vector<std::shared_ptr<const lfs::core::Camera>> enabled_cameras;
+            std::vector<glm::mat4> enabled_transforms;
+            enabled_cameras.reserve(cameras->size());
+            enabled_transforms.reserve(scene_transforms_.size());
+            for (size_t index = 0; index < cameras->size() && index < scene_transforms_.size(); ++index) {
+                if (!disabled.contains((*cameras)[index]->uid())) {
+                    enabled_cameras.push_back((*cameras)[index]);
+                    enabled_transforms.push_back(scene_transforms_[index]);
+                }
+            }
+            if (enabled_cameras.empty())
+                return -1;
+            if (const auto pick_result = pick(enabled_cameras, enabled_transforms))
+                cam_id = *pick_result;
+        } else if (const auto pick_result = pick(*cameras, scene_transforms_)) {
             cam_id = *pick_result;
+        }
 
         hover_changed = updateHoveredCamera(cam_id);
         return hovered_camera_id_;

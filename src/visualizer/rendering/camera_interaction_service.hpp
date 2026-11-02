@@ -7,6 +7,13 @@
 #include "rendering_types.hpp"
 #include "viewport_interaction_context.hpp"
 #include <chrono>
+#include <glm/glm.hpp>
+#include <memory>
+#include <vector>
+
+namespace lfs::core {
+    class Camera;
+}
 
 namespace lfs::rendering {
     class RenderingEngine;
@@ -54,6 +61,8 @@ namespace lfs::vis {
         int current_camera_id_ = -1;
         int hovered_camera_id_ = -1;
         std::chrono::steady_clock::time_point last_pick_time_{};
+        std::weak_ptr<const std::vector<std::shared_ptr<const lfs::core::Camera>>> camera_snapshot_;
+        std::vector<glm::mat4> scene_transforms_;
     };
 
 } // namespace lfs::vis
