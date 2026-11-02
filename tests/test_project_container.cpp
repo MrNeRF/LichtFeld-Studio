@@ -1167,6 +1167,81 @@ namespace {
         return framed;
     }
 
+    // f32-word byte planes: plane0 || plane1 || plane2 || plane3.
+    std::vector<std::byte> byte_planes(const std::span<const std::byte> words) {
+        const std::size_t n_words = words.size() / 4;
+        std::vector<std::byte> planes(words.size());
+        for (std::size_t w = 0; w < n_words; ++w)
+            for (std::size_t plane = 0; plane < 4; ++plane)
+                planes[plane * n_words + w] = words[w * 4 + plane];
+        return planes;
+    }
+
+    // Shuffled records are framed exactly like a ZstdFramed payload of the
+    // transposed bytes, whether a record lies in one plane or spans two.
+    TEST(ProjectContainerWriter, ByteShuffleRecordsMatchFramedPlanes) {
+        for (const std::size_t bytes : {2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull,
+                                        2ull * 64ull * 1024ull * 1024ull + 4ull * 1024ull * 1024ull + 12ull}) {
+            SCOPED_TRACE(bytes);
+            const auto payload = patterned_payload(bytes);
+            TemporaryDirectory temporary;
+            const fs::path path = temporary.path / "byteshuffle-records.licht";
+            write_framed_fixture(path, FOURCC_CKPT, 840, payload, Compression::ByteShuffleZstdFramed,
+                                 true, true, 840);
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            ASSERT_EQ(chunk.compression, Compression::ByteShuffleZstdFramed);
+            std::vector<std::byte> stored(chunk.stored_bytes);
+            require_status(reader.read_stored_at(chunk, 0, stored));
+            EXPECT_EQ(stored, reference_framed_zstd(byte_planes(payload)));
+            EXPECT_EQ(require_result(reader.read_chunk(chunk)), payload);
+        }
+    }
+
+    // A segmented payload is consumed while it is compressed. The stored
+    // bytes must match the contiguous path, including records that read
+    // several planes and records that span two.
+    TEST(ProjectContainerWriter, SegmentedPayloadStoresTheSameRecords) {
+        constexpr std::size_t MIB = 1024ull * 1024ull;
+        for (const std::size_t bytes : {160 * MIB, 132 * MIB + 12, 160 * MIB + 3, 40 * MIB}) {
+            SCOPED_TRACE(bytes);
+            const auto payload = patterned_payload(bytes);
+            auto segmented = require_result(SegmentedPayload::allocate(bytes));
+            ASSERT_EQ(segmented.segment_count(), (bytes + SegmentedPayload::SEGMENT_BYTES - 1) /
+                                                     SegmentedPayload::SEGMENT_BYTES);
+            for (std::size_t done = 0; done < bytes;) {
+                const auto window = segmented.window(done);
+                const std::size_t count = std::min(window.size(), bytes - done);
+                std::memcpy(window.data(), payload.data() + done, count);
+                done += count;
+            }
+            const ChunkWriteOptions options{
+                .chunk_version = 1,
+                .compression = Compression::ByteShuffleZstdFramed,
+                .tensor_payload = true,
+                .block_crcs = true,
+            };
+            const auto prepared = require_result(ProjectWriter::prepare_chunk(std::move(segmented), options));
+            EXPECT_EQ(prepared.logical_bytes(), bytes);
+            EXPECT_EQ(require_result(prepared.decode()), payload);
+
+            TemporaryDirectory temporary;
+            const fs::path path = temporary.path / "segmented.licht";
+            ProjectWriter writer = require_result(ProjectWriter::create(path, fixture_create_options(840)));
+            require_status(writer.plan_commit(fixture_commit_options(841, 842, 1)));
+            require_status(writer.preflight(prepared.stored_bytes()));
+            require_status(writer.write_prepared_chunk(
+                ChunkKey{.fourcc = FOURCC_CKPT, .instance_uuid = fixed_uuid(840)}, prepared));
+            require_status(writer.commit());
+            ProjectReader reader = require_result(ProjectReader::open(path));
+            const ChunkInfo& chunk = reader.chunks().front();
+            std::vector<std::byte> stored(chunk.stored_bytes);
+            require_status(reader.read_stored_at(chunk, 0, stored));
+            EXPECT_EQ(stored, reference_framed_zstd(bytes % 4 == 0 ? byte_planes(payload) : payload));
+            EXPECT_EQ(require_result(reader.read_chunk(chunk)), payload);
+        }
+    }
+
     TEST(ProjectContainerReader, BoundedStreamMatchesReadChunkForFramedPayloads) {
         constexpr std::size_t kBytes =
             2ull * 64ull * 1024ull * 1024ull + 32ull * 1024ull * 1024ull;

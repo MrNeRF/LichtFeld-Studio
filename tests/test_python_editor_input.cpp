@@ -5,6 +5,7 @@
 
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/editor/zep_rml_display.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/terminal/terminal_input.hpp"
@@ -449,6 +450,31 @@ namespace {
         EXPECT_NE(state.getOutputText().find("KeyboardInterrupt"), std::string::npos);
         EXPECT_FALSE(state.handleShortcut(copy, &bindings, &service));
         document->newDocument("");
+    }
+
+    TEST(PythonEditorDisplayTest, TextUsesTheRegisteredMonospaceFace) {
+        struct RmlSession {
+            bool ready = Rml::Initialise();
+            ~RmlSession() {
+                if (ready)
+                    Rml::Shutdown();
+            }
+        } rml;
+        ASSERT_TRUE(rml.ready);
+        std::ifstream file(std::filesystem::path(PROJECT_ROOT_PATH) / "src/rendering/resources/assets/JetBrainsMono-Regular.ttf", std::ios::binary);
+        const std::vector<Rml::byte> bytes((std::istreambuf_iterator<char>(file)), {});
+        // Registered under the same spelling as the application fonts.
+        ASSERT_TRUE(Rml::LoadFontFace(bytes, "JetBrains Mono", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal));
+        lfs::vis::editor::ZepDisplay_Rml display;
+        display.setBaseFontSize(20.0f);
+        auto& font = display.GetFont(Zep::ZepTextType::Text);
+        const auto width = [&](const std::string_view text) {
+            const auto* begin = reinterpret_cast<const uint8_t*>(text.data());
+            return font.GetTextSize(begin, begin + text.size()).x;
+        };
+        // Multi-byte characters advance like ASCII ones in a monospace face.
+        EXPECT_FLOAT_EQ(width("λ"), width("a"));
+        EXPECT_FLOAT_EQ(width("äöü"), width("abc"));
     }
 
     TEST(PythonConsoleInputTest, DirtyShaderSaveAsReloadPreservesExactBytes) {

@@ -2350,6 +2350,7 @@ namespace lfs::core {
             tensors[0].capacity() >= total_size_along_dim) {
 
             LOG_DEBUG("  ✓ IN-PLACE OPTIMIZATION: Reusing buffer");
+            tensors[0].commit_rows(total_size_along_dim);
             // IN-PLACE PATH: Reuse first tensor's pre-allocated buffer
             // IMPORTANT: Use logical_size_ (actual current size) not shape_[0] which may be stale after reserve()
             const size_t first_size = (tensors[0].capacity() > 0 && tensors[0].logical_size() > 0)

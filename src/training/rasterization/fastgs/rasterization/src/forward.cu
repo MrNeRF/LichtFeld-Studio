@@ -343,14 +343,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         n_tiles_u64);
     LFS_FASTGS_PHASE_CHECK("cub::DeviceScan::InclusiveSum (FastGS visibility)");
 
-    lfs::rasterization::visibility::compact_indices<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
-        visibility_buffers.visibility_mask,
-        visibility_buffers.block_offsets,
-        visibility_buffers.visible_indices,
-        visibility_buffers.primitive_work_indices,
-        static_cast<uint>(n_primitives));
-    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
-
     // Legacy-default-stream copies do not wait for nonblocking streams.
     LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "cudaStreamSynchronize(FastGS visible count)");
     uint h_n_visible = 0;
@@ -359,6 +351,18 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                    sizeof(h_n_visible), cudaMemcpyDeviceToHost),
         "cudaMemcpy(FastGS visible count)");
     const int n_visible = checked_fastgs_visible_count(h_n_visible, n_primitives);
+
+    visibility_buffers.visible_indices = reinterpret_cast<uint*>(
+        per_primitive_buffers_func(std::max<size_t>(n_visible, 1) * sizeof(uint)));
+    if (!visibility_buffers.visible_indices)
+        throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS visible indices");
+    lfs::rasterization::visibility::compact_indices<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
+        visibility_buffers.visibility_mask,
+        visibility_buffers.block_offsets,
+        visibility_buffers.visible_indices,
+        visibility_buffers.primitive_work_indices,
+        static_cast<uint>(n_primitives));
+    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
 
     char* per_primitive_buffers_base =
         per_primitive_buffers_func(PerPrimitiveBuffers::required_persistent(n_visible));

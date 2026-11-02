@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace lfs::training {
 
@@ -1011,6 +1012,8 @@ namespace lfs::training {
                     if (moment_cap_floats >= float_layout && state.size < float_layout) {
                         // Capacity reserved at max_cap: advance logical size (new slots
                         // already zero-initialized under joint bounds when pre-allocated).
+                        state.exp_avg.commit_rows(
+                            joint_adam::packed_bytes(float_layout, state.joint_bits));
                         grow_grad_rows(state.grad, name, state.size, float_layout, moment_cap_floats);
                         state.size = float_layout;
                     } else if (state.size < float_layout) {
@@ -1033,6 +1036,8 @@ namespace lfs::training {
                             // Last resort: force size when capacity allows after extend.
                             const size_t cap2 = state.capacity;
                             if (cap2 >= float_layout && state.size < float_layout) {
+                                state.exp_avg.commit_rows(
+                                    joint_adam::packed_bytes(float_layout, state.joint_bits));
                                 grow_grad_rows(state.grad, name, state.size, float_layout, cap2);
                                 state.size = float_layout;
                             }
@@ -1767,13 +1772,30 @@ namespace lfs::training {
             // q16: gather-decode sources and encode only the appended 256-splat
             // blocks. fp32: in-swizzle gather into the grown tail.
             if (q16_param) {
-                lfs::core::Tensor canonical = lfs::core::Tensor::zeros(
-                    {n_new, static_cast<size_t>(layout_rest), size_t{3}},
-                    param.device());
-                lfs::training::sh_value::gather_shN_to_canonical(
-                    splat_data_, indices, canonical, old_N);
-                lfs::training::sh_value::append_canonical_to_shN(
-                    splat_data_, canonical, old_N);
+                // The fp32 staging takes 180 B per new row at SH3, so it goes
+                // a few whole 256-splat blocks at a time. Pieces end on block
+                // starts so each block is encoded once, and append from the
+                // last one back so every gather still reads the source blocks
+                // as they were before this growth.
+                constexpr size_t kStageBytes = size_t{64} << 20;
+                constexpr size_t kBlock = static_cast<size_t>(lfs::core::sh_value_quant::kBlockSize);
+                const size_t row_bytes = static_cast<size_t>(layout_rest) * 3 * sizeof(float);
+                const size_t stage_rows = std::max(kBlock, kStageBytes / row_bytes / kBlock * kBlock);
+                std::vector<size_t> starts{0};
+                for (size_t next = (old_N + stage_rows) / kBlock * kBlock; next < new_N; next += stage_rows) {
+                    starts.push_back(next - old_N);
+                }
+                for (size_t piece = starts.size(); piece-- > 0;) {
+                    const size_t begin = starts[piece];
+                    const size_t end = piece + 1 < starts.size() ? starts[piece + 1] : n_new;
+                    lfs::core::Tensor canonical = lfs::core::Tensor::zeros(
+                        {end - begin, static_cast<size_t>(layout_rest), size_t{3}},
+                        param.device());
+                    lfs::training::sh_value::gather_shN_to_canonical(
+                        splat_data_, indices.slice(0, begin, end), canonical, old_N);
+                    lfs::training::sh_value::append_canonical_to_shN(
+                        splat_data_, canonical, old_N + begin);
+                }
             } else if (param.dtype() == lfs::core::DataType::Float32) {
                 gather_new_swizzled_rows(param);
             }

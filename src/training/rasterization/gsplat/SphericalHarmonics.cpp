@@ -48,7 +48,8 @@ namespace gsplat_lfs {
         float* v_dirs,
         uint32_t color_stride,
         cudaStream_t stream,
-        const float* sh_value_bounds) {
+        const float* sh_value_bounds,
+        const ShGradientTarget& sh_grads) {
         if (total_elements == 0) {
             return;
         }
@@ -58,7 +59,8 @@ namespace gsplat_lfs {
             dirs, sh0, sh_rest_swizzled, masks, v_colors,
             total_elements, K,
             compute_v_dirs,
-            v_coeffs, v_dirs, stream, sh_value_bounds);
+            v_coeffs, v_dirs, stream, sh_value_bounds,
+            sh_grads.sh0, sh_grads.shN, sh_grads.shN_slots);
     }
 
 } // namespace gsplat_lfs

@@ -1213,6 +1213,37 @@ namespace lfs::core::tensor_ops {
         launch_scatter<T>(dst, idx, src, shape, in_shape, rank, dim, n_idx, 1, stream);
     }
 
+    template <typename T, typename IndexT>
+    __global__ void index_put_rows_kernel(T* __restrict__ data, const IndexT* __restrict__ idx,
+                                          const T* __restrict__ vals, const size_t row_size,
+                                          const int64_t num_rows, const size_t total) {
+        for (size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x; i < total;
+             i += static_cast<size_t>(gridDim.x) * blockDim.x) {
+            const size_t k = i / row_size;
+            int64_t row = static_cast<int64_t>(idx[k]);
+            if (row < 0) {
+                row += num_rows;
+            }
+            if (row >= 0 && row < num_rows) {
+                data[static_cast<size_t>(row) * row_size + i % row_size] = vals[i];
+            }
+        }
+    }
+
+    template <typename T, typename IndexT>
+    void launch_index_put_rows(T* data, const IndexT* idx, const T* vals, const size_t row_size,
+                               const size_t num_rows, const size_t idx_size, cudaStream_t stream) {
+        const size_t total = idx_size * row_size;
+        if (total == 0) {
+            return;
+        }
+        constexpr unsigned threads = 256;
+        const auto blocks = static_cast<unsigned>(std::min<size_t>((total + threads - 1) / threads, 65535u * 16u));
+        index_put_rows_kernel<T, IndexT><<<blocks, threads, 0, stream>>>(
+            data, idx, vals, row_size, static_cast<int64_t>(num_rows), total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.index_put_rows");
+    }
+
     void launch_index_put(float* data, const int* idx, const float* vals,
                           size_t data_size, size_t idx_size, cudaStream_t stream) {
         auto data_ptr = thrust::device_pointer_cast(data);
@@ -1324,5 +1355,17 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_index_fill<float>(float*, const int*, float, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_fill<int>(int*, const int*, int, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_fill<uint8_t>(uint8_t*, const int*, uint8_t, const size_t*, size_t, int, size_t, cudaStream_t);
+
+#define LFS_INDEX_PUT_ROWS(T, I) \
+    template LFS_CORE_API void launch_index_put_rows<T, I>(T*, const I*, const T*, size_t, size_t, size_t, cudaStream_t);
+    LFS_INDEX_PUT_ROWS(float, int)
+    LFS_INDEX_PUT_ROWS(float, int64_t)
+    LFS_INDEX_PUT_ROWS(unsigned char, int)
+    LFS_INDEX_PUT_ROWS(unsigned char, int64_t)
+    LFS_INDEX_PUT_ROWS(int, int)
+    LFS_INDEX_PUT_ROWS(int, int64_t)
+    LFS_INDEX_PUT_ROWS(int64_t, int)
+    LFS_INDEX_PUT_ROWS(int64_t, int64_t)
+#undef LFS_INDEX_PUT_ROWS
 
 } // namespace lfs::core::tensor_ops

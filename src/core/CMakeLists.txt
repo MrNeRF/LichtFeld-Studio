@@ -28,6 +28,7 @@ set(TENSOR_SOURCES
         tensor/gpu_slab_allocator.cpp
         tensor/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
+        tensor/lazy_device_storage.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor.cpp

@@ -120,14 +120,15 @@ namespace lfs::vis::editor {
             if (!font_engine)
                 return;
 
+            // The font engine keys families in lowercase; other spellings never match.
             face_handle_ = font_engine->GetFontFaceHandle(
-                "JetBrains Mono",
+                "jetbrains mono",
                 Rml::Style::FontStyle::Normal,
                 Rml::Style::FontWeight::Normal,
                 m_pixelHeight);
             if (!face_handle_) {
                 face_handle_ = font_engine->GetFontFaceHandle(
-                    "Inter",
+                    "inter",
                     Rml::Style::FontStyle::Normal,
                     Rml::Style::FontWeight::Normal,
                     m_pixelHeight);

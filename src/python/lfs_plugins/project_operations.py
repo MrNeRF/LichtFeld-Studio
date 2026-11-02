@@ -8,6 +8,7 @@ import logging
 import threading
 from _lfs_path_io import Path
 
+from .asset_index import resolve_asset_manager_storage_path
 from .asset_storage import lichtfeld_home
 from .credential_storage import FileBackend
 from .portal_account import _locked_sidecar
@@ -26,7 +27,8 @@ class ProjectOperationFailure(RuntimeError):
 class ProjectOperations:
     def __init__(self, io, root=None):
         self.io = io
-        self.root = Path(root or lichtfeld_home() / "data" / "asset_library").resolve()
+        # The Asset Manager's directory, so its storage overrides apply here too.
+        self.root = Path(root or resolve_asset_manager_storage_path()).resolve()
         self.path = self.root / "contents.json"
         with _store_locks_guard:
             self._lock = _store_locks.setdefault(self.path, threading.RLock())

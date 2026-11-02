@@ -78,43 +78,6 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * @brief Add gradients with unsqueeze (src [N] -> dst [N, 1])
-     *
-     * Accumulates gradients from a 1D buffer into a 2D buffer.
-     * Used for opacity gradients [N] -> [N, 1].
-     *
-     * @param dst Destination gradient buffer [N, 1], modified in-place
-     * @param src Source gradient buffer [N]
-     * @param N Number of elements
-     * @param stream CUDA stream
-     */
-    void launch_grad_accumulate_unsqueeze(
-        float* dst,
-        const float* src,
-        int64_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Add SH gradients into split sh0 + swizzled shN storage.
-     *
-     * @param dst_sh0 Destination sh0 gradient buffer [N, 1, 3], modified in-place
-     * @param dst_shN Destination swizzled shN gradient buffer, modified in-place (nullable when K_src=1)
-     * @param src Source canonical gradient buffer [N, K_src, 3]
-     * @param N Number of Gaussians
-     * @param K_src Active SH coefficients in source, including sh0
-     * @param shN_layout_rest Resident swizzled shN rest coefficient count
-     * @param stream CUDA stream
-     */
-    void launch_grad_accumulate_sh_swizzled(
-        float* dst_sh0,
-        float* dst_shN,
-        const float* src,
-        int64_t N,
-        int64_t K_src,
-        uint32_t shN_layout_rest,
-        cudaStream_t stream = nullptr);
-
-    /**
      * @brief Compute L2 norm of each row and add to destination buffer
      *
      * For each Gaussian, computes ||grad_means[i]||_2 and adds it to densification_info[i].

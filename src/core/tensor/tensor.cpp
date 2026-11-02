@@ -11,6 +11,7 @@
 #include "internal/cuda_event_pool.hpp"
 #include "internal/cuda_memory_guard.hpp"
 #include "internal/cuda_stream_context.hpp"
+#include "internal/lazy_device_storage.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/stream_lifetime.hpp"
@@ -308,6 +309,39 @@ namespace lfs::core {
 
     std::size_t Tensor::cuda_direct_storage_live_bytes() {
         return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
+    }
+
+    void Tensor::commit_rows(const size_t rows) const {
+        const auto lazy = storage_meta_ ? storage_meta_->lazy_storage.lock() : nullptr;
+        if (!lazy || shape_.rank() == 0) {
+            return;
+        }
+        LFS_ASSERT_MSG(rows <= capacity(),
+                       std::format("commit_rows({}) exceeds the reserved capacity {}", rows, capacity()));
+        size_t row_elements = 1;
+        for (size_t i = 1; i < shape_.rank(); ++i) {
+            row_elements = checked_product(row_elements, shape_[i], "commit_rows row");
+        }
+        const size_t elements = checked_product(rows, row_elements, "commit_rows elements");
+        lazy->commit(checked_product(storage_offset_ + elements, dtype_size(dtype_), "commit_rows bytes"),
+                     stream());
+    }
+
+    size_t Tensor::committed_rows() const {
+        const auto lazy = storage_meta_ ? storage_meta_->lazy_storage.lock() : nullptr;
+        if (!lazy || shape_.rank() == 0) {
+            return capacity();
+        }
+        size_t row_bytes = dtype_size(dtype_);
+        for (size_t i = 1; i < shape_.rank(); ++i) {
+            row_bytes *= shape_[i];
+        }
+        const size_t offset_bytes = storage_offset_ * dtype_size(dtype_);
+        const size_t committed = lazy->committed_bytes();
+        if (row_bytes == 0 || committed <= offset_bytes) {
+            return row_bytes == 0 ? capacity() : 0;
+        }
+        return std::min(capacity(), (committed - offset_bytes) / row_bytes);
     }
 
     // TensorLeaf implementation
@@ -3509,9 +3543,17 @@ namespace lfs::core {
             old_data = logical_source.data_ptr();
         }
 
-        // Allocate new buffer
+        // Allocate new buffer. On CUDA the rows past the current size are only
+        // a reservation, committed as the tensor grows into them (commit_rows).
         void* new_data = nullptr;
+        std::shared_ptr<LazyDeviceStorage> lazy;
         if (device_ == Device::CUDA) {
+            lazy = LazyDeviceStorage::create(
+                new_bytes, checked_product(numel(), element_size, "reserve live bytes"), stream());
+        }
+        if (lazy) {
+            new_data = lazy->data();
+        } else if (device_ == Device::CUDA) {
             new_data = allocate_cuda_storage(
                 new_bytes, stream(), CudaStorageMode::Direct,
                 "Tensor reserve CUDA allocation failed", "tensor.reserve");
@@ -3530,7 +3572,9 @@ namespace lfs::core {
         }
 
         std::shared_ptr<void> new_owner;
-        if (device_ == Device::CUDA) {
+        if (lazy) {
+            new_owner = std::shared_ptr<void>(lazy, lazy->data());
+        } else if (device_ == Device::CUDA) {
             record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
                 // skip cudaFree after ordered process teardown.
@@ -3552,6 +3596,7 @@ namespace lfs::core {
         auto new_storage_meta = std::make_shared<StorageMeta>();
         if (device_ == Device::CUDA) {
             new_storage_meta->external_kind = "cuda.direct";
+            new_storage_meta->lazy_storage = lazy;
         }
 
         // Copy existing data
@@ -3672,6 +3717,33 @@ namespace lfs::core {
             t.init_storage_meta();
             t.storage_meta_->external_kind = "cuda.direct";
             return t;
+        }
+
+        // Rows past the logical size are only a reservation: commit and zero the
+        // live rows now, the rest as the tensor grows into them (commit_rows).
+        if (capacity > current_size) {
+            const size_t live_bytes = checked_product(
+                checked_product(current_size, row_size, "zeros_direct live elements"),
+                dtype_size(dtype), "zeros_direct live bytes");
+            if (auto lazy = LazyDeviceStorage::create(total_bytes, live_bytes,
+                                                      getCurrentCUDAStream())) {
+                Tensor t;
+                t.data_ = lazy->data();
+                t.data_owner_ = std::shared_ptr<void>(lazy, lazy->data());
+                t.shape_ = shape;
+                t.strides_ = shape.strides();
+                t.storage_offset_ = 0;
+                t.device_ = device;
+                t.dtype_ = dtype;
+                t.ensure_state();
+                t.state_->capacity = capacity;
+                t.state_->logical_size = current_size;
+                t.id_ = next_id_++;
+                t.init_storage_meta();
+                t.storage_meta_->external_kind = "cuda.direct";
+                t.storage_meta_->lazy_storage = lazy;
+                return t;
+            }
         }
 
         void* data_ptr = allocate_cuda_storage(

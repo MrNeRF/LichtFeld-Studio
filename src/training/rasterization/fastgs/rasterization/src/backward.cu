@@ -57,7 +57,8 @@ void fast_lfs::rasterization::backward(
     float* grad_depth_helper,
     float3* grad_normal_helper,
     float4* grad_w2c,
-    float* densification_info,
+    float* densification_weight,
+    float* densification_error,
     const int n_primitives,
     const int n_instances,
     const int n_visible,
@@ -124,7 +125,8 @@ void fast_lfs::rasterization::backward(
                         grad_normal_helper,
                         grad_opacity_helper,
                         grad_color_helper,
-                        densification_info,
+                        densification_weight,
+                        densification_error,
                         densification_error_map,
                         edge_weight_map,
                         edge_score_out,
@@ -171,9 +173,12 @@ void fast_lfs::rasterization::backward(
                 launch_blend.template operator()<DensificationType::None, false, true, 2>();
             else
                 launch_blend.template operator()<DensificationType::None, false, false, 2>();
-        } else if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
+        } else if (densification_weight != nullptr && densification_error != nullptr &&
+                   (densification_type == DensificationType::MRNF || densification_error_map != nullptr)) {
+            // Both rows: the MRNF variant sums the weight and the (map-weighted) error.
             launch_production.template operator()<DensificationType::MRNF>();
-        } else if (densification_info != nullptr && densification_error_map != nullptr) {
+        } else if (densification_error != nullptr && densification_error_map != nullptr) {
+            // The error row alone.
             launch_production.template operator()<DensificationType::MCMC>();
         } else {
             launch_production.template operator()<DensificationType::None>();
@@ -209,7 +214,8 @@ void fast_lfs::rasterization::backward(
                 grad_opacity_helper,
                 grad_color_helper,
                 grad_w2c,
-                (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
+                (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_weight : nullptr,
+                (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_error : nullptr,
                 n_primitives,
                 w_f,
                 h_f,

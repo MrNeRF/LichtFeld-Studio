@@ -381,6 +381,51 @@ TEST(DualRepOptimizer, JointAddNewParamsGatherShNGrowsMoments) {
         << "joint gather must grow packed moment buffer";
 }
 
+// q16 growth stages its fp32 rows a few blocks at a time; the encoded result
+// must be the same as staging every new row at once.
+TEST(DualRepOptimizer, QuantizedShNGatherInPiecesMatchesOnePass) {
+    CodecsOnGuard guard;
+    constexpr size_t n0 = 300001;
+    constexpr size_t n_new = 900003;
+    std::vector<int> host_indices(n_new);
+    for (size_t i = 0; i < n_new; ++i) {
+        host_indices[i] = static_cast<int>((i * 7919u + 13u) % n0);
+    }
+    const auto indices =
+        Tensor::from_vector(host_indices, TensorShape({n_new}), Device::CUDA).to(DataType::Int64);
+    const auto grow_rows = [](SplatData& splat) {
+        for (auto* t : {&splat.means(), &splat.sh0(), &splat.scaling_raw(), &splat.rotation_raw(),
+                        &splat.opacity_raw()}) {
+            t->reserve(n0 + n_new);
+            t->append_zeros(n_new);
+        }
+    };
+
+    auto pieces = make_sh_splat(n0, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(pieces));
+    AdamOptimizer opt(pieces, make_cfg(n0 + n_new));
+    opt.allocate_gradients(n0 + n_new);
+    grow_rows(pieces);
+    opt.add_new_params_gather(ParamType::ShN, indices);
+
+    auto one_pass = make_sh_splat(n0, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(one_pass));
+    grow_rows(one_pass);
+    auto canonical = Tensor::zeros({n_new, one_pass.max_sh_coeffs_rest(), size_t{3}}, Device::CUDA);
+    sh_value::gather_shN_to_canonical(one_pass, indices, canonical, n0);
+    sh_value::append_canonical_to_shN(one_pass, canonical, n0);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_TRUE(pieces.shN_value_quantized());
+    const auto bytes_of = [](const Tensor& t) {
+        const auto host = t.cpu();
+        const auto* p = static_cast<const unsigned char*>(host.data_ptr());
+        return std::vector<unsigned char>(p, p + host.bytes());
+    };
+    EXPECT_EQ(bytes_of(pieces.shN()), bytes_of(one_pass.shN()));
+    EXPECT_EQ(bytes_of(pieces.shN_value_bounds()), bytes_of(one_pass.shN_value_bounds()));
+}
+
 TEST(DualRepOptimizer, LazyShNGradientGrowsWithMcmcGather) {
     CodecsOnGuard guard;
     constexpr size_t n0 = 30;

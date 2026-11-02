@@ -790,9 +790,8 @@ namespace lfs::training {
         }
 
         const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
-        // densification_info has shape [2, N]
-        const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
-                                               gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
+        const auto densification_rows = gaussian_model.densification_rows(static_cast<size_t>(n_primitives));
+        const bool update_densification_info = densification_rows.error != nullptr;
         const bool use_pixel_error_densification = update_densification_info &&
                                                    pixel_error_map.is_valid() &&
                                                    pixel_error_map.numel() > 0;
@@ -882,7 +881,8 @@ namespace lfs::training {
             bwd_shN_ptr = ctx.shN.ptr<float>();
         }
         auto backward_result = fast_lfs::rasterization::backward_raw(
-            update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
+            densification_rows.weight,
+            densification_rows.error,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             background_grad,

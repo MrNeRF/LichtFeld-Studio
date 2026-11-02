@@ -982,6 +982,33 @@ namespace lfs::core {
             return false;
         }
 
+        const auto& deleted = splat_data.deleted();
+        const bool masked = splat_data.has_deleted_mask();
+        if (!use_percentile && means.device() == Device::CUDA && means.dtype() == DataType::Float32 &&
+            means.is_contiguous() && (!masked || (deleted.is_contiguous() && deleted.numel() >= means.size(0)))) {
+            // Reduce in place: an index list plus a gathered copy cost 20 bytes per
+            // Gaussian, which a viewport pick cannot take from a training run at the
+            // VRAM limit.
+            const auto stream = means.stream();
+            means.sync_to_stream(stream);
+            if (masked)
+                deleted.sync_to_stream(stream);
+            auto scratch = Tensor::empty({6}, Device::CUDA, DataType::UInt32);
+            scratch.set_stream(stream);
+            float lo[3], hi[3];
+            const bool found = cuda::splat_position_bounds(
+                means.ptr<float>(), masked ? deleted.ptr<uint8_t>() : nullptr, static_cast<std::size_t>(means.size(0)),
+                scratch.ptr<uint32_t>(), lo, hi, stream);
+            scratch.record_stream(stream);
+            if (!found)
+                return false;
+            for (int i = 0; i < 3; ++i) {
+                min_bounds[i] = lo[i] - padding;
+                max_bounds[i] = hi[i] + padding;
+            }
+            return true;
+        }
+
         // Filter deleted gaussians (index_select preserves [N,3] shape)
         Tensor visible_means = means;
         if (splat_data.has_deleted_mask()) {

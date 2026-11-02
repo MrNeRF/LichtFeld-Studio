@@ -9,7 +9,6 @@
 #include "core/tensor.hpp"
 #include "istrategy.hpp"
 #include "kernels/mrnf_kernels.hpp"
-#include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include "strategy_utils.hpp"
@@ -22,7 +21,8 @@ namespace lfs::training::sh_value {
     class ShNMutationBatch;
 }
 
-class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+class MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
+class MRNFStrategyTest_RefineOutOfVramIsUndoneToTheRowsItStartedFrom_Test;
 class MRNFStrategyTest_GrowthExchangeUsesMaxOfImpactRanks_Test;
 class MRNFStrategyTest_GrowthExchangeSkipsNewbornsUntilScored_Test;
 class MRNFStrategyTest_GrowthExchangeMarksSplitParentsAndChildrenNewborn_Test;
@@ -82,7 +82,7 @@ namespace lfs::training {
         void step(int iter) override;
         [[nodiscard]] lfs::core::Tensor rendered_support_counts() const override { return _rendered_count; }
 
-        void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
+        void for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) override;
 
         lfs::core::SplatData& get_model() override { return *_splat_data; }
         const lfs::core::SplatData& get_model() const override { return *_splat_data; }
@@ -115,7 +115,8 @@ namespace lfs::training {
         void on_impact_accumulated(int iter) override;
 
     private:
-        friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
+        friend class ::MRNFStrategyTest_MortonReorderKeepsFarMaskPublished_Test;
+        friend class ::MRNFStrategyTest_RefineOutOfVramIsUndoneToTheRowsItStartedFrom_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
@@ -215,13 +216,11 @@ namespace lfs::training {
         [[nodiscard]] lfs::core::Tensor sample_with_roi_share(
             const lfs::core::Tensor& weights,
             int k,
-            uint64_t seed,
-            size_t known_nnz);
+            uint64_t seed);
         [[nodiscard]] lfs::core::Tensor sample_gumbel_topk(
             const lfs::core::Tensor& weights,
             int k,
-            uint64_t seed,
-            size_t known_nnz = 0);
+            uint64_t seed);
         size_t append_child_rows(
             const lfs::core::Tensor& child_means,
             const lfs::core::Tensor& child_rotations,
@@ -247,7 +246,7 @@ namespace lfs::training {
             const lfs::core::Tensor& opacities,
             int64_t count,
             lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
-        [[nodiscard]] lfs::core::Tensor edge_guidance_factor();
+        [[nodiscard]] mrnf_strategy::EdgeGuidance edge_guidance();
 
         std::unique_ptr<AdamOptimizer> _optimizer;
         std::unique_ptr<ExponentialLR> _scheduler;
@@ -286,7 +285,6 @@ namespace lfs::training {
         int _exchange_first_iter = -1;
 
         DensifyNScratch _densify_n_scratch;
-        GumbelTopKScratch _gumbel_scratch;
         lfs::core::Tensor _refine_counts_dev;
 
         std::size_t _strategy_required_peak_bytes = 0;
@@ -306,7 +304,7 @@ namespace lfs::training {
             size_t n,
             const lfs::core::Tensor& active_mask,
             const lfs::core::Tensor& trainable_mask,
-            const lfs::core::Tensor& edge_guidance) const;
+            const mrnf_strategy::EdgeGuidance& edge_guidance) const;
 
         // Grow MRNF bookkeeping after parameter preflight and before any
         // parameter append. This is intentionally grow-only: refine resets

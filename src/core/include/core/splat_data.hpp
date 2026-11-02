@@ -500,8 +500,16 @@ namespace lfs::core {
         }
 
     public:
-        // Holds the magnitude of the screen space gradient (used for densification)
+        // Holds the magnitude of the screen space gradient (used for densification).
+        // [rows >= 2, N] is a weight row, then an error row. [N] is the error
+        // row alone, for strategies that never read the weight.
         Tensor _densification_info;
+        struct DensificationRows {
+            float* weight = nullptr;
+            float* error = nullptr;
+        };
+        // The rows of _densification_info covering n splats; none when it does not.
+        [[nodiscard]] DensificationRows densification_rows(std::size_t n);
         // Per-splat max screen-share over the current refine window. [N] fp32.
         Tensor _max_screen_share;
 

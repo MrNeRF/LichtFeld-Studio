@@ -62,6 +62,7 @@ def _install_recording_lf(monkeypatch):
         "CROP_BOX",
         "WALK",
         "VR",
+        "EDITOR",
     )
     action_names = (
         "NONE",

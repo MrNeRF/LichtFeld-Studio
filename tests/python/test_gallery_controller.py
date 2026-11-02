@@ -34,6 +34,8 @@ def gallery(monkeypatch, panel_module):
     native_io = import_module('lichtfeld.io')
     monkeypatch.setattr(module.lf, "io", SimpleNamespace(
         inspect_project=lambda path: SimpleNamespace(project_uuid="project", commit_uuid=""),
+        inspect_project_details=lambda _path, **_kwargs: SimpleNamespace(chapters=[]),
+        ProjectRowKind=native_io.ProjectRowKind,
         project_content_stamp=native_io.project_content_stamp), raising=False)
     panel = module.GalleryController()
     yield panel, state, actions
@@ -642,6 +644,34 @@ def test_publish_review_save_choice_only_for_open_project(gallery, monkeypatch, 
     assert 'data-if="show_prepared_copy"' in rml
     assert 'data-if="show_cover"' in rml
     assert 'data-if="show_unlinked_hint">{{unlinked_copy}}' in rml
+
+
+@pytest.mark.parametrize("open_project, live_shaders, stored_row, warned", [
+    (True, ["asset"], None, True),
+    (False, ["asset"], None, False),
+    (False, [], "LIVE", True),
+    (False, [], "TOMBSTONE", False),
+])
+def test_publish_review_warns_that_user_shaders_stay_local(gallery, monkeypatch, tmp_path, open_project, live_shaders, stored_row, warned):
+    from lfs_plugins.gallery_file_panel import GalleryFilePanel
+    module = import_module("lfs_plugins.gallery_file_panel")
+    controller, _, _ = gallery
+    path = tmp_path / "project-a.licht"
+    path.write_bytes(b"saved project")
+    kind = module.lf.io.ProjectRowKind
+    chapters = [SimpleNamespace(fourcc="SHDR", row_kind=getattr(kind, stored_row))] if stored_row else []
+    monkeypatch.setattr(module.lf.io, "inspect_project_details", lambda _path, checkpoint_byte_budget: SimpleNamespace(chapters=chapters))
+    monkeypatch.setattr(module.lf, "shaders", SimpleNamespace(list=lambda: live_shaders), raising=False)
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"path": str(path) if open_project else ""}, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    monkeypatch.setattr(module.lf.ui, "get_panel_object", lambda _: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *_: None, raising=False)
+    monkeypatch.setattr(module.lf.ui, "request_redraw", lambda: None, raising=False)
+    panel = GalleryFilePanel()
+    panel.show(controller=controller, asset={"id": "project", "path": str(path), "name": "Project"},
+               scene=None, action="publish", fields={"title": "Project", "description": "", "upload_format": "sog"},
+               warning="Quota low")
+    assert panel._review["warning"] == ("Quota low shader.publication_omitted" if warned else "Quota low")
 
 
 def test_pull_review_folder_dropdown_browse_and_submit(gallery, monkeypatch, tmp_path):

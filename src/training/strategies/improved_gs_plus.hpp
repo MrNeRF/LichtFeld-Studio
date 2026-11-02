@@ -6,7 +6,6 @@
 
 #include "istrategy.hpp"
 
-#include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include "strategy_utils.hpp"
@@ -47,7 +46,7 @@ namespace lfs::training {
 
         bool is_refining(int iter) const override;
 
-        void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
+        void for_each_gaussian_row(const std::function<void(lfs::core::Tensor&)>& visit) override;
 
         lfs::core::SplatData& get_model() override { return *_splat_data; }
         const lfs::core::SplatData& get_model() const override { return *_splat_data; }
@@ -105,7 +104,8 @@ namespace lfs::training {
         void ensure_error_score_shape();
         [[nodiscard]] lfs::core::Tensor damp_densification_scores(
             const lfs::core::Tensor& scores) const;
-        void densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget);
+        // Consumes both score buffers: they are normalized and combined in place.
+        void densify_with_score(lfs::core::Tensor& edge_scores, lfs::core::Tensor& error_scores, const int64_t budget);
         void LAS_densify(const lfs::core::Tensor& scores, const int64_t allocation_budget);
 
         void reset_opacity();
@@ -167,7 +167,5 @@ namespace lfs::training {
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;
         PendingFailureSnapshot _pending_failure_snapshot;
-
-        DensifyChildWorkspace _densify_ws;
     };
 } // namespace lfs::training

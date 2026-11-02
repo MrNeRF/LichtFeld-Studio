@@ -121,6 +121,17 @@ namespace gsplat_lfs {
                 return lfs::core::VmmDeviceBuffer::kGranularityBytes;
             }
 
+            [[nodiscard]] size_t pair_committed_bytes() const noexcept {
+                size_t bytes = 0;
+                for (const auto* storage : {&isect_ids_storage, &isect_values_storage,
+                                            &sort_ids_storage, &sort_values_storage}) {
+                    if (*storage) {
+                        bytes += (*storage)->committed_bytes();
+                    }
+                }
+                return bytes;
+            }
+
             size_t pair_reservation_bytes(const size_t element_bytes) const {
                 constexpr size_t kMaxIntersectionCount =
                     static_cast<size_t>(std::numeric_limits<int32_t>::max());
@@ -523,12 +534,16 @@ namespace gsplat_lfs {
 
         auto& cache = get_cache();
         cache.begin_call(n_elements, stream);
-        if (cache.pair_budget == 0) {
+        {
+            // Training state grows in place as the model densifies, so the
+            // budget follows current free VRAM (plus the pair buffers this
+            // cache already holds) instead of the first call's.
             size_t free_bytes = 0, total_bytes = 0;
             LFS_CUDA_CHECK_MSG(cudaMemGetInfo(&free_bytes, &total_bytes), "gsplat pair budget");
             // 24 bytes/pair for the two key/value sets; reserve additional
             // space for CUB, forward/backward tensors and the optimizer.
-            cache.pair_budget = std::max<size_t>(1, std::min<size_t>(INT32_MAX, free_bytes / 64));
+            cache.pair_budget = std::max<size_t>(
+                1, std::min<size_t>(INT32_MAX, (free_bytes + cache.pair_committed_bytes()) / 64));
             if (const auto value = lfs::core::environment::value("LFS_GSPLAT_PAIR_BUDGET")) {
                 const auto requested = lfs::core::environment::unsigned_integer<size_t>(*value);
                 if (requested && *requested > 0) {

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/training_manager.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
@@ -738,12 +739,24 @@ namespace lfs::vis {
         if (splat_storage_->capacity() >= needed_rows) {
             return true;
         }
-        const std::size_t want = lfs::core::SplatExportableStorage::growthCapacity(
-            needed_rows, splat_storage_->reservedCapacity());
-
         auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
         if (!model_ptr) {
             return false;
+        }
+
+        std::size_t want = lfs::core::SplatExportableStorage::growthCapacity(
+            needed_rows, splat_storage_->reservedCapacity());
+        // Densification grows the model up to the VRAM limit; headroom past
+        // needed_rows must not take the free VRAM the rasterizer arena needs.
+        std::size_t free_bytes = 0;
+        std::size_t total_bytes = 0;
+        if (want > needed_rows && cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+            const std::size_t headroom_bytes =
+                (want - splat_storage_->capacity()) *
+                lfs::core::SplatExportableStorage::layoutBytesPerSplat(model_ptr->get_max_sh_degree());
+            if (free_bytes < headroom_bytes + 2 * lfs::core::RasterizerMemoryArena::growth_headroom_bytes(total_bytes)) {
+                want = needed_rows;
+            }
         }
 
         const std::size_t old_capacity = splat_storage_->capacity();

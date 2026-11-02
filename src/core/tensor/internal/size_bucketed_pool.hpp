@@ -114,6 +114,12 @@ namespace lfs::core {
             return std::clamp(total_bytes / 96, MIN_CACHE_BUDGET, MAX_CACHE_BUDGET);
         }
 
+        // A bucket larger than the cache budget is freed on release, so its
+        // rounding would only waste memory while it lives.
+        [[nodiscard]] bool may_cache(const size_t bytes) {
+            return get_bucket_size(bytes) <= current_cache_budget();
+        }
+
         void* try_allocate_cached(size_t bytes, cudaStream_t stream = nullptr) {
             LFS_CUDA_BREADCRUMB_STREAM("tensor.bucket.allocate", stream);
             const size_t bucket_size = get_bucket_size(bytes);
