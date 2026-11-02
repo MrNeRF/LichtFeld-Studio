@@ -56,11 +56,13 @@ With a crop box, the loss shown in the progress bar, the GUI's loss chart and to
 
 ### Automatic tiling
 
-To train a whole dataset as a grid, pass only the number of cells. LichtFeld Studio measures the sparse point cloud, discards the extreme 2% of coordinates on each axis, aligns the grid to its dominant horizontal direction, and trains the cells one after another. Each tile runs in a separate process, so its GPU resources are released before the next tile starts. The generated boxes are recorded in `output/tiles.json`. Successful runs are exported to `output/tiles/tile_i_j/tile_i_j.ply`; after all cells finish, `output/merged.ply` contains the combined model. The merge checks that every binary PLY has the same vertex properties, then copies the vertex data in bounded chunks. It does not load the tile models into RAM or VRAM. The merged file still needs disk space for all tile data, and its PLY header is rebuilt with a fresh minimal provenance stamp.
+To train a whole dataset as a grid, pass only the number of cells. LichtFeld Studio measures the sparse point cloud and camera centres, discards the extreme 2% of coordinates on each axis, aligns the grid with 3D PCA by default, and trains the cells one after another. Each tile runs in a separate process, so its GPU resources are released before the next tile starts. The generated boxes are recorded in `output/tiles.json`. Successful runs are exported to `output/tiles/tile_i_j/tile_i_j.ply`; after all cells finish, `output/merged.ply` contains the combined model. The merge checks that every binary PLY has the same vertex properties, then copies the vertex data in bounded chunks. It does not load the tile models into RAM or VRAM. The merged file still needs disk space for all tile data, and its PLY header is rebuilt with a fresh minimal provenance stamp.
 
 ```sh
 LichtFeld-Studio -d ./dataset -o ./output --auto-tile 3x2 --iter 30000
 ```
+
+The default orientation uses 3D PCA on sparse points and camera centres. Choose `--tile-align planar_yaw`, `planar_pitch`, or `planar_roll` to align only in the XY, XZ, or YZ plane, respectively. `--tile-align axis_aligned` disables PCA. `--tile-source both|points|cameras` selects the positions used for bounds and orientation, while `--tile-quantile 0.02` controls the outlier trim. The GUI exposes the same choices in the Automatic tiling section.
 
 Use `--tile-size 30` instead of `--auto-tile 3x2` to derive the grid from a target width in dataset units. `--tile-overlap 0.15` is the default; accepted values are 0 through 0.3. `--no-tile-pca` aligns the grid to the dataset axes, and `--no-tile-merge` leaves just the individual exports. Auto-tiling uses fresh dataset training with `--centralize off`; it cannot be combined with a manual `--cropbox`, resumed training or added splats. If a tile fails or the user interrupts training, merging stops and the completed tile exports remain available.
 

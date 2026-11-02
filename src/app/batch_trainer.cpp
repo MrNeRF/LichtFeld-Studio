@@ -1308,6 +1308,8 @@ namespace lfs::app {
                                      name == "--auto-tile" || name == "--tile-size" ||
                                      name == "--tile-overlap" || name == "--no-tile-pca" ||
                                      name == "--no-tile-merge" || name == "--tile-plan" ||
+                                     name == "--tile-align" || name == "--tile-source" ||
+                                     name == "--tile-quantile" ||
                                      name == "--train";
             if (!parent_only)
                 shared.insert(shared.end(), command_line.begin() + n, command_line.begin() + n + count);
@@ -1375,27 +1377,31 @@ namespace lfs::app {
             }
             const lfs::core::PointCloud empty_points;
             const auto& points = scene->point_cloud ? *scene->point_cloud : empty_points;
-            float angle = 0.0f;
-            if (params.auto_tile_align_pca) {
-                if (points.size() > 1) {
-                    angle = lfs::core::compute_dominant_orientation_pca(points);
-                } else if (centers.size() > 1) {
-                    std::vector<float> coordinates;
-                    coordinates.reserve(centers.size() * 3);
-                    for (const auto& center : centers)
-                        coordinates.insert(coordinates.end(), {center.x, center.y, center.z});
-                    const lfs::core::PointCloud cameras{
-                        lfs::core::Tensor::from_vector(coordinates, {centers.size(), 3}, lfs::core::Device::CPU),
-                        lfs::core::Tensor{}};
-                    angle = lfs::core::compute_dominant_orientation_pca(cameras);
-                }
+            lfs::core::OrientationMode mode = lfs::core::OrientationMode::Obb3D;
+            if (params.auto_tile_align_mode == "planar_yaw" || params.auto_tile_align_mode == "yaw") {
+                mode = lfs::core::OrientationMode::PlanarYaw;
+            } else if (params.auto_tile_align_mode == "planar_pitch" || params.auto_tile_align_mode == "pitch") {
+                mode = lfs::core::OrientationMode::PlanarPitch;
+            } else if (params.auto_tile_align_mode == "planar_roll" || params.auto_tile_align_mode == "roll") {
+                mode = lfs::core::OrientationMode::PlanarRoll;
+            } else if (params.auto_tile_align_mode == "axis_aligned" || params.auto_tile_align_mode == "none" || !params.auto_tile_align_pca) {
+                mode = lfs::core::OrientationMode::AxisAligned;
             }
-            auto bounds = lfs::core::compute_robust_scene_bounds(points, centers, 0.02f, angle);
+            lfs::core::BoundsSource source = lfs::core::BoundsSource::Both;
+            if (params.auto_tile_source == "points") {
+                source = lfs::core::BoundsSource::Points;
+            } else if (params.auto_tile_source == "cameras") {
+                source = lfs::core::BoundsSource::Cameras;
+            }
+            auto bounds = lfs::core::compute_robust_scene_bounds_obb(
+                points, centers, params.auto_tile_quantile, mode, source);
             const auto extent = bounds.max - bounds.min;
-            // Keep legitimate edge geometry and the full vertical range just beyond the quantiles.
-            const glm::vec3 padding = glm::max(extent * 0.02f, glm::vec3(0.01f));
-            bounds.min -= padding;
-            bounds.max += padding;
+            if (params.auto_tile_quantile > 0.0f) {
+                // Keep legitimate edge geometry and the full vertical range just beyond the quantiles.
+                const glm::vec3 padding = glm::max(extent * 0.02f, glm::vec3(0.01f));
+                bounds.min -= padding;
+                bounds.max += padding;
+            }
             lfs::core::TileGridConfig grid;
             if (params.auto_tile_grid) {
                 grid.columns = params.auto_tile_grid->first;
@@ -1404,6 +1410,8 @@ namespace lfs::app {
             grid.target_size = params.auto_tile_size;
             grid.overlap_ratio = params.tile_overlap;
             grid.align_pca = params.auto_tile_align_pca;
+            grid.orientation_mode = mode;
+            grid.quantile = params.auto_tile_quantile;
             tiles = lfs::core::generate_tile_grid(bounds, grid);
             }
         } catch (const std::exception& error) {

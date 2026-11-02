@@ -2923,6 +2923,20 @@ def property_callback(property_path: str) -> object:
 def get_scene() -> scene.Scene | None:
     """Get the current scene (None if not available)"""
 
+def studio_executable_path() -> str:
+    """Path to the running LichtFeld Studio executable"""
+
+@overload
+def preview_auto_tiles(columns: int, rows: int, overlap: float = 0.15000000596046448, align_mode: str = 'obb_3d', source: str = 'both', quantile: float = 0.019999999552965164, replace_group_id: int = -1) -> int:
+    """Preview auto-tile boxes in the current scene"""
+
+@overload
+def preview_auto_tiles(columns: int, rows: int, overlap: float = 0.15000000596046448, align_pca: bool = True, replace_group_id: int = -1) -> int:
+    """Preview auto-tile boxes in the current scene (legacy signature)"""
+
+def save_auto_tile_plan(group_id: int, columns: int, destination: str) -> int:
+    """Save edited preview boxes for a headless auto-tile run"""
+
 def get_scene_generation() -> int:
     """Get current scene generation counter (for validity checking)"""
 

@@ -213,6 +213,7 @@ SECTIONS = [
     "evaluation",
     "save_steps",
     "advanced_registry",
+    "auto_tiles",
 ]
 
 INITIALLY_COLLAPSED = {
@@ -226,6 +227,7 @@ INITIALLY_COLLAPSED = {
     "init",
     "evaluation",
     "save_steps",
+    "auto_tiles",
 }
 
 
@@ -264,8 +266,10 @@ class TrainingPanel(Panel):
         self._auto_scale_dataset_path = ""
         self._auto_tile_columns = "2"
         self._auto_tile_rows = "2"
-        self._auto_tile_overlap = "0.15"
-        self._auto_tile_align = True
+        self._auto_tile_overlap = 0.15
+        self._auto_tile_align_mode = "obb_3d"
+        self._auto_tile_source = "both"
+        self._auto_tile_quantile = 0.02
         self._auto_tile_process = None
         self._auto_tile_status = ""
         self._auto_tile_output = ""
@@ -363,10 +367,16 @@ class TrainingPanel(Panel):
                    lambda value: setattr(self, "_auto_tile_columns", str(value)))
         model.bind("auto_tile_rows", lambda: self._auto_tile_rows,
                    lambda value: setattr(self, "_auto_tile_rows", str(value)))
-        model.bind("auto_tile_overlap", lambda: self._auto_tile_overlap,
-                   lambda value: setattr(self, "_auto_tile_overlap", str(value)))
-        model.bind("auto_tile_align", lambda: self._auto_tile_align,
-                   lambda value: setattr(self, "_auto_tile_align", bool(value)))
+        model.bind("auto_tile_overlap_steps", lambda: round(self._auto_tile_overlap * 100),
+                   lambda value: setattr(self, "_auto_tile_overlap", round(float(value)) / 100))
+        model.bind_func("auto_tile_overlap_label", lambda: f"{self._auto_tile_overlap:.2f}")
+        model.bind("auto_tile_align_mode", lambda: self._auto_tile_align_mode,
+                   lambda value: setattr(self, "_auto_tile_align_mode", str(value)))
+        model.bind("auto_tile_source", lambda: self._auto_tile_source,
+                   lambda value: setattr(self, "_auto_tile_source", str(value)))
+        model.bind("auto_tile_quantile_steps", lambda: round(self._auto_tile_quantile * 1000),
+                   lambda value: setattr(self, "_auto_tile_quantile", round(float(value)) / 1000))
+        model.bind_func("auto_tile_quantile_label", lambda: f"{self._auto_tile_quantile:.3f}")
         model.bind_func("auto_tile_status", lambda: self._auto_tile_status)
         model.bind_func("auto_tile_running", lambda: self._auto_tile_process is not None)
         self._bind_property_search(model)
@@ -1494,6 +1504,7 @@ class TrainingPanel(Panel):
         model.bind_event("pv_blur", self._on_pv_number_input_blur)
         model.bind_event("pv_escape", self._on_pv_number_input_escape)
         model.bind_event("pv_value_change", self._on_pv_value_change)
+        model.bind_event("auto_tile_slider_change", self._on_auto_tile_slider_change)
         model.bind_event("pv_search_clear", self._on_pv_search_clear)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
@@ -2917,12 +2928,34 @@ class TrainingPanel(Panel):
             columns = int(self._auto_tile_columns)
             rows = int(self._auto_tile_rows)
             overlap = float(self._auto_tile_overlap)
+            quantile = float(self._auto_tile_quantile)
         except (TypeError, ValueError):
             raise ValueError(tr("auto_tiles.invalid_grid"))
+        if -1e-6 <= overlap < 0.0:
+            overlap = 0.0
+        if -1e-6 <= quantile < 0.0:
+            quantile = 0.0
         if not (1 <= columns <= 100 and 1 <= rows <= 100 and
-                columns * rows <= 1000 and 0.0 <= overlap <= 0.3):
+                columns * rows <= 1000 and 0.0 <= overlap <= 0.3 and
+                0.0 <= quantile < 0.5):
             raise ValueError(tr("auto_tiles.invalid_grid"))
-        return columns, rows, overlap
+        return columns, rows, overlap, quantile
+
+    def _on_auto_tile_slider_change(self, handle, _event, args):
+        if len(args) < 2:
+            return
+        try:
+            steps = round(float(args[1]))
+        except (TypeError, ValueError):
+            return
+        if args[0] == "overlap":
+            self._auto_tile_overlap = min(30, max(0, steps)) / 100
+            handle.dirty("auto_tile_overlap_steps")
+            handle.dirty("auto_tile_overlap_label")
+        elif args[0] == "quantile":
+            self._auto_tile_quantile = min(100, max(0, steps)) / 1000
+            handle.dirty("auto_tile_quantile_steps")
+            handle.dirty("auto_tile_quantile_label")
 
     def _set_auto_tile_status(self, status):
         self._auto_tile_status = status
@@ -2931,16 +2964,22 @@ class TrainingPanel(Panel):
 
     def _auto_tile_preview(self):
         try:
-            columns, rows, overlap = self._auto_tile_settings()
+            columns, rows, overlap, quantile = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
                 raise ValueError(tr("auto_tiles.dataset_required"))
             if dataset.centralize_dataset != "off":
                 raise ValueError(tr("auto_tiles.centralize_off"))
             self._auto_tile_preview_group = lf.preview_auto_tiles(
-                columns, rows, overlap, self._auto_tile_align,
-                self._auto_tile_preview_group)
-            self._auto_tile_preview_settings = (columns, rows, overlap, self._auto_tile_align)
+                columns, rows, overlap,
+                align_mode=self._auto_tile_align_mode,
+                source=self._auto_tile_source,
+                quantile=quantile,
+                replace_group_id=self._auto_tile_preview_group)
+            self._auto_tile_preview_settings = (
+                columns, rows, overlap, quantile,
+                self._auto_tile_align_mode, self._auto_tile_source
+            )
             self._auto_tile_preview_dataset = dataset.data_path if dataset and dataset.has_params() else ""
             self._set_auto_tile_status(tr("auto_tiles.previewed").format(columns * rows))
         except (RuntimeError, ValueError) as error:
@@ -2953,7 +2992,7 @@ class TrainingPanel(Panel):
             self._set_auto_tile_status(tr("auto_tiles.training_active"))
             return
         try:
-            columns, rows, overlap = self._auto_tile_settings()
+            columns, rows, overlap, quantile = self._auto_tile_settings()
             dataset = lf.dataset_params()
             if not dataset or not dataset.has_params() or not os.path.isdir(dataset.data_path):
                 raise ValueError(tr("auto_tiles.dataset_required"))
@@ -2964,17 +3003,21 @@ class TrainingPanel(Panel):
                                      os.path.join(dataset_path, "output"))
             command = [lf.studio_executable_path(), "-d", dataset_path,
                        "-o", output, "--auto-tile", f"{columns}x{rows}",
-                       "--tile-overlap", str(overlap)]
+                       "--tile-overlap", f"{overlap:.4g}",
+                       "--tile-align", self._auto_tile_align_mode,
+                       "--tile-source", self._auto_tile_source,
+                       "--tile-quantile", f"{quantile:.4g}"]
             if (self._auto_tile_preview_group >= 0 and
                     self._auto_tile_preview_dataset == dataset.data_path and
                     self._auto_tile_preview_settings ==
-                    (columns, rows, overlap, self._auto_tile_align)):
+                    (columns, rows, overlap, quantile,
+                     self._auto_tile_align_mode, self._auto_tile_source)):
                 tile_plan = os.path.join(output, "auto_tile_plan.json")
                 count = lf.save_auto_tile_plan(self._auto_tile_preview_group, columns, tile_plan)
                 if count != columns * rows:
                     raise ValueError(tr("auto_tiles.invalid_preview"))
                 command.extend(["--tile-plan", tile_plan])
-            if not self._auto_tile_align:
+            if self._auto_tile_align_mode == "axis_aligned":
                 command.append("--no-tile-pca")
             if dataset.images != "images":
                 command.extend(["--images", dataset.images])

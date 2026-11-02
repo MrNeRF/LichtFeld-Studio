@@ -816,6 +816,9 @@ namespace {
             ::args::ValueFlag<std::string> auto_tile(training_group, "NxM", "Split a dataset into a grid, train each cell sequentially, and merge the exported splats (e.g. 3x2)", {"auto-tile"});
             ::args::ValueFlag<float> tile_size(training_group, "distance", "Choose the auto-tile grid from a target tile width in dataset units", {"tile-size"});
             ::args::ValueFlag<float> tile_overlap(training_group, "ratio", "Tile overlap ratio from 0 to 0.3 (default 0.15)", {"tile-overlap"});
+            ::args::ValueFlag<std::string> tile_align(training_group, "mode", "Tile alignment mode: 'obb_3d' (default), 'planar_yaw', 'planar_pitch', 'planar_roll', or 'axis_aligned'", {"tile-align"});
+            ::args::ValueFlag<std::string> tile_source(training_group, "source", "Data used for tile bounds and orientation: 'both' (default), 'points', or 'cameras'", {"tile-source"});
+            ::args::ValueFlag<float> tile_quantile(training_group, "ratio", "Outlier trim quantile from 0 to 0.49 (default 0.02)", {"tile-quantile"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
             ::args::ValueFlag<std::string> tile_plan(training_group, "path", "Use edited tile boxes from a JSON plan instead of recomputing the grid", {"tile-plan"});
@@ -1380,7 +1383,43 @@ namespace {
                 if (!std::isfinite(params.tile_overlap) || params.tile_overlap < 0.0f || params.tile_overlap > 0.3f)
                     return std::unexpected("--tile-overlap must be between 0 and 0.3");
             }
-            params.auto_tile_align_pca = !no_tile_pca;
+            if (tile_align) {
+                const auto mode = ::args::get(tile_align);
+                if (mode == "obb_3d" || mode == "3d") {
+                    params.auto_tile_align_mode = "obb_3d";
+                    params.auto_tile_align_pca = true;
+                } else if (mode == "planar_yaw" || mode == "yaw") {
+                    params.auto_tile_align_mode = "planar_yaw";
+                    params.auto_tile_align_pca = true;
+                } else if (mode == "planar_pitch" || mode == "pitch") {
+                    params.auto_tile_align_mode = "planar_pitch";
+                    params.auto_tile_align_pca = true;
+                } else if (mode == "planar_roll" || mode == "roll") {
+                    params.auto_tile_align_mode = "planar_roll";
+                    params.auto_tile_align_pca = true;
+                } else if (mode == "axis_aligned" || mode == "none") {
+                    params.auto_tile_align_mode = "axis_aligned";
+                    params.auto_tile_align_pca = false;
+                } else {
+                    return std::unexpected("--tile-align must be 'obb_3d', 'planar_yaw', 'planar_pitch', 'planar_roll', or 'axis_aligned'");
+                }
+            } else if (no_tile_pca) {
+                params.auto_tile_align_mode = "axis_aligned";
+                params.auto_tile_align_pca = false;
+            }
+            if (tile_source) {
+                const auto src = ::args::get(tile_source);
+                if (src == "both" || src == "points" || src == "cameras") {
+                    params.auto_tile_source = src;
+                } else {
+                    return std::unexpected("--tile-source must be 'both', 'points', or 'cameras'");
+                }
+            }
+            if (tile_quantile) {
+                params.auto_tile_quantile = ::args::get(tile_quantile);
+                if (!std::isfinite(params.auto_tile_quantile) || params.auto_tile_quantile < 0.0f || params.auto_tile_quantile >= 0.5f)
+                    return std::unexpected("--tile-quantile must be between 0 and 0.49");
+            }
             params.auto_tile_merge = !no_tile_merge;
             if (tile_plan) {
                 params.tile_plan_path = absolute_input_path(::args::get(tile_plan));

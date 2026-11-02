@@ -34,6 +34,8 @@
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 #include <limits>
 #include <numeric>
 #include <ranges>
@@ -4398,8 +4400,9 @@ namespace lfs::core {
             setCropBoxData(box, data);
             const auto center = (tile.min + tile.max) * 0.5f;
             const auto transform = glm::translate(glm::mat4{1.0f}, center) *
-                                   glm::rotate(glm::mat4{1.0f}, glm::radians(tile.rotation_degrees.z),
-                                               glm::vec3{0.0f, 0.0f, 1.0f});
+                                   glm::eulerAngleXYZ(glm::radians(tile.rotation_degrees.x),
+                                                      glm::radians(tile.rotation_degrees.y),
+                                                      glm::radians(tile.rotation_degrees.z));
             setNodeTransform(box, transform);
         }
         return group;

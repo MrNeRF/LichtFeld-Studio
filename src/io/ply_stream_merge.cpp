@@ -16,12 +16,11 @@
 
 namespace lfs::io {
     namespace {
-        namespace fs = std::filesystem;
         constexpr std::size_t MAX_HEADER_BYTES = 1024 * 1024;
         constexpr std::size_t COPY_BYTES = 8 * 1024 * 1024;
 
         struct PlyPart {
-            fs::path path;
+            std::filesystem::path path;
             std::vector<std::string> properties;
             std::uint64_t vertices = 0;
             std::uint64_t body_offset = 0;
@@ -48,8 +47,8 @@ namespace lfs::io {
             return false;
         }
 
-        Result<PlyPart> inspect_part(const fs::path& path) {
-            std::ifstream input(core::native_fs::native_path(path), std::ios::binary);
+        Result<PlyPart> inspect_part(const std::filesystem::path& path) {
+            std::ifstream input(lfs::core::native_fs::native_path(path), std::ios::binary);
             if (!input) return make_error(ErrorCode::READ_FAILURE, "Cannot open tile PLY", path);
             PlyPart part;
             part.path = path;
@@ -98,15 +97,15 @@ namespace lfs::io {
                 return make_error(ErrorCode::INVALID_HEADER, "Incomplete or overflowing PLY header", path);
             part.body_bytes = part.vertices * stride;
             std::error_code ec;
-            const auto file_bytes = core::native_fs::file_size(path, ec);
+            const auto file_bytes = lfs::core::native_fs::file_size(path, ec);
             if (ec || file_bytes < part.body_offset || file_bytes - part.body_offset != part.body_bytes)
                 return make_error(ErrorCode::CORRUPTED_DATA, "PLY body length differs from its header", path);
             return part;
         }
     } // namespace
 
-    Result<void> merge_binary_ply_streaming(const std::vector<fs::path>& inputs,
-                                             const fs::path& output,
+    Result<void> merge_binary_ply_streaming(const std::vector<std::filesystem::path>& inputs,
+                                             const std::filesystem::path& output,
                                              const std::function<bool()>& cancelled) {
         if (inputs.empty()) return make_error(ErrorCode::EMPTY_DATASET, "No tile PLYs to merge");
         std::vector<PlyPart> parts;
@@ -116,7 +115,7 @@ namespace lfs::io {
         for (const auto& path : inputs) {
             if (cancelled && cancelled()) return make_error(ErrorCode::CANCELLED, "PLY merge cancelled");
             std::error_code ec;
-            if (core::native_fs::equivalent(path, output, ec) && !ec)
+            if (lfs::core::native_fs::equivalent(path, output, ec) && !ec)
                 return make_error(ErrorCode::INVALID_DATASET, "Merged PLY cannot replace a tile input", output);
             auto inspected = inspect_part(path);
             if (!inspected) return std::unexpected(inspected.error());
@@ -145,14 +144,14 @@ namespace lfs::io {
         if (auto space = check_disk_space(output, total_body_bytes + header.size()); !space)
             return std::unexpected(space.error());
         ScopedAtomicOutputFile atomic(output);
-        std::ofstream merged(core::native_fs::native_path(atomic.temp_path()), std::ios::binary | std::ios::trunc);
+        std::ofstream merged(lfs::core::native_fs::native_path(atomic.temp_path()), std::ios::binary | std::ios::trunc);
         if (!merged) return make_error(ErrorCode::WRITE_FAILURE, "Cannot create temporary merged PLY", output);
         merged.write(header.data(), static_cast<std::streamsize>(header.size()));
         if (!merged) return make_error(ErrorCode::WRITE_FAILURE, "Cannot write merged PLY header", output);
         std::vector<char> buffer(COPY_BYTES);
         for (const auto& part : parts) {
             if (cancelled && cancelled()) return make_error(ErrorCode::CANCELLED, "PLY merge cancelled");
-            std::ifstream input(core::native_fs::native_path(part.path), std::ios::binary);
+            std::ifstream input(lfs::core::native_fs::native_path(part.path), std::ios::binary);
             if (!input || part.body_offset > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max()))
                 return make_error(ErrorCode::READ_FAILURE, "Cannot reopen tile PLY", part.path);
             input.seekg(static_cast<std::streamoff>(part.body_offset));

@@ -15,22 +15,6 @@
   <div id="controls">
     <div data-if="show_ctrl_ready">
       <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{btn_start}}</button>
-      <div class="training-subsection section-gap">
-        <div class="section-header">@tr:auto_tiles.title</div>
-        <div class="setting-row">
-          <label>@tr:auto_tiles.columns <input type="text" class="number-input" data-value="auto_tile_columns" /></label>
-          <label>@tr:auto_tiles.rows <input type="text" class="number-input" data-value="auto_tile_rows" /></label>
-        </div>
-        <div class="setting-row">
-          <label>@tr:auto_tiles.overlap <input type="range" class="setting-slider" min="0" max="0.3" step="0.01" data-value="auto_tile_overlap" /></label>
-          <span>{{auto_tile_overlap}}</span>
-        </div>
-        <label class="setting-row"><input type="checkbox" data-checked="auto_tile_align" />@tr:auto_tiles.align_pca</label>
-        <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
-        <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
-        <button class="btn btn--warning btn--full" data-if="auto_tile_running" data-event-click="action('auto_tile_cancel')">@tr:auto_tiles.cancel</button>
-        <span class="status-text">{{auto_tile_status}}</span>
-      </div>
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
@@ -1004,6 +988,60 @@
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Auto Tiles subsection -->
+    <div class="training-subsection" data-if="!pv_search_active">
+      <div class="section-header text-accent" id="hdr-auto-tiles" data-event-click="toggle_section('auto_tiles')">
+        <span class="section-arrow text-accent" id="arrow-auto-tiles">&#x25B6;</span>
+        <span class="text-accent">@tr:auto_tiles.title</span>
+      </div>
+      <div class="section-content collapsed" id="sec-auto-tiles">
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.columns</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_columns" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.rows</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_rows" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.overlap</span></span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" min="0" max="30" step="1" data-value="auto_tile_overlap_steps" data-event-change="auto_tile_slider_change('overlap', ev.value)" />
+            <span class="slider-value">{{auto_tile_overlap_label}}</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.align_mode</span></span>
+          <select data-value="auto_tile_align_mode">
+            <option value="obb_3d">@tr:auto_tiles.mode_obb_3d</option>
+            <option value="planar_yaw">@tr:auto_tiles.mode_planar_yaw</option>
+            <option value="planar_pitch">@tr:auto_tiles.mode_planar_pitch</option>
+            <option value="planar_roll">@tr:auto_tiles.mode_planar_roll</option>
+            <option value="axis_aligned">@tr:auto_tiles.mode_axis_aligned</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.source</span></span>
+          <select data-value="auto_tile_source">
+            <option value="both">@tr:auto_tiles.source_both</option>
+            <option value="points">@tr:auto_tiles.source_points</option>
+            <option value="cameras">@tr:auto_tiles.source_cameras</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.quantile</span></span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" min="0" max="100" step="5" data-value="auto_tile_quantile_steps" data-event-change="auto_tile_slider_change('quantile', ev.value)" />
+            <span class="slider-value">{{auto_tile_quantile_label}}</span>
+          </div>
+        </div>
+        <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
+        <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
+        <button class="btn btn--warning btn--full" data-if="auto_tile_running" data-event-click="action('auto_tile_cancel')">@tr:auto_tiles.cancel</button>
+        <span class="status-text">{{auto_tile_status}}</span>
       </div>
     </div>
   </div>

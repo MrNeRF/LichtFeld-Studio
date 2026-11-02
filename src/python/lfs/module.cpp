@@ -3739,6 +3739,76 @@ NB_MODULE(lichtfeld, m) {
         return lfs::core::path_to_utf8(lfs::core::getExecutablePath());
     }, "Path to the running LichtFeld Studio executable");
 
+    m.def("preview_auto_tiles", [](int columns, int rows, float overlap,
+                                    const std::string& align_mode,
+                                    const std::string& source_str,
+                                    float quantile,
+                                    int replace_group_id) {
+        auto* scene = get_scene_internal();
+        if (!scene) throw std::runtime_error("No scene is loaded");
+        auto point_cloud = scene->getInitialPointCloud();
+        if (!point_cloud) {
+            for (const auto* node : scene->getNodes()) {
+                if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
+                    point_cloud = node->point_cloud;
+                    break;
+                }
+            }
+        }
+        const lfs::core::PointCloud empty_points;
+        const auto& points = point_cloud ? *point_cloud : empty_points;
+        std::vector<glm::vec3> centers;
+        for (const auto* node : scene->getNodes()) {
+            if (node->type != lfs::core::NodeType::CAMERA || !node->camera) continue;
+            const auto position = node->camera->cam_position().cpu().contiguous();
+            if (position.numel() < 3) continue;
+            const auto* p = position.ptr<float>();
+            centers.emplace_back(p[0], p[1], p[2]);
+        }
+        lfs::core::OrientationMode mode = lfs::core::OrientationMode::Obb3D;
+        if (align_mode == "planar_yaw" || align_mode == "yaw") {
+            mode = lfs::core::OrientationMode::PlanarYaw;
+        } else if (align_mode == "planar_pitch" || align_mode == "pitch") {
+            mode = lfs::core::OrientationMode::PlanarPitch;
+        } else if (align_mode == "planar_roll" || align_mode == "roll") {
+            mode = lfs::core::OrientationMode::PlanarRoll;
+        } else if (align_mode == "axis_aligned" || align_mode == "none") {
+            mode = lfs::core::OrientationMode::AxisAligned;
+        } else if (align_mode != "obb_3d" && align_mode != "3d") {
+            throw std::invalid_argument("Unknown tile orientation mode");
+        }
+
+        lfs::core::BoundsSource source = lfs::core::BoundsSource::Both;
+        if (source_str == "points") {
+            source = lfs::core::BoundsSource::Points;
+        } else if (source_str == "cameras") {
+            source = lfs::core::BoundsSource::Cameras;
+        } else if (source_str != "both") {
+            throw std::invalid_argument("Unknown tile data source");
+        }
+
+        auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, quantile, mode, source);
+        if (quantile > 0.0f) {
+            const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
+            bounds.min -= padding;
+            bounds.max += padding;
+        }
+        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap,
+                                                                 mode != lfs::core::OrientationMode::AxisAligned,
+                                                                 mode, quantile});
+        if (const auto* old = scene->getNodeById(replace_group_id);
+            old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
+            scene->removeNode(old->name);
+        }
+        const auto group_id = scene->createTileCropBoxes(tiles);
+        if (group_id == lfs::core::NULL_NODE)
+            throw std::runtime_error("Could not create tile preview boxes");
+        return group_id;
+    }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
+       nb::arg("align_mode") = "obb_3d", nb::arg("source") = "both",
+       nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
+       "Preview auto-tile boxes in the current scene");
+
     m.def("preview_auto_tiles", [](int columns, int rows, float overlap, bool align_pca,
                                     int replace_group_id) {
         auto* scene = get_scene_internal();
@@ -3762,26 +3832,12 @@ NB_MODULE(lichtfeld, m) {
             const auto* p = position.ptr<float>();
             centers.emplace_back(p[0], p[1], p[2]);
         }
-        float angle = 0.0f;
-        if (align_pca) {
-            if (points.size() > 1) {
-                angle = lfs::core::compute_dominant_orientation_pca(points);
-            } else if (centers.size() > 1) {
-                std::vector<float> values;
-                values.reserve(centers.size() * 3);
-                for (const auto& center : centers)
-                    values.insert(values.end(), {center.x, center.y, center.z});
-                const lfs::core::PointCloud camera_points{
-                    lfs::core::Tensor::from_vector(values, {centers.size(), 3}, lfs::core::Device::CPU),
-                    lfs::core::Tensor{}};
-                angle = lfs::core::compute_dominant_orientation_pca(camera_points);
-            }
-        }
-        auto bounds = lfs::core::compute_robust_scene_bounds(points, centers, 0.02f, angle);
+        const auto mode = align_pca ? lfs::core::OrientationMode::Obb3D : lfs::core::OrientationMode::AxisAligned;
+        auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, 0.02f, mode, lfs::core::BoundsSource::Both);
         const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
         bounds.min -= padding;
         bounds.max += padding;
-        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca});
+        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca, mode, 0.02f});
         if (const auto* old = scene->getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
             scene->removeNode(old->name);
@@ -3792,7 +3848,7 @@ NB_MODULE(lichtfeld, m) {
         return group_id;
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
        nb::arg("align_pca") = true, nb::arg("replace_group_id") = -1,
-       "Preview auto-tile boxes in the current scene");
+       "Preview auto-tile boxes in the current scene (legacy signature)");
 
     m.def("save_auto_tile_plan", [](int group_id, int columns, const std::string& destination) {
         auto* scene = get_scene_internal();

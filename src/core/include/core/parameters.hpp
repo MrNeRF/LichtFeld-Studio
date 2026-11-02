@@ -620,6 +620,9 @@ namespace lfs::core {
             float auto_tile_size = 0.0f;
             float tile_overlap = 0.15f;
             bool auto_tile_align_pca = true;
+            std::string auto_tile_align_mode = "obb_3d";
+            std::string auto_tile_source = "both";
+            float auto_tile_quantile = 0.02f;
             bool auto_tile_merge = true;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
 
