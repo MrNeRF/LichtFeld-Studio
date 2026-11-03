@@ -185,8 +185,15 @@ if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
     add_test(NAME TensorBackendSelftestArgs.CPU COMMAND tensor_backend_selftest_args
         --gtest_filter=TensorBackendSelftestArgs.*)
     set_tests_properties(TensorBackendSelftestArgs.CPU PROPERTIES LABELS "cpu;tensor;cli" TIMEOUT 120)
+    set(_tensor_selftest_tests TensorBackendSelftestArgs.CPU)
+    if(LFS_TENSOR_HIP)
+        add_test(NAME TensorBackendSelftest.HIP COMMAND tensor_backend_selftest_args
+            --require-tensor-backend=HIP --gtest_filter=Backends/HipTensorBackendSelftest.*/HIP)
+        set_tests_properties(TensorBackendSelftest.HIP PROPERTIES LABELS "gpu;tensor;hip" TIMEOUT 180)
+        list(APPEND _tensor_selftest_tests TensorBackendSelftest.HIP)
+    endif()
     if(WIN32)
-        set_tests_properties(TensorBackendSelftestArgs.CPU PROPERTIES ENVIRONMENT_MODIFICATION
+        set_tests_properties(${_tensor_selftest_tests} PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:GTest::gtest>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
     endif()
 endif()

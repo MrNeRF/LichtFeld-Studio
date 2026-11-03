@@ -176,6 +176,13 @@ rather than unloading code beneath pending GPU work.
 
 ## Validation
 
+Build `tensor_backend_selftest_args` to run the CLI parser contracts through
+`TensorBackendSelftestArgs.CPU`. With HIP enabled, `TensorBackendSelftest.HIP`
+requires a compatible AMD device and checks the Core self-test, Tensor reuse
+after shutdown and repeated-call allocation stability. A missing HIP device
+fails that explicitly selected GPU test; it does not count as a successful skip.
+The standard hosted build steps select only the CPU group.
+
 Build `tensor_operation_contracts` and run `TensorOperationContracts.HIP` for
 required GPU execution; an unavailable required backend is a failure. The same
 operation and edge-case tests run against CPU and each compiled GPU backend.
