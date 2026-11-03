@@ -452,6 +452,28 @@ Before calling a window or panel complete, verify:
 
 ## Reference resources
 
+### Image inspection
+
+The Image Preview keeps viewing commands in a wrapping toolbar and metadata in
+a collapsible inspector. The status bar stays compact; the shortcut reference
+is opened with Help. Thumbnail virtualization follows the scroll viewport,
+independently of the selected camera. Only deliberate image navigation brings
+the selection back into view.
+
+Preview gestures operate on the source image. View rotation does not rewrite
+the dataset. At 100%, one source pixel occupies one physical screen pixel,
+independently of UI scale; the footer also reports the actual zoom in Fit mode.
+Metadata reads run off the UI thread, and a preview becomes usable
+only after its revisioned texture is ready. Refresh checks changed sources and
+retries failed previews. Camera-specific actions are disabled for unbound files.
+
+The color picker samples without changing settings. Applying the sample to the
+render background or to the training background is an explicit, separate,
+undoable action. Shortcuts leave editable fields and modified application
+shortcuts alone.
+
+### Component references
+
 Use these files when implementing or reviewing a surface:
 
 - `src/visualizer/gui/rmlui/resources/components.rcss` and

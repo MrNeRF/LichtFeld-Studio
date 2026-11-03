@@ -134,6 +134,8 @@ public:
     [[nodiscard]] uint64_t previewTextureGeneration() const {
         return m_preview_texture_generation.load(std::memory_order_acquire);
     }
+    // Graphics thread only; source identity is the complete revisioned preview URL.
+    [[nodiscard]] LFS_VIS_API std::string previewTextureStatus(const std::string& source) const;
     [[nodiscard]] bool currentContextUsedPreviewTexture() const {
         return m_current_context_used_preview_texture;
     }
@@ -201,6 +203,8 @@ private:
         int m_width = 0;
         int m_height = 0;
         bool m_is_async_preview = false;
+        std::string m_preview_source;
+        std::string m_preview_status;
         // Resource identity for VulkanImageBarrierTracker (#1478).
         std::uint64_t m_barrier_generation = 0;
     };
@@ -759,6 +763,7 @@ private:
     Rml::Vector<VkShaderModule> m_shaders;
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::unordered_set<texture_data_t*> m_live_textures;
+    std::unordered_map<std::string, texture_data_t*> m_preview_textures_by_source;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
     std::mutex m_preview_queue_mutex;
     std::condition_variable m_preview_queue_cv;

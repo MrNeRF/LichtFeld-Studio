@@ -2474,6 +2474,9 @@ def release_texture(texture_id: int) -> None:
 def release_rml_texture(source: str) -> bool:
     """Release a cached RmlUi texture by source URL"""
 
+def preview_texture_status(source: str) -> str:
+    """UI thread: return unknown, pending, ready or error for a revisioned preview URL."""
+
 def get_image_info(path: str) -> tuple:
     """
     Get image dimensions without loading pixel data, returns (width, height, channels)
@@ -2481,7 +2484,8 @@ def get_image_info(path: str) -> tuple:
 
 def sample_image_color(path: str, x: int, y: int, radius: int = 10) -> tuple:
     """
-    Sample average color around pixel (x, y) within given radius, returns (r, g, b) in 0..1
+    Sample source pixels as (r, g, b) in 0..1. Releases the GIL during image IO.
+    Raises on decode failure or invalid coordinates; failures do not produce a black sample.
     """
 
 def preload_image_async(path: str) -> None:

@@ -2027,6 +2027,13 @@
     "disabled": "Desactivado"
   },
   "image_preview": {
+    "help": "Ayuda",
+    "refresh": "Actualizar",
+    "apply_render_color": "Aplicar al fondo del render",
+    "apply_training_color": "Aplicar al fondo de entrenamiento",
+    "camera_unavailable": "No hay ninguna cámara asociada a esta imagen",
+    "loading": "Cargando imagen…",
+    "load_failed": "No se pudo cargar la imagen. Actualiza o elige otra imagen.",
     "title": "Vista Previa de Imagen",
     "image_section": "IMAGEN",
     "file_section": "ARCHIVO",

@@ -2027,6 +2027,13 @@
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {
+    "help": "Help",
+    "refresh": "Vernieuwen",
+    "apply_render_color": "Toepassen op renderachtergrond",
+    "apply_training_color": "Toepassen op trainingsachtergrond",
+    "camera_unavailable": "Er is geen camera aan deze afbeelding gekoppeld",
+    "loading": "Afbeelding laden…",
+    "load_failed": "Afbeelding kan niet worden geladen. Vernieuw of kies een andere afbeelding.",
     "title": "Afbeeldingsvoorbeeld",
     "image_section": "AFBEELDING",
     "file_section": "BESTAND",

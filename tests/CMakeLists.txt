@@ -299,6 +299,8 @@ if(BUILD_VISUALIZER_TESTS)
         test_sdl_rml_key_mapping.cpp
         test_rml_form_control_layout.cpp
         test_histogram_layout.cpp
+        test_image_preview_layout.cpp
+        test_preview_texture_status.cpp
     )
     target_compile_features(lichtfeld_rmlui_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_rmlui_tests PRIVATE
@@ -1681,6 +1683,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_pan_scale.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_camera_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_file_revision.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preview_workflow.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scale_distance_contract.py

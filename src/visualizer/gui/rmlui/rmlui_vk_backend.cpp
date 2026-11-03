@@ -1165,6 +1165,9 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
     if (!texture)
         return 0;
     texture->m_is_async_preview = true;
+    texture->m_preview_source = source;
+    texture->m_preview_status = "pending";
+    m_preview_textures_by_source[source] = texture;
 
     auto state = std::make_shared<async_preview_state_t>();
     state->texture = texture;
@@ -1179,9 +1182,15 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
                  lfs::core::path_to_utf8(request->path), e.what());
         DropAsyncPreviewTexture(texture);
+        texture->m_preview_status = "error";
     }
 
     return handle;
+}
+
+std::string RenderInterface_VK::previewTextureStatus(const std::string& source) const {
+    const auto it = m_preview_textures_by_source.find(source);
+    return it == m_preview_textures_by_source.end() ? "unknown" : it->second->m_preview_status;
 }
 
 void RenderInterface_VK::EnsurePreviewWorkerPool() {
@@ -1401,13 +1410,19 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
             auto* replacement = reinterpret_cast<texture_data_t*>(replacement_handle);
             if (replacement) {
                 replacement->m_is_async_preview = true;
+                replacement->m_preview_source = state->source;
+                replacement->m_preview_status = "ready";
                 QueueTextureForDeferredDeletion(new texture_data_t(*state->texture));
                 *state->texture = *replacement;
                 UnregisterLiveTexture(replacement);
                 delete replacement;
                 --uploads_remaining;
                 uploaded_any = true;
+            } else {
+                state->texture->m_preview_status = "error";
             }
+        } else {
+            state->texture->m_preview_status = "error";
         }
 
         it = m_async_preview_textures.erase(it);
@@ -2686,6 +2701,7 @@ void RenderInterface_VK::Destroy_Textures() noexcept {
 void RenderInterface_VK::Destroy_LiveTextures() noexcept {
     auto live_textures = std::move(m_live_textures);
     m_live_textures.clear();
+    m_preview_textures_by_source.clear();
 
     for (texture_data_t* texture : live_textures) {
         if (!texture)
@@ -2701,8 +2717,12 @@ void RenderInterface_VK::RegisterLiveTexture(texture_data_t* texture) {
 }
 
 void RenderInterface_VK::UnregisterLiveTexture(texture_data_t* texture) {
-    if (texture)
+    if (texture) {
+        const auto it = m_preview_textures_by_source.find(texture->m_preview_source);
+        if (it != m_preview_textures_by_source.end() && it->second == texture)
+            m_preview_textures_by_source.erase(it);
         m_live_textures.erase(texture);
+    }
 }
 
 uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {

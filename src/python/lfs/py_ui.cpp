@@ -4847,10 +4847,19 @@ namespace lfs::python {
             nb::arg("source"),
             "Release a cached RmlUi texture by source URL");
 
+        m.def("preview_texture_status", [](const std::string& source) {
+            lfs::python::require_ui_texture_creation_thread();
+            const auto* gui = lfs::python::get_gui_manager();
+            return gui ? gui->previewTextureStatus(source) : std::string("unknown"); }, nb::arg("source"), "Get a preview URL's upload state: unknown, pending, ready or error. UI thread only.");
+
         m.def(
             "get_image_info",
             [](const std::string& path) -> nb::tuple {
-                auto [w, h, c] = lfs::core::get_image_info(lfs::core::utf8_to_path(path));
+                int w, h, c;
+                {
+                    nb::gil_scoped_release release;
+                    std::tie(w, h, c) = lfs::core::get_image_info(lfs::core::utf8_to_path(path));
+                }
                 return nb::make_tuple(w, h, c);
             },
             nb::arg("path"), "Get image dimensions without loading pixel data, returns (width, height, channels)");
@@ -4858,42 +4867,35 @@ namespace lfs::python {
         m.def(
             "sample_image_color",
             [](const std::string& path, int x, int y, int radius) -> nb::tuple {
-                try {
-                    auto [data, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, -1);
-                    if (!data)
-                        return nb::make_tuple(0.0f, 0.0f, 0.0f);
-
-                    const int x0 = std::max(0, x - radius);
-                    const int y0 = std::max(0, y - radius);
-                    const int x1 = std::min(w - 1, x + radius);
-                    const int y1 = std::min(h - 1, y + radius);
-
-                    double r_sum = 0.0, g_sum = 0.0, b_sum = 0.0;
-                    int count = 0;
-                    const int ch = std::min(channels, 3);
+                std::array<float, 3> color{};
+                {
+                    nb::gil_scoped_release release;
+                    auto [pixels, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, -1);
+                    const auto free_pixels = [](unsigned char* p) { lfs::core::free_image(p); };
+                    const std::unique_ptr<unsigned char, decltype(free_pixels)> data(pixels, free_pixels);
+                    if (!pixels || channels < 1)
+                        throw std::runtime_error("Unable to decode the image for color sampling");
+                    if (x < 0 || y < 0 || x >= w || y >= h || radius < 0)
+                        throw std::invalid_argument("Color sample is outside the image");
+                    std::array<double, 3> sum{};
+                    uint64_t count = 0;
+                    // Widen before adding radius to avoid overflowing a caller-provided integer.
+                    const int x0 = static_cast<int>(std::max<int64_t>(0, int64_t(x) - radius));
+                    const int y0 = static_cast<int>(std::max<int64_t>(0, int64_t(y) - radius));
+                    const int x1 = static_cast<int>(std::min<int64_t>(w - 1, int64_t(x) + radius));
+                    const int y1 = static_cast<int>(std::min<int64_t>(h - 1, int64_t(y) + radius));
                     for (int py = y0; py <= y1; ++py) {
                         for (int px = x0; px <= x1; ++px) {
-                            const unsigned char* pixel = data + (static_cast<size_t>(py) * w + px) * channels;
-                            r_sum += pixel[0];
-                            g_sum += (ch > 1) ? pixel[1] : pixel[0];
-                            b_sum += (ch > 2) ? pixel[2] : pixel[0];
+                            const auto* pixel = pixels + (static_cast<size_t>(py) * w + px) * channels;
+                            for (int c = 0; c < 3; ++c)
+                                sum[c] += pixel[channels >= 3 ? c : 0];
                             ++count;
                         }
                     }
-
-                    lfs::core::free_image(data);
-
-                    if (count == 0)
-                        return nb::make_tuple(0.0f, 0.0f, 0.0f);
-
-                    return nb::make_tuple(
-                        static_cast<float>(r_sum / (count * 255.0)),
-                        static_cast<float>(g_sum / (count * 255.0)),
-                        static_cast<float>(b_sum / (count * 255.0)));
-                } catch (const std::exception& e) {
-                    LOG_WARN("sample_image_color failed for {}: {}", path, e.what());
-                    return nb::make_tuple(0.0f, 0.0f, 0.0f);
+                    for (int c = 0; c < 3; ++c)
+                        color[c] = static_cast<float>(sum[c] / (double(count) * 255.0));
                 }
+                return nb::make_tuple(color[0], color[1], color[2]);
             },
             nb::arg("path"), nb::arg("x"), nb::arg("y"), nb::arg("radius") = 10,
             "Sample average color around pixel (x, y) within given radius, returns (r, g, b) in 0..1");

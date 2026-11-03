@@ -2040,6 +2040,13 @@
     "disabled": "Disabilitato"
   },
   "image_preview": {
+    "help": "Aiuto",
+    "refresh": "Aggiorna",
+    "apply_render_color": "Applica allo sfondo rendering",
+    "apply_training_color": "Applica allo sfondo training",
+    "camera_unavailable": "Nessuna camera associata a questa immagine",
+    "loading": "Caricamento immagine…",
+    "load_failed": "Impossibile caricare l’immagine. Aggiorna o scegli un’altra immagine.",
     "title": "Anteprima immagine",
     "image_section": "IMMAGINE",
     "file_section": "FILE",

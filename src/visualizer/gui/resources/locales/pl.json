@@ -2027,6 +2027,13 @@
     "disabled": "Wyłączony"
   },
   "image_preview": {
+    "help": "Pomoc",
+    "refresh": "Odśwież",
+    "apply_render_color": "Zastosuj do tła renderowania",
+    "apply_training_color": "Zastosuj do tła treningu",
+    "camera_unavailable": "Brak kamery powiązanej z tym obrazem",
+    "loading": "Ładowanie obrazu…",
+    "load_failed": "Nie można wczytać obrazu. Odśwież lub wybierz inny obraz.",
     "title": "Podgląd obrazu",
     "image_section": "OBRAZ",
     "file_section": "PLIK",

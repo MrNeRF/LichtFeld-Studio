@@ -222,7 +222,9 @@ def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
 
     expected_mask = quote(str(mask_path), safe=_RML_PATH_SAFE_CHARS)
     mask_img = panel._doc.get_element_by_id("mask-overlay")
-    assert mask_img.properties["decorator"] == f"image({expected_mask})"
+    assert mask_img.properties["decorator"].startswith("image(preview://")
+    assert mask_img.properties["decorator"].endswith(f"&path={expected_mask})")
+    assert "&rev=" in mask_img.properties["decorator"]
 
 
 def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
