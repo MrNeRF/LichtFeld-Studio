@@ -258,15 +258,20 @@ int main() {
             good(sequence.close());
             require(!fs::exists(companion), "sidecars disabled left obsolete render metadata");
             require(read(image) == original_image, "render sidecars changed encoded image bytes");
-            {
-                std::ofstream foreign(companion);
-                foreign << "foreign XMP";
+            auto altered_policy = packet;
+            const auto policy_offset = altered_policy.find("image-render-xmp-v1");
+            require(policy_offset != std::string::npos, "render producer packet declares its policy");
+            altered_policy[policy_offset] = 'X';
+            const std::string foreign_xml = "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\"><!--" +
+                                            std::string(packet.size(), 'x') + "--></rdf:Description></rdf:RDF>";
+            for (const auto& foreign : {std::string("foreign XMP"), std::string(packet.size(), 'x'), altered_policy, foreign_xml}) {
+                std::ofstream(companion, std::ios::binary) << foreign;
+                good(sequence.open(metadata));
+                good(sequence.write(render));
+                good(sequence.write(render));
+                good(sequence.close());
+                require(fs::is_regular_file(companion) && read(companion) == foreign, "render cleanup removed or changed foreign metadata, including full-length packets");
             }
-            good(sequence.open(metadata));
-            good(sequence.write(render));
-            good(sequence.write(render));
-            good(sequence.close());
-            require(read(companion) == "foreign XMP", "render cleanup removed foreign metadata");
 
             // A failed second publication retains the image but cannot accept
             // or complete the frame. No pair-atomicity is promised.
@@ -394,11 +399,22 @@ int main() {
             require(!preflight && preflight.error().code() == ErrorCode::InvalidArgument, "preflight accepted invalid render provenance");
             const auto result = sequence.open(invalid_metadata);
             require(!result && result.error().code() == ErrorCode::InvalidArgument, "invalid render provenance accepted");
+            const auto diagnostic = std::string(result.error().detail());
+            if (invalid == "[]")
+                require(diagnostic.find("type=array") != std::string::npos, "wrong JSON type diagnostic omits observed type");
+            else if (invalid.find("[[[[") != std::string::npos)
+                require(diagnostic.find("depth=5, limit=4") != std::string::npos, "nesting diagnostic omits observed depth and limit");
+            else
+                require(diagnostic.find("byte=") != std::string::npos && diagnostic.find("size=" + std::to_string(invalid.size())) != std::string::npos,
+                        "JSON parse diagnostic omits byte position and input size");
+            require(preflight.error().detail() == result.error().detail(), "preflight and open report different deterministic metadata errors");
             require(!fs::exists(invalid_metadata.files.output_directory), "invalid provenance created output");
         }
         invalid_metadata.provenance.assign(32 * 1024 * 1024, 'x');
         const auto limited = sequence.open(invalid_metadata);
         require(!limited && limited.error().code() == ErrorCode::ResourceExhausted, "oversized provenance accepted");
+        require(std::string(limited.error().detail()).find("size=33554432, limit=65536") != std::string::npos,
+                "provenance budget diagnostic omits actual size and limit");
         require(!fs::exists(invalid_metadata.files.output_directory), "oversized provenance created output");
         invalid_metadata.provenance = "{\"x\":\"" + std::string(64 * 1024 - 8, '&') + "\"}";
         good(sequence.open(invalid_metadata));

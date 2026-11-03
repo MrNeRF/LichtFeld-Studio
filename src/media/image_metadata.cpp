@@ -172,31 +172,36 @@ namespace lfs::media::detail {
     }
     Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat format, std::string_view provenance) {
         if (embeddedMetadataPolicy(format).empty())
-            return metadataError(ErrorCode::InvalidArgument, "Invalid render metadata format");
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render metadata format (format=" + std::to_string(static_cast<int>(format)) + ")");
         // Bound escaped output before allocating it; XML escaping can expand input.
         if (provenance.size() > max_render_provenance_bytes)
-            return metadataError(ErrorCode::ResourceExhausted, "Render provenance exceeds the 64 KiB input limit");
+            return metadataError(ErrorCode::ResourceExhausted, "Render provenance exceeds its input byte limit (size=" + std::to_string(provenance.size()) + ", limit=" + std::to_string(max_render_provenance_bytes) + ")");
+        int rejected_depth = 0;
         try {
             EmbeddedImageMetadata result;
             result.format = format;
             result.rendered = true;
             if (!provenance.empty()) {
-                const auto stamp = nlohmann::json::parse(provenance, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
-                    if (depth > 4)
+                const auto stamp = nlohmann::json::parse(provenance, [&](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
+                    if (depth > 4) {
+                        rejected_depth = depth;
                         throw std::invalid_argument("Render provenance nesting exceeds its budget");
+                    }
                     return true;
                 });
                 if (!stamp.is_object())
-                    return metadataError(ErrorCode::InvalidArgument, "Render provenance must be a JSON object");
+                    return metadataError(ErrorCode::InvalidArgument, "Render provenance must be a JSON object (type=" + std::string(stamp.type_name()) + ")");
                 property(result.source_properties, "RenderProvenance", stamp.dump(-1, ' ', true));
             }
             return result;
         } catch (const std::bad_alloc&) {
             return metadataError(ErrorCode::ResourceExhausted, "Render metadata allocation failed");
-        } catch (const nlohmann::json::exception&) {
-            return metadataError(ErrorCode::InvalidArgument, "Invalid render provenance JSON");
+        } catch (const nlohmann::json::parse_error& error) {
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render provenance JSON (byte=" + std::to_string(error.byte) + ", size=" + std::to_string(provenance.size()) + ")");
+        } catch (const nlohmann::json::exception& error) {
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render provenance JSON (error=" + std::to_string(error.id) + ", size=" + std::to_string(provenance.size()) + ")");
         } catch (const std::invalid_argument&) {
-            return metadataError(ErrorCode::InvalidArgument, "Render provenance nesting exceeds its budget");
+            return metadataError(ErrorCode::InvalidArgument, "Render provenance nesting exceeds its budget (depth=" + std::to_string(rejected_depth) + ", limit=4)");
         }
     }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info, bool sidecar) {
@@ -208,7 +213,7 @@ namespace lfs::media::detail {
             if (metadata.rendered) {
                 if (!sidecar || info.origin != FrameOrigin::Rendered || !info.output_timestamp ||
                     info.output_timestamp->time_base.numerator <= 0 || info.output_timestamp->time_base.denominator <= 0)
-                    return metadataError(ErrorCode::InvalidArgument, "Render metadata requires a rendered output timestamp");
+                    return metadataError(ErrorCode::InvalidArgument, "Render metadata requires a rendered output timestamp (sidecar=" + std::to_string(sidecar) + ", origin=" + std::to_string(static_cast<int>(info.origin)) + ", time_base=" + (info.output_timestamp ? std::to_string(info.output_timestamp->time_base.numerator) + "/" + std::to_string(info.output_timestamp->time_base.denominator) : std::string("missing")) + ")");
                 property(tree, "MetadataPolicy", render_sidecar_metadata_policy);
                 property(tree, "FrameOrigin", "rendered");
                 property(tree, "PixelWidth", std::to_string(width));

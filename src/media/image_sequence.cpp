@@ -40,14 +40,14 @@ namespace lfs::media {
                 static_cast<int64_t>(options.framerate) > 1000LL * options.framerate_denominator ||
                 files.first_source_frame_number < 0 ||
                 options.frame_count - 1 > std::numeric_limits<int>::max() - files.first_source_frame_number)
-                return sequenceError(ErrorCode::InvalidArgument, "Invalid image sequence count, rate or numbering");
+                return sequenceError(ErrorCode::InvalidArgument, "Invalid image sequence count, rate or numbering (count=" + std::to_string(options.frame_count) + ", rate=" + std::to_string(options.framerate) + "/" + std::to_string(options.framerate_denominator) + ", first_frame=" + std::to_string(files.first_source_frame_number) + ")");
             // Keep renderer cleanup independent of extraction metadata and files.
             if (files.remove_stale_frames || files.preserve_metadata)
                 return sequenceError(ErrorCode::InvalidArgument, "Image sequences do not own extraction metadata or stale frames");
             if (files.embed_source_metadata || files.write_source_metadata_sidecars)
-                return sequenceError(ErrorCode::InvalidArgument, "Rendered sequences require render metadata rather than source-camera metadata");
+                return sequenceError(ErrorCode::InvalidArgument, "Rendered sequences require render metadata rather than source-camera metadata (embed_source_metadata=" + std::to_string(files.embed_source_metadata) + ", write_source_metadata_sidecars=" + std::to_string(files.write_source_metadata_sidecars) + ")");
             if (options.write_metadata_sidecars && options.provenance.size() > detail::max_render_provenance_bytes)
-                return sequenceError(ErrorCode::ResourceExhausted, "Render provenance exceeds the 64 KiB input limit");
+                return sequenceError(ErrorCode::ResourceExhausted, "Render provenance exceeds its input byte limit (size=" + std::to_string(options.provenance.size()) + ", limit=" + std::to_string(detail::max_render_provenance_bytes) + ")");
             if (files.filename_pattern.empty() || files.filename_pattern.find_first_of("/\\:") != std::string::npos ||
                 files.filename_pattern.find('\0') != std::string::npos ||
                 io::formatFrameFilenameStem(files.filename_pattern, 1) == io::formatFrameFilenameStem(files.filename_pattern, 2))
