@@ -37,4 +37,20 @@ namespace {
         EXPECT_EQ(rooted.to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f}));
     }
 
+    TEST(TensorBackendSelftest, HipSucceedsWhenAvailableAndLeavesBackendUsable) {
+        if (!gpu_backend_available(GpuBackend::HIP)) {
+            GTEST_SKIP() << "HIP backend unavailable";
+        }
+
+        const lfs::Status status = tensor_backend_selftest(GpuBackend::HIP);
+        ASSERT_TRUE(status.has_value()) << (status ? "" : std::string(status.error().user_message()));
+
+        GpuBackendScope scope(GpuBackend::HIP);
+        const Tensor input = Tensor::from_vector(std::vector<float>{1.0f, 4.0f, 9.0f},
+                                                 {3}, Device::GPU);
+        const Tensor rooted = input.sqrt();
+        EXPECT_EQ(gpu_backend_of(rooted), GpuBackend::HIP);
+        EXPECT_EQ(rooted.to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f}));
+    }
+
 } // namespace

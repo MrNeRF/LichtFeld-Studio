@@ -177,6 +177,18 @@ endif()
 if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
     include(${CMAKE_CURRENT_LIST_DIR}/TensorOperationContracts.cmake)
     include(${CMAKE_CURRENT_LIST_DIR}/TrainingHipContracts.cmake)
+    add_executable(tensor_backend_selftest_args
+        test_tensor_contract_main.cpp test_tensor_backend_selftest_args.cpp test_tensor_backend_selftest.cpp)
+    target_compile_features(tensor_backend_selftest_args PRIVATE cxx_std_23)
+    target_include_directories(tensor_backend_selftest_args PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(tensor_backend_selftest_args PRIVATE lfs_io GTest::gtest)
+    add_test(NAME TensorBackendSelftestArgs.CPU COMMAND tensor_backend_selftest_args
+        --gtest_filter=TensorBackendSelftestArgs.*)
+    set_tests_properties(TensorBackendSelftestArgs.CPU PROPERTIES LABELS "cpu;tensor;cli" TIMEOUT 120)
+    if(WIN32)
+        set_tests_properties(TensorBackendSelftestArgs.CPU PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:GTest::gtest>;PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
 endif()
 
 # Deliberately no executable opt-in: exercise extended-path I/O independently

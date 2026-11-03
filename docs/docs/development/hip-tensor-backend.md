@@ -43,6 +43,13 @@ supported capabilities rather than infer them from Tensor availability.
 
 ## Selection and execution
 
+Run the existing Tensor self-test explicitly with
+`LichtFeld-Studio --tensor-backend-selftest hip` (or `--tensor-backend-selftest=hip`).
+It exits with status 0 on success and 1 on failure. A build without HIP or a
+machine without an available HIP backend reports failure rather than falling
+back to another backend. This command checks Tensor operations and shutdown/reuse;
+it does not enable or qualify the full HIP trainer.
+
 `GpuBackend::HIP = 3` and the dense `kGpuBackends` table are present in every
 build, including builds without HIP. `kCompiledGpuBackends` alone controls which
 backends are advertised; disabled HIP reports no devices and cannot construct
