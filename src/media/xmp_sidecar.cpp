@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/image_codecs.hpp"
 #include "media/media_ingest.hpp"
+#include "metadata_file_io.hpp"
 #include "source_metadata_internal.hpp"
-#include "xmp_sidecar_io.hpp"
 #include <limits>
 
 namespace lfs::media {

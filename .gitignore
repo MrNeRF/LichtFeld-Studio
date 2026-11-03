@@ -116,3 +116,5 @@ src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv
 !src/core/tensor/backend/hip/prepare_pointwise.py
 
 !tests/media/png_metadata_fixture.py
+
+!tests/media/srt_metadata_fixture.py

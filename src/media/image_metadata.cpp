@@ -3,8 +3,8 @@
 #include "image_metadata.hpp"
 #include "core/image_codecs.hpp"
 #include "media_json.hpp"
+#include "metadata_file_io.hpp"
 #include "xmp_metadata.hpp"
-#include "xmp_sidecar_io.hpp"
 #include <algorithm>
 #include <array>
 #include <limits>

@@ -141,7 +141,25 @@ namespace lfs::python {
                 { nb::gil_scoped_release release; result.emplace(ImageOutput::writeAvif(path, frame.view(), copy)); }
                 if (callbacks->error) std::rethrow_exception(callbacks->error);
                 if (!*result) throw Exception(result->error()); }, nb::arg("path"), nb::arg("frame"), nb::arg("options") = AvifOutputOptions{}, nb::arg("cancelled") = nb::none());
+        nb::class_<SrtMetadataCatalog>(m, "SrtMetadataCatalog")
+            .def_prop_ro("cue_count", [](const SrtMetadataCatalog& catalog) { return catalog.cues().size(); })
+            .def("metadata_json", [](const SrtMetadataCatalog& catalog) {
+                nb::gil_scoped_release release;
+                try { return json_detail::dump(json_detail::srtMetadata(catalog)); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, "Return the owned SRT observation and retained raw bytes as JSON.")
+            .def("lookup_json", [](const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance) {
+                nb::gil_scoped_release release;
+                try {
+                const auto result = json_detail::srtLookup(catalog, timestamp, offset, tolerance);
+                if (!result) throw Exception(result.error());
+                return json_detail::dump(*result); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "SRT lookup JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, nb::arg("timestamp"), nb::arg("offset_milliseconds"), nb::arg("point_tolerance_milliseconds") = nb::none(), "Look up a half-open cue interval with an explicit clock offset. Default gaps return null; overlapping matches fail. Optional point tolerance enables nearest-point fallback; equal-distance or duplicate samples fail. No interpolation or last-value hold.");
         nb::class_<MediaIngest>(m, "MediaIngest")
+            .def_static("source_srt_metadata", [](const std::filesystem::path& path) {
+                nb::gil_scoped_release release;
+                const auto result = MediaIngest::sourceSrtMetadata(path);
+                if (!result) throw Exception(result.error());
+                return *result; }, nb::arg("path"), "Read an explicitly supplied SRT file once into an immutable catalog for timed lookup. Uses FFmpeg SRT demux and bounded DJI bracket-field interpretation.")
             .def_static("capabilities", &MediaIngest::capabilities)
             .def_static("source_metadata_json", [](const std::filesystem::path& path) {
                 nb::gil_scoped_release release;

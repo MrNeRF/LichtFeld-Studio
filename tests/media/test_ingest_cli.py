@@ -20,6 +20,9 @@ import struct
 import unittest
 import zlib
 ROOT=Path(__file__).resolve().parents[2]
+_srt_spec = importlib.util.spec_from_file_location("srt_metadata_fixture", ROOT / "tests/media/srt_metadata_fixture.py")
+srt_metadata_fixture = importlib.util.module_from_spec(_srt_spec)
+_srt_spec.loader.exec_module(srt_metadata_fixture)
 _exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", ROOT / "tests/media/source_exif_fixture.py")
 source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
 _exif_spec.loader.exec_module(source_exif_fixture)
@@ -1979,6 +1982,40 @@ class IngestCLI(unittest.TestCase):
             facts = {node.tag.rsplit("}", 1)[-1]: node.text for node in ET.fromstring(packets[0]).iter()
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
+
+    def test_source_srt_metadata_raw_and_explicit_clock_lookup(self):
+        path = self.root / "DJI telemetry é 日本語.srt"
+        packet = srt_metadata_fixture.packet(offset_ms=1000)
+        path.write_bytes(packet)
+        result, stderr = self.invoke("source-srt-metadata", path)
+        self.assertEqual(stderr, b"")
+        self.assertEqual(bytes.fromhex(result["original_bytes"]), packet)
+        self.assertEqual([(cue["start_ms"], cue["end_ms"]) for cue in result["cues"]], [(1000, 1150), (1400, 2000)])
+        match, _ = self.invoke("source-srt-metadata", path, "--timestamp", "100", "1", "1000", "--offset-ms", "1000")
+        self.assertEqual(match["match"]["cue"], 0)
+        gap, _ = self.invoke("source-srt-metadata", path, "--timestamp", "200", "1", "1000", "--offset-ms", "1000")
+        self.assertIsNone(gap["match"])
+        self.invoke("source-srt-metadata", path, "--timestamp", "0", "1", "1000", code=2)
+        self.invoke("source-srt-metadata", path, "--timestamp", "0", "1", "0", "--offset-ms", "0", code=2)
+        self.invoke("source-srt-metadata", self.root / "missing.srt", code=3)
+        directory = self.root / "srt-directory"
+        directory.mkdir()
+        # CreateFile without directory/backup access rejects this at open on
+        # Windows; POSIX reaches the regular-file check on the opened handle.
+        rejected, _ = self.invoke("source-srt-metadata", directory, code=3 if os.name == "nt" else 4)
+        self.assertEqual(rejected["error"]["code"], "PermissionDenied" if os.name == "nt" else "FailedPrecondition")
+        if hasattr(os, "mkfifo"):
+            fifo = self.root / "srt-fifo"
+            os.mkfifo(fifo)
+            self.invoke("source-srt-metadata", fifo, code=4)
+        points = self.root / "point samples.srt"
+        points.write_bytes(srt_metadata_fixture.packet(offset_ms=1000, points=True))
+        strict, _ = self.invoke("source-srt-metadata", points, "--timestamp", "1", "1", "2000", "--offset-ms", "1000")
+        self.assertIsNone(strict["match"])
+        nearest, _ = self.invoke("source-srt-metadata", points, "--timestamp", "1", "1", "2000", "--offset-ms", "1000", "--point-tolerance-ms", "1")
+        self.assertEqual(nearest["match"]["cue"], 0)
+        self.invoke("source-srt-metadata", points, "--timestamp", "200", "1", "1000", "--offset-ms", "1000", "--point-tolerance-ms", "200", code=4)
+        self.assertEqual(path.read_bytes(), packet)
 
     def test_source_sidecar_metadata_explicit_names_and_independent_observations(self):
         image = self.root / "external é 日本語.jpg"

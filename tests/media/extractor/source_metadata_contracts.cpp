@@ -3,8 +3,8 @@
 #include "media/media_ingest.hpp"
 #include "media/media_json.hpp"
 #include "media/media_probe_ffmpeg.hpp"
+#include "media/metadata_file_io.hpp"
 #include "media/source_metadata.hpp"
-#include "media/xmp_sidecar_io.hpp"
 #include <chrono>
 #include <fstream>
 #include <sstream>
@@ -19,6 +19,7 @@ extern "C" {
 #include <utility>
 
 int runMetadataObservationContracts();
+int runSrtMetadataContracts();
 
 namespace {
     using namespace lfs::media;
@@ -514,5 +515,7 @@ int runSourceMetadataContracts() {
         invalid.blocks[0].payload_offset = 1;
         require(!catalogSourceMetadata({}, {}, std::nullopt, std::move(invalid)), "sidecar carrier rejects invented payload offsets");
     }
-    return runMetadataObservationContracts();
+    if (const auto status = runMetadataObservationContracts())
+        return status;
+    return runSrtMetadataContracts();
 }

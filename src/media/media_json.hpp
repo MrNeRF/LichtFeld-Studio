@@ -5,6 +5,7 @@
 #include "media/metadata_observation.hpp"
 #include "media/source_exif.hpp"
 #include "media/source_metadata.hpp"
+#include "media/srt_metadata.hpp"
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
@@ -374,6 +375,27 @@ namespace lfs::media::json_detail {
         const auto output = sourceSidecarMetadataJson(sidecar, summary);
         stream.write(output.data(), static_cast<std::streamsize>(output.size()));
         return static_cast<bool>(stream);
+    }
+    inline json srtCue(const SrtCue& cue) {
+        json facts = json::array();
+        for (const auto& fact : cue.facts)
+            facts.push_back({{"semantic", fact.semantic}, {"unit", fact.unit}, {"value", optional(fact.value)}, {"state", fact.value ? "present" : "invalid"}, {"ambiguous", fact.ambiguous}, {"text_offset", fact.offset}, {"text_bytes", fact.bytes}});
+        return {{"profile", cue.dji_bracket_profile ? "dji_bracket_fields_v1" : "raw_text"}, {"sample_kind", cue.start_milliseconds == cue.end_milliseconds ? "point" : "interval"}, {"start_ms", cue.start_milliseconds}, {"end_ms", cue.end_milliseconds}, {"source_offset", cue.source_offset}, {"text", cue.text}, {"text_bytes", hexBytes(cue.text)}, {"facts", std::move(facts)}};
+    }
+    inline json srtMetadata(const SrtMetadataCatalog& catalog) {
+        json cues = json::array();
+        for (const auto& cue : catalog.cues())
+            cues.push_back(srtCue(cue));
+        return {{"schema_version", 1}, {"success", true}, {"scope", "timed_srt"}, {"parser", "ffmpeg_srt"}, {"interpreter", "dji_bracket_fields_v1"}, {"source_locator", catalog.source().display}, {"source_locator_bytes", hexBytes(catalog.source().native_bytes)}, {"source_locator_encoding", catalog.source().encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"}, {"original_bytes", hexBytes(catalog.originalBytes())}, {"cues", std::move(cues)}};
+    }
+    inline Result<json> srtLookup(const SrtMetadataCatalog& catalog, Timestamp timestamp, std::int64_t offset, std::optional<std::int64_t> tolerance = std::nullopt) {
+        const auto match = catalog.lookup(timestamp, offset, tolerance);
+        if (!match)
+            return match.error();
+        json result{{"schema_version", 1}, {"success", true}, {"source_locator", catalog.source().display}, {"source_locator_bytes", hexBytes(catalog.source().native_bytes)}, {"source_locator_encoding", catalog.source().encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"}, {"query", {{"ticks", timestamp.ticks}, {"time_base", {timestamp.time_base.numerator, timestamp.time_base.denominator}}, {"offset_ms", offset}, {"point_tolerance_ms", optional(tolerance)}}}, {"match", nullptr}};
+        if (*match)
+            result["match"] = {{"cue", **match}, {"metadata", srtCue(catalog.cues()[**match])}};
+        return result;
     }
     inline void appendXmlText(std::string& output, std::string_view text) {
         for (const auto c : text) {

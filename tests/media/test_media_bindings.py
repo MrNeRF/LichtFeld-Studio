@@ -4,6 +4,8 @@
 import argparse
 import concurrent.futures
 import errno
+from fractions import Fraction
+import random
 import hashlib
 import importlib.util
 import json
@@ -20,6 +22,9 @@ import unicodedata
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+_srt_spec = importlib.util.spec_from_file_location("srt_metadata_fixture", ROOT / "tests/media/srt_metadata_fixture.py")
+srt_metadata_fixture = importlib.util.module_from_spec(_srt_spec)
+_srt_spec.loader.exec_module(srt_metadata_fixture)
 _exif_spec = importlib.util.spec_from_file_location("source_exif_fixture", ROOT / "tests/media/source_exif_fixture.py")
 source_exif_fixture = importlib.util.module_from_spec(_exif_spec)
 _exif_spec.loader.exec_module(source_exif_fixture)
@@ -42,6 +47,76 @@ class SourceMetadataBindings(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="lfs-python-metadata-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_srt_lookup_matches_independent_rational_reference(self):
+        rng = random.Random(3966)
+        rows = []
+        start = 0
+        for index in range(64):
+            start += rng.choice((0, 1, 20, 50))
+            end = start + rng.choice((0, 0, 10, 30, 1000))
+            rows.append((start, end, f"FrameCnt: {index}"))
+        path = self.root / "rational reference.srt"
+        path.write_bytes(srt_metadata_fixture.cues(rows))
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        self.assertEqual(catalog.cue_count, len(rows))
+        for _ in range(384):
+            ticks = rng.randint(-1000, 12000)
+            numerator, denominator = rng.choice(((1, 1000), (1, 2000), (1, 3000), (1001, 90000)))
+            offset = rng.choice((-777, 0, 13, 777))
+            tolerance = rng.choice((None, 0, 1, 11, 333))
+            query = Fraction(ticks*numerator*1000, denominator) + offset
+            matches = [i for i, (begin, end, _) in enumerate(rows)
+                       if (begin == end and query == begin) or (begin <= query < end)]
+            if not matches and tolerance is not None:
+                distances = [(abs(query-begin), i) for i, (begin, end, _) in enumerate(rows)
+                             if begin == end and abs(query-begin) <= tolerance]
+                if distances:
+                    nearest = min(distance for distance, _ in distances)
+                    matches = [i for distance, i in distances if distance == nearest]
+            timestamp = media.Timestamp()
+            timestamp.ticks = ticks
+            base = media.Rational()
+            base.numerator, base.denominator = numerator, denominator
+            timestamp.time_base = base
+            with self.subTest(ticks=ticks, time_base=(numerator, denominator), offset=offset, tolerance=tolerance):
+                if len(matches) > 1:
+                    with self.assertRaises(MEDIA_ERROR):
+                        catalog.lookup_json(timestamp, offset, tolerance)
+                else:
+                    match = json.loads(catalog.lookup_json(timestamp, offset, tolerance))["match"]
+                    actual = int(match["metadata"]["text"].split(": ")[1]) if match else None
+                    self.assertEqual(actual, matches[0] if matches else None)
+
+    def test_srt_catalog_ownership_cli_parity_and_concurrent_lookup(self):
+        path = self.root / "flight é 日本語.srt"
+        packet = srt_metadata_fixture.packet()
+        path.write_bytes(packet)
+        before = path.stat().st_mtime_ns
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        self.assertEqual(catalog.cue_count, 2)
+        encoded = catalog.metadata_json()
+        reference = subprocess.run([str(METADATA_CLI), "source-srt-metadata", str(path)], check=True, capture_output=True, timeout=30)
+        self.assertEqual(json.loads(encoded), json.loads(reference.stdout))
+        cue = json.loads(encoded)["cues"][0]
+        cue_bytes = bytes.fromhex(cue["text_bytes"])
+        self.assertEqual(cue["text"].encode("utf-8"), cue_bytes)
+        latitude = next(fact for fact in cue["facts"] if fact["semantic"] == "dji.srt.latitude")
+        self.assertEqual(cue_bytes[latitude["text_offset"]:latitude["text_offset"]+latitude["text_bytes"]], b"0")
+        self.assertEqual(path.stat().st_mtime_ns, before)
+        path.unlink()
+        self.assertEqual(bytes.fromhex(json.loads(catalog.metadata_json())["original_bytes"]), packet)
+        timestamp = media.Timestamp()
+        timestamp.ticks = 100
+        base = media.Rational()
+        base.numerator, base.denominator = 1, 1000
+        timestamp.time_base = base
+        def lookup(_):
+            return json.loads(catalog.lookup_json(timestamp, 0))["match"]["cue"]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            self.assertEqual(list(pool.map(lookup, range(32))), [0] * 32)
+        with self.assertRaises(MEDIA_ERROR):
+            media.MediaIngest.source_srt_metadata(path)
 
     def test_explicit_sidecar_json_matches_cli_and_retains_owned_original(self):
         image = self.root / "sidecar é 日本語.jpg"
@@ -838,6 +913,48 @@ class MediaBindings(unittest.TestCase):
         request.end_seconds = 0.35
         request.allow_hardware_decode = False
         return request
+
+    def test_srt_lookup_consumes_real_cfr_and_vfr_frame_timestamps(self):
+        path = self.root / "offset telemetry.srt"
+        path.write_bytes(srt_metadata_fixture.packet(offset_ms=1000))
+        catalog = media.MediaIngest.source_srt_metadata(path)
+        point_path = self.root / "point telemetry.srt"
+        point_path.write_bytes(srt_metadata_fixture.packet(offset_ms=1000, points=True))
+        points = media.MediaIngest.source_srt_metadata(point_path)
+        reference_pixels = None
+        for source, expected in (("cfr-asymmetric", [0, 0, None, None, 1]),
+                                 ("vfr-asymmetric", [0, 0, 1, 1, None])):
+            with self.subTest(source=source):
+                request = self.request()
+                request.input = self.corpus / (source + ".nut")
+                request.end_seconds = -1
+                report, frames = media.MediaIngest.extract(request)
+                self.assertEqual(report.frames_accepted, 5)
+                pixels = [frame.pixels for frame in frames]
+                if source == "cfr-asymmetric":
+                    reference_pixels = pixels
+                matches = [json.loads(catalog.lookup_json(frame.info.source_timestamp, 1000))["match"] for frame in frames]
+                self.assertEqual([match["cue"] if match else None for match in matches], expected)
+                point_matches = [json.loads(points.lookup_json(frame.info.source_timestamp, 1000, point_tolerance_milliseconds=1))["match"] for frame in frames]
+                expected_points = [0, None, None, None, 1] if source == "cfr-asymmetric" else [0, None, 1, None, None]
+                self.assertEqual([match["cue"] if match else None for match in point_matches], expected_points)
+                self.assertEqual([frame.pixels for frame in frames], pixels)
+                # This is a caller-supplied mapping, not filename-based sync.
+                self.assertIsNone(json.loads(catalog.lookup_json(frames[0].info.source_timestamp, 0))["match"])
+
+        shifted = self.root / "nonzero SRT clock.nut"
+        subprocess.run([os.environ.get("LFS_MEDIA_TEST_FFMPEG", "ffmpeg"), "-v", "error", "-y", "-copyts",
+                        "-itsoffset", "2.5", "-i", str(self.corpus / "cfr-asymmetric.nut"),
+                        "-map", "0:v:0", "-c:v", "copy", str(shifted)], check=True, capture_output=True)
+        request = self.request()
+        request.input, request.end_seconds = shifted, -1
+        report, frames = media.MediaIngest.extract(request)
+        self.assertEqual(report.frames_accepted, 5)
+        first = frames[0].info.source_timestamp
+        self.assertEqual(first.ticks * first.time_base.numerator * 2, 5 * first.time_base.denominator)
+        matches = [json.loads(catalog.lookup_json(frame.info.source_timestamp, -1500))["match"] for frame in frames]
+        self.assertEqual([match["cue"] if match else None for match in matches], [0, 0, None, None, 1])
+        self.assertEqual([frame.pixels for frame in frames], reference_pixels)
 
     def test_hdr_units_survive_owned_surfaces_and_verified_file_resume(self):
         for hlg,profile,transfer,units in [(False,media.FloatColorProfile.PqNits,"smpte2084",media.ColorUnits.Nits),
