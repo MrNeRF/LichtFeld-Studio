@@ -100,6 +100,7 @@ set(CORE_SOURCES
         reactive_store.cpp
         scene.cpp
         scene_partitioner.cpp
+        scene_tile_planner.cpp
         session_breadcrumb.cpp
         uuid.cpp
         splat_simplify.cpp

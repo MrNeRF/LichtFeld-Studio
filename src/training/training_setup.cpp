@@ -15,6 +15,7 @@
 #include "core/point_cloud.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/scene_partitioner.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/source_site.hpp"
@@ -37,13 +38,16 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <numeric>
 #include <optional>
+#include <unordered_map>
 #include <random>
 #include <variant>
 
@@ -420,7 +424,8 @@ namespace lfs::training {
             lfs::core::Scene& scene,
             const lfs::core::NodeId dataset_id,
             const lfs::io::LoadedScene& data,
-            const bool verbose) {
+            const bool verbose,
+            const std::vector<std::shared_ptr<lfs::core::Camera>>* tile_cameras = nullptr) {
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
             if (!params.init_path.has_value() || params.init_path->empty()) {
                 pendingInitMesh().clear();
@@ -440,6 +445,40 @@ namespace lfs::training {
                 point_cloud = createRandomPointCloud(params);
                 if (verbose) {
                     LOG_INFO("Adding {} random points to scene", point_cloud->size());
+                }
+            }
+
+            if (tile_cameras && params.cropbox && point_cloud->size() > 0 &&
+                (data.point_cloud || (params.init_path && !params.init_path->empty())) &&
+                params.optimization.cropbox_loss_weight == 0.0f) {
+                const auto& box = *params.cropbox;
+                const auto rotation = params.cropbox_rotation.value_or(std::array<float, 3>{0, 0, 0});
+                lfs::core::TileSpec tile;
+                tile.min = {box[0], box[1], box[2]};
+                tile.max = {box[3], box[4], box[5]};
+                tile.rotation_degrees = {rotation[0], rotation[1], rotation[2]};
+                const auto evidence = lfs::core::collect_tile_camera_evidence(*tile_cameras);
+                const auto selected = lfs::core::select_tile_initial_point_indices(*point_cloud, tile, evidence);
+                if (!selected.empty() && selected.size() < static_cast<size_t>(point_cloud->size())) {
+                    const int64_t original_count = point_cloud->size();
+                    point_cloud = std::make_shared<lfs::core::PointCloud>(*point_cloud);
+                    const auto select_rows = [&](lfs::core::Tensor& tensor) {
+                        if (!tensor.is_valid() || tensor.numel() == 0 || tensor.ndim() == 0 ||
+                            static_cast<int64_t>(tensor.size(0)) != original_count)
+                            return;
+                        const auto indices = lfs::core::Tensor::from_vector(
+                            selected, lfs::core::TensorShape({selected.size()}), tensor.device());
+                        tensor = tensor.index_select(0, indices).contiguous();
+                    };
+                    select_rows(point_cloud->means);
+                    select_rows(point_cloud->colors);
+                    select_rows(point_cloud->normals);
+                    select_rows(point_cloud->sh0);
+                    select_rows(point_cloud->shN);
+                    select_rows(point_cloud->opacity);
+                    select_rows(point_cloud->scaling);
+                    select_rows(point_cloud->rotation);
+                    LOG_INFO("Tile initialization retains {} of {} sparse points", selected.size(), original_count);
                 }
             }
 
@@ -1031,12 +1070,47 @@ namespace lfs::training {
 
                 const auto dataset_id = scene.addDataset(dataset_name);
 
-                if (auto attached = attachDatasetPointCloud(params, scene, dataset_id, data, true);
+                auto cameras = data.cameras;
+                if (params.tile_camera_uids_path) {
+                    std::ifstream input(lfs::core::native_fs::native_path(*params.tile_camera_uids_path));
+                    if (!input) return std::unexpected("Cannot open tile camera allowlist");
+                    nlohmann::json allowlist;
+                    try { input >> allowlist; }
+                    catch (const std::exception& e) {
+                        return std::unexpected(std::format("Invalid tile camera allowlist: {}", e.what()));
+                    }
+                    if (!allowlist.contains("dataset") || !allowlist["dataset"].is_string() ||
+                        allowlist["dataset"].get<std::string>() !=
+                            lfs::core::path_to_utf8(params.dataset.data_path))
+                        return std::unexpected("Tile camera allowlist belongs to another dataset");
+                    if (!allowlist.contains("cameras") || !allowlist["cameras"].is_array())
+                        return std::unexpected("Tile camera allowlist needs a cameras array");
+                    std::unordered_map<int, std::string> allowed;
+                    try {
+                        for (const auto& item : allowlist["cameras"])
+                            if (!allowed.emplace(item.at("uid").get<int>(),
+                                                 item.at("image").get<std::string>()).second)
+                                return std::unexpected("Tile camera allowlist has duplicate UIDs");
+                    } catch (const std::exception& e) {
+                        return std::unexpected(std::format("Invalid tile camera entry: {}", e.what()));
+                    }
+                    bool mismatched = false;
+                    std::erase_if(cameras, [&](const auto& camera) {
+                        const auto found = allowed.find(camera->uid());
+                        if (found == allowed.end()) return true;
+                        if (found->second != camera->image_name()) mismatched = true;
+                        allowed.erase(found);
+                        return false;
+                    });
+                    if (mismatched || !allowed.empty() || cameras.empty())
+                        return std::unexpected("Tile camera allowlist does not match this dataset");
+                }
+                if (auto attached = attachDatasetPointCloud(
+                        params, scene, dataset_id, data, true,
+                        params.tile_camera_uids_path ? &cameras : nullptr);
                     !attached) {
                     return std::unexpected(std::string(attached.error().user_message()));
                 }
-
-                auto cameras = data.cameras;
                 const bool hold_out = params.optimization.holds_out_eval_images();
                 const int test_every = params.dataset.test_every;
                 if (hold_out && !params.resume_checkpoint) {

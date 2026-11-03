@@ -3743,7 +3743,11 @@ NB_MODULE(lichtfeld, m) {
                                     const std::string& align_mode,
                                     const std::string& source_str,
                                     float quantile,
-                                    int replace_group_id) {
+                                    int replace_group_id,
+                                    int count,
+                                    float outside_loss_weight,
+                                    int resize_factor,
+                                    int max_width) {
         auto* scene = get_scene_internal();
         if (!scene) throw std::runtime_error("No scene is loaded");
         auto point_cloud = scene->getInitialPointCloud();
@@ -3758,8 +3762,10 @@ NB_MODULE(lichtfeld, m) {
         const lfs::core::PointCloud empty_points;
         const auto& points = point_cloud ? *point_cloud : empty_points;
         std::vector<glm::vec3> centers;
+        std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
         for (const auto* node : scene->getNodes()) {
             if (node->type != lfs::core::NodeType::CAMERA || !node->camera) continue;
+            cameras.push_back(node->camera);
             const auto position = node->camera->cam_position().cpu().contiguous();
             if (position.numel() < 3) continue;
             const auto* p = position.ptr<float>();
@@ -3778,7 +3784,7 @@ NB_MODULE(lichtfeld, m) {
             throw std::invalid_argument("Unknown tile orientation mode");
         }
 
-        lfs::core::BoundsSource source = lfs::core::BoundsSource::Both;
+        lfs::core::BoundsSource source = lfs::core::BoundsSource::Points;
         if (source_str == "points") {
             source = lfs::core::BoundsSource::Points;
         } else if (source_str == "cameras") {
@@ -3788,14 +3794,22 @@ NB_MODULE(lichtfeld, m) {
         }
 
         auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, quantile, mode, source);
+        const auto outer_bounds = lfs::core::compute_outer_scene_bounds(points, centers, bounds, quantile, source);
         if (quantile > 0.0f) {
             const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
             bounds.min -= padding;
             bounds.max += padding;
         }
-        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap,
-                                                                 mode != lfs::core::OrientationMode::AxisAligned,
-                                                                 mode, quantile});
+        const auto tiles = count > 0
+            ? lfs::core::generate_adaptive_tiles(bounds, count, overlap, outer_bounds,
+                                                 points, lfs::core::collect_tile_camera_evidence(cameras),
+                                                 nullptr,
+                                                 {.all_cameras_for_training = outside_loss_weight > 0.0f,
+                                                  .resize_factor = resize_factor,
+                                                  .max_width = max_width})
+            : lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap,
+                                                     mode != lfs::core::OrientationMode::AxisAligned,
+                                                     mode, quantile}, outer_bounds);
         if (const auto* old = scene->getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
             scene->removeNode(old->name);
@@ -3805,8 +3819,10 @@ NB_MODULE(lichtfeld, m) {
             throw std::runtime_error("Could not create tile preview boxes");
         return group_id;
     }, nb::arg("columns"), nb::arg("rows"), nb::arg("overlap") = 0.15f,
-       nb::arg("align_mode") = "obb_3d", nb::arg("source") = "both",
+       nb::arg("align_mode") = "obb_3d", nb::arg("source") = "points",
        nb::arg("quantile") = 0.02f, nb::arg("replace_group_id") = -1,
+       nb::arg("count") = 0, nb::arg("outside_loss_weight") = 0.0f,
+       nb::arg("resize_factor") = -1, nb::arg("max_width") = 3840,
        "Preview auto-tile boxes in the current scene");
 
     m.def("preview_auto_tiles", [](int columns, int rows, float overlap, bool align_pca,
@@ -3833,11 +3849,14 @@ NB_MODULE(lichtfeld, m) {
             centers.emplace_back(p[0], p[1], p[2]);
         }
         const auto mode = align_pca ? lfs::core::OrientationMode::Obb3D : lfs::core::OrientationMode::AxisAligned;
-        auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, 0.02f, mode, lfs::core::BoundsSource::Both);
+        auto bounds = lfs::core::compute_robust_scene_bounds_obb(points, centers, 0.02f, mode, lfs::core::BoundsSource::Points);
+        const auto outer_bounds = lfs::core::compute_outer_scene_bounds(
+            points, centers, bounds, 0.02f, lfs::core::BoundsSource::Points);
         const auto padding = glm::max((bounds.max - bounds.min) * 0.02f, glm::vec3{0.01f});
         bounds.min -= padding;
         bounds.max += padding;
-        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca, mode, 0.02f});
+        const auto tiles = lfs::core::generate_tile_grid(bounds, {columns, rows, 0.0f, overlap, align_pca, mode, 0.02f},
+                                                        outer_bounds);
         if (const auto* old = scene->getNodeById(replace_group_id);
             old && old->type == lfs::core::NodeType::GROUP && old->name.starts_with("AutoTiles")) {
             scene->removeNode(old->name);

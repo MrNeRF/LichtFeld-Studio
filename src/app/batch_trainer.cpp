@@ -1305,9 +1305,11 @@ namespace lfs::app {
             const bool parent_only = name == "-d" || name == "--data-path" || name == "-o" ||
                                      name == "--output-path" || name == "--output-name" ||
                                      name == "--export" || name == "--headless" ||
+                                     name == "--crop" ||
                                      name == "--auto-tile" || name == "--tile-size" ||
                                      name == "--tile-overlap" || name == "--no-tile-pca" ||
-                                     name == "--no-tile-merge" || name == "--tile-plan" ||
+                                     name == "--no-tile-crop" || name == "--no-tile-merge" ||
+                                     name == "--tile-outside-loss-weight" || name == "--tile-plan" ||
                                      name == "--tile-align" || name == "--tile-source" ||
                                      name == "--tile-quantile" ||
                                      name == "--train";
@@ -1317,6 +1319,8 @@ namespace lfs::app {
         }
 
         std::vector<lfs::core::TileSpec> tiles;
+        std::vector<lfs::core::TileCameraEvidence> camera_evidence;
+        std::vector<lfs::core::TilePlanDiagnostics> planning_diagnostics;
         try {
             if (params.tile_plan_path) {
                 std::ifstream input(lfs::core::native_fs::native_path(*params.tile_plan_path));
@@ -1355,6 +1359,8 @@ namespace lfs::app {
                 if (params.auto_tile_grid &&
                     tiles.size() != static_cast<size_t>(params.auto_tile_grid->first * params.auto_tile_grid->second))
                     throw std::runtime_error("Tile plan count differs from --auto-tile grid");
+                if (params.auto_tile_count > 0 && tiles.size() != static_cast<size_t>(params.auto_tile_count))
+                    throw std::runtime_error("Tile plan count differs from --auto-tile count");
             } else {
             lfs::io::LoadOptions load_options;
             load_options.images_folder = params.dataset.images;
@@ -1377,6 +1383,7 @@ namespace lfs::app {
             }
             const lfs::core::PointCloud empty_points;
             const auto& points = scene->point_cloud ? *scene->point_cloud : empty_points;
+            camera_evidence = lfs::core::collect_tile_camera_evidence(scene->cameras);
             lfs::core::OrientationMode mode = lfs::core::OrientationMode::Obb3D;
             if (params.auto_tile_align_mode == "planar_yaw" || params.auto_tile_align_mode == "yaw") {
                 mode = lfs::core::OrientationMode::PlanarYaw;
@@ -1387,7 +1394,7 @@ namespace lfs::app {
             } else if (params.auto_tile_align_mode == "axis_aligned" || params.auto_tile_align_mode == "none" || !params.auto_tile_align_pca) {
                 mode = lfs::core::OrientationMode::AxisAligned;
             }
-            lfs::core::BoundsSource source = lfs::core::BoundsSource::Both;
+            lfs::core::BoundsSource source = lfs::core::BoundsSource::Points;
             if (params.auto_tile_source == "points") {
                 source = lfs::core::BoundsSource::Points;
             } else if (params.auto_tile_source == "cameras") {
@@ -1395,9 +1402,11 @@ namespace lfs::app {
             }
             auto bounds = lfs::core::compute_robust_scene_bounds_obb(
                 points, centers, params.auto_tile_quantile, mode, source);
+            const auto outer_bounds = lfs::core::compute_outer_scene_bounds(
+                points, centers, bounds, params.auto_tile_quantile, source);
             const auto extent = bounds.max - bounds.min;
             if (params.auto_tile_quantile > 0.0f) {
-                // Keep legitimate edge geometry and the full vertical range just beyond the quantiles.
+                // Keep edge geometry and the full local Z range just beyond the quantiles.
                 const glm::vec3 padding = glm::max(extent * 0.02f, glm::vec3(0.01f));
                 bounds.min -= padding;
                 bounds.max += padding;
@@ -1412,24 +1421,91 @@ namespace lfs::app {
             grid.align_pca = params.auto_tile_align_pca;
             grid.orientation_mode = mode;
             grid.quantile = params.auto_tile_quantile;
-            tiles = lfs::core::generate_tile_grid(bounds, grid);
+            tiles = params.auto_tile_count > 0
+                ? lfs::core::generate_adaptive_tiles(bounds, params.auto_tile_count,
+                      params.tile_overlap, outer_bounds, points, camera_evidence,
+                      &planning_diagnostics,
+                      {.all_cameras_for_training = params.tile_outside_loss_weight > 0.0f,
+                       .resize_factor = params.dataset.resize_factor,
+                       .max_width = params.dataset.max_width})
+                : lfs::core::generate_tile_grid(bounds, grid, outer_bounds);
             }
+            if (camera_evidence.empty()) {
+                lfs::io::LoadOptions load_options;
+                load_options.images_folder = params.dataset.images;
+                load_options.min_track_length = params.dataset.min_track_length;
+                auto loaded = lfs::io::Loader::create()->load(dataset, load_options);
+                if (!loaded)
+                    throw std::runtime_error(std::format("Cannot inspect dataset cameras: {}", loaded.error().format()));
+                auto* scene = std::get_if<lfs::io::LoadedScene>(&loaded->data);
+                if (!scene) throw std::runtime_error("Tile plan needs a dataset with cameras");
+                camera_evidence = lfs::core::collect_tile_camera_evidence(scene->cameras);
+            }
+            if (camera_evidence.size() < 2)
+                throw std::runtime_error("Auto-tiling needs at least two usable cameras");
         } catch (const std::exception& error) {
             LOG_ERROR("Cannot partition dataset: {}", error.what());
             return 1;
         }
 
+        std::vector<std::vector<int>> tile_cameras;
+        tile_cameras.reserve(tiles.size());
+        std::unordered_map<int, const lfs::core::TileCameraEvidence*> views_by_uid;
+        for (const auto& view : camera_evidence)
+            if (!views_by_uid.emplace(view.uid, &view).second) {
+                LOG_ERROR("Dataset contains duplicate camera UID {}", view.uid);
+                return 1;
+            }
+        for (const auto& tile : tiles) {
+            if (params.tile_outside_loss_weight > 0.0f) {
+                std::vector<int> all;
+                all.reserve(camera_evidence.size());
+                for (const auto& view : camera_evidence) all.push_back(view.uid);
+                tile_cameras.push_back(std::move(all));
+            } else {
+                tile_cameras.push_back(lfs::core::select_tile_camera_uids(tile, camera_evidence));
+            }
+        }
+        // The parent needs only UID/name metadata after planning. Release loaded
+        // camera payloads before starting a separate training process.
+        for (auto& view : camera_evidence) {
+            view.source.reset();
+            std::vector<glm::vec3>().swap(view.observations);
+        }
         json manifest;
         manifest["dataset"] = path_to_utf8(dataset);
         manifest["overlap_ratio"] = params.tile_overlap;
+        manifest["outside_loss_weight"] = params.tile_outside_loss_weight;
+        manifest["crop_after_training"] = params.auto_tile_crop;
+        manifest["merge_exports"] = params.auto_tile_merge;
+        manifest["partition_mode"] = params.auto_tile_count > 0 ? "adaptive" : "grid";
+        manifest["camera_selection"] = params.tile_outside_loss_weight > 0.0f
+            ? "all_cameras_for_outside_loss" : "sfm_tracks_and_pinhole_box_coverage";
+        if (!planning_diagnostics.empty())
+            manifest["planning_work_units"] = "relative SfM-point and image-resolution proxy";
         manifest["tiles"] = json::array();
-        for (const auto& tile : tiles) {
-            manifest["tiles"].push_back({{"name", tile.name}, {"i", tile.i}, {"j", tile.j},
-                                          {"min", {tile.min.x, tile.min.y, tile.min.z}},
-                                          {"max", {tile.max.x, tile.max.y, tile.max.z}},
-                                          {"rotation_degrees", {tile.rotation_degrees.x,
-                                                                 tile.rotation_degrees.y,
-                                                                 tile.rotation_degrees.z}}});
+        for (size_t index = 0; index < tiles.size(); ++index) {
+            const auto& tile = tiles[index];
+            json entry = {{"name", tile.name}, {"i", tile.i}, {"j", tile.j},
+                          {"camera_count", tile_cameras[index].size()},
+                          {"camera_allowlist", path_to_utf8(path("tiles") / tile.name / "tile_cameras.json")},
+                          {"min", {tile.min.x, tile.min.y, tile.min.z}},
+                          {"max", {tile.max.x, tile.max.y, tile.max.z}},
+                          {"rotation_degrees", {tile.rotation_degrees.x,
+                                                 tile.rotation_degrees.y,
+                                                 tile.rotation_degrees.z}}};
+            if (index < planning_diagnostics.size()) {
+                const auto& d = planning_diagnostics[index];
+                entry["planning"] = {{"sampled_points", d.sampled_points},
+                                     {"sampled_crop_points", d.sampled_crop_points},
+                                     {"supporting_cameras", d.supporting_cameras},
+                                     {"estimated_selected_cameras", d.estimated_selected_cameras},
+                                     {"occupied_cells", d.occupied_cells},
+                                     {"covered_cells", d.covered_cells},
+                                     {"mean_image_megapixels", d.mean_image_megapixels},
+                                     {"estimated_work_units", d.estimated_work_units}};
+            }
+            manifest["tiles"].push_back(std::move(entry));
         }
         if (!write_batch_report(output / "tiles.json", manifest.dump(2) + "\n"))
             return 1;
@@ -1444,15 +1520,30 @@ namespace lfs::app {
         ScopedSignalHandler signal_handler;
         std::vector<path> exports;
         exports.reserve(tiles.size());
-        for (const auto& tile : tiles) {
+        for (size_t tile_index = 0; tile_index < tiles.size(); ++tile_index) {
+            const auto& tile = tiles[tile_index];
             lfs::core::param::BatchJobItem job;
             job.dataset_path = dataset;
             job.name = tile.name;
             job.output_path = output / "tiles" / tile.name;
+            json allowlist;
+            allowlist["dataset"] = path_to_utf8(dataset);
+            allowlist["cameras"] = json::array();
+            for (const int uid : tile_cameras[tile_index]) {
+                const auto found = views_by_uid.find(uid);
+                if (found != views_by_uid.end())
+                    allowlist["cameras"].push_back({{"uid", uid}, {"image", found->second->image_name}});
+            }
+            const path camera_path = job.output_path / "tile_cameras.json";
+            if (!write_batch_report(camera_path, allowlist.dump(2) + "\n")) return 1;
             const auto box = std::format("{},{},{},{},{},{}", tile.min.x, tile.min.y, tile.min.z,
                                          tile.max.x, tile.max.y, tile.max.z);
-            job.extra_args = {"--cropbox=" + box, "--cropbox-loss-weight", "0", "--crop",
+            job.extra_args = {"--cropbox=" + box, "--cropbox-loss-weight",
+                              std::format("{}", params.tile_outside_loss_weight),
+                              "--tile-camera-uids", path_to_utf8(camera_path),
                               "--output-name", tile.name, "--export", "ply"};
+            if (params.auto_tile_crop)
+                job.extra_args.push_back("--crop");
             if (tile.rotation_degrees.x != 0.0f || tile.rotation_degrees.y != 0.0f ||
                 tile.rotation_degrees.z != 0.0f) {
                 job.extra_args.push_back(std::format("--cropbox-rotation={},{},{}",
@@ -1471,6 +1562,9 @@ namespace lfs::app {
             }
             std::println("[Auto-tile {}/{}] Training {}", exports.size() + 1, tiles.size(), tile.name);
             const auto result = execute_job(job, batch, executable);
+            manifest["tiles"][tile_index]["training_seconds"] = result.duration_seconds;
+            if (!write_batch_report(output / "tiles.json", manifest.dump(2) + "\n"))
+                return 1;
             if (!result.success) {
                 LOG_ERROR("Tile {} failed: {}", tile.name, result.error_message);
                 return 1;

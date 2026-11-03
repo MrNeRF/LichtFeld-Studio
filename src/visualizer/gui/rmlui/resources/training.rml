@@ -999,10 +999,18 @@
       </div>
       <div class="section-content collapsed" id="sec-auto-tiles">
         <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.adaptive</span></span>
+          <input type="checkbox" data-value="auto_tile_adaptive" />
+        </div>
+        <div class="setting-row" data-if="auto_tile_adaptive">
+          <span class="prop-label"><span>@tr:auto_tiles.count</span></span>
+          <input type="text" class="number-input" data-value="auto_tile_count" />
+        </div>
+        <div class="setting-row" data-if="!auto_tile_adaptive">
           <span class="prop-label"><span>@tr:auto_tiles.columns</span></span>
           <input type="text" class="number-input" data-value="auto_tile_columns" />
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-if="!auto_tile_adaptive">
           <span class="prop-label"><span>@tr:auto_tiles.rows</span></span>
           <input type="text" class="number-input" data-value="auto_tile_rows" />
         </div>
@@ -1024,20 +1032,28 @@
           </select>
         </div>
         <div class="setting-row">
-          <span class="prop-label"><span>@tr:auto_tiles.source</span></span>
-          <select data-value="auto_tile_source">
-            <option value="both">@tr:auto_tiles.source_both</option>
-            <option value="points">@tr:auto_tiles.source_points</option>
-            <option value="cameras">@tr:auto_tiles.source_cameras</option>
-          </select>
-        </div>
-        <div class="setting-row">
           <span class="prop-label"><span>@tr:auto_tiles.quantile</span></span>
           <div class="setting-row__control-col setting-row__control-col--slider">
             <input type="range" class="setting-slider" min="0" max="100" step="5" data-value="auto_tile_quantile_steps" data-event-change="auto_tile_slider_change('quantile', ev.value)" />
             <span class="slider-value">{{auto_tile_quantile_label}}</span>
           </div>
         </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.outside_loss_weight</span></span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" min="0" max="100" step="5" data-value="auto_tile_outside_loss_steps" data-event-change="auto_tile_slider_change('outside_loss', ev.value)" />
+            <span class="slider-value">{{auto_tile_outside_loss_label}}</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.crop_after_training</span></span>
+          <input type="checkbox" data-value="auto_tile_crop" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label"><span>@tr:auto_tiles.merge_after_training</span></span>
+          <input type="checkbox" data-value="auto_tile_merge" />
+        </div>
+        <span class="status-text status-muted">@tr:auto_tiles.outside_loss_help</span>
         <button class="btn btn--secondary btn--full" data-event-click="action('auto_tile_preview')">@tr:auto_tiles.preview</button>
         <button class="btn btn--primary btn--full" data-if="!auto_tile_running" data-event-click="action('auto_tile_train')">@tr:auto_tiles.train</button>
         <button class="btn btn--warning btn--full" data-if="auto_tile_running" data-event-click="action('auto_tile_cancel')">@tr:auto_tiles.cancel</button>

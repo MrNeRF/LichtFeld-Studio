@@ -813,15 +813,18 @@ namespace {
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
             ::args::ValueFlag<std::string> cropbox(training_group, "x0,y0,z0,x1,y1,z1", "Train with a region of interest: an enabled crop box on the training model with that minimum and maximum corner in the dataset's coordinates, set up when a headless run starts a fresh model. --cropbox-rotation turns it, --cropbox-loss-weight 0 ignores every pixel outside it and --crop keeps only the splats inside it", {"cropbox"});
             ::args::ValueFlag<std::string> cropbox_rotation(training_group, "rx,ry,rz", "Turn the --cropbox box about its centre, keeping its size, by rx, ry and rz degrees about the dataset's X, Y and Z axes, the frame of the --cropbox corners: the rotation Rx(rx)*Ry(ry)*Rz(rz), turning the box about Z first, then Y, then X. Without it the box stays axis-aligned. The GUI transform panel shows the box in the viewer's axes, with Y and Z flipped, so its Rotation fields show the same turn as rx+180, ry, rz rather than the same numbers", {"cropbox-rotation"});
-            ::args::ValueFlag<std::string> auto_tile(training_group, "NxM", "Split a dataset into a grid, train each cell sequentially, and merge the exported splats (e.g. 3x2)", {"auto-tile"});
+            ::args::ValueFlag<std::string> auto_tile(training_group, "N|NxM", "Train N adaptively partitioned tiles or an explicit NxM grid (e.g. 4 or 3x2)", {"auto-tile"});
             ::args::ValueFlag<float> tile_size(training_group, "distance", "Choose the auto-tile grid from a target tile width in dataset units", {"tile-size"});
             ::args::ValueFlag<float> tile_overlap(training_group, "ratio", "Tile overlap ratio from 0 to 0.3 (default 0.15)", {"tile-overlap"});
             ::args::ValueFlag<std::string> tile_align(training_group, "mode", "Tile alignment mode: 'obb_3d' (default), 'planar_yaw', 'planar_pitch', 'planar_roll', or 'axis_aligned'", {"tile-align"});
-            ::args::ValueFlag<std::string> tile_source(training_group, "source", "Data used for tile bounds and orientation: 'both' (default), 'points', or 'cameras'", {"tile-source"});
+            ::args::ValueFlag<std::string> tile_source(training_group, "source", "Data used for tile bounds and orientation: 'points' (default), 'both', or 'cameras'", {"tile-source"});
             ::args::ValueFlag<float> tile_quantile(training_group, "ratio", "Outlier trim quantile from 0 to 0.49 (default 0.02)", {"tile-quantile"});
+            ::args::ValueFlag<float> tile_outside_loss_weight(training_group, "weight", "Loss weight outside each tile from 0 to 1 (default 0)", {"tile-outside-loss-weight"});
             ::args::Flag no_tile_pca(training_group, "no_tile_pca", "Align tile grid to dataset axes instead of the sparse point cloud PCA", {"no-tile-pca"});
+            ::args::Flag no_tile_crop(training_group, "no_tile_crop", "Keep splats outside each tile after training", {"no-tile-crop"});
             ::args::Flag no_tile_merge(training_group, "no_tile_merge", "Keep individual tile exports without merging", {"no-tile-merge"});
             ::args::ValueFlag<std::string> tile_plan(training_group, "path", "Use edited tile boxes from a JSON plan instead of recomputing the grid", {"tile-plan"});
+            ::args::ValueFlag<std::string> tile_camera_uids(training_group, "path", "Internal: camera UID allowlist for one tile job", {"tile-camera-uids"});
             ::args::Flag crop(training_group, "crop", lfs::core::args::optimization_cli_help("--crop"), {"crop"});
             ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
             ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
@@ -1366,12 +1369,16 @@ namespace {
                     const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), value);
                     return error == std::errc{} && end == token.data() + token.size() && value > 0;
                 };
-                if (separator == std::string::npos ||
-                    !parse_positive_int(std::string_view(spec).substr(0, separator), columns) ||
-                    !parse_positive_int(std::string_view(spec).substr(separator + 1), rows) ||
-                    columns > 100 || rows > 100 || columns * rows > 1000)
-                    return std::unexpected("--auto-tile expects NxM with at most 1000 cells (e.g. 3x2)");
-                params.auto_tile_grid = std::pair{columns, rows};
+                if (separator == std::string::npos) {
+                    if (!parse_positive_int(spec, params.auto_tile_count) || params.auto_tile_count > 100)
+                        return std::unexpected("--auto-tile expects 1-100 adaptive tiles or NxM with at most 1000 cells");
+                } else {
+                    if (!parse_positive_int(std::string_view(spec).substr(0, separator), columns) ||
+                        !parse_positive_int(std::string_view(spec).substr(separator + 1), rows) ||
+                        columns > 100 || rows > 100 || columns * rows > 1000)
+                        return std::unexpected("--auto-tile expects 1-100 adaptive tiles or NxM with at most 1000 cells");
+                    params.auto_tile_grid = std::pair{columns, rows};
+                }
             }
             if (tile_size) {
                 params.auto_tile_size = ::args::get(tile_size);
@@ -1420,19 +1427,33 @@ namespace {
                 if (!std::isfinite(params.auto_tile_quantile) || params.auto_tile_quantile < 0.0f || params.auto_tile_quantile >= 0.5f)
                     return std::unexpected("--tile-quantile must be between 0 and 0.49");
             }
+            if (tile_outside_loss_weight) {
+                params.tile_outside_loss_weight = ::args::get(tile_outside_loss_weight);
+                if (!std::isfinite(params.tile_outside_loss_weight) ||
+                    params.tile_outside_loss_weight < 0.0f || params.tile_outside_loss_weight > 1.0f)
+                    return std::unexpected("--tile-outside-loss-weight must be between 0 and 1");
+            }
+            params.auto_tile_crop = !no_tile_crop;
             params.auto_tile_merge = !no_tile_merge;
             if (tile_plan) {
                 params.tile_plan_path = absolute_input_path(::args::get(tile_plan));
                 if (!lfs::core::native_fs::exists(*params.tile_plan_path))
                     return std::unexpected("--tile-plan file does not exist");
-                if (!params.auto_tile_grid && params.auto_tile_size <= 0.0f)
+                if (!params.auto_tile_grid && params.auto_tile_count <= 0 && params.auto_tile_size <= 0.0f)
                     return std::unexpected("--tile-plan needs --auto-tile or --tile-size");
             }
-            if ((params.auto_tile_grid || params.auto_tile_size > 0.0f) &&
+            if (tile_camera_uids) {
+                params.tile_camera_uids_path = absolute_input_path(::args::get(tile_camera_uids));
+                if (!lfs::core::native_fs::exists(*params.tile_camera_uids_path))
+                    return std::unexpected("--tile-camera-uids file does not exist");
+                if (params.auto_tile_grid || params.auto_tile_count || params.auto_tile_size > 0.0f)
+                    return std::unexpected("--tile-camera-uids is for one tile job only");
+            }
+            if ((params.auto_tile_grid || params.auto_tile_count > 0 || params.auto_tile_size > 0.0f) &&
                 (params.cropbox || params.resume_checkpoint || params.resume_project))
                 return std::unexpected("Auto-tiling cannot resume or use --cropbox");
             if (crop && !params.cropbox && !params.resume_checkpoint && !params.resume_project &&
-                !params.auto_tile_grid && params.auto_tile_size <= 0.0f)
+                !params.auto_tile_grid && params.auto_tile_count <= 0 && params.auto_tile_size <= 0.0f)
                 return std::unexpected(
                     "--crop removes the splats outside the training crop box when training completes and when exporting: "
                     "it needs --cropbox, or a resumed project that has a crop box");

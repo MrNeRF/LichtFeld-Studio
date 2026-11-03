@@ -156,6 +156,46 @@ def _make_signal(value):
     return SimpleNamespace(value=value)
 
 
+def test_auto_tile_gui_forwards_export_policy_and_loss_weight(
+    training_panel_module, monkeypatch, tmp_path
+):
+    module = training_panel_module
+    dataset = SimpleNamespace(
+        has_params=lambda: True, data_path=str(tmp_path),
+        output_path=str(tmp_path / "output"), centralize_dataset="off", images="images",
+        resize_factor=2, max_width=2048
+    )
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", iterations=100,
+        sh_degree=3, max_cap=10_000_000
+    )
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "studio_executable_path", lambda: "LichtFeld-Studio", raising=False)
+    monkeypatch.setattr(module, "RuntimeState", SimpleNamespace(trainer_state=_make_signal("ready")))
+    started = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda command, **kwargs: started.append(command) or object())
+
+    panel = module.TrainingPanel()
+    panel._auto_tile_crop = False
+    panel._auto_tile_merge = False
+    panel._auto_tile_outside_loss = 0.25
+    panel._schedule_deferred_update = lambda _delay: None
+    panel._auto_tile_train()
+
+    assert len(started) == 1
+    command = started[0]
+    assert command[command.index("--auto-tile") + 1] == "4"
+    assert "--no-tile-crop" in command
+    assert "--no-tile-merge" in command
+    assert command[command.index("--tile-outside-loss-weight") + 1] == "0.25"
+    assert "--tile-source" not in command
+    assert command[command.index("--max-cap") + 1] == "10000000"
+    assert command[command.index("-r") + 1] == "2"
+    assert command[command.index("--max-width") + 1] == "2048"
+    assert panel._auto_tile_run_merge is False
+
+
 class _ParamsStub:
     def __init__(self):
         self.iterations = 1234

@@ -181,7 +181,7 @@ namespace {
                 }
                 return lfs::app::run_batch_training(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
-                if (mode.params->auto_tile_grid || mode.params->auto_tile_size > 0.0f)
+                if (mode.params->auto_tile_grid || mode.params->auto_tile_count > 0 || mode.params->auto_tile_size > 0.0f)
                     return lfs::app::run_auto_tile_training(*mode.params, command_line);
 #ifdef __GLIBC__
                 // Training workers create many short-lived glibc arenas. Limit their

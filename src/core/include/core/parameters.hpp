@@ -617,14 +617,18 @@ namespace lfs::core {
 
             // CLI auto-tiling is orchestrated by the parent process; each tile is a fresh headless run.
             std::optional<std::pair<int, int>> auto_tile_grid = std::nullopt;
+            int auto_tile_count = 0;
             float auto_tile_size = 0.0f;
             float tile_overlap = 0.15f;
             bool auto_tile_align_pca = true;
             std::string auto_tile_align_mode = "obb_3d";
-            std::string auto_tile_source = "both";
+            std::string auto_tile_source = "points";
             float auto_tile_quantile = 0.02f;
+            bool auto_tile_crop = true;
             bool auto_tile_merge = true;
+            float tile_outside_loss_weight = 0.0f;
             std::optional<std::filesystem::path> tile_plan_path = std::nullopt;
+            std::optional<std::filesystem::path> tile_camera_uids_path = std::nullopt;
 
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
