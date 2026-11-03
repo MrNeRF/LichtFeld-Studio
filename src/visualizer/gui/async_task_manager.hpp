@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "core/collision.hpp"
+#include "core/error.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/job_registry.hpp"
@@ -277,7 +278,7 @@ namespace lfs::vis {
                 core::NodeId camera_group_id = core::NULL_NODE;
                 core::NodeId cropbox_id = core::NULL_NODE;
             };
-            [[nodiscard]] std::expected<JobHandle, std::string> startCameraSelection(CameraSelectionOptions options);
+            [[nodiscard]] std::expected<JobHandle, lfs::Error> startCameraSelection(CameraSelectionOptions options);
             void pollCameraSelectionCompletion();
             void cancelCameraSelection();
             [[nodiscard]] std::optional<JobSnapshot> cameraSelectionStatus() const { return jobs_.peek(camera_selection_state_.job); }

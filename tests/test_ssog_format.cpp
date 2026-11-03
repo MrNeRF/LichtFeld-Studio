@@ -604,6 +604,7 @@ TEST(SsogFormat, BundleCancellationPreservesDestination) {
     EXPECT_EQ(saved.error().code, ErrorCode::CANCELLED);
     std::ifstream file(bundle);
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing destination");
+    file.close();
     for (const auto& entry : fs::directory_iterator(dir.path))
         EXPECT_EQ(entry.path(), bundle);
     fs::remove(bundle);
@@ -884,10 +885,11 @@ TEST(SsogFormat, BundleReadersAcceptSuffixCaseWithoutChangingRows) {
         ASSERT_TRUE(saved) << saved.error().format();
         auto reference = ssog ? load_ssog(lower) : load_sog(lower);
         ASSERT_TRUE(reference) << reference.error().format();
+        size_t copy_index = 0;
         for (const auto suffix : ssog ? std::vector<std::string>{".ssog", ".SSOG", ".SsOg"}
                                       : std::vector<std::string>{".sog", ".SOG", ".SoG"}) {
             SCOPED_TRACE(suffix);
-            const auto path = dir.path / ("copy" + suffix);
+            const auto path = dir.path / ("copy" + std::to_string(copy_index++) + suffix);
             fs::copy_file(lower, path);
             if (ssog)
                 EXPECT_TRUE(is_ssog_path(path));

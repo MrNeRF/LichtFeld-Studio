@@ -785,8 +785,9 @@ namespace lfs::app {
                                  "apriltag.scan", LOC("runtime.apriltag_scan"), "calibration", "GUI manager is not initialized"));
             }
             if (job_id == "camera.selection") {
-                return gui ? std::expected<json, std::string>(camera_selection_job_json(*gui))
-                           : std::expected<json, std::string>(unavailable_job_json("camera.selection", LOC("scene.camera_selection"), "selection", "GUI manager is not initialized"));
+                if (gui)
+                    return camera_selection_job_json(*gui);
+                return unavailable_job_json("camera.selection", LOC("scene.camera_selection"), "selection", "GUI manager is not initialized");
             }
             if (job_id == "editor.python") {
                 return editor_job_json(include_output, output_max_chars, output_tail);

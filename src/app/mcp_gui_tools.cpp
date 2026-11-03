@@ -2512,7 +2512,7 @@ namespace lfs::app {
                         .percentage = args.value("percentage", 25.0F), .every_n = args.value("every_n", 2),
                         .overlap = args.value("overlap", 65.0F), .coverage = args.value("coverage", 40.0F),
                         .camera_group_id = group_id, .cropbox_id = cropbox_id});
-                    if (!handle) return json{{"error", handle.error()}};
+                    if (!handle) return json{{"error", std::string(handle.error().user_message())}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
                 });
             });

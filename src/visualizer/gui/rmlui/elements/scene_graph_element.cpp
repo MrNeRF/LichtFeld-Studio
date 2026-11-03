@@ -3478,11 +3478,12 @@ namespace lfs::vis::gui {
                 toggleChildrenTraining(group_id, kind == "enable_all_train");
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
             core::NodeId group_id = core::NULL_NODE;
-            if (auto* gui = services().guiOrNull(); parseNodeId(parts[1], group_id)) {
+            if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {
                 const auto operation = kind == "enable_group_train" ? AsyncTaskManager::CameraSelectionOperation::EnableAll
                                      : kind == "disable_group_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
                                                                           : AsyncTaskManager::CameraSelectionOperation::Invert;
-                static_cast<void>(gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}));
+                if (const auto result = gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}); !result)
+                    gui->enqueueToast({.title = tr("scene.camera_selection"), .message = std::string(result.error().user_message())});
             }
         } else if (kind == "camera_selection" && parts.size() >= 3) {
             core::NodeId group_id = core::NULL_NODE;

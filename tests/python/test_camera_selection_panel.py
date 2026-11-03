@@ -62,6 +62,7 @@ def test_camera_selection_uses_viewer_thread_and_safe_crop_projection():
     root = Path(__file__).parents[2]
     module = (root / "src/python/lfs/module.cpp").read_text(encoding="utf-8")
     tasks = (root / "src/visualizer/gui/async_task_manager.cpp").read_text(encoding="utf-8")
+    algorithms = (root / "src/visualizer/gui/camera_selection_algorithms.hpp").read_text(encoding="utf-8")
     scene_graph = (root / "src/visualizer/gui/rmlui/elements/scene_graph_element.cpp").read_text(encoding="utf-8")
     interaction = (root / "src/visualizer/rendering/camera_interaction_service.cpp").read_text(encoding="utf-8")
 
@@ -69,8 +70,8 @@ def test_camera_selection_uses_viewer_thread_and_safe_crop_projection():
     assert '"python.camera_selection_status"' in module
     assert '"python.camera_selection_cancel"' in module
     assert "post_guarded_and_wait" in module
-    assert "camera.center_x" in tasks and "camera.center_y" in tasks
-    assert "camera.world_to_camera" in tasks
+    assert "camera.center_x" in algorithms and "camera.center_y" in algorithms
+    assert "camera.world_to_camera" in algorithms
     assert "camera_selection_pinhole_required" in tasks
     assert "camera_selection_stale" in tasks
     assert "same_cropbox_points" in tasks

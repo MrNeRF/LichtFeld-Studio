@@ -2522,25 +2522,27 @@ NB_MODULE(lichtfeld, m) {
             const Task::CameraSelectionOptions options{.operation = type, .percentage = static_cast<float>(percentage), .every_n = every_n,
                                                         .overlap = static_cast<float>(overlap), .coverage = static_cast<float>(coverage),
                                                         .camera_group_id = static_cast<lfs::core::NodeId>(camera_group_id), .cropbox_id = static_cast<lfs::core::NodeId>(cropbox_id)};
-            const auto start = [&]() -> std::expected<lfs::vis::JobHandle, std::string> {
+            const auto start = [&]() -> std::expected<lfs::vis::JobHandle, lfs::Error> {
                 auto* gui = lfs::python::get_gui_manager();
                 if (!gui)
-                    return std::unexpected("GUI is unavailable");
+                    return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::Python,
+                        .user_message = "GUI is unavailable", .detection = LFS_SOURCE_SITE_CURRENT()}));
                 return gui->asyncTasks().startCameraSelection(options);
             };
-            std::expected<lfs::vis::JobHandle, std::string> handle = std::unexpected("GUI is unavailable");
+            std::optional<std::expected<lfs::vis::JobHandle, lfs::Error>> handle;
             if (viewer->isOnViewerThread()) handle = start();
             else {
                 nb::gil_scoped_release release;
                 const lfs::core::TaskContext context{.name = "python.camera_selection_start", .domain = lfs::ErrorDomain::Python,
                                                       .operation_id = lfs::OperationId::generate(), .site = LFS_SOURCE_SITE_CURRENT()};
-                auto result = lfs::vis::post_guarded_and_wait<std::expected<lfs::vis::JobHandle, std::string>>(*viewer, context, start, python_viewer_shutdown_error());
+                auto result = lfs::vis::post_guarded_and_wait<std::expected<lfs::vis::JobHandle, lfs::Error>>(*viewer, context, start, python_viewer_shutdown_error());
                 if (!result) throw std::runtime_error(lfs::format_for_developer(result.error()));
                 handle = *result;
             }
-            if (!handle) throw std::runtime_error(handle.error());
+            if (!*handle) throw std::runtime_error(lfs::format_for_developer(handle->error()));
             nb::dict result;
-            result["job_id"] = "camera.selection"; result["handle"] = handle->id; result["operation"] = operation;
+            result["job_id"] = "camera.selection"; result["handle"] = handle->value().id; result["operation"] = operation;
             return result;
         }, nb::arg("operation"), nb::arg("camera_group_id"), nb::arg("percentage") = 25.0, nb::arg("every_n") = 2,
         nb::arg("overlap") = 65.0, nb::arg("coverage") = 40.0, nb::arg("cropbox_id") = 0,
