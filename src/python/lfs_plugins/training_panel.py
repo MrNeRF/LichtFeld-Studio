@@ -3025,7 +3025,8 @@ class TrainingPanel(Panel):
             if params and params.has_params():
                 command.extend(["--strategy", params.strategy,
                                 "--iter", str(params.iterations),
-                                "--sh-degree", str(params.sh_degree)])
+                                "--sh-degree", str(params.sh_degree),
+                                "--max-cap", str(params.max_cap)])
             os.makedirs(output, exist_ok=True)
             self._auto_tile_output = output
             with open(os.path.join(output, "auto_tiles.log"), "w", encoding="utf-8") as log:
