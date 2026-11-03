@@ -914,6 +914,7 @@
     "camera_selection_no_scene": "Geen scène beschikbaar.",
     "camera_selection_cropbox_required": "Kies een geldig snijvak.",
     "camera_selection_group_required": "Kies een geldige cameragroep.",
+    "camera_selection_already_running": "Cameraselectie wordt al uitgevoerd.",
     "camera_selection_pinhole_required": "Zichtbaarheid van het snijvak vereist pinholecamera's.",
     "camera_selection_stale": "De scène is gewijzigd tijdens de cameraselectie.",
     "camera_selection_progress": "Selectievoortgang",

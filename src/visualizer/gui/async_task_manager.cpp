@@ -4485,13 +4485,13 @@ namespace lfs::vis::gui {
     std::expected<JobHandle, std::string> AsyncTaskManager::startCameraSelection(const CameraSelectionOptions options) {
         if (camera_selection_state_.thread && camera_selection_state_.thread->joinable()) {
             if (const auto prior = cameraSelectionStatus(); prior && prior->running())
-                return std::unexpected("Camera selection is already running");
+                return std::unexpected(LOC("scene.camera_selection_already_running"));
             camera_selection_state_.thread->join();
             camera_selection_state_.thread.reset();
         }
         auto* const manager = viewer_->getSceneManager();
         if (!manager || !viewer_->project_lifecycle_)
-            return std::unexpected("Scene manager is not initialized");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED));
         auto& scene = manager->getScene();
         const auto* group = scene.getNodeById(options.camera_group_id);
         if (!group || group->type != core::NodeType::CAMERA_GROUP)
@@ -4538,13 +4538,13 @@ namespace lfs::vis::gui {
         const auto* cropbox = scene.getNodeById(options.cropbox_id);
         if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
             if (!cropbox || !cropbox->cropbox)
-                return std::unexpected("A valid crop box is required");
+                return std::unexpected(LOC("scene.camera_selection_cropbox_required"));
             if (std::ranges::any_of(cameras, [](const auto& camera) {
                     return camera.model != core::CameraModelType::PINHOLE;
                 })) {
                 if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
                               LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
-                    return std::unexpected("Camera selection is already running");
+                    return std::unexpected(LOC("scene.camera_selection_already_running"));
                 jobs_.failed(camera_selection_state_.job,
                              LOC("scene.camera_selection_pinhole_required"),
                              LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS));
@@ -4557,7 +4557,7 @@ namespace lfs::vis::gui {
         }
         if (!beginJob(camera_selection_state_.job, JobType::CameraSelection,
                       LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS)))
-            return std::unexpected("Camera selection is already running");
+            return std::unexpected(LOC("scene.camera_selection_already_running"));
         publishCameraSelectionState();
         camera_selection_state_.completion.store(CameraSelectionState::Completion::Idle, std::memory_order_release);
         {

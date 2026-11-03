@@ -914,6 +914,7 @@
     "camera_selection_no_scene": "Aucune scène disponible.",
     "camera_selection_cropbox_required": "Choisissez une boîte de recadrage valide.",
     "camera_selection_group_required": "Choisissez un groupe de caméras valide.",
+    "camera_selection_already_running": "La sélection de caméras est déjà en cours.",
     "camera_selection_pinhole_required": "La visibilité de la boîte de recadrage nécessite des caméras à sténopé.",
     "camera_selection_stale": "La scène a changé pendant la sélection des caméras.",
     "camera_selection_progress": "Progression de la sélection",

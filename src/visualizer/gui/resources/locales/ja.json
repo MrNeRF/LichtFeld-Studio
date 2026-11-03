@@ -914,6 +914,7 @@
     "camera_selection_no_scene": "利用可能なシーンはありません。",
     "camera_selection_cropbox_required": "有効なクロップボックスを選択してください。",
     "camera_selection_group_required": "有効なカメラグループを選択してください。",
+    "camera_selection_already_running": "カメラ選択はすでに実行中です。",
     "camera_selection_pinhole_required": "クロップボックスの可視性にはピンホールカメラが必要です。",
     "camera_selection_stale": "カメラ選択中にシーンが変更されました。",
     "camera_selection_progress": "選択の進行状況",

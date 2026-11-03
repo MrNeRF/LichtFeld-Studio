@@ -914,6 +914,7 @@
     "camera_selection_no_scene": "사용 가능한 장면이 없습니다.",
     "camera_selection_cropbox_required": "유효한 크롭 상자를 선택하세요.",
     "camera_selection_group_required": "유효한 카메라 그룹을 선택하세요.",
+    "camera_selection_already_running": "카메라 선택이 이미 실행 중입니다.",
     "camera_selection_pinhole_required": "크롭 상자 가시성에는 핀홀 카메라가 필요합니다.",
     "camera_selection_stale": "카메라 선택 중 장면이 변경되었습니다.",
     "camera_selection_progress": "선택 진행률",

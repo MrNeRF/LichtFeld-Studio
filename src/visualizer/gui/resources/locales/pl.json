@@ -914,6 +914,7 @@
     "camera_selection_no_scene": "Brak dostępnej sceny.",
     "camera_selection_cropbox_required": "Wybierz prawidłowe pole kadrowania.",
     "camera_selection_group_required": "Wybierz prawidłową grupę kamer.",
+    "camera_selection_already_running": "Wybór kamer jest już uruchomiony.",
     "camera_selection_pinhole_required": "Widoczność pola kadrowania wymaga kamer otworkowych.",
     "camera_selection_stale": "Scena zmieniła się podczas wyboru kamer.",
     "camera_selection_progress": "Postęp wyboru",
