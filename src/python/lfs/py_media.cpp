@@ -150,6 +150,14 @@ namespace lfs::python {
                 const auto summary = summarizeImageMetadata(*catalog);
                 if (!summary) throw Exception(summary.error());
                 return json_detail::dump(json_detail::sourceMetadataResult(*catalog, *summary)); }, nb::arg("path"), "Read the original image metadata catalog and interpreted summary as JSON, using the source-metadata CLI schema and default limits. Collection and interpretation run with the GIL released; binary values are hex and partial results retain their status.")
+            .def_static("source_sidecar_metadata_json", [](const std::filesystem::path& image, const std::filesystem::path& sidecar) {
+                nb::gil_scoped_release release;
+                const auto result = MediaIngest::sourceSidecarMetadata(image, sidecar);
+                if (!result) throw Exception(result.error());
+                const auto summary = summarizeImageMetadata(result->catalog);
+                if (!summary) throw Exception(summary.error());
+                try { return json_detail::sourceSidecarMetadataJson(*result, *summary); }
+                catch (const std::bad_alloc&) { throw Exception(make_error({.code = ErrorCode::ResourceExhausted, .domain = ErrorDomain::IO, .detail = "Sidecar metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()})); } }, nb::arg("image"), nb::arg("sidecar"), "Read an explicitly named image/XMP sidecar pair as a separate metadata observation. No discovery, pixel validation or embedded-metadata merge; uses the shared bounded XMP interpreter.")
             .def_static("source_exif_json", [](const std::filesystem::path& path) {
                 nb::gil_scoped_release release;
                 const auto result = MediaIngest::sourceExif(path);

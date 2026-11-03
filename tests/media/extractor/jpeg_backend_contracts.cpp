@@ -64,6 +64,10 @@ nlohmann::json runJpegBackendContracts(const nlohmann::json& request) {
     files.files.filename_pattern = "frame_%03d";
     files.files.format = media::FrameFileFormat::JPEG;
     files.files.embed_source_metadata = mode == "metadata-bad-app0";
+    files.files.image_output.overwrite = request.value("overwrite", true);
+    files.write_source_metadata_sidecars = request.value("write_sidecars", false);
+    if (request.value("cancel_after_cleanup", false))
+        input.cancelled = [&] { return !std::filesystem::exists(files.files.output_directory / "frame_001.jpg.xmp"); };
     media::MemoryFrameSink memory;
     auto result = mode == "memory" ? media::MediaIngest::extract(input, memory) : media::MediaIngest::extractFiles(input, files);
     std::uint64_t accepted = result ? result->frames_accepted : 0;

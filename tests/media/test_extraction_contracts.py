@@ -371,6 +371,56 @@ class ExtractionContracts(unittest.TestCase):
                 if expected and mode != "memory":
                     self.assertEqual({p.name:p.read_bytes() for p in written}, {p.name:p.read_bytes() for p in files.glob("*.jpg")})
 
+    def test_source_metadata_sidecars_optional_jpeg_backend_replacement(self):
+        reference, files = self.extract(format="jpg")
+        self.assertTrue(reference["success"], reference["error"])
+        encoded = next(files.glob("*.jpg"))
+        for hardware in (False, True):
+            for scenario in ("replace", "no-overwrite", "cancel", "foreign"):
+                with self.subTest(hardware=hardware, scenario=scenario):
+                    work = Path(tempfile.mkdtemp(dir=self.root))
+                    output = work / "output"
+                    request = {"operation": "jpeg-backend", "input": str(self.corpus / "cfr-asymmetric.nut"),
+                               "output": str(output), "backend_mode": "normal", "allow_hardware": False,
+                               "encoded_reference": str(encoded), "write_sidecars": True}
+                    path = work / "request.json"
+                    def invoke():
+                        path.write_text(json.dumps(request), encoding="utf-8")
+                        result = subprocess.run([str(RUNNER), str(path)], capture_output=True, timeout=30)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        return json.loads(result.stdout)
+                    seeded = invoke()
+                    self.assertTrue(seeded["success"], seeded)
+                    images = sorted(output.glob("*.jpg"))
+                    self.assertEqual(len(images), 4)
+                    sidecars = [Path(str(p) + ".xmp") for p in images]
+                    self.assertTrue(all(p.is_file() for p in sidecars))
+                    unrelated = output / "other.jpg.xmp"
+                    stem = output / "frame_001.xmp"
+                    packet = sidecars[0].read_bytes()
+                    unrelated.write_bytes(packet)
+                    stem.write_bytes(packet)
+                    if scenario == "foreign":
+                        sidecars[0].write_bytes(b"external XMP")
+                    before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in images + sidecars}
+                    request.update(write_sidecars=False, allow_hardware=hardware,
+                                   overwrite=scenario != "no-overwrite", cancel_after_cleanup=scenario == "cancel")
+                    actual = invoke()
+                    self.assertEqual(actual["factory_calls"], int(hardware), actual)
+                    self.assertEqual(actual["success"], scenario in ("replace", "foreign"), actual)
+                    self.assertEqual(actual["accepted"], 0 if scenario == "no-overwrite" else 1 if scenario == "cancel" else 4, actual)
+                    self.assertEqual(unrelated.read_bytes(), packet)
+                    self.assertEqual(stem.read_bytes(), packet)
+                    for index, (image, sidecar) in enumerate(zip(images, sidecars)):
+                        retained = scenario == "no-overwrite" or scenario == "cancel" and index > 0
+                        if retained:
+                            self.assertEqual((image.read_bytes(), image.stat().st_mtime_ns), before[image.name])
+                            self.assertEqual((sidecar.read_bytes(), sidecar.stat().st_mtime_ns), before[sidecar.name])
+                        elif scenario == "foreign" and index == 0:
+                            self.assertEqual(sidecar.read_bytes(), b"external XMP")
+                        else:
+                            self.assertFalse(sidecar.exists())
+
     def test_memory_sink_matches_file_transform_selection(self):
         for options in ({"rotation":90}, {"scale":0.5}, {"width":40,"height":24},
                         {"start":0.1,"end":0.3}, {"mode":"fps","fps":5},

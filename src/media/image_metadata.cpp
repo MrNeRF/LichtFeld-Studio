@@ -4,6 +4,7 @@
 #include "core/image_codecs.hpp"
 #include "media_json.hpp"
 #include "xmp_metadata.hpp"
+#include "xmp_sidecar_io.hpp"
 #include <algorithm>
 #include <limits>
 
@@ -99,6 +100,57 @@ namespace lfs::media::detail {
             return out;
         }
     } // namespace
+    PreviousSourceSidecar PreviousSourceSidecar::inspect(const std::filesystem::path& image) {
+        PreviousSourceSidecar result;
+        auto path = image;
+        path += sidecar_metadata_suffix;
+        std::error_code error;
+        if (!core::native_fs::is_regular_file(core::native_fs::symlink_status(path, error)) || error)
+            return result;
+        SidecarFile file;
+        const auto size = file.open(path, max_packet_bytes);
+        if (!size)
+            return result;
+        static const std::string signature = [] {
+            std::string prefix(packet_start);
+            prefix += tree_start;
+            property(prefix, "MetadataPolicy", sidecar_metadata_policy);
+            return prefix;
+        }();
+        if (*size < signature.size())
+            return result;
+        std::string prefix(signature.size(), '\0');
+        std::size_t offset = 0;
+        while (offset < prefix.size()) {
+            const auto read = file.read({reinterpret_cast<std::uint8_t*>(prefix.data()) + offset, prefix.size() - offset});
+            if (!read || !*read)
+                return result;
+            offset += *read;
+        }
+        if (prefix != signature || !file.verifyUnchanged())
+            return result;
+        result.path_ = std::move(path);
+        result.observation_ = std::make_shared<const SidecarObservation>(file.observation());
+        return result;
+    }
+    SinkResult PreviousSourceSidecar::removeUnchanged() {
+        if (!observation_)
+            return {};
+        // Replacement, removal or edits by another writer relinquish our claim.
+        bool unchanged = false;
+        {
+            SidecarFile current;
+            unchanged = current.open(path_, max_packet_bytes, true) && observation_->sameVersion(current.observation());
+        }
+        if (unchanged) {
+            std::error_code error;
+            core::native_fs::remove(path_, error);
+            if (error)
+                return SinkResult::failure(sidecarIoError(error, "Remove superseded source XMP", path_));
+        }
+        observation_.reset();
+        return {};
+    }
     std::string_view embeddedMetadataPolicy(FrameFileFormat format) {
         return format == FrameFileFormat::JPEG     ? std::string_view(jpeg_metadata_policy)
                : format == FrameFileFormat::PNG    ? std::string_view(png_metadata_policy)

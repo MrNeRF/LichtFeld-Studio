@@ -70,7 +70,7 @@ namespace {
     int run(const std::vector<std::string>& args) {
         try {
             if (args.size() == 2 && (args[1] == "--help" || args[1] == "-h")) {
-                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
+                std::cout << "media-ingest version\nmedia-ingest capabilities\nmedia-ingest source-exif INPUT\nmedia-ingest source-metadata INPUT\nmedia-ingest source-container-metadata INPUT\nmedia-ingest source-sidecar-metadata IMAGE SIDECAR\nmedia-ingest probe INPUT [--headers-only] [--timeout-ms N]\n"
                              "media-ingest extract INPUT --output DIRECTORY [--fps N | --interval N]\n"
                              "  [--start SECONDS] [--end SECONDS] [--rotate 0|90|180|270]\n"
                              "  [--scale N | --size WIDTH HEIGHT] [--format png|jpeg|exr|tiff16|jxl|avif] [--quality N]\n"
@@ -112,6 +112,25 @@ namespace {
                     return failed(summary.error());
                 std::cout << json_detail::dump(json_detail::sourceMetadataResult(*result, *summary)) << '\n';
                 return 0;
+            }
+            if (args.size() == 4 && args[1] == "source-sidecar-metadata") {
+                const auto result = MediaIngest::sourceSidecarMetadata(lfs::core::utf8_to_path(args[2]), lfs::core::utf8_to_path(args[3]));
+                if (!result)
+                    return failed(result.error());
+                const auto summary = summarizeImageMetadata(result->catalog);
+                if (!summary)
+                    return failed(summary.error());
+                try {
+                    if (!json_detail::writeSourceSidecarMetadataJson(std::cout, *result, *summary))
+                        return failed(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::IO, .detail = "Write sidecar metadata JSON failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    std::cout << '\n';
+                    std::cout.flush();
+                    if (!std::cout)
+                        return failed(lfs::make_error({.code = lfs::ErrorCode::Unavailable, .domain = lfs::ErrorDomain::IO, .detail = "Flush sidecar metadata JSON failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                    return 0;
+                } catch (const std::bad_alloc&) {
+                    return failed(lfs::make_error({.code = lfs::ErrorCode::ResourceExhausted, .domain = lfs::ErrorDomain::IO, .detail = "Sidecar metadata JSON allocation failed", .detection = LFS_SOURCE_SITE_CURRENT()}));
+                }
             }
             if (args.size() == 3 && args[1] == "source-exif") {
                 const auto result = MediaIngest::sourceExif(lfs::core::utf8_to_path(args[2]));

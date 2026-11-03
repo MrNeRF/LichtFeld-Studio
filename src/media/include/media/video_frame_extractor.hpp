@@ -150,7 +150,7 @@ namespace lfs::io {
             int avif_bit_depth = 8;
             bool preserve_source_metadata = false;
             bool embed_source_metadata = false;
-            // Publication policy for embedded JPEG/PNG metadata; legacy field name retained.
+            // Publication policy for JPEG/PNG images; legacy field name retained.
             core::AtomicFileOptions jpeg_metadata_output{.overwrite = true, .durable = false, .create_directories = false};
             // Appended: MediaIngest file sinks own publication and optional recovery.
             bool write_source_metadata_sidecars = false;

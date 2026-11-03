@@ -3193,7 +3193,7 @@ namespace lfs::core::image_codecs {
             if (block.heif_item && (!block.heif_item->image_item || !block.heif_item->metadata_item ||
                                     block.inflated || block.compressed || block.payload_offset || block.crc_valid))
                 return std::nullopt;
-            if ((block.jxl_box || block.envelope == XmpEnvelope::ExrString) &&
+            if ((block.jxl_box || block.envelope == XmpEnvelope::ExrString || block.envelope == XmpEnvelope::SidecarFile) &&
                 (block.inflated || block.compressed || block.payload_offset || block.crc_valid))
                 return std::nullopt;
             return std::span<const uint8_t>(block.bytes);

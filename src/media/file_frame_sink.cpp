@@ -79,11 +79,11 @@ namespace lfs::media {
                 if (options_.preserve_metadata && path.filename() == "extraction_metadata.json")
                     continue;
                 existing_frames_.push_back({path, lfs::core::native_fs::last_write_time(path), lfs::core::native_fs::file_size(path)});
-                if (options_.write_source_metadata_sidecars && path.filename() != "extraction_metadata.json") {
+                if (path.filename() != "extraction_metadata.json" && detail::PreviousSourceSidecar::inspect(path)) {
                     auto sidecar = path;
                     sidecar += detail::sidecar_metadata_suffix;
                     if (lfs::core::native_fs::is_regular_file(lfs::core::native_fs::symlink_status(sidecar)))
-                        existing_frames_.push_back({sidecar, lfs::core::native_fs::last_write_time(sidecar), lfs::core::native_fs::file_size(sidecar)});
+                        existing_frames_.push_back({sidecar, lfs::core::native_fs::last_write_time(sidecar), lfs::core::native_fs::file_size(sidecar), true});
                 }
             }
         }
@@ -222,8 +222,12 @@ namespace lfs::media {
                                                              options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
             return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
         };
+        auto previous_sidecar = options_.write_source_metadata_sidecars ? detail::PreviousSourceSidecar{}
+                                                                        : detail::PreviousSourceSidecar::inspect(filename);
         if (auto written = write_image(); !written)
             return written;
+        if (auto removed = previous_sidecar.removeUnchanged(); !removed)
+            return removed;
         if (sidecar_metadata_) {
             auto sidecar = filename;
             sidecar += detail::sidecar_metadata_suffix;
@@ -241,7 +245,16 @@ namespace lfs::media {
         embedded_metadata_.reset();
         sidecar_metadata_.reset();
         source_metadata_.reset();
+        std::optional<std::filesystem::path> removed_image;
         for (const auto& old : existing_frames_) {
+            if (!old.sidecar)
+                removed_image.reset();
+            else {
+                auto image = old.path;
+                image.replace_extension();
+                if (!removed_image || *removed_image != image)
+                    continue;
+            }
             if (filenames_.contains(old.path))
                 continue;
             std::error_code error;
@@ -255,7 +268,15 @@ namespace lfs::media {
             const auto size = lfs::core::native_fs::file_size(old.path, error);
             if (error || size != old.size)
                 continue;
-            lfs::core::native_fs::remove(old.path, error);
+            if (old.sidecar) {
+                auto image = old.path;
+                image.replace_extension();
+                if (auto removed = detail::PreviousSourceSidecar::inspect(image).removeUnchanged(); !removed)
+                    return removed;
+                continue;
+            }
+            if (lfs::core::native_fs::remove(old.path, error))
+                removed_image = old.path;
             if (error)
                 return sinkError(ErrorCode::Unavailable, "Remove obsolete frame failed: " + core::path_to_utf8(old.path) + ": " + error.message());
         }

@@ -804,6 +804,34 @@ Each file is atomic, but the pair is not: cancellation or an XMP write failure
 can leave a published image without its sidecar. A later plain run follows the
 usual overwrite policy rather than verifying or adopting previous output.
 
+When a plain run writes an image with sidecars disabled, it removes that image's
+previous LichtFeld sidecar after successful image publication. Recognition is
+limited to the canonical packet prefix and `image-static-source-xmp-v1` policy
+written by this exporter, in the exact full-image-filename-plus-`.xmp` companion.
+The bounded prefix check uses the existing native reader and does not parse
+foreign XML. Other names, foreign/unreadable/nonregular companions and symlinks
+are preserved. Identity, size and timestamps are compared with the pre-write
+observation; a companion changed or replaced during image output is preserved.
+Edits made before the run still count as generated output when the canonical
+prefix and policy remain intact; a later sidecars-disabled replacement can
+remove that edited companion. Preserve manual edits under a different filename
+or outside the output directory.
+No handle is retained across the image write, so other writers remain able to
+replace the companion on Windows. These checks do not lock a hostile directory
+or establish an atomic image/XMP transaction.
+
+An image write failure or cancellation before publication keeps its companion.
+After image publication, cleanup happens before the next cancellation check;
+a later abort therefore does not leave the superseded generated XMP attached.
+Failure to remove an unchanged generated companion is reported as an error.
+Requested stale-image cleanup also includes recognized generated companions
+with sidecars disabled, only after successful removal of their obsolete image;
+it preserves companions changed since the initial snapshot and foreign XMP.
+The direct JPEG batch path uses the same companion checks and existing atomic
+writer without disabling its encoder or changing the encoded byte stream.
+Manifest generation follows the existing metadata options; companion cleanup
+does not implicitly enable manifest writing.
+
 Normal sidecar extraction uses the CPU image writer, including JPEG encoding;
 the direct batched GPU JPEG writer bypasses this sink and is disabled for this
 option. Hardware video decoding remains independently selectable. Resume uses
@@ -832,6 +860,74 @@ Resume retains its existing restriction against stale-frame removal. Separate
 file publication does not establish power-loss durability.
 
 This consumer is file extraction through MediaIngest (C++, Python and CLI).
-External XMP collection and automatic sidecar discovery remain separate readers;
-export does not enable them. Generic rendered image sequences continue to use
+Export does not automatically read external XMP or discover companions. Explicit
+sidecar collection is described below. Generic rendered image sequences continue to use
 their existing APIs.
+
+
+### Explicit XMP sidecar collection
+
+`MediaIngest::sourceSidecarMetadata(image, sidecar)` reads an explicitly named
+external XMP file into a separate `SourceMetadataCatalog`. The Python entry point
+is `MediaIngest.source_sidecar_metadata_json(image, sidecar)`; the CLI is:
+
+```sh
+media-ingest source-sidecar-metadata photo.jpg photo.jpg.xmp
+```
+
+The two paths must identify different regular, non-symlink files in the same
+directory. The sidecar name must be either the complete image filename plus
+`.xmp` or its stem plus `.xmp`; the `.xmp` suffix itself accepts ASCII case
+variants. Other filename characters must match exactly. Both forms require an
+explicit image argument. An extensionless image named `photo` can use
+`photo.xmp`; `photo.xmp` is not automatically assigned to every
+image format sharing that stem. Directory aliases are compared through native
+filesystem identity. This is a filename association, not pixel validation,
+a content hash or proof that the external metadata describes that image.
+
+The result carries the image locator, the naming convention and an immutable
+catalog whose source locator identifies the sidecar. JSON uses the existing
+metadata/summary schema, adds `association` with `verification` set to
+`explicit_filenames`, and identifies the carrier as `xmp_sidecar`. Originals and
+locator bytes remain available as hex. The image is not decoded or modified;
+embedded metadata collection remains an independent operation. Nothing is
+silently merged, preferred or overwritten when external and embedded values
+conflict. Training, dataset discovery and ordinary image loading do not search
+for sidecars through this API.
+
+Collection retains at most 32 MiB of original bytes, matching the export packet
+ceiling; C++ callers can request a smaller positive byte limit and bound the
+reference index separately. Missing/unreadable files and collection-limit
+failures return structured errors. The identities of the opened image and sidecar are compared, rather than
+rechecking their pathnames for the same-file test. The image handle requests
+metadata access only; its pixel bytes are not read. The opened sidecar object is
+checked before allocation; POSIX reads use nonblocking, no-follow descriptors and compare size
+and modification/change timestamps after reading. The Windows sidecar handle opens a disk file without following a final reparse
+point and excludes concurrent writers and replacement while it is open. The opened sidecar size and modification
+time are checked after the read on all three supported platforms. These checks
+do not authenticate either
+file or provide a filesystem snapshot against arbitrary concurrent actors.
+
+XML interpretation reuses the existing bounded Expat implementation. Its
+separate 1 MiB packet, property and text budgets remain unchanged. Collection
+can succeed while interpretation reports malformed, unsupported or limited:
+original bytes are still retained, including UTF-16 XML or an invalid packet.
+External entities and DTDs are not resolved. Unknown properties, including the
+exported LichtFeld source-catalog property, stay in the retained packet; reading
+a sidecar does not recursively import that property's serialized catalog.
+
+Sidecar scope classification is shared with the generic catalog serializer,
+so it does not depend on a CLI/Python wrapper correction. JSON formatting and
+escaping use the existing metadata serializer, and CLI output errors are
+reported instead of accepted as successful output.
+
+Explicit sidecar association pins the opened image identity without decoding its
+pixels. On macOS the metadata-only `O_EVTONLY` open still requires read permission
+on the image; Linux uses `O_PATH` and does not require image read permission.
+Reading the sidecar itself requires read permission on both platforms. A denied
+open reports the actual file path and native error code.
+
+Sidecar JSON uses the shared metadata DOM serializer, including hexadecimal
+original packet and payload fields. The 32 MiB input ceiling is not a process
+memory ceiling: hex expansion, DOM values and the serialized result require
+additional memory, as with the existing source-metadata command.

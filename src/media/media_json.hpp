@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>
-#include <span>
+#include <ostream>
 #include <type_traits>
 #include <vector>
 namespace lfs::media::json_detail {
@@ -150,7 +150,12 @@ namespace lfs::media::json_detail {
         case MetadataIndexStatus::Complete: status = "complete"; break;
         case MetadataIndexStatus::Limited: status = "limited"; break;
         }
-        json result{{"scope", catalog.container() ? "container_stream" : "static_image_exif"}, {"index_status", status}, {"records", json::array()}};
+        const auto& xmp_blocks = catalog.imageXmp().blocks;
+        const bool sidecar = !xmp_blocks.empty() && std::all_of(xmp_blocks.begin(), xmp_blocks.end(), [](const auto& block) { return block.envelope == core::image_codecs::XmpEnvelope::SidecarFile; });
+        json result{{"scope", catalog.container() ? "container_stream" : sidecar ? "static_xmp_sidecar"
+                                                                                 : "static_image_exif"},
+                    {"index_status", status},
+                    {"records", json::array()}};
         if (!catalog.container()) {
             result["image_exif"] = sourceExif(catalog.imageExif());
             const auto& xmp = catalog.imageXmp();
@@ -164,6 +169,7 @@ namespace lfs::media::json_detail {
                                                                                            : block.envelope == XmpEnvelope::TiffTag              ? "tiff_tag700"
                                                                                            : block.envelope == XmpEnvelope::HeifMime             ? "heif_mime"
                                                                                            : block.envelope == XmpEnvelope::ExrString            ? "exr_string"
+                                                                                           : block.envelope == XmpEnvelope::SidecarFile          ? "xmp_sidecar"
                                                                                                                                                  : "jxl_xml";
                 json payload = nullptr;
                 if (const auto view = catalog.xmpPayloadBytes({index}))
@@ -350,6 +356,24 @@ namespace lfs::media::json_detail {
     }
     inline json sourceMetadataResult(const SourceMetadataCatalog& catalog, const MetadataSummary& summary) {
         return {{"schema_version", 1}, {"success", true}, {"metadata", sourceMetadata(catalog)}, {"summary", metadataSummary(summary)}};
+    }
+    inline json sourceSidecarMetadataResult(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        auto result = sourceMetadataResult(sidecar.catalog, summary);
+        result["association"] = {{"image", sidecar.image.display},
+                                 {"image_bytes", hexBytes(sidecar.image.native_bytes)},
+                                 {"image_encoding", sidecar.image.encoding == MetadataPathEncoding::Utf16LE ? "utf16le" : "posix_bytes"},
+                                 {"naming", sidecar.naming == XmpSidecarNaming::ImageFilename ? "image_filename_plus_xmp" : "image_stem_plus_xmp"},
+                                 {"verification", "explicit_filenames"}};
+        return result;
+    }
+
+    inline std::string sourceSidecarMetadataJson(const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        return dump(sourceSidecarMetadataResult(sidecar, summary));
+    }
+    inline bool writeSourceSidecarMetadataJson(std::ostream& stream, const SourceSidecarMetadata& sidecar, const MetadataSummary& summary) {
+        const auto output = sourceSidecarMetadataJson(sidecar, summary);
+        stream.write(output.data(), static_cast<std::streamsize>(output.size()));
+        return static_cast<bool>(stream);
     }
     inline void appendXmlText(std::string& output, std::string_view text) {
         for (const auto c : text) {
