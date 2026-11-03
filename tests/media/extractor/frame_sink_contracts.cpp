@@ -282,6 +282,53 @@ int runFrameSinkUnitContracts() {
         require(!std::filesystem::exists(directory / "frame_6.png") && std::filesystem::exists(directory / "frame_6.png.xmp"),
                 "stale image cleanup preserves a foreign companion");
         require(std::filesystem::exists(directory / "frame_1.png.xmp") && std::filesystem::exists(directory / "photo.png.xmp"), "current and unrelated companions retained");
+        {
+            auto source_options = seed_options;
+            source_options.output_directory = directory / "source-sidecar-failure";
+            source_options.image_output.overwrite = true;
+            const auto image = source_options.output_directory / "frame_1.png";
+            const auto companion = source_options.output_directory / "frame_1.png.xmp";
+            const auto read = [](const std::filesystem::path& path) {
+                std::ifstream input(path, std::ios::binary);
+                return std::string(std::istreambuf_iterator<char>(input), {});
+            };
+            FileFrameSink seeded(source_options);
+            require(seeded.begin(session).has_value() && seeded.write(file_view).has_value() && seeded.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                    "source replacement failure seed writes a pair");
+            const auto original = read(image);
+            std::vector<uint8_t> changed_pixels(6, 220);
+            FrameView changed_frame{{1, 2, 3, FramePixelFormat::RGB8}, file_view.info, changed_pixels};
+            source_options.image_output.cancelled = [&] { return read(image) != original; };
+            FileFrameSink interrupted_source(source_options);
+            require(interrupted_source.begin(session).has_value(), "source replacement failure begins");
+            const auto interrupted = interrupted_source.write(changed_frame);
+            require(!interrupted && interrupted.error().code() == lfs::ErrorCode::Cancelled && read(image) != original && !std::filesystem::exists(companion),
+                    "failed source sidecar replacement removes only its superseded generated packet");
+            interrupted_source.abort({SinkOutcome::Cancelled, 0, {}});
+#ifdef _WIN32
+            source_options.image_output.cancelled = {};
+            FileFrameSink restored(source_options);
+            require(restored.begin(session).has_value() && restored.write(file_view).has_value() && restored.complete({SinkOutcome::Completed, 1, {}}).has_value(),
+                    "source cleanup failure seed restores its pair");
+            const auto before_locked = read(image);
+            std::ifstream locked;
+            source_options.image_output.cancelled = [&] {
+                if (read(image) == before_locked)
+                    return false;
+                if (!locked.is_open())
+                    locked.open(companion, std::ios::binary);
+                return true;
+            };
+            FileFrameSink blocked_cleanup(source_options);
+            require(blocked_cleanup.begin(session).has_value(), "source cleanup failure begins");
+            const auto blocked = blocked_cleanup.write(changed_frame);
+            require(locked.is_open(), "source companion held during failure cleanup");
+            locked.close();
+            require(!blocked && blocked.error().code() != lfs::ErrorCode::Cancelled && std::filesystem::exists(companion),
+                    "source companion cleanup failure must be reported rather than hidden by cancellation");
+            blocked_cleanup.abort({SinkOutcome::Failed, 0, {}});
+#endif
+        }
         replacement.write_source_metadata_sidecars = false;
         seed_options.write_source_metadata_sidecars = false;
         seed_options.image_output.overwrite = false;

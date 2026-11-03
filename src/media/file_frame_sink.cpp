@@ -24,7 +24,8 @@ namespace lfs::media {
     SinkResult FileFrameSink::begin(const SinkSession& session) {
         return beginPrepared(session, {});
     }
-    SinkResult FileFrameSink::beginPrepared(const SinkSession& session, std::shared_ptr<const detail::EmbeddedImageMetadata> prepared_metadata) {
+    SinkResult FileFrameSink::beginPrepared(const SinkSession& session, std::shared_ptr<const detail::EmbeddedImageMetadata> prepared_metadata,
+                                            std::shared_ptr<const detail::EmbeddedImageMetadata> sidecar) {
         if (active_)
             return sinkError(ErrorCode::FailedPrecondition, "File sink already active");
         if (options_.output_directory.empty() ||
@@ -51,12 +52,12 @@ namespace lfs::media {
             if (auto valid = validateAvifOutputOptions(options_.avif); !valid)
                 return valid;
         source_metadata_.reset();
-        sidecar_metadata_.reset();
+        sidecar_metadata_ = std::move(sidecar);
         embedded_metadata_ = options_.embed_source_metadata ? std::move(prepared_metadata) : nullptr;
         if (options_.embed_source_metadata || options_.write_source_metadata_sidecars) {
             if (detail::embeddedMetadataPolicy(options_.format).empty())
                 return sinkError(ErrorCode::InvalidArgument, "Embedded source metadata requires JPEG, PNG, TIFF16, EXR, JXL or AVIF output");
-            if (!session.source_metadata)
+            if (!session.source_metadata && !sidecar_metadata_)
                 return sinkError(ErrorCode::InvalidArgument, "Image metadata requires an explicit source observation");
             // GPU extraction writes its encoded batch directly. Keep only the
             // owned catalog until this sink actually receives a CPU frame.
@@ -222,18 +223,26 @@ namespace lfs::media {
                                                              options_.format == FrameFileFormat::JPEG && options_.jpeg_quality > 90);
             return result ? SinkResult{} : SinkResult::failure(std::move(result).error());
         };
-        auto previous_sidecar = options_.write_source_metadata_sidecars ? detail::PreviousSourceSidecar{}
-                                                                        : detail::PreviousSourceSidecar::inspect(filename);
+        auto previous_sidecar = !options_.write_source_metadata_sidecars || sidecar_options.overwrite
+                                    ? detail::PreviousSourceSidecar::inspect(filename)
+                                    : detail::PreviousSourceSidecar{};
         if (auto written = write_image(); !written)
             return written;
-        if (auto removed = previous_sidecar.removeUnchanged(); !removed)
-            return removed;
+        if (!options_.write_source_metadata_sidecars)
+            if (auto removed = previous_sidecar.removeUnchanged(); !removed)
+                return removed;
         if (sidecar_metadata_) {
             auto sidecar = filename;
             sidecar += detail::sidecar_metadata_suffix;
-            if (auto written = core::writeTextFileAtomically(sidecar, sidecar_packet, sidecar_options); !written)
+            if (auto written = core::writeTextFileAtomically(sidecar, sidecar_packet, sidecar_options); !written) {
+                if (auto removed = previous_sidecar.removeUnchanged(); !removed)
+                    return removed;
                 return written;
-            filenames_.insert(std::move(sidecar));
+            }
+            // Companion paths are only needed for stale-output cleanup; image
+            // names already provide duplicate detection for this fixed format.
+            if (options_.remove_stale_frames)
+                filenames_.insert(std::move(sidecar));
         }
         return {};
     }

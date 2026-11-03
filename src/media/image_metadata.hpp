@@ -17,10 +17,12 @@ namespace lfs::media::detail {
     inline constexpr char jxl_metadata_policy[] = "jxl-static-source-xmp-v1";
     inline constexpr char avif_metadata_policy[] = "avif-static-source-xmp-v1";
     inline constexpr char sidecar_metadata_policy[] = "image-static-source-xmp-v1";
+    inline constexpr char render_sidecar_metadata_policy[] = "image-render-xmp-v1";
+    inline constexpr std::size_t max_render_provenance_bytes = 64 * 1024;
     inline constexpr char sidecar_metadata_naming[] = "image-filename-plus-xmp-v1";
     inline constexpr char sidecar_metadata_suffix[] = ".xmp";
     struct SidecarObservation;
-    // Only recognize our exact generated prefix, without parsing foreign XMP.
+    // Only recognize our exact source/render prefixes, without parsing foreign XMP.
     // Compare native identity and timestamps without locking a companion across
     // image output (open Windows handles prevent ordinary atomic replacement).
     class PreviousSourceSidecar {
@@ -47,7 +49,9 @@ namespace lfs::media::detail {
         std::string source_properties;
         std::string extended_guid;
         std::vector<std::uint8_t> extended_markers;
+        bool rendered = false;
     };
+    [[nodiscard]] Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat, std::string_view provenance);
     [[nodiscard]] Result<EmbeddedImageMetadata> prepareImageMetadata(const SourceMetadataCatalog&, int applied_rotation, FrameFileFormat, bool sidecar = false);
     [[nodiscard]] std::string_view imageXmpSuffix();
     [[nodiscard]] Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata&, int width, int height, const FrameInfo&, bool sidecar = false);

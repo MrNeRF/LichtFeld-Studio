@@ -55,8 +55,10 @@ namespace lfs::media {
         void abort(const SinkSummary&) noexcept override;
 
     private:
+        friend class ImageSequence;
         friend class detail::ResumableFileSink;
-        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::EmbeddedImageMetadata>);
+        SinkResult beginPrepared(const SinkSession&, std::shared_ptr<const detail::EmbeddedImageMetadata>,
+                                 std::shared_ptr<const detail::EmbeddedImageMetadata> sidecar = {});
         FileFrameSinkOptions options_;
         bool active_ = false;
         std::shared_ptr<const detail::EmbeddedImageMetadata> embedded_metadata_;

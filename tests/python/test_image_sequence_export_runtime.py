@@ -3,6 +3,7 @@
 """Exercise the real timeline job with a disposable synthetic Gaussian scene."""
 import json
 import struct
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -10,6 +11,7 @@ from test_api_camera_project_runtime import camera_runtime, _editor
 from test_render_on_demand_idle import _call, _tool
 
 pytestmark = [pytest.mark.gpu, pytest.mark.integration]
+FORMATS = {"png": "png", "jpeg": "jpg", "exr": "exr", "tiff16": "tif", "jxl": "jxl", "avif": "avif"}
 
 
 def test_original_float_capture_contract(camera_runtime):
@@ -19,8 +21,7 @@ def test_original_float_capture_contract(camera_runtime):
     test_real_float_color_capture(camera_runtime)
 
 
-def test_timeline_image_sequence_formats_and_collision(camera_runtime, tmp_path):
-    endpoint = camera_runtime
+def _setup_timeline(endpoint):
     _editor(endpoint, '''
 import lichtfeld as lf, math
 scene = lf.get_scene()
@@ -40,8 +41,49 @@ lf.ui.reset_video_reconstruction_selection()
                            "focal_length_mm": 35, "easing": 0}
                           for t, x in [(0.0, 0.0), (0.125, 0.25)]]}
     _editor(endpoint, f"assert lf.ui.set_camera_path({path!r})")
-    formats = {"png": "png", "jpeg": "jpg", "exr": "exr", "tiff16": "tif", "jxl": "jxl", "avif": "avif"}
-    for format, extension in formats.items():
+    return path
+
+
+@pytest.mark.parametrize("include_provenance", [False, True])
+def test_timeline_image_sequence_sidecars(camera_runtime, tmp_path, include_provenance):
+    endpoint = camera_runtime
+    _setup_timeline(endpoint)
+    namespace = {"lfs": "https://lichtfeld.io/ns/media/1.0/"}
+    for format, extension in FORMATS.items():
+        directory = tmp_path / format
+        _editor(endpoint, f"lf.ui.export_image_sequence(63, 47, 24, {str(directory)!r}, format={format!r}, filename_pattern='timeline_%04d', include_provenance={include_provenance!r}, metadata_sidecars=True)")
+        job = _tool(endpoint, "runtime_job_wait", {"job_id": "export.video", "until": "inactive", "timeout_ms": 60000})
+        assert job["outcome"] == "completed" and job["details"]["current_frame"] == 3, job
+        names = [f"timeline_{index:04d}.{extension}" for index in range(3)]
+        assert sorted(path.name for path in directory.iterdir()) == sorted(names + [name + ".xmp" for name in names])
+        stamps = []
+        for index, name in enumerate(names):
+            assert (directory / name).stat().st_size > 0
+            packet = ET.parse(directory / (name + ".xmp"))
+
+            def value(field):
+                return packet.findtext(".//lfs:" + field, namespaces=namespace)
+
+            assert value("MetadataPolicy") == "image-render-xmp-v1"
+            assert value("FrameOrigin") == "rendered"
+            assert value("PixelWidth") == "63" and value("PixelHeight") == "47"
+            assert value("DeliveryIndex") == value("OutputTimestampTicks") == str(index)
+            assert value("OutputTimeBaseNumerator") == "1" and value("OutputTimeBaseDenominator") == "24"
+            assert value("SourceMetadata") is None and value("SourceTimestampTicks") is None
+            stamp = json.loads(value("RenderProvenance"))
+            assert stamp["lichtfeld_provenance"] == 1 and stamp["app_version"] and stamp["build_commit"]
+            assert bool(stamp.get("export_id")) == include_provenance
+            assert bool(stamp.get("exported_at")) == include_provenance
+            if not include_provenance:
+                assert set(stamp) == {"lichtfeld_provenance", "app_version", "build_commit"}
+            stamps.append(stamp)
+        assert stamps[0] == stamps[1] == stamps[2]
+
+
+def test_timeline_image_sequence_formats_and_collision(camera_runtime, tmp_path):
+    endpoint = camera_runtime
+    path = _setup_timeline(endpoint)
+    for format, extension in FORMATS.items():
         directory = tmp_path / format
         _editor(endpoint, f"lf.ui.export_image_sequence(63, 47, 24, {str(directory)!r}, format={format!r}, filename_pattern='timeline_%04d', include_provenance=False)")
         job = _tool(endpoint, "runtime_job_wait", {"job_id": "export.video", "until": "inactive", "timeout_ms": 60000})

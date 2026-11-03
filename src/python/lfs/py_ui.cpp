@@ -5403,7 +5403,7 @@ namespace lfs::python {
             "export_image_sequence",
             [](int width, int height, int framerate, const std::string& path,
                const std::string& format, const std::string& filename_pattern,
-               int first_frame_number, bool overwrite, bool transparent, bool include_provenance) {
+               int first_frame_number, bool overwrite, bool transparent, bool include_provenance, bool metadata_sidecars) {
                 const auto parsed = media::parseOutputOption<media::FrameFileFormat>(format);
                 if (!parsed)
                     throw nb::value_error("Image sequence format must be png, jpeg, exr, tiff16, jxl or avif");
@@ -5420,6 +5420,7 @@ namespace lfs::python {
                 preflight.files.first_source_frame_number = first_frame_number;
                 preflight.frame_count = 1;
                 preflight.framerate = framerate;
+                preflight.write_metadata_sidecars = metadata_sidecars;
                 const bool bytes = *parsed == media::FrameFileFormat::PNG || *parsed == media::FrameFileFormat::JPEG;
                 preflight.layout = {width, height, static_cast<size_t>(width) * (bytes ? 3 : (transparent ? 4 : 3) * sizeof(float)), bytes ? media::FramePixelFormat::RGB8 : transparent ? media::FramePixelFormat::RGBAFloat32
                                                                                                                                                                                          : media::FramePixelFormat::RGBFloat32,
@@ -5441,6 +5442,7 @@ namespace lfs::python {
                         request.first_frame_number = first_frame_number;
                         request.overwrite_images = overwrite;
                         request.transparent_images = transparent;
+                        request.image_sequence_metadata_sidecars = metadata_sidecars;
                         request.emit();
                         return true;
                     },
@@ -5452,11 +5454,13 @@ namespace lfs::python {
             nb::arg("format") = "png", nb::arg("filename_pattern") = "frame_%06d",
             nb::arg("first_frame_number") = 0, nb::arg("overwrite") = false,
             nb::arg("transparent") = false, nb::arg("include_provenance") = true,
+            nb::arg("metadata_sidecars") = false,
             "Export timeline frames through the shared image sinks. PNG/JPEG use the existing SDR video render; "
             "EXR/TIFF16/JXL/AVIF use the Gaussian linear float capture before PPISP/environment post-processing. "
             "Linear capture rejects mesh/environment compositing and non-native reconstruction. "
             "Uses the saved reconstruction selection and existing export progress/cancellation job. "
-            "Full provenance selection currently applies to EXR/TIFF16; other formats retain their existing writer metadata. "
+            "Embedded full provenance selection applies to EXR/TIFF16; other formats retain their existing writer metadata. "
+            "metadata_sidecars writes image-filename+.xmp with render geometry, exact output time and the selected provenance stamp. "
             "Completed images survive interruption; automatic resume and a new GUI selector are not provided.");
 
         m.def(

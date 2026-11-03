@@ -861,8 +861,46 @@ file publication does not establish power-loss durability.
 
 This consumer is file extraction through MediaIngest (C++, Python and CLI).
 Export does not automatically read external XMP or discover companions. Explicit
-sidecar collection is described below. Generic rendered image sequences continue to use
-their existing APIs.
+sidecar collection is described below. Rendered image sequences can opt into the
+render-specific sidecars described below.
+
+### Rendered image sequence sidecars
+
+`ImageSequenceOptions::write_metadata_sidecars` defaults to false. When enabled,
+the shared file sink writes `image-filename.xmp` after each rendered image, for
+PNG, JPEG, TIFF16, EXR, JXL and AVIF. `TensorImageSequence` passes the same options
+through after its existing bounded CPU/GPU readback. Python timeline exports use
+`lichtfeld.ui.export_image_sequence(..., metadata_sidecars=True)`.
+
+The packet uses `image-render-xmp-v1`. It records rendered origin, output width
+and height, orientation, zero-based delivery index and the exact output timestamp
+as ticks plus a rational time base. Filename numbering does not change this
+ordinal. `framerate / framerate_denominator` determines the output clock. Source
+timestamps and camera metadata supplied in a frame are not copied into render
+packets. These facts describe the output, not a source-camera acquisition time.
+
+An optional `ImageSequenceOptions::provenance` JSON object is written as escaped
+`RenderProvenance` text. Timeline exports reuse their selected full or minimal
+LichtFeld provenance stamp. The object is checked before creating output, with a
+64 KiB input limit and a maximum nesting depth of four; serialization produces ASCII JSON before
+XML escaping. It is prepared once per sequence. There is no synthetic source
+catalog, implicit source-file collection or frame-pixel copy for metadata.
+The metadata-only preflight checks the same provenance syntax and limits as
+opening a sequence. The Tensor adapter and sequence retain only their runtime
+layout, timing and callbacks; unused provenance is not copied into session state.
+
+Each file uses the existing atomic writer and the format's overwrite and
+cancellation policy. Image and XMP are separate publications: a failed sidecar
+can leave a completed image, but that frame is not accepted and the sequence
+cannot report successful completion. Completed files survive interruption.
+When overwrite is allowed, a failed XMP replacement also removes the unchanged
+recognized previous packet after the new image has been published. Foreign or
+concurrently replaced companions are preserved, and cleanup failures are reported.
+Automatic resume is not added to the render API. No extraction manifest is
+created. A later successful image replacement with sidecars disabled removes an
+unchanged recognized LichtFeld source or render companion, while foreign XMP,
+stem-named companions and symlinks are preserved. This retains the existing
+non-hostile-filesystem cleanup contract, not a cross-file transaction.
 
 
 ### Explicit XMP sidecar collection

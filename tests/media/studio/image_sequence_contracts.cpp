@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -56,8 +57,31 @@ int main(int argc, char** argv) {
         options.output.files.filename_pattern = "frame_%04d";
         options.output.files.first_source_frame_number = 0;
         options.output.frame_count = 3;
+        options.output.write_metadata_sidecars = true;
+        options.output.provenance = R"({"app_version":"tensor-test","build_commit":"test"})";
         options.output.layout = {3, 5, 9, media::FramePixelFormat::RGB8, {media::ColorTransfer::Srgb, media::ColorPrimaries::Bt709}};
         options.input_color = options.output.layout.color;
+        {
+            auto rejected = options;
+            rejected.output.files.output_directory = root / "oversized-provenance";
+            rejected.output.provenance.assign(32 * 1024 * 1024, 'x');
+            const auto result = output.open(rejected);
+            require(!result && result.error().code() == ErrorCode::ResourceExhausted && !fs::exists(rejected.output.files.output_directory),
+                    "Tensor producer did not reject oversized provenance before output");
+            rejected.output.provenance = "not JSON";
+            const auto malformed = output.open(rejected);
+            require(!malformed && malformed.error().code() == ErrorCode::InvalidArgument && !fs::exists(rejected.output.files.output_directory),
+                    "Tensor producer accepted malformed provenance");
+            rejected.output.write_metadata_sidecars = false;
+            rejected.output.frame_count = 1;
+            rejected.output.provenance.assign(32 * 1024 * 1024, 'x');
+            good(output.open(rejected));
+            std::vector<float> sample_pixels(45, .25f);
+            auto sample = core::Tensor::from_blob(sample_pixels.data(), {5, 3, 3}, core::Device::CPU, core::DataType::Float32);
+            good(output.write(sample));
+            good(output.close());
+            require(!fs::exists(rejected.output.files.output_directory / "frame_0000.png.xmp"), "disabled Tensor metadata wrote a companion");
+        }
         good(output.open(options));
         for (int index = 0; index < 3; ++index) {
             std::vector<float> samples(5 * 6 * 3, (31 + index * 40) / 255.f);
@@ -77,6 +101,11 @@ int main(int argc, char** argv) {
             require(core::image_codecs::decode(root / "png" / ("frame_000" + std::to_string(index) + ".png"), image, error), "Tensor output did not decode");
             require(image.width == 3 && image.height == 5 && image.channels == 3, "Tensor output shape changed");
             require(std::all_of(image.data.begin(), image.data.end(), [index](uint8_t sample) { return sample == 31 + index * 40; }), "Tensor output order or encoded samples changed");
+            std::ifstream sidecar(root / "png" / ("frame_000" + std::to_string(index) + ".png.xmp"), std::ios::binary);
+            require(sidecar.good(), "Tensor render sidecar absent");
+            const std::string packet{std::istreambuf_iterator<char>(sidecar), {}};
+            require(packet.find("<lfs:FrameOrigin>rendered</lfs:FrameOrigin>") != std::string::npos && packet.find("SourceMetadata") == std::string::npos,
+                    "Tensor readback lost render provenance or invented a source catalog");
         }
         options.output.files.output_directory = root / "budget";
         options.readback_budget = 1;

@@ -3,6 +3,7 @@
 #pragma once
 #include "core/tensor.hpp"
 #include "io/image_sequence_options.hpp"
+#include <functional>
 
 namespace lfs::io {
     // Thin Tensor producer adapter. Shared sinks own filenames and publication;
@@ -16,7 +17,9 @@ namespace lfs::io {
         [[nodiscard]] bool isOpen() const noexcept { return sequence_.isOpen(); }
 
     private:
-        TensorImageSequenceOptions options_;
+        media::FrameLayout layout_;
+        bool input_linear_ = true;
+        std::function<bool()> cancelled_;
         media::ImageSequence sequence_;
         std::vector<float> linear_;
         std::vector<uint8_t> bytes_;

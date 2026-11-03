@@ -6,7 +6,9 @@
 #include "xmp_metadata.hpp"
 #include "xmp_sidecar_io.hpp"
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <stdexcept>
 
 namespace lfs::media::detail {
     namespace {
@@ -111,15 +113,19 @@ namespace lfs::media::detail {
         const auto size = file.open(path, max_packet_bytes);
         if (!size)
             return result;
-        static const std::string signature = [] {
-            std::string prefix(packet_start);
-            prefix += tree_start;
-            property(prefix, "MetadataPolicy", sidecar_metadata_policy);
-            return prefix;
+        static const auto signatures = [] {
+            std::array<std::string, 2> prefixes;
+            const std::array<std::string_view, 2> policies{sidecar_metadata_policy, render_sidecar_metadata_policy};
+            for (std::size_t i = 0; i < policies.size(); ++i) {
+                prefixes[i] = packet_start;
+                prefixes[i] += tree_start;
+                property(prefixes[i], "MetadataPolicy", policies[i]);
+            }
+            return prefixes;
         }();
-        if (*size < signature.size())
+        if (*size < std::min(signatures[0].size(), signatures[1].size()))
             return result;
-        std::string prefix(signature.size(), '\0');
+        std::string prefix(std::min<std::uint64_t>(*size, std::max(signatures[0].size(), signatures[1].size())), '\0');
         std::size_t offset = 0;
         while (offset < prefix.size()) {
             const auto read = file.read({reinterpret_cast<std::uint8_t*>(prefix.data()) + offset, prefix.size() - offset});
@@ -127,7 +133,7 @@ namespace lfs::media::detail {
                 return result;
             offset += *read;
         }
-        if (prefix != signature || !file.verifyUnchanged())
+        if ((!prefix.starts_with(signatures[0]) && !prefix.starts_with(signatures[1])) || !file.verifyUnchanged())
             return result;
         result.path_ = std::move(path);
         result.observation_ = std::make_shared<const SidecarObservation>(file.observation());
@@ -146,7 +152,7 @@ namespace lfs::media::detail {
             std::error_code error;
             core::native_fs::remove(path_, error);
             if (error)
-                return SinkResult::failure(sidecarIoError(error, "Remove superseded source XMP", path_));
+                return SinkResult::failure(sidecarIoError(error, "Remove superseded image XMP", path_));
         }
         observation_.reset();
         return {};
@@ -164,13 +170,62 @@ namespace lfs::media::detail {
         // Rewriting the packet requires updating the carrier lengths/structure.
         return "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"r\"?>";
     }
+    Result<EmbeddedImageMetadata> prepareRenderedMetadata(FrameFileFormat format, std::string_view provenance) {
+        if (embeddedMetadataPolicy(format).empty())
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render metadata format (format=" + std::to_string(static_cast<int>(format)) + ")");
+        // Bound escaped output before allocating it; XML escaping can expand input.
+        if (provenance.size() > max_render_provenance_bytes)
+            return metadataError(ErrorCode::ResourceExhausted, "Render provenance exceeds its input byte limit (size=" + std::to_string(provenance.size()) + ", limit=" + std::to_string(max_render_provenance_bytes) + ")");
+        int rejected_depth = 0;
+        try {
+            EmbeddedImageMetadata result;
+            result.format = format;
+            result.rendered = true;
+            if (!provenance.empty()) {
+                const auto stamp = nlohmann::json::parse(provenance, [&](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
+                    if (depth > 4) {
+                        rejected_depth = depth;
+                        throw std::invalid_argument("Render provenance nesting exceeds its budget");
+                    }
+                    return true;
+                });
+                if (!stamp.is_object())
+                    return metadataError(ErrorCode::InvalidArgument, "Render provenance must be a JSON object (type=" + std::string(stamp.type_name()) + ")");
+                property(result.source_properties, "RenderProvenance", stamp.dump(-1, ' ', true));
+            }
+            return result;
+        } catch (const std::bad_alloc&) {
+            return metadataError(ErrorCode::ResourceExhausted, "Render metadata allocation failed");
+        } catch (const nlohmann::json::parse_error& error) {
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render provenance JSON (byte=" + std::to_string(error.byte) + ", size=" + std::to_string(provenance.size()) + ")");
+        } catch (const nlohmann::json::exception& error) {
+            return metadataError(ErrorCode::InvalidArgument, "Invalid render provenance JSON (error=" + std::to_string(error.id) + ", size=" + std::to_string(provenance.size()) + ")");
+        } catch (const std::invalid_argument&) {
+            return metadataError(ErrorCode::InvalidArgument, "Render provenance nesting exceeds its budget (depth=" + std::to_string(rejected_depth) + ", limit=4)");
+        }
+    }
     Result<std::string> imageXmpPrefix(const EmbeddedImageMetadata& metadata, int width, int height, const FrameInfo& info, bool sidecar) {
         if (((metadata.format == FrameFileFormat::JPEG && !sidecar) || embeddedMetadataPolicy(metadata.format).empty()) || width <= 0 || height <= 0)
             return metadataError(ErrorCode::InvalidArgument, "Invalid image metadata input");
         try {
             std::string tree(packet_start);
             tree += tree_start;
-            frameProperties(tree, width, height, metadata.applied_rotation, info, sidecar ? std::string_view(sidecar_metadata_policy) : embeddedMetadataPolicy(metadata.format));
+            if (metadata.rendered) {
+                if (!sidecar || info.origin != FrameOrigin::Rendered || !info.output_timestamp ||
+                    info.output_timestamp->time_base.numerator <= 0 || info.output_timestamp->time_base.denominator <= 0)
+                    return metadataError(ErrorCode::InvalidArgument, "Render metadata requires a rendered output timestamp (sidecar=" + std::to_string(sidecar) + ", origin=" + std::to_string(static_cast<int>(info.origin)) + ", time_base=" + (info.output_timestamp ? std::to_string(info.output_timestamp->time_base.numerator) + "/" + std::to_string(info.output_timestamp->time_base.denominator) : std::string("missing")) + ")");
+                property(tree, "MetadataPolicy", render_sidecar_metadata_policy);
+                property(tree, "FrameOrigin", "rendered");
+                property(tree, "PixelWidth", std::to_string(width));
+                property(tree, "PixelHeight", std::to_string(height));
+                property(tree, "Orientation", "1");
+                property(tree, "DeliveryIndex", std::to_string(info.delivery_index));
+                property(tree, "OutputTimestampTicks", std::to_string(info.output_timestamp->ticks));
+                property(tree, "OutputTimeBaseNumerator", std::to_string(info.output_timestamp->time_base.numerator));
+                property(tree, "OutputTimeBaseDenominator", std::to_string(info.output_timestamp->time_base.denominator));
+            } else {
+                frameProperties(tree, width, height, metadata.applied_rotation, info, sidecar ? std::string_view(sidecar_metadata_policy) : embeddedMetadataPolicy(metadata.format));
+            }
             if (tree.size() + metadata.source_properties.size() + imageXmpSuffix().size() > max_packet_bytes)
                 return metadataError(ErrorCode::ResourceExhausted, "Image XMP exceeds the export packet budget");
             return tree;

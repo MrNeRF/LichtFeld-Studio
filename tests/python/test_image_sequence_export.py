@@ -20,7 +20,8 @@ def test_invalid_image_sequence_rejected_before_viewer(lf, tmp_path, changes):
 
 
 @pytest.mark.parametrize("format", ["png", "jpeg", "exr", "tiff16", "jxl", "avif"])
-def test_image_sequence_headless_boundary(lf, tmp_path, format):
+@pytest.mark.parametrize("metadata_sidecars", [False, True])
+def test_image_sequence_headless_boundary(lf, tmp_path, format, metadata_sidecars):
     try:
         lf.ui.get_video_reconstruction_selection()
     except RuntimeError as error:
@@ -29,5 +30,5 @@ def test_image_sequence_headless_boundary(lf, tmp_path, format):
         pytest.skip("Requires the headless binding boundary")
     path = tmp_path / "frames"
     with pytest.raises(RuntimeError, match="Viewer is unavailable"):
-        lf.ui.export_image_sequence(3, 5, 24, str(path), format=format)
+        lf.ui.export_image_sequence(3, 5, 24, str(path), format=format, metadata_sidecars=metadata_sidecars)
     assert not path.exists()
