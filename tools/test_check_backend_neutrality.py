@@ -9,6 +9,7 @@ import contextlib
 import io
 import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
             "training/kernels/mrnf_kernels.hpp",
             "lfs/kernels/ssim.cuh",
             "lfs/training/ops/geometry_cuda.hpp",
+            "lfs/training/ops/extra_loss_hip.hpp",
             "cuda_runtime.h",
             "cuda.h",
         ):
@@ -50,6 +52,16 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
         ):
             self.assertFalse(gate.neutral_trainer_file(relative), relative)
 
+    def test_hip_implementation_files_are_not_neutral(self) -> None:
+        for relative in (
+            "src/training/ops/extra_loss_hip.cpp",
+            "src/training/ops/table_hip.cpp",
+            "src/training/include/lfs/training/ops/extra_loss_hip.hpp",
+        ):
+            self.assertFalse(gate.neutral_trainer_file(relative), relative)
+        for relative in ("src/training/trainer.cpp", "src/training/ops/extra_loss.cpp"):
+            self.assertTrue(gate.neutral_trainer_file(relative), relative)
+
     def test_scan_reports_a_neutral_include(self) -> None:
         path = Path(__file__).resolve().parent.parent / "src/training/trainer.hpp"
         # The live header is part of the gate. A synthetic copy proves the rule
@@ -63,6 +75,18 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
         finally:
             forbidden.unlink()
         self.assertIn((1, "trainer-cuda-include", "kernels/depth_loss.hpp"), findings)
+
+    def test_neutral_trainer_rejects_hip_sdk_headers_types_and_calls(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory(dir=root / "src/training") as directory:
+            probe = Path(directory) / "probe.cpp"
+            probe.write_text('#include <hip/hip_runtime.h>\n#include <hiprtc.h>\n'
+                             'hipStream_t stream; void f() { hipMalloc(nullptr, 4); hiprtcCompileProgram(nullptr, 0, nullptr); }\n',
+                             encoding="utf-8")
+            findings = gate.scan(probe)
+        self.assertEqual(sum(kind == "hip-header" for _, kind, _ in findings), 2)
+        symbols = {text for _, kind, text in findings if kind == "native-api"}
+        self.assertEqual(symbols, {"hipStream_t", "hipMalloc", "hiprtcCompileProgram"})
 
     def test_directory_scan_includes_objective_cpp(self) -> None:
         # Metal viewer code is Objective-C++; a directory scan must not skip it.
@@ -84,6 +108,22 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
 
 
 class SharedTensorDispatchTest(unittest.TestCase):
+    def test_rejects_hip_sdk_and_backend_guards(self) -> None:
+        source = ('#ifdef LFS_TENSOR_HIP\n#endif\n'
+                  'if constexpr (gpu_backend_compiled(GpuBackend::HIP)) {}\n'
+                  '#include <hip/hip_runtime.h>\n#include <hiprtc.h>\n'
+                  '#include "backend/hip/hip_backend_ops.hpp"\n'
+                  'hipStream_t stream; void f() { hipMalloc(nullptr, 4); hiprtcCompileProgram(nullptr, 0, nullptr); }\n')
+        findings = gate.scan_shared_tensor_dispatch(source)
+        kinds = [kind for _, kind, _ in findings]
+        self.assertIn("shared-backend-guard", kinds)
+        self.assertIn("shared-backend-branch", kinds)
+        self.assertEqual(kinds.count("shared-native-include"), 3)
+        self.assertEqual(kinds.count("shared-native-api"), 3)
+        control = ('auto identity = GpuBackend::HIP;\n'
+                   '// hipMalloc(nullptr, 4);\nconst char* text = "hiprtcCompileProgram()";\n')
+        self.assertEqual(gate.scan_shared_tensor_dispatch(control), [])
+
     def test_rejects_compile_time_and_runtime_backend_choices(self) -> None:
         source = "#if LFS_HAS_CUDA\nif (b == core::GpuBackend::Vulkan) {}\n#endif\nif constexpr (gpu_backend_compiled(GpuBackend::Metal)) {}\n"
         kinds = [kind for _, kind, _ in gate.scan_shared_tensor_dispatch(source)]

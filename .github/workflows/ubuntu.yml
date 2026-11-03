@@ -290,11 +290,11 @@ jobs:
 
       - name: Run shared tensor operation CPU contracts
         run: |
-          cmake --build build --target tensor_operation_contracts --parallel 2
+          cmake --build build --target tensor_operation_contracts training_hip_contracts --parallel 2
           mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
           ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
           LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            ctest --test-dir build --output-on-failure --no-tests=error -R '^TensorOperationContracts[.](CPU|Runner)$'
+            ctest --test-dir build --output-on-failure --no-tests=error -R '^(TensorOperationContracts[.](CPU|Runner)|TrainingBackendContracts[.]CPU)$'
 
       - name: Run splat drag contracts
         run: |
@@ -403,9 +403,9 @@ jobs:
             -DLFS_HIP_ROOT="$LFS_CI_HIP_ROOT" -DLFS_HIP_ARCHITECTURE=gfx1150 \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF
-          cmake --build build-hip-adapter --target tensor_operation_contracts tensor_binding_contracts --parallel 2
+          cmake --build build-hip-adapter --target tensor_operation_contracts tensor_binding_contracts training_hip_contracts --parallel 2
           ctest --test-dir build-hip-adapter --output-on-failure --no-tests=error \
-            -R '^(TensorOperationContracts[.](CPU|Runner)|TensorPythonBindings[.]CPU)$'
+            -R '^(TensorOperationContracts[.](CPU|Runner)|TensorPythonBindings[.]CPU|TrainingBackendContracts[.]CPU)$'
 
   idle-e2e:
     name: GPU idle E2E (optional)

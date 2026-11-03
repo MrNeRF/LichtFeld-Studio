@@ -11,7 +11,7 @@ New-backend checklist:
 * Run the tensor contract, parity and application suites with that backend selected.
 
 Private tensor includes and symbols are forbidden throughout consumers. Native
-CUDA API and backend branches are checked in the viewer and trainer. Trainer
+GPU APIs and backend branches are checked in the viewer and trainer. Trainer
 exceptions are path rules for native ops implementations, kernels and rasterizers.
 The header-only tensor implementation lives in src/core/include/core/detail and
 may be included only from core/tensor.hpp. Headers under src/core/tensor are
@@ -42,12 +42,14 @@ TRAINER_CUDA_FILE = re.compile(
     r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
     r'ops/[^/]+_vulkan\.cpp|'
     r'include/lfs/training/ops/[^/]+_vulkan\.hpp|'
+    r'ops/[^/]+_hip\.cpp|'
+    r'include/lfs/training/ops/[^/]+_hip\.hpp|'
     r'vulkan/.*|'
     r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
 # Neutral trainer sources dispatch through the ops table. Kernel and CUDA
 # headers stay on the implementation side of that boundary.
 TRAINER_KERNEL_INCLUDE = re.compile(
-    r'(?:^|/)kernels/|_cuda\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
+    r'(?:^|/)kernels/|_(?:cuda|hip)\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
 CUDA_RASTERIZERS = ("src/rendering/rasterizer/cuda/",)
 # File-specific native interoperability and backend selection seams.
 SEAMS = {
@@ -90,6 +92,8 @@ PRIVATE_SEAMS = {
 }
 INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 CUDA_HEADER = re.compile(r'^(?:cuda(?:_runtime(?:_api)?|_fp16|_bf16)?\.h|driver_types\.h|vector_types\.h|cublas.*\.h|curand.*\.h|cub/.*)$')
+HIP_HEADER = re.compile(r'^(?:hip/.*|hip(?:_runtime(?:_api)?|rtc)\.h)$')
+HIP_NATIVE = re.compile(r'\bhip(?:rtc)?[A-Z]\w*\b')
 NATIVE_CALL = re.compile(r'\b(cuda[A-Z]\w*|cu[A-Z]\w*)\s*\(')
 CUDA_STREAM = re.compile(r'\bcudaStream_t\b')
 TRAINER_NATIVE = re.compile(
@@ -159,20 +163,22 @@ def scan_shared_tensor_dispatch(source: str) -> list[tuple[int, str, str]]:
     def add(position: int, kind: str, text: str) -> None:
         findings.append((source.count('\n', 0, position) + 1, kind, text))
 
-    for match in re.finditer(r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b[^\n]*(?:LFS_HAS_CUDA|LFS_TENSOR_(?:METAL|VULKAN)|LFS_GRAPHICS_(?:METAL|VULKAN))', code, re.M):
+    for match in re.finditer(r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b[^\n]*(?:LFS_HAS_CUDA|LFS_TENSOR_(?:METAL|VULKAN|HIP)|LFS_GRAPHICS_(?:METAL|VULKAN))', code, re.M):
         add(match.start(), "shared-backend-guard", match.group().strip())
     for match in BACKEND_BRANCH.finditer(code):
         add(match.start(), "shared-backend-branch", match.group())
-    for match in re.finditer(r'\bgpu_backend_compiled\s*\(\s*(?:\w+::)*GpuBackend::(?:CUDA|Vulkan|Metal)\s*\)', code):
+    for match in re.finditer(r'\bgpu_backend_compiled\s*\(\s*(?:\w+::)*GpuBackend::(?:CUDA|Vulkan|Metal|HIP)\s*\)', code):
         add(match.start(), "shared-backend-branch", match.group())
     for match in INCLUDE.finditer(comments_removed):
         header = match[1].replace("\\", "/")
-        if (CUDA_HEADER.fullmatch(header) or
-                re.search(r'(?:^|/)(?:backend/)?(?:cuda|vulkan|metal)/', header, re.I) or
+        if (CUDA_HEADER.fullmatch(header) or HIP_HEADER.fullmatch(header) or
+                re.search(r'(?:^|/)(?:backend/)?(?:cuda|vulkan|metal|hip)/', header, re.I) or
                 re.fullmatch(r'(?:curand|cublas|cusolver|cufft)(?:_[a-z0-9]+)?\.h', header)):
             add(match.start(), "shared-native-include", header)
     for match in NATIVE_CALL.finditer(code):
         add(match.start(), "shared-native-api", match[1])
+    for match in HIP_NATIVE.finditer(code):
+        add(match.start(), "shared-native-api", match.group())
     return findings
 
 
@@ -212,6 +218,8 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
         if native_checked and (CUDA_HEADER.fullmatch(header) or
                                (relative.startswith(TRAINER_ROOTS) and TRAINER_CUDA_HEADER.fullmatch(header))):
             add(match.start(), "cuda-header", header)
+        if native_checked and HIP_HEADER.fullmatch(normalized):
+            add(match.start(), "hip-header", header)
         if neutral_trainer_file(relative) and TRAINER_KERNEL_INCLUDE.search(normalized):
             add(match.start(), "trainer-cuda-include", header)
     if native_checked:
@@ -220,6 +228,8 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
                 add(match.start(), "trainer-native-api", match.group())
         for match in NATIVE_CALL.finditer(code):
             add(match.start(), "native-api", match[1])
+        for match in HIP_NATIVE.finditer(code):
+            add(match.start(), "native-api", match.group())
         for match in CUDA_STREAM.finditer(code):
             add(match.start(), "cuda-stream", match.group())
         for match in BACKEND_BRANCH.finditer(code):
