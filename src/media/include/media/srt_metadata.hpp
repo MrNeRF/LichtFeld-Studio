@@ -8,7 +8,8 @@ namespace lfs::media {
     struct SrtMetadataLimits {
         std::size_t bytes = 32u * 1024 * 1024;
         std::size_t cues = 100000;
-        std::size_t line_bytes = 65536;
+        // The provider splits longer physical lines, potentially inside a value.
+        std::size_t line_bytes = 4095;
         std::size_t lines = 1000000;
         std::size_t facts = 500000;
         std::size_t cue_bytes = 256u * 1024;

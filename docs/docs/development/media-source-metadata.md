@@ -997,8 +997,23 @@ Binary/NUL-containing input, including UTF-16/32 SRT, is refused. Invalid
 UTF-8 bytes remain available in the raw fields; JSON display text uses the shared
 replacement policy.
 
+Before FFmpeg opens the memory input, a bounded guard counts timing lines and
+checks their numeric ranges. It refuses reversed intervals, components outside
+their clock ranges, durations above 2,147,483,647 milliseconds, and malformed or
+out-of-range optional `X1/X2/Y1/Y2` subtitle coordinates. These checks prevent the
+provider from repairing a negative duration or narrowing an oversized one. Cue
+and physical-line budgets apply before the provider materializes its subtitle
+queue. CRLF, LF and CR line endings and an initial UTF-8 BOM are supported.
+The `:60` second carry used at minute boundaries by Matrice sidecars retains
+its exact arithmetic value; it is not clamped or treated as a civil leap second.
+Physical lines are limited to 4,095 bytes because the provider would otherwise
+split them and could change a numeric token. A mismatch between counted source
+timing lines and demuxed cues is refused, including identical occurrences that
+FFmpeg deduplicates. Distinct retained cues remain subject to the lookup's
+overlap/duplicate-point ambiguity checks.
+
 The first interpreter recognizes the DJI bracket profile with `FrameCnt:` or
-`SrtCnt:` and lowercase `latitude`, `longitude`/`longtitude`, `rel_alt` and
+`SrtCnt:` as complete tokens and lowercase `latitude`, `longitude`/`longtitude`, `rel_alt` and
 `abs_alt` fields. Latitude and longitude are finite decimal degree declarations
 with range checks. Altitudes are retained as distinct vendor declarations with
 unspecified units/datum; no geoid or sea-level conversion is inferred. Duplicate
@@ -1058,7 +1073,7 @@ media-ingest source-srt-metadata flight.srt --timestamp 4500 1 90000 --offset-ms
 ```
 
 Default budgets are 32 MiB original bytes, 100,000 cues, 500,000 interpreted
-facts, 256 KiB text per cue, 64 KiB raw line length and 1,000,000 lines. Native
+facts, 256 KiB text per cue, 4,095-byte physical lines and 1,000,000 lines. Native
 callers can lower budgets; cue text can be raised to 1 MiB. Each cue retains at
 most 64 interpreted facts. Budget exhaustion returns an error rather than a
 truncated complete observation. The input and record limits are not a process

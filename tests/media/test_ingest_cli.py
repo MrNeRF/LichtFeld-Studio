@@ -1983,6 +1983,28 @@ class IngestCLI(unittest.TestCase):
                      if node.tag.startswith("{https://lichtfeld.io/ns/media/1.0/}")}
             self.assertEqual(json.loads(facts["SourceMetadata"]), manifest["source_metadata"])
 
+    def test_source_srt_metadata_rejects_provider_normalization_and_bad_timing(self):
+        path = self.root / "corrupt telemetry.srt"
+        for packet, code, error in (
+            (b"1\n00:00:01,000 --> 00:00:00,000\nx\n\n2\n00:00:02,000 --> 00:00:03,000\ny\n", 3, "DataLoss"),
+            (b"1\n00:00:00,000 --> 1300:00:00,000\nx\n", 3, "DataLoss"),
+            (srt_metadata_fixture.cues([(0, 0, "same"), (0, 0, "same")]), 3, "Unsupported"),
+            (srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 " + "x" * 4071 + "[latitude: 12]")]), 4, "ResourceExhausted"),
+            (b"\xff\xfe1\0", 3, "Unsupported"),
+        ):
+            with self.subTest(error=error, packet=packet[:60]):
+                path.write_bytes(packet)
+                result, _ = self.invoke("source-srt-metadata", path, code=code)
+                self.assertEqual(result["error"]["code"], error)
+                self.assertEqual(path.read_bytes(), packet)
+        raw = b"1\n00:00:00,000 --> 00:00:01,000\nFrameCnt: 1 [latitude: 12] \xff\n"
+        path.write_bytes(raw)
+        result, _ = self.invoke("source-srt-metadata", path)
+        self.assertEqual(bytes.fromhex(result["original_bytes"]), raw)
+        self.assertIn(b"\xff", bytes.fromhex(result["cues"][0]["text_bytes"]))
+        self.assertIn("\ufffd", result["cues"][0]["text"])
+        self.assertEqual(result["cues"][0]["facts"][0]["value"], 12)
+
     def test_source_srt_metadata_raw_and_explicit_clock_lookup(self):
         path = self.root / "DJI telemetry é 日本語.srt"
         packet = srt_metadata_fixture.packet(offset_ms=1000)

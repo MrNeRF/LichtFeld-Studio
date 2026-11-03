@@ -48,6 +48,60 @@ class SourceMetadataBindings(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_srt_corrupt_timing_and_duplicate_occurrences_are_refused(self):
+        path = self.root / "corrupt telemetry.srt"
+        cases = (
+            b"1\n00:00:01,000 --> 00:00:00,000\nx\n\n2\n00:00:02,000 --> 00:00:03,000\ny\n",
+            b"1\n00:00:00,000 --> 1300:00:00,000\nx\n",
+            b"1\n999999999999999999999:00:00,000 --> 00:00:01,000\nx\n",
+            srt_metadata_fixture.cues([(0, 0, "same"), (0, 0, "same")]),
+            srt_metadata_fixture.cues([(0, 1000, "same"), (0, 1000, "same")]),
+            srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 " + "x" * 4071 + "[latitude: 12]")]),
+            b"\xff\xfe1\0",
+        )
+        for packet in cases:
+            with self.subTest(packet=packet[:70]):
+                path.write_bytes(packet)
+                with self.assertRaises(MEDIA_ERROR):
+                    media.MediaIngest.source_srt_metadata(path)
+                self.assertEqual(path.read_bytes(), packet)
+        path.write_bytes(srt_metadata_fixture.cues([(0, 1000, "FrameCnt: 1 [latitude: +-12] [longitude: +12]")]))
+        facts = json.loads(media.MediaIngest.source_srt_metadata(path).metadata_json())["cues"][0]["facts"]
+        self.assertEqual([(fact["state"], fact["value"]) for fact in facts], [("invalid", None), ("present", 12)])
+
+    def test_srt_deterministic_byte_corruptions_preserve_observation_invariants(self):
+        rng = random.Random(73561)
+        original = srt_metadata_fixture.packet()
+        path = self.root / "mutated telemetry.srt"
+        for index in range(128):
+            packet = bytearray(original)
+            position = rng.randrange(len(packet))
+            if index % 3 == 0:
+                del packet[position:]
+            elif index % 3 == 1:
+                packet[position] = rng.randrange(256)
+            else:
+                packet[position:position] = bytes(rng.randrange(256) for _ in range(8))
+            path.write_bytes(packet)
+            with self.subTest(index=index):
+                try:
+                    catalog = media.MediaIngest.source_srt_metadata(path)
+                except MEDIA_ERROR:
+                    continue
+                observation = json.loads(catalog.metadata_json())
+                self.assertEqual(bytes.fromhex(observation["original_bytes"]), packet)
+                self.assertEqual(len(observation["cues"]), catalog.cue_count)
+                for cue in observation["cues"]:
+                    self.assertGreaterEqual(cue["start_ms"], 0)
+                    self.assertGreaterEqual(cue["end_ms"], cue["start_ms"])
+                    self.assertLess(cue["source_offset"], len(packet))
+                    self.assertGreaterEqual(cue["source_offset"], 0)
+                    text = bytes.fromhex(cue["text_bytes"])
+                    for fact in cue["facts"]:
+                        self.assertGreaterEqual(fact["text_offset"], 0)
+                        self.assertLessEqual(fact["text_offset"] + fact["text_bytes"], len(text))
+                self.assertEqual(path.read_bytes(), packet)
+
     def test_srt_lookup_matches_independent_rational_reference(self):
         rng = random.Random(3966)
         rows = []
