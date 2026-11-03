@@ -43,6 +43,13 @@ supported capabilities rather than infer them from Tensor availability.
 
 ## Selection and execution
 
+Run the existing Tensor self-test explicitly with
+`LichtFeld-Studio --tensor-backend-selftest hip` (or `--tensor-backend-selftest=hip`).
+It exits with status 0 on success and 1 on failure. A build without HIP or a
+machine without an available HIP backend reports failure rather than falling
+back to another backend. This command checks Tensor operations and shutdown/reuse;
+it does not enable or qualify the full HIP trainer.
+
 `GpuBackend::HIP = 3` and the dense `kGpuBackends` table are present in every
 build, including builds without HIP. `kCompiledGpuBackends` alone controls which
 backends are advertised; disabled HIP reports no devices and cannot construct
@@ -168,6 +175,13 @@ teardown. An unrecoverable driver failure retains ownership until process exit
 rather than unloading code beneath pending GPU work.
 
 ## Validation
+
+Build `tensor_backend_selftest_args` to run the CLI parser contracts through
+`TensorBackendSelftestArgs.CPU`. With HIP enabled, `TensorBackendSelftest.HIP`
+requires a compatible AMD device and checks the Core self-test, Tensor reuse
+after shutdown and repeated-call allocation stability. A missing HIP device
+fails that explicitly selected GPU test; it does not count as a successful skip.
+The standard hosted build steps select only the CPU group.
 
 Build `tensor_operation_contracts` and run `TensorOperationContracts.HIP` for
 required GPU execution; an unavailable required backend is a failure. The same

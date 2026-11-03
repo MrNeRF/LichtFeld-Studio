@@ -213,6 +213,7 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::io::args::TensorBackendSelftestMode>) {
                 const char* name = mode.backend == lfs::core::GpuBackend::Vulkan  ? "vulkan"
                                    : mode.backend == lfs::core::GpuBackend::Metal ? "metal"
+                                   : mode.backend == lfs::core::GpuBackend::HIP   ? "hip"
                                                                                   : "cuda";
                 const lfs::Status status = lfs::core::tensor_backend_selftest(mode.backend);
                 if (status) {

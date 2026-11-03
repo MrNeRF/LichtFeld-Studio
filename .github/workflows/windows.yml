@@ -215,9 +215,9 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build %BUILD_DIR% --target tensor_operation_contracts training_hip_contracts --parallel 2
+          cmake --build %BUILD_DIR% --target tensor_operation_contracts training_hip_contracts tensor_backend_selftest_args --parallel 2
           if errorlevel 1 exit /b 1
-          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(TensorOperationContracts[.](CPU|Runner)|TrainingBackendContracts[.]CPU)$"
+          ctest --test-dir %BUILD_DIR% --output-on-failure --no-tests=error -R "^(TensorOperationContracts[.](CPU|Runner)|TrainingBackendContracts[.]CPU|TensorBackendSelftestArgs[.]CPU)$"
 
       - name: Run Python runtime DLL boundary tests
         shell: cmd
