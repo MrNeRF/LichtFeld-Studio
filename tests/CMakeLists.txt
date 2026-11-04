@@ -1671,6 +1671,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_masking.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_mesh_export.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_finalize.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_texturing.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_video_to_splat_bridge.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_preferences_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py

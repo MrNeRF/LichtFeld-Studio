@@ -2847,6 +2847,21 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 18: Texture the mesh from the frames, ship the viewer page, announce the package
+
+**Goal:** The last cloud deliverables: a textured mesh in glTF/USDZ, a shareable viewer, and a "ready" notice.
+
+**Files:** `video_to_splat/texturing.py` (projection, view choice, atlas baking, textured GLB/USDZ), `finalize.py` (steps 5 and 6), `project_bridge.py` (`export_viewer`, `announce_package`), locales, `tests/python/test_video_to_splat_texturing.py`.
+
+**Acceptance Criteria:**
+- [x] Projection matches COLMAP and the rasterizer for pinhole, OpenCV and equirectangular cameras.
+- [x] `mesh_textured.glb` carries TEXCOORD_0 and an embedded PNG; `mesh_textured.usdz` binds a UsdUVTexture to `atlas.png`.
+- [x] `viewer.html` is written through `lf.io.export_html`; a dialog names the package folder when training ends.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_texturing.py tests/python/test_video_to_splat_finalize.py -q`
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.

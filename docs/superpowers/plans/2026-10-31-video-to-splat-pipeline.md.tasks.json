@@ -116,7 +116,14 @@
       "status": "completed",
       "blockedBy": [16],
       "description": "**Goal:** Splat exports, dense cloud and mesh in PLY/GLB/USDZ when training ends.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/mesh_export.py\", \"src/python/lfs_plugins/video_to_splat/finalize.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_mesh_export.py tests/python/test_video_to_splat_finalize.py -q\", \"acceptanceCriteria\": [\"training end writes the full package\", \"GLB opens in the app\", \"failures recorded, rest still written\"]}\n```"
+    },
+    {
+      "id": 18,
+      "subject": "Task 18: Texture the mesh from the frames, ship the viewer page, announce the package",
+      "status": "completed",
+      "blockedBy": [17],
+      "description": "**Goal:** Textured mesh in glTF/USDZ, shareable viewer page, ready notice.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/texturing.py\", \"src/python/lfs_plugins/video_to_splat/finalize.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_texturing.py tests/python/test_video_to_splat_finalize.py -q\", \"acceptanceCriteria\": [\"projection matches COLMAP for pinhole, OpenCV, equirectangular\", \"textured GLB/USDZ written\", \"viewer.html and ready dialog\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-03T21:30:00Z"
+  "lastUpdated": "2026-11-03T22:30:00Z"
 }

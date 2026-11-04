@@ -44,6 +44,7 @@ def lf_stub(monkeypatch, tmp_path):
         "video_to_splat.download_message": "COLMAP {version} ({size_mb} MB) from {url}",
         "video_to_splat.weak_message": "{registered} of {total} frames ({percent}%)",
         "video_to_splat.import_failed": "import failed: {error}",
+        "video_to_splat.package_ready_message": "package {path} files {files} skipped {skipped}",
     }
 
     stub = ModuleType("lichtfeld")
@@ -68,6 +69,10 @@ def lf_stub(monkeypatch, tmp_path):
     stub.export_scene = lambda code, path, names, sh_degree, **kw: state.exports.append((code, path, list(names)))
     stub.get_scene = lambda: state.scene
     state.scene = None
+    state.html_exports = []
+    stub.io = SimpleNamespace(export_html=lambda data, path, **kw: state.html_exports.append(path))
+    state.messages = []
+    stub.ui.message_dialog = lambda title, message, style="info", callback=None: state.messages.append((title, message, style))
     stub.packages = SimpleNamespace(install=lambda name: state.installed.append(name) or "ok")
     stub.optimization_params = lambda: state.optimization
     stub.is_training_active = lambda: False
@@ -354,3 +359,26 @@ def test_start_training_schedules_the_package_for_training_end(lf_stub, tmp_path
     for thread in bridge._finalize_threads:
         thread.join(5)
     assert finalized == [tmp_path / "package2"]
+
+
+def test_export_viewer_writes_the_html_viewer_of_the_splat(lf_stub, tmp_path):
+    bridge, state = lf_stub
+    assert bridge.export_viewer(tmp_path / "viewer.html") == "video_to_splat.export_no_splat"
+    _scene_with_splat(state)
+    assert bridge.export_viewer(tmp_path / "viewer.html") is None
+    assert state.html_exports == [str(tmp_path / "viewer.html")]
+
+
+def test_training_end_announces_the_package(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import finalize as fin
+
+    result = fin.FinalizeResult(package=tmp_path / "package", files={"splat.ply": {"source": "x", "bytes": 1}},
+                                skipped={"viewer.html": "nope"})
+    monkeypatch.setattr(bridge, "finalize_now", lambda package, *a, **k: result)
+    bridge.start_training("perspective", False, tmp_path / "package", poll_seconds=0)
+    state.training_end_callbacks[0]({"iteration": 1})
+    for thread in bridge._finalize_threads:
+        thread.join(5)
+    assert state.messages[-1][0] == "video_to_splat.package_ready_title"
+    assert str(tmp_path / "package") in state.messages[-1][1] and "splat.ply" in state.messages[-1][1]

@@ -56,10 +56,13 @@ COLMAP, creates the project and starts training.
    GUT-trained splats.
 6. When training ends (or is stopped), the download package is completed in `package/` next to the project:
    the splat as `splat.ply`, `splat.spz`, `splat.sog` and `splat.glb`; `dense.ply`, the Gaussians as a colored,
-   oriented point cloud; `mesh.ply`, COLMAP's Poisson reconstruction of that cloud; and `mesh.glb` and
-   `mesh.usdz`, the same mesh with vertex colors for game engines and iPhone AR. `package.json` lists what
-   was written and why anything was skipped. The MCP tool `plugin_video_to_splat_finalize` writes the same
-   package for whatever splat is in the scene, at any time.
+   oriented point cloud; `mesh.ply`, COLMAP's Poisson reconstruction of that cloud; `mesh.glb` and
+   `mesh.usdz`, the same mesh with vertex colors; `atlas.png`, `mesh_textured.glb` and `mesh_textured.usdz`,
+   the mesh textured from the source frames (every triangle samples the frame that sees it best, which works
+   for 360 cameras too); and `viewer.html`, the self-contained web viewer to share or embed. `package.json`
+   lists what was written and why anything was skipped. A dialog announces the folder when it is ready. The
+   MCP tool `plugin_video_to_splat_finalize` writes the same package for whatever splat is in the scene, at
+   any time. To publish online, use **File → Publish to Gallery**.
 
 **Extract frames only** opens the frame extractor on the same video for a manual workflow.
 
@@ -98,7 +101,9 @@ D:/projects/room/
   package/splat.{ply,spz,sog,glb}     the trained splat, written when training ends
   package/dense.ply                   the Gaussians as a colored point cloud with normals
   package/mesh.ply, mesh.glb, mesh.usdz   Poisson mesh of that cloud, with vertex colors
-  package/textured/                   COLMAP's texture atlas, only when the dense chain ran
+  package/atlas.png, mesh_textured.{glb,usdz}   the mesh textured from the frames
+  package/viewer.html                 self-contained web viewer of the splat
+  package/textured/                   COLMAP's own texture atlas, only when the dense chain ran
   package/package.json                what was written, what was skipped and why
   pipeline.json                       finished stages and their results
 ```

@@ -243,6 +243,23 @@ def export_splat(code: int, path: Path, *, timeout: float = EXPORT_TIMEOUT, poll
         time.sleep(poll_seconds)
 
 
+def export_viewer(path: Path) -> Optional[str]:
+    """The self-contained HTML viewer of the first splat node: the shareable, embeddable result."""
+
+    def write() -> Optional[str]:
+        scene = lf.get_scene()
+        if scene is None:
+            return tr("video_to_splat.export_no_splat")
+        for node in scene.get_nodes():
+            data = node.splat_data()
+            if data is not None:
+                lf.io.export_html(data, str(path))
+                return None
+        return tr("video_to_splat.export_no_splat")
+
+    return ask_on_ui_thread(write)
+
+
 def finalize_hooks(colmap: Optional[Path] = None) -> finalize.FinalizeHooks:
     if colmap is None:
         try:
@@ -250,15 +267,24 @@ def finalize_hooks(colmap: Optional[Path] = None) -> finalize.FinalizeHooks:
         except PipelineError:
             colmap = None
     return finalize.FinalizeHooks(splat_tensors=splat_tensors, export_splat=export_splat, run=run_process,
-                                  colmap=colmap)
+                                  colmap=colmap, export_viewer=export_viewer)
 
 
 def finalize_now(package: Path, on_progress: Callable[[str], None] = lambda _m: None,
                  should_cancel: Callable[[], bool] = lambda: False) -> finalize.FinalizeResult:
     tensors = splat_tensors()
     name = (tensors or {}).get("name") or "scene"
+    dataset = package.parent / "dataset"  # the pipeline keeps frames and the sparse model beside the package
     return finalize.finalize_package(package, finalize_hooks(), on_progress=on_progress, should_cancel=should_cancel,
-                                     name=str(name))
+                                     name=str(name), dataset=dataset if dataset.is_dir() else None)
+
+
+def announce_package(result: finalize.FinalizeResult) -> None:
+    """The local stand-in for 'we e-mail you when it is ready': a dialog naming the package folder."""
+    written = ", ".join(sorted(result.files)) or "-"
+    message = tr("video_to_splat.package_ready_message").format(path=str(result.package), files=written,
+                                                               skipped=len(result.skipped))
+    lf.ui.schedule_on_ui_thread(lambda: lf.ui.message_dialog(tr("video_to_splat.package_ready_title"), message, "info"))
 
 
 def _on_training_end(*_args, **_kwargs) -> None:
@@ -268,7 +294,14 @@ def _on_training_end(*_args, **_kwargs) -> None:
     package, _pending_package = _pending_package, None
     if package is None:
         return
-    thread = threading.Thread(target=lambda: finalize_now(package), daemon=True, name="VideoToSplatFinalize")
+    def work() -> None:
+        try:
+            announce_package(finalize_now(package))
+        except Exception as exc:  # noqa: BLE001 - never let a package failure escape the trainer callback
+            lf.ui.schedule_on_ui_thread(lambda: lf.ui.message_dialog(tr("video_to_splat.package_ready_title"),
+                                                                     str(exc), "error"))
+
+    thread = threading.Thread(target=work, daemon=True, name="VideoToSplatFinalize")
     _finalize_threads.append(thread)
     thread.start()
 

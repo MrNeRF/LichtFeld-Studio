@@ -65,11 +65,13 @@ def test_finalize_writes_every_package_file_and_a_manifest(tmp_path):
     package = tmp_path / "package"
     for name in ("splat.ply", "splat.spz", "splat.sog", "splat.glb", "dense.ply", "mesh.ply", "mesh.glb", "mesh.usdz"):
         assert (package / name).is_file(), name
+    assert result.skipped["mesh_textured.glb"] == "no dataset with frames and a sparse model"
+    assert "viewer.html" not in result.files  # no viewer hook in this fake
     poisson = fakes.commands[0]
     assert poisson[1] == "poisson_mesher" and poisson[poisson.index("--PoissonMeshing.color") + 1] == "1"
     manifest = json.loads((package / "package.json").read_text())
     assert manifest["files"]["dense.ply"]["source"] == "gaussians"
-    assert manifest["files"]["mesh.glb"]["source"] == "mesh.ply" and manifest["skipped"] == {}
+    assert manifest["files"]["mesh.glb"]["source"] == "mesh.ply" and list(manifest["skipped"]) == ["mesh_textured.glb"]
     assert result.files["mesh.usdz"]["bytes"] > 0
     glb = mesh_export.read_glb(package / "mesh.glb")["json"]
     assert glb["meshes"][0]["name"] == "room" and glb["accessors"][glb["meshes"][0]["primitives"][0]["indices"]]["count"] == 6
@@ -101,3 +103,50 @@ def test_finalize_honours_cancel_before_exports(tmp_path):
     assert (tmp_path / "package" / "dense.ply").is_file()  # the cheap local steps still run
     assert "poisson_mesher" in [c[1] for c in fakes.commands]
     assert result.files
+
+
+def _dataset_with_one_frame(tmp_path):
+    """A dataset whose single pinhole frame at the origin looks at the fake mesher's quad (z = 0 ... use z offset)."""
+    dataset = tmp_path / "dataset"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "sparse" / "0").mkdir(parents=True)
+    with open(dataset / "sparse" / "0" / "cameras.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1) + struct.pack("<iiQQ", 1, 1, 64, 64) + struct.pack("<4d", 32, 32, 32, 32))
+    with open(dataset / "sparse" / "0" / "images.bin", "wb") as f:
+        f.write(struct.pack("<Q", 1) + struct.pack("<i", 1) + struct.pack("<4d", 1, 0, 0, 0)
+                + struct.pack("<3d", 0, 0, 3) + struct.pack("<i", 1) + b"a.png\x00" + struct.pack("<Q", 0))
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frame[:, :, 1] = 200
+    return dataset, frame
+
+
+def test_finalize_textures_the_mesh_and_writes_the_viewer(tmp_path):
+    fakes = Fakes()
+    dataset, frame = _dataset_with_one_frame(tmp_path)
+    viewers = []
+
+    def export_viewer(path):
+        viewers.append(path)
+        path.write_text("<html>viewer</html>")
+        return None
+
+    hooks = fakes.hooks()
+    hooks.export_viewer = export_viewer
+    hooks.load_image = lambda path: frame
+    result = finalize.finalize_package(tmp_path / "package", hooks, dataset=dataset, name="room")
+    package = tmp_path / "package"
+    for name in ("atlas.png", "mesh_textured.glb", "mesh_textured.usdz", "viewer.html"):
+        assert (package / name).is_file(), name
+    assert result.files["mesh_textured.glb"]["source"] == "frames" and result.files["mesh_textured.glb"]["textured_faces"] == 2
+    assert result.files["viewer.html"]["source"] == "lf.io.export_html" and viewers == [package / "viewer.html"]
+    assert result.skipped == {}
+    glb = mesh_export.read_glb(package / "mesh_textured.glb")["json"]
+    assert "TEXCOORD_0" in glb["meshes"][0]["primitives"][0]["attributes"] and glb["images"][0]["mimeType"] == "image/png"
+
+
+def test_finalize_reports_a_failed_viewer_export(tmp_path):
+    fakes = Fakes()
+    hooks = fakes.hooks()
+    hooks.export_viewer = lambda path: "viewer exporter unavailable"
+    result = finalize.finalize_package(tmp_path / "package", hooks)
+    assert result.skipped["viewer.html"] == "viewer exporter unavailable"

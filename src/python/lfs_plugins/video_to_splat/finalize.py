@@ -7,7 +7,10 @@ Runs when training ends (or on request) because it needs the trained Gaussians:
 1. splat.ply / splat.spz / splat.sog / splat.glb through the app's exporters,
 2. dense.ply: the Gaussians as a colored, oriented point cloud,
 3. mesh.ply: COLMAP's Poisson mesher on that cloud (CPU),
-4. mesh.glb and mesh.usdz: the mesh with vertex colors, for engines and iPhone AR.
+4. mesh.glb and mesh.usdz: the mesh with vertex colors, for engines and iPhone AR,
+5. atlas.png, mesh_textured.glb and mesh_textured.usdz: the mesh textured from the source
+   frames (needs the dataset's images and sparse model),
+6. viewer.html: the self-contained web viewer, the shareable and embeddable result.
 
 Every step is optional and reported in package.json; a missing exporter or a crashed tool
 never undoes the others. All side effects are injected so this stays testable.
@@ -21,7 +24,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Callable, Optional
 
-from . import mesh_export
+from . import mesh_export, sfm, texturing
 from .text import _tr
 
 SPLAT_FORMATS = (("ply", 0), ("spz", 2), ("sog", 1), ("glb", 13))  # lf.export_scene format codes
@@ -38,6 +41,8 @@ class FinalizeHooks:
     export_splat: Callable[[int, Path], Optional[str]]     # (format code, path) -> error message or None
     run: Callable[[list[str], Callable[[str], None], Callable[[], bool]], CompletedProcess]
     colmap: Optional[Path] = None
+    export_viewer: Optional[Callable[[Path], Optional[str]]] = None   # (path) -> error message or None
+    load_image: Optional[Callable[[Path], object]] = None             # (file) -> HxWx3 uint8 array
 
 
 @dataclass
@@ -56,9 +61,16 @@ def plan_poisson_command(colmap: Path, cloud: Path, mesh: Path) -> list[str]:
             "--PoissonMeshing.color", "1", "--log_target", "stderr"]
 
 
+def default_load_image(path: Path):
+    import numpy as np
+    from PIL import Image
+
+    return np.asarray(Image.open(path).convert("RGB"))
+
+
 def finalize_package(package: Path, hooks: FinalizeHooks, *, on_progress: Callable[[str], None] = lambda _m: None,
                      should_cancel: Callable[[], bool] = lambda: False, formats=SPLAT_FORMATS,
-                     name: str = "scene") -> FinalizeResult:
+                     name: str = "scene", dataset: Optional[Path] = None) -> FinalizeResult:
     package.mkdir(parents=True, exist_ok=True)
     result = FinalizeResult(package=package)
 
@@ -108,7 +120,8 @@ def finalize_package(package: Path, hooks: FinalizeHooks, *, on_progress: Callab
         else:
             record(mesh, "poisson_mesher")
 
-    # 4. GLB and USDZ
+    # 4. GLB and USDZ with vertex colors
+    data = None
     if mesh.is_file():
         try:
             data = mesh_export.read_ply_mesh(mesh)
@@ -119,6 +132,43 @@ def finalize_package(package: Path, hooks: FinalizeHooks, *, on_progress: Callab
             record(package / "mesh.usdz", "mesh.ply")
         except Exception as exc:  # noqa: BLE001 - a bad mesh must not lose the rest of the package
             result.skipped["mesh.glb"] = str(exc)
+            data = None
+
+    # 5. texture atlas from the source frames
+    if data is not None and len(data["faces"]):
+        model_dir = (dataset / sfm.SPARSE_DIR / "0") if dataset is not None else None
+        images_dir = (dataset / sfm.IMAGES_DIR) if dataset is not None else None
+        if model_dir is None or not (model_dir / "images.bin").is_file() or not images_dir or not images_dir.is_dir():
+            result.skipped["mesh_textured.glb"] = "no dataset with frames and a sparse model"
+        else:
+            try:
+                cameras = sfm.read_cameras_bin(model_dir / "cameras.bin")
+                images = sfm.read_images_bin(model_dir / "images.bin")
+                loader = hooks.load_image or default_load_image
+                on_progress(_tr("video_to_splat.progress.texturing", "Texturing the mesh from the frames"))
+                stats = texturing.texture_mesh(
+                    package, data["positions"], data["faces"], images, cameras,
+                    lambda image_name: loader(images_dir / image_name), name=name,
+                    on_progress=lambda c, t: on_progress(_tr("video_to_splat.progress.texturing_faces",
+                                                             "Texturing {current}/{total} faces", current=c, total=t)))
+                for file_name in ("atlas.png", "mesh_textured.glb", "mesh_textured.usdz"):
+                    record(package / file_name, "frames")
+                result.files["mesh_textured.glb"]["textured_faces"] = stats["textured_faces"]
+            except Exception as exc:  # noqa: BLE001 - texturing is the last, most fragile step
+                result.skipped["mesh_textured.glb"] = str(exc)
+
+    # 6. the shareable viewer page
+    if hooks.export_viewer is not None and not should_cancel():
+        viewer = package / "viewer.html"
+        on_progress(_tr("video_to_splat.progress.writing_viewer", "Writing viewer.html"))
+        try:
+            error = hooks.export_viewer(viewer)
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+        if error or not viewer.is_file():
+            result.skipped["viewer.html"] = error or "export produced no file"
+        else:
+            record(viewer, "lf.io.export_html")
     _write_manifest(result)
     return result
 
