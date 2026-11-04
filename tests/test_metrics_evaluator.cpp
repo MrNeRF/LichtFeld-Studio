@@ -1767,6 +1767,38 @@ TEST(ViewEvaluationJson, OneFileKeyedByImageNameInTheOutputFolder) {
     std::filesystem::remove_all(tmp);
 }
 
+TEST(MetricsReporterOutput, CreatesHeaderInNewDirectoryAndPreservesExistingRows) {
+    const auto root = std::filesystem::temp_directory_path() / "lfs_metrics_reporter_output";
+    std::filesystem::remove_all(root);
+    for (const bool existing_directory : {false, true}) {
+        const auto output = root / (existing_directory ? "existing" : "new") / "output";
+        if (existing_directory)
+            std::filesystem::create_directories(output);
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = output;
+        EvalMetrics first;
+        first.iteration = 100;
+        first.psnr = 25.0f;
+        {
+            lfs::training::MetricsReporter reporter(output);
+            reporter.write_training_config(params);
+            reporter.add_metrics(first);
+        }
+        EvalMetrics second = first;
+        second.iteration = 200;
+        {
+            lfs::training::MetricsReporter reporter(output);
+            reporter.add_metrics(second);
+        }
+        std::ifstream csv(output / "metrics.csv");
+        ASSERT_TRUE(csv.is_open());
+        const std::string contents{std::istreambuf_iterator<char>(csv), std::istreambuf_iterator<char>()};
+        EXPECT_EQ(contents, first.to_csv_header() + "\n" + first.to_csv_row() + "\n" + second.to_csv_row() + "\n")
+            << "existing directory: " << existing_directory;
+    }
+    std::filesystem::remove_all(root);
+}
+
 TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";

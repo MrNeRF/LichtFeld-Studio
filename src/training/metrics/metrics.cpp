@@ -1225,6 +1225,13 @@ namespace lfs::training {
           csv_path_(output_dir_ / "metrics.csv"),
           txt_path_(output_dir_ / "metrics_report.txt"),
           per_image_path_(output_dir_ / "per_image_metrics.json") {
+        if (!output_dir_.empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(output_dir_, ec);
+            if (ec) {
+                LOG_WARN("Eval: failed to create the output directory: {}", ec.message());
+            }
+        }
         // Create CSV header if file doesn't exist
         if (!lfs::core::native_fs::exists(csv_path_)) {
             std::ofstream csv_file;
