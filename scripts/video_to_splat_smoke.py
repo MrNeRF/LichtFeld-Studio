@@ -29,6 +29,7 @@ request = pipeline.Request(
     preset=os.environ.get("LFS_V2S_PRESET", "balanced"),
     mask_people=os.environ.get("LFS_V2S_MASK", "1") not in ("0", "false", "no"),
     build_mesh=os.environ.get("LFS_V2S_MESH", "0") in ("1", "true", "yes"),
+    publish_to_gallery=os.environ.get("LFS_V2S_PUBLISH", "0") in ("1", "true", "yes"),
 )
 done = threading.Event()
 outcome = {}

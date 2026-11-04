@@ -123,7 +123,14 @@
       "status": "completed",
       "blockedBy": [17],
       "description": "**Goal:** Textured mesh in glTF/USDZ, shareable viewer page, ready notice.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/texturing.py\", \"src/python/lfs_plugins/video_to_splat/finalize.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_texturing.py tests/python/test_video_to_splat_finalize.py -q\", \"acceptanceCriteria\": [\"projection matches COLMAP for pinhole, OpenCV, equirectangular\", \"textured GLB/USDZ written\", \"viewer.html and ready dialog\"]}\n```"
+    },
+    {
+      "id": 19,
+      "subject": "Task 19: Publish to the gallery when the package is ready",
+      "status": "completed",
+      "blockedBy": [18],
+      "description": "**Goal:** Hosted sharing with accounts through the gallery, from the pipeline.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/project_bridge.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_bridge.py tests/python/test_video_to_splat_pipeline.py -q\", \"acceptanceCriteria\": [\"publish review opens when asked\", \"ready dialog offers publish and show folder\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-03T22:30:00Z"
+  "lastUpdated": "2026-11-03T23:00:00Z"
 }

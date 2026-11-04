@@ -60,9 +60,14 @@ COLMAP, creates the project and starts training.
    `mesh.usdz`, the same mesh with vertex colors; `atlas.png`, `mesh_textured.glb` and `mesh_textured.usdz`,
    the mesh textured from the source frames (every triangle samples the frame that sees it best, which works
    for 360 cameras too); and `viewer.html`, the self-contained web viewer to share or embed. `package.json`
-   lists what was written and why anything was skipped. A dialog announces the folder when it is ready. The
-   MCP tool `plugin_video_to_splat_finalize` writes the same package for whatever splat is in the scene, at
-   any time. To publish online, use **File → Publish to Gallery**.
+   lists what was written and why anything was skipped. A dialog announces the folder when it is ready, with
+   **Publish to gallery** and **Show folder** one click away. The MCP tool `plugin_video_to_splat_finalize`
+   writes the same package for whatever splat is in the scene, at any time.
+7. **Publish to the gallery when the package is ready** (a checkbox in the dialog, `publish_to_gallery` in
+   the MCP tool) opens the gallery publish review as soon as the package exists: sign in to your gallery
+   account if needed, set the title and visibility, upload, and copy the share link or open the hosted
+   viewer from the gallery panel. This is the hosted, account-based sharing of the cloud service, provided by
+   the LichtFeld gallery.
 
 **Extract frames only** opens the frame extractor on the same video for a manual workflow.
 
@@ -126,7 +131,7 @@ without the dialog. Python tools appear with a `plugin_` prefix in `tools/list`,
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu`, `mask_people`, `build_mesh` | `{started, project, work_dir}` or `{started: false, error}` |
+| `video_to_splat_start` | `source` (video file or photo folder), `project` (.licht path), `mode` (auto, on, off), `preset` (fast, balanced, high), `use_gpu`, `mask_people`, `build_mesh`, `publish_to_gallery` | `{started, project, work_dir}` or `{started: false, error}` |
 | `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir, package_dir}` |
 | `video_to_splat_cancel` | none | `{cancelling}` |
 | `video_to_splat_finalize` | `package` (folder; defaults to the last run's) | `{started, package}`; progress and results under `finalize_*` in the status |

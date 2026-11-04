@@ -223,6 +223,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._video_preset = DEFAULT_PRESET
         self._video_mask_people = True
         self._video_build_mesh = False
+        self._video_publish_gallery = False
         self._pipeline_running = False
         self._pipeline_stage = ""
         self._pipeline_fraction = 0.0
@@ -244,6 +245,7 @@ class NewProjectPanel(_ImportDialogPanel):
         model.bind("video_preset", lambda: self._video_preset, self._set_video_preset)
         model.bind("video_mask_people", lambda: self._video_mask_people, self._set_video_mask_people)
         model.bind("video_build_mesh", lambda: self._video_build_mesh, self._set_video_build_mesh)
+        model.bind("video_publish_gallery", lambda: self._video_publish_gallery, self._set_video_publish_gallery)
         model.bind_func("pipeline_running", lambda: self._pipeline_running)
         model.bind_func("pipeline_stage", self._pipeline_stage_label)
         model.bind_func("pipeline_fraction", lambda: self._pipeline_fraction)
@@ -341,6 +343,7 @@ class NewProjectPanel(_ImportDialogPanel):
         self._video_preset = DEFAULT_PRESET
         self._video_mask_people = True
         self._video_build_mesh = False
+        self._video_publish_gallery = False
         self._pipeline_stage = ""
         self._pipeline_fraction = 0.0
         self._pipeline_message = ""
@@ -860,6 +863,9 @@ class NewProjectPanel(_ImportDialogPanel):
     def _set_video_build_mesh(self, value) -> None:
         self._video_build_mesh = self._as_bool(value)
 
+    def _set_video_publish_gallery(self, value) -> None:
+        self._video_publish_gallery = self._as_bool(value)
+
     def _pipeline_stage_label(self) -> str:
         key = _VIDEO_STAGE_KEYS.get(self._pipeline_stage)
         return lf.ui.tr(key) if key else ""
@@ -887,7 +893,7 @@ class NewProjectPanel(_ImportDialogPanel):
             return
         request = v2s_pipeline.Request(video=video, project=project, mode_override=self._video_mode,
                                        preset=self._video_preset, mask_people=self._video_mask_people,
-                                       build_mesh=self._video_build_mesh)
+                                       build_mesh=self._video_build_mesh, publish_to_gallery=self._video_publish_gallery)
         self._pipeline_cancel.clear()
         self._pipeline_running = True
         self._pipeline_stage, self._pipeline_fraction, self._pipeline_message = "toolchain", 0.0, ""

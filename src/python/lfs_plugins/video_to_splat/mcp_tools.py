@@ -21,12 +21,14 @@ TOOL_NAMES = ("video_to_splat_start", "video_to_splat_status", "video_to_splat_c
 
 
 def video_to_splat_start(source: str, project: str, mode: str = "auto", preset: str = "balanced",
-                         use_gpu: bool = True, mask_people: bool = True, build_mesh: bool = False) -> dict:
+                         use_gpu: bool = True, mask_people: bool = True, build_mesh: bool = False,
+                         publish_to_gallery: bool = False) -> dict:
     """Build a trained splat from a video file or a folder of photos. ``project`` is the .licht path to
     create (the extension is added when missing); ``mode`` is auto, on or off for 360 handling; ``preset``
     is fast, balanced or high; ``mask_people`` masks walkers out of training; ``build_mesh`` also runs
-    COLMAP dense stereo, Poisson meshing and texturing into the package folder (slow, needs CUDA).
-    Returns {started, project, work_dir} or {started: false, error}."""
+    COLMAP dense stereo, Poisson meshing and texturing into the package folder (slow, needs CUDA);
+    ``publish_to_gallery`` opens the gallery publish review (sign-in, title, upload, share link) once the
+    package is ready. Returns {started, project, work_dir} or {started: false, error}."""
     source_path = Path(source)
     if not source_path.exists():
         return {"started": False, "error": f"Source does not exist: {source_path}"}
@@ -40,7 +42,8 @@ def video_to_splat_start(source: str, project: str, mode: str = "auto", preset: 
     if project_path.suffix.lower() != ".licht":
         project_path = project_path.with_name(project_path.name + ".licht")
     request = Request(video=source_path, project=project_path, mode_override=mode, preset=preset,
-                      use_gpu=bool(use_gpu), mask_people=bool(mask_people), build_mesh=bool(build_mesh))
+                      use_gpu=bool(use_gpu), mask_people=bool(mask_people), build_mesh=bool(build_mesh),
+                      publish_to_gallery=bool(publish_to_gallery))
     return _runner.start(request, build_hooks())
 
 

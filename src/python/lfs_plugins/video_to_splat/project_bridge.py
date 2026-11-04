@@ -200,7 +200,7 @@ def create_project_and_wait(project: Path, dataset: Path, images_folder: str, *,
 
 
 EXPORT_TIMEOUT = 1800.0
-_pending_package: Optional[Path] = None   # the package to finalize when the current training ends
+_pending_package: Optional[tuple[Path, bool]] = None   # (package to finalize, publish afterwards) for the current training
 _training_end_registered = False
 _finalize_threads: list[threading.Thread] = []
 
@@ -279,24 +279,53 @@ def finalize_now(package: Path, on_progress: Callable[[str], None] = lambda _m: 
                                      name=str(name), dataset=dataset if dataset.is_dir() else None)
 
 
-def announce_package(result: finalize.FinalizeResult) -> None:
-    """The local stand-in for 'we e-mail you when it is ready': a dialog naming the package folder."""
+def publish_to_gallery() -> None:
+    """Open the gallery publish review for the current project: sign-in, title, upload and share links live there."""
+    from ..file_menu import _publish_current_project_to_gallery
+
+    try:
+        _publish_current_project_to_gallery()
+    except Exception as exc:  # noqa: BLE001 - the gallery reports its own errors; never crash the UI thread
+        lf.ui.message_dialog(tr("video_to_splat.package_ready_title"), str(exc), "error")
+
+
+def announce_package(result: finalize.FinalizeResult, publish: bool = False) -> None:
+    """The local stand-in for 'we e-mail you when it is ready': a dialog naming the package folder, with the
+    gallery publish review one click away (or opened right away when the run asked for it)."""
     written = ", ".join(sorted(result.files)) or "-"
     message = tr("video_to_splat.package_ready_message").format(path=str(result.package), files=written,
                                                                skipped=len(result.skipped))
-    lf.ui.schedule_on_ui_thread(lambda: lf.ui.message_dialog(tr("video_to_splat.package_ready_title"), message, "info"))
+    publish_label = tr("video_to_splat.package_ready_publish")
+    show_label = tr("video_to_splat.package_ready_show")
+
+    def on_choice(label: str) -> None:
+        if label == publish_label:
+            publish_to_gallery()
+        elif label == show_label:
+            lf.ui.reveal_in_file_manager(str(result.package))
+
+    def show() -> None:
+        if publish:
+            publish_to_gallery()
+            return
+        lf.ui.confirm_dialog(tr("video_to_splat.package_ready_title"), message,
+                             [publish_label, show_label, tr("common.ok")], on_choice)
+
+    lf.ui.schedule_on_ui_thread(show)
 
 
 def _on_training_end(*_args, **_kwargs) -> None:
     """Trainer callback (lf.on_training_end passes one payload object): finish the package on a worker
     thread, never on the trainer's."""
     global _pending_package
-    package, _pending_package = _pending_package, None
-    if package is None:
+    pending, _pending_package = _pending_package, None
+    if pending is None:
         return
+    package, publish = pending
+
     def work() -> None:
         try:
-            announce_package(finalize_now(package))
+            announce_package(finalize_now(package), publish)
         except Exception as exc:  # noqa: BLE001 - never let a package failure escape the trainer callback
             lf.ui.schedule_on_ui_thread(lambda: lf.ui.message_dialog(tr("video_to_splat.package_ready_title"),
                                                                      str(exc), "error"))
@@ -306,15 +335,15 @@ def _on_training_end(*_args, **_kwargs) -> None:
     thread.start()
 
 
-def schedule_finalize_on_training_end(package: Path) -> None:
+def schedule_finalize_on_training_end(package: Path, publish: bool = False) -> None:
     global _pending_package, _training_end_registered
-    _pending_package = package
+    _pending_package = (package, publish)
     if not _training_end_registered:
         lf.on_training_end(_on_training_end)
         _training_end_registered = True
 
 
-def start_training(mode: str, masked: bool = False, package: Optional[Path] = None, *,
+def start_training(mode: str, masked: bool = False, package: Optional[Path] = None, publish: bool = False, *,
                    timeout: float = TRAINING_START_TIMEOUT, dispatch_timeout: float = TRAINING_DISPATCH_TIMEOUT,
                    poll_seconds: float = 0.25) -> None:
     """Start training on the UI thread and block until the trainer runs.
@@ -334,7 +363,7 @@ def start_training(mode: str, masked: bool = False, package: Optional[Path] = No
         lf.start_training()
 
     if package is not None:
-        schedule_finalize_on_training_end(Path(package))
+        schedule_finalize_on_training_end(Path(package), publish)
     ask_on_ui_thread(start)
     began = time.monotonic()
     seen_starting = False

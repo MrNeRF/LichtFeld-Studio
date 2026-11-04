@@ -45,6 +45,8 @@ def lf_stub(monkeypatch, tmp_path):
         "video_to_splat.weak_message": "{registered} of {total} frames ({percent}%)",
         "video_to_splat.import_failed": "import failed: {error}",
         "video_to_splat.package_ready_message": "package {path} files {files} skipped {skipped}",
+        "video_to_splat.package_ready_publish": "Publish to gallery",
+        "video_to_splat.package_ready_show": "Show folder",
     }
 
     stub = ModuleType("lichtfeld")
@@ -376,9 +378,42 @@ def test_training_end_announces_the_package(lf_stub, tmp_path, monkeypatch):
     result = fin.FinalizeResult(package=tmp_path / "package", files={"splat.ply": {"source": "x", "bytes": 1}},
                                 skipped={"viewer.html": "nope"})
     monkeypatch.setattr(bridge, "finalize_now", lambda package, *a, **k: result)
+    published = []
+    monkeypatch.setattr(bridge, "publish_to_gallery", lambda: published.append("gallery"))
+    revealed = []
+    bridge.lf.ui.reveal_in_file_manager = lambda path: revealed.append(path) or True
     bridge.start_training("perspective", False, tmp_path / "package", poll_seconds=0)
     state.training_end_callbacks[0]({"iteration": 1})
     for thread in bridge._finalize_threads:
         thread.join(5)
-    assert state.messages[-1][0] == "video_to_splat.package_ready_title"
-    assert str(tmp_path / "package") in state.messages[-1][1] and "splat.ply" in state.messages[-1][1]
+    title, message, buttons, _style = state.dialogs[-1]
+    assert title == "video_to_splat.package_ready_title"
+    assert str(tmp_path / "package") in message and "splat.ply" in message
+    assert buttons == ["Publish to gallery", "Show folder", "common.ok"]
+    assert published == ["gallery"]  # the stub presses the first button
+
+
+def test_training_end_with_publish_opens_the_gallery_review_directly(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import finalize as fin
+
+    monkeypatch.setattr(bridge, "finalize_now", lambda package, *a, **k: fin.FinalizeResult(package=package))
+    published = []
+    monkeypatch.setattr(bridge, "publish_to_gallery", lambda: published.append("gallery"))
+    bridge.start_training("perspective", False, tmp_path / "package", True, poll_seconds=0)
+    before = len(state.dialogs)
+    state.training_end_callbacks[0]({"iteration": 1})
+    for thread in bridge._finalize_threads:
+        thread.join(5)
+    assert published == ["gallery"] and len(state.dialogs) == before  # no extra dialog in between
+
+
+def test_show_folder_button_reveals_the_package(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import finalize as fin
+
+    revealed = []
+    bridge.lf.ui.reveal_in_file_manager = lambda path: revealed.append(path) or True
+    bridge.lf.ui.confirm_dialog = lambda title, message, buttons, callback, style="info": callback(buttons[1])
+    bridge.announce_package(fin.FinalizeResult(package=tmp_path / "package"))
+    assert revealed == [str(tmp_path / "package")]

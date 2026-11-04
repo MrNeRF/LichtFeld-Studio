@@ -148,13 +148,13 @@ def test_mcp_tools_register_and_validate(lf_stub, tmp_path, monkeypatch):
     state.training = False
 
     started = start(source=str(video), project=str(tmp_path / "room"), mode="on", preset="fast", use_gpu=False,
-                    mask_people=False, build_mesh=True)
+                    mask_people=False, build_mesh=True, publish_to_gallery=True)
     assert started["started"] is True
     assert Path(started["project"]) == tmp_path / "room.licht"  # the extension is added
     assert run.started.wait(5)
     request = run.requests[0]
     assert (request.mode_override, request.preset, request.use_gpu) == ("on", "fast", False)
-    assert (request.mask_people, request.build_mesh) == (False, True)
+    assert (request.mask_people, request.build_mesh, request.publish_to_gallery) == (False, True, True)
     assert state.tools["video_to_splat_status"]()["active"] is True
     assert state.tools["video_to_splat_cancel"]()["cancelling"] is True
     run.outcome = pipeline.PipelineCancelled()

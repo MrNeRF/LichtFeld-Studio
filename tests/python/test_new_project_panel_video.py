@@ -439,6 +439,7 @@ def test_mask_and_mesh_options_reach_the_request(panel_env, monkeypatch):
     panel._set_name("room")
     panel._set_video_mask_people(False)
     panel._set_video_build_mesh(True)
+    panel._set_video_publish_gallery("true")
     captured = {}
     started = threading.Event()
 
@@ -452,5 +453,7 @@ def test_mask_and_mesh_options_reach_the_request(panel_env, monkeypatch):
     assert started.wait(5)
     _wait_for_thread(panel)
     assert captured["request"].mask_people is False and captured["request"].build_mesh is True
+    assert captured["request"].publish_to_gallery is True
     panel.show("D:/clips/other.mp4")
     assert panel._video_mask_people is True and panel._video_build_mesh is False  # show() resets the options
+    assert panel._video_publish_gallery is False

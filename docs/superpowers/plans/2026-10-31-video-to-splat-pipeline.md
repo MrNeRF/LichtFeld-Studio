@@ -2862,6 +2862,20 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 19: Publish to the gallery when the package is ready
+
+**Goal:** The hosted, account-based sharing step of the cloud service, through the app's own gallery.
+
+**Files:** `pipeline.py` (`publish_to_gallery` request flag passed to the train hook), `project_bridge.py` (`publish_to_gallery`, package-ready dialog buttons), dialog checkbox, MCP argument, locales, tests.
+
+**Acceptance Criteria:**
+- [x] With the option on, the gallery publish review opens right after the package is written; otherwise the ready dialog offers "Publish to gallery" and "Show folder".
+- [x] The option does not change the request fingerprint, so a rerun resumes.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_bridge.py tests/python/test_video_to_splat_pipeline.py -q`
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.

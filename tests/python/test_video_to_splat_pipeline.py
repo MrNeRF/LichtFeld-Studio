@@ -103,11 +103,12 @@ class Fakes:
         self.calls.append("create_project")
         self.create_args = (project, dataset, images_folder)
 
-    def train(self, mode, masked, package):
+    def train(self, mode, masked, package, publish):
         self.calls.append("train")
         self.train_mode = mode
         self.train_masked = masked
         self.train_package = package
+        self.train_publish = publish
 
     def mask_people(self, images, masks_dir, on_progress, should_cancel, carry_state):
         self.calls.append("mask_people")
@@ -207,6 +208,7 @@ def test_full_run_order_and_state(tmp_path, clip):
     assert fakes.train_mode == "equirectangular"
     assert fakes.train_masked is True  # masks were written, so training must run in ignore mode
     assert fakes.train_package == work_dir(project) / "package"  # finalized there when training ends
+    assert fakes.train_publish is False
 
 
 def test_rerun_skips_completed_stages(tmp_path, clip):
@@ -799,3 +801,12 @@ def write_model(model: Path, images, camera) -> None:
             f.write(struct.pack("<Q", 2))
             f.write(struct.pack("<ddq", 1.0, 2.0, -1) * 2)
     (model / "points3D.bin").write_bytes(struct.pack("<Q", 0))
+
+
+def test_publish_option_reaches_the_train_hook_without_changing_the_fingerprint(tmp_path, clip):
+    project = tmp_path / "proj.licht"
+    fakes = Fakes(project)
+    request = pipeline.Request(video=clip, project=project, publish_to_gallery=True)
+    pipeline.run(request, fakes.hooks(), on_progress=lambda *a: None, should_cancel=lambda: False)
+    assert fakes.train_publish is True
+    assert request.fingerprint() == make_request(project, clip).fingerprint()  # publishing is not a rebuild
