@@ -4,6 +4,7 @@
 
 #include "py_splat_data.hpp"
 #include "core/scene.hpp"
+#include "core/splat_preview.hpp"
 #include <nanobind/stl/optional.h>
 #include <stdexcept>
 #include <string_view>
@@ -157,6 +158,13 @@ namespace lfs::python {
                          "SHN tensor in canonical [N, (degree+1)^2-1, 3] layout "
                          "(materialised from the internal swizzled storage — this allocates, "
                          "not a view).")
+            .def("shN_rows",
+                 [](const PySplatData& self, const PyTensor& rows, int degree) {
+                     return PyTensor(core::splat_sh_preview(*self.data(), rows.tensor(), degree), true);
+                 },
+                 nb::arg("rows"), nb::arg("degree"), nb::call_guard<nb::gil_scoped_release>(),
+                 "Copy selected SH-rest rows and bands to owned canonical Float32 CPU storage. "
+                 "Rows must be a rank-1 CPU Int32 or Int64 tensor; call at a model read boundary.")
             .def_prop_ro("scaling_raw", &PySplatData::scaling_raw,
                          "Raw scaling tensor [N, 3] (log-space, view)")
             .def_prop_ro("rotation_raw", &PySplatData::rotation_raw,

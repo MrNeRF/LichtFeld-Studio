@@ -48,6 +48,20 @@ add_test(NAME lichtfeld.collision_preview_upload COMMAND lichtfeld_collision_pre
 set_tests_properties(lichtfeld.collision_preview_upload PROPERTIES LABELS "cpu;collision" TIMEOUT 30)
 
 if(TARGET lfs_core)
+    add_executable(lichtfeld_training_adapter_tests test_splat_preview.cpp test_training_hook_context.cpp)
+    target_compile_features(lichtfeld_training_adapter_tests PRIVATE cxx_std_23)
+    target_link_libraries(lichtfeld_training_adapter_tests PRIVATE lfs_core GTest::gtest_main CUDA::cudart)
+    add_test(NAME lichtfeld.training_adapter
+        COMMAND lichtfeld_training_adapter_tests --gtest_filter=-*SplatPreviewGpu*)
+    add_test(NAME lichtfeld.training_adapter_gpu
+        COMMAND lichtfeld_training_adapter_tests --gtest_filter=*SplatPreviewGpu*)
+    set_tests_properties(lichtfeld.training_adapter PROPERTIES LABELS "fast;cpu" TIMEOUT 30)
+    set_tests_properties(lichtfeld.training_adapter_gpu PROPERTIES LABELS "gpu" TIMEOUT 60)
+    if(WIN32)
+        set_tests_properties(lichtfeld.training_adapter lichtfeld.training_adapter_gpu PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:lfs_core>")
+    endif()
+
     add_executable(lichtfeld_collision_volume_tests test_collision_volume_validation.cpp)
     target_compile_features(lichtfeld_collision_volume_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_collision_volume_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io)
@@ -1665,6 +1679,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_project_operations.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
@@ -1799,6 +1814,16 @@ set_tests_properties(lichtfeld.python.nightly PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "nightly;gpu"
     TIMEOUT 1800
+)
+
+add_test(NAME lichtfeld.python.training_adapter_gpu
+    COMMAND ${Python_EXECUTABLE} -m pytest -q -m gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_adapter.py
+)
+set_tests_properties(lichtfeld.python.training_adapter_gpu PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "gpu;integration"
+    TIMEOUT 240
 )
 
 # Leave the baseline environment intact unless a directory is configured explicitly.
