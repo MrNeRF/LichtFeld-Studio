@@ -124,6 +124,28 @@ class RuntimeContracts(unittest.TestCase):
             with self.assertRaises(OSError):os.fstat(descriptor)
             self.assertFalse(list(Path(root).glob('*.tmp')))
 
+    @unittest.skipUnless(os.name=='nt', 'Windows native Unicode and extended paths')
+    def test_session_metadata_roundtrips_through_long_unicode_registry(self):
+        from _lfs_path_io import TemporaryDirectory
+        with TemporaryDirectory() as base:
+            directory=t.Path(base)
+            while len(str(directory))<290:
+                directory=directory/'training-カメラ-é'
+            with mock.patch.dict(os.environ,LFS_TRAINING_SESSIONS_DIR=str(directory)):
+                publisher=t.SessionPublisher({'label':'Camera é · カメラ'})
+                client=None
+                try:
+                    client=t.SessionClient(publisher.root,'Long-path reader')
+                    publisher.update(iteration=12)
+                    status=client.status()
+                    self.assertEqual(status['iteration'],12)
+                    self.assertEqual(status['label'],'Camera é · カメラ')
+                    self.assertNotIn('\\\\?\\',json_text:=str(publisher.root))
+                    self.assertGreater(len(json_text),260)
+                finally:
+                    if client:client.close()
+                    publisher.finish();publisher.thread.join(3);publisher.pool.close()
+
     @unittest.skipUnless(os.name=='nt', 'Windows native handle transfer')
     def test_windows_failed_handle_transfer_does_not_leak(self):
         import ctypes

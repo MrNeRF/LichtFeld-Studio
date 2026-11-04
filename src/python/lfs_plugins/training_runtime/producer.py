@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Opt-in snapshot demand on every trainer, independent of Blender."""
 import os
-from pathlib import Path
+from _lfs_path_io import Path
 import sys
 import time
 import threading

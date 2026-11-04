@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Bounded background readers. Never import or access bpy, widgets or scene APIs."""
-from pathlib import Path
+from _lfs_path_io import Path
 import queue
 import threading
 import time

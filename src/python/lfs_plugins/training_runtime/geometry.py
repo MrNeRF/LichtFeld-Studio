@@ -2,7 +2,7 @@
 """Explicit dataset/model/viewer frames and bounded immutable camera metadata."""
 import hashlib
 import json
-from pathlib import Path
+from _lfs_path_io import Path
 
 SCHEMA = 1
 MAX_CAMERAS = 10000

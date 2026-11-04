@@ -5,7 +5,7 @@ import time
 import queue
 import uuid
 import weakref
-from pathlib import Path
+from _lfs_path_io import Path
 from concurrent.futures import ThreadPoolExecutor
 
 _retirement = ThreadPoolExecutor(max_workers=1, thread_name_prefix="viewer-retire")
