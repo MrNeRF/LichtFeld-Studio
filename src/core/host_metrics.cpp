@@ -197,7 +197,8 @@ namespace lfs::core::host_metrics {
                     const auto cores = std::max(1u, std::thread::hardware_concurrency());
                     result.process_cpu_percent = std::clamp(
                         static_cast<float>(100.0 * (process_ticks - previous.process_ticks) /
-                                           (elapsed * 10000000.0 * cores)), 0.f, 100.f);
+                                           (elapsed * 10000000.0 * cores)),
+                        0.f, 100.f);
                 }
             }
             previous.valid = true;

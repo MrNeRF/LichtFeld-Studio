@@ -716,13 +716,21 @@ namespace lfs::app {
             const bool completed = state && state->status == vis::JobStatus::Completed;
             const bool canceled = state && state->status == vis::JobStatus::Canceled;
             const bool failed = state && state->status == vis::JobStatus::Failed;
-            json payload{{"id", "camera.selection"}, {"label", LOC("scene.camera_selection")}, {"kind", "selection"},
-                         {"active", active}, {"status", active ? "running" : completed ? "finished" : failed ? "failed" : canceled ? "cancelled" : "idle"},
-                         {"outcome", active ? "running" : completed ? "completed" : failed ? "failed" : canceled ? "cancelled" : "idle"},
-                         {"progress", state ? state->progress : 0.0F}, {"stage", state ? state->stage : ""},
-                         {"cancel_supported", active}, {"dismiss_supported", false},
+            json payload{{"id", "camera.selection"}, {"label", LOC("scene.camera_selection")}, {"kind", "selection"}, {"active", active}, {"status", active ? "running" : completed ? "finished"
+                                                                                                                                                                      : failed      ? "failed"
+                                                                                                                                                                      : canceled    ? "cancelled"
+                                                                                                                                                                                    : "idle"},
+                         {"outcome", active ? "running" : completed ? "completed"
+                                                      : failed      ? "failed"
+                                                      : canceled    ? "cancelled"
+                                                                    : "idle"},
+                         {"progress", state ? state->progress : 0.0F},
+                         {"stage", state ? state->stage : ""},
+                         {"cancel_supported", active},
+                         {"dismiss_supported", false},
                          {"actions", {{"start", false}, {"pause", false}, {"resume", false}, {"cancel", active}, {"dismiss", false}}}};
-            if (state && !state->error.empty()) payload["error"] = state->error;
+            if (state && !state->error.empty())
+                payload["error"] = state->error;
             add_runtime_job_links(payload);
             return payload;
         }
@@ -1107,9 +1115,11 @@ namespace lfs::app {
                 return {};
             }
             if (job_id == "camera.selection") {
-                if (action != "cancel" || !gui) return std::unexpected("Only cancellation is supported for camera.selection");
+                if (action != "cancel" || !gui)
+                    return std::unexpected("Only cancellation is supported for camera.selection");
                 const auto state = gui->asyncTasks().cameraSelectionStatus();
-                if (!state || !state->running()) return std::unexpected("Camera selection is not running");
+                if (!state || !state->running())
+                    return std::unexpected("Camera selection is not running");
                 gui->asyncTasks().cancelCameraSelection();
                 return {};
             }

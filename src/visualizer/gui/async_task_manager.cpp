@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/async_task_manager.hpp"
-#include "gui/camera_selection_algorithms.hpp"
 #include "core/collision.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error_bus.hpp"
@@ -20,6 +19,7 @@
 #include "core/scene.hpp"
 #include "core/scene_export_path.hpp"
 #include "core/services.hpp"
+#include "gui/camera_selection_algorithms.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
@@ -73,8 +73,8 @@
 #include <future>
 #include <limits>
 #include <nlohmann/json.hpp>
-#include <optional>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <shared_mutex>
 #include <string_view>
@@ -4403,7 +4403,7 @@ namespace lfs::vis::gui {
         }
 
         std::vector<glm::vec3> cropbox_world_points(const core::Scene& scene,
-                                                     const core::SceneNode& cropbox) {
+                                                    const core::SceneNode& cropbox) {
             std::vector<glm::vec3> points;
             if (!cropbox.cropbox)
                 return points;
@@ -4422,8 +4422,10 @@ namespace lfs::vis::gui {
     std::expected<JobHandle, lfs::Error> AsyncTaskManager::startCameraSelection(const CameraSelectionOptions options) {
         const auto selection_error = [](const std::string& message) {
             return std::unexpected(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::FailedPrecondition, .domain = lfs::ErrorDomain::App,
-                .user_message = message, .detection = LFS_SOURCE_SITE_CURRENT()}));
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::App,
+                .user_message = message,
+                .detection = LFS_SOURCE_SITE_CURRENT()}));
         };
         if (camera_selection_state_.thread && camera_selection_state_.thread->joinable()) {
             if (const auto prior = cameraSelectionStatus(); prior && prior->running())
@@ -4560,17 +4562,24 @@ namespace lfs::vis::gui {
                         jobs_.report(job, progress, LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
                     });
                 } else if (options.operation == CameraSelectionOperation::CropBoxVisibility) {
-                    if (cropbox_points.empty()) error = LOC("scene.camera_selection_cropbox_required");
-                    else for (size_t index = 0; index < count; ++index) {
-                        if (cancelled()) break;
-                        if (camera_selection::crop_coverage(cameras[index], cropbox_points, snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max) >= std::clamp(options.coverage, 0.0F, 100.0F)) selected.push_back(index);
-                        if ((index & 63U) == 0U) jobs_.report(job, 0.9F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
-                    }
+                    if (cropbox_points.empty())
+                        error = LOC("scene.camera_selection_cropbox_required");
+                    else
+                        for (size_t index = 0; index < count; ++index) {
+                            if (cancelled())
+                                break;
+                            if (camera_selection::crop_coverage(cameras[index], cropbox_points, snapshot_cropbox_world_to_local, snapshot_cropbox_min, snapshot_cropbox_max) >= std::clamp(options.coverage, 0.0F, 100.0F))
+                                selected.push_back(index);
+                            if ((index & 63U) == 0U)
+                                jobs_.report(job, 0.9F * static_cast<float>(index) / std::max<size_t>(count, 1), LOC(lichtfeld::Strings::Runtime::TASK_STARTING));
+                        }
                 }
             } catch (const std::exception& exception) {
                 const auto failure = lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Internal, .domain = lfs::ErrorDomain::App,
-                    .user_message = "Camera selection failed", .detail = exception.what(),
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::App,
+                    .user_message = "Camera selection failed",
+                    .detail = exception.what(),
                     .detection = LFS_SOURCE_SITE_CURRENT()});
                 error = lfs::format_for_developer(failure);
                 LOG_ERROR("{}", error);
@@ -4632,9 +4641,10 @@ namespace lfs::vis::gui {
                 std::unordered_set<core::Uuid> current;
                 if (!group || group->type != core::NodeType::CAMERA_GROUP)
                     valid = false;
-                else for (const core::NodeId child_id : group->children)
-                    if (const auto* node = manager->getScene().getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera)
-                        current.insert(node->uuid);
+                else
+                    for (const core::NodeId child_id : group->children)
+                        if (const auto* node = manager->getScene().getNodeById(child_id); node && node->type == core::NodeType::CAMERA && node->camera)
+                            current.insert(node->uuid);
                 valid = valid && current.size() == uuids.size() &&
                         std::ranges::all_of(uuids, [&current](const auto& uuid) { return current.contains(uuid); });
             }

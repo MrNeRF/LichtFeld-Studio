@@ -23,8 +23,8 @@
 #include "io/video/video_export_options.hpp"
 #include "training/training_cropbox_mask.hpp"
 #include "visualizer/apriltag_calibration.hpp"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <expected>

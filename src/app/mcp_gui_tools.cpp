@@ -2468,14 +2468,7 @@ namespace lfs::app {
             McpTool{
                 .name = "camera_selection.start",
                 .description = "Start a cancellable camera-group training selection job",
-                .input_schema = {.type = "object", .properties = json{
-                    {"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility"})}}},
-                    {"camera_group", {{"type", "string"}}},
-                    {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
-                    {"every_n", {{"type", "integer"}, {"minimum", 1}}},
-                    {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
-                    {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}},
-                    {"cropbox", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
+                .input_schema = {.type = "object", .properties = json{{"operation", {{"type", "string"}, {"enum", json::array({"enable_all", "disable_all", "invert", "random", "every_n", "distinct", "cropbox_visibility"})}}}, {"camera_group", {{"type", "string"}}}, {"percentage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"every_n", {{"type", "integer"}, {"minimum", 1}}}, {"overlap", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"coverage", {{"type", "number"}, {"minimum", 0}, {"maximum", 100}}}, {"cropbox", {{"type", "string"}}}}, .required = {"operation", "camera_group"}},
                 .metadata = {.category = "scene", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread", .long_running = true, .user_visible = true}},
             [viewer_impl](const json& args) -> json {
                 return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
@@ -2486,14 +2479,14 @@ namespace lfs::app {
                     auto& scene = manager->getScene();
                     const auto operation = args.at("operation").get<std::string>();
                     using Selection = vis::gui::AsyncTaskManager;
-                    const auto type = operation == "enable_all" ? Selection::CameraSelectionOperation::EnableAll
-                                    : operation == "disable_all" ? Selection::CameraSelectionOperation::DisableAll
-                                    : operation == "invert" ? Selection::CameraSelectionOperation::Invert
-                                    : operation == "random" ? Selection::CameraSelectionOperation::Random
-                                    : operation == "every_n" ? Selection::CameraSelectionOperation::EveryN
-                                    : operation == "distinct" ? Selection::CameraSelectionOperation::Distinct
-                                    : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
-                                    : Selection::CameraSelectionOperation::Random;
+                    const auto type = operation == "enable_all"           ? Selection::CameraSelectionOperation::EnableAll
+                                      : operation == "disable_all"        ? Selection::CameraSelectionOperation::DisableAll
+                                      : operation == "invert"             ? Selection::CameraSelectionOperation::Invert
+                                      : operation == "random"             ? Selection::CameraSelectionOperation::Random
+                                      : operation == "every_n"            ? Selection::CameraSelectionOperation::EveryN
+                                      : operation == "distinct"           ? Selection::CameraSelectionOperation::Distinct
+                                      : operation == "cropbox_visibility" ? Selection::CameraSelectionOperation::CropBoxVisibility
+                                                                          : Selection::CameraSelectionOperation::Random;
                     if (operation != "enable_all" && operation != "disable_all" && operation != "invert" &&
                         operation != "random" && operation != "every_n" && operation != "distinct" && operation != "cropbox_visibility")
                         return mcp::invalid_argument_result("Unsupported camera selection operation", "operation");
@@ -2509,10 +2502,14 @@ namespace lfs::app {
                             return mcp::invalid_argument_result("A valid crop box is required", "cropbox");
                     }
                     const auto handle = gui->asyncTasks().startCameraSelection({.operation = type,
-                        .percentage = args.value("percentage", 25.0F), .every_n = args.value("every_n", 2),
-                        .overlap = args.value("overlap", 65.0F), .coverage = args.value("coverage", 40.0F),
-                        .camera_group_id = group_id, .cropbox_id = cropbox_id});
-                    if (!handle) return json{{"error", std::string(handle.error().user_message())}};
+                                                                                .percentage = args.value("percentage", 25.0F),
+                                                                                .every_n = args.value("every_n", 2),
+                                                                                .overlap = args.value("overlap", 65.0F),
+                                                                                .coverage = args.value("coverage", 40.0F),
+                                                                                .camera_group_id = group_id,
+                                                                                .cropbox_id = cropbox_id});
+                    if (!handle)
+                        return json{{"error", std::string(handle.error().user_message())}};
                     return json{{"job_id", "camera.selection"}, {"handle", handle->id}, {"operation", operation}};
                 });
             });

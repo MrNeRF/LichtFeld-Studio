@@ -16,8 +16,8 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
-#include "gui/global_context_menu.hpp"
 #include "gui/async_task_manager.hpp"
+#include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
@@ -3479,9 +3479,9 @@ namespace lfs::vis::gui {
         } else if ((kind == "enable_group_train" || kind == "disable_group_train" || kind == "invert_group_train") && parts.size() >= 2) {
             core::NodeId group_id = core::NULL_NODE;
             if (auto* gui = services().guiOrNull(); gui && parseNodeId(parts[1], group_id)) {
-                const auto operation = kind == "enable_group_train" ? AsyncTaskManager::CameraSelectionOperation::EnableAll
-                                     : kind == "disable_group_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
-                                                                          : AsyncTaskManager::CameraSelectionOperation::Invert;
+                const auto operation = kind == "enable_group_train"    ? AsyncTaskManager::CameraSelectionOperation::EnableAll
+                                       : kind == "disable_group_train" ? AsyncTaskManager::CameraSelectionOperation::DisableAll
+                                                                       : AsyncTaskManager::CameraSelectionOperation::Invert;
                 if (const auto result = gui->asyncTasks().startCameraSelection({.operation = operation, .camera_group_id = group_id}); !result)
                     gui->enqueueToast({.title = tr("scene.camera_selection"), .message = std::string(result.error().user_message())});
             }
