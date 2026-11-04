@@ -2038,6 +2038,9 @@
     "disabled": "Disabled"
   },
   "image_preview": {
+    "source_changed": "Image changed. Refresh and sample the color again.",
+    "scene_changed": "The scene changed. Sample the color again.",
+    "color_sample_failed": "Could not sample the color: {}",
     "help": "Help",
     "refresh": "Refresh",
     "apply_render_color": "Apply to render background",

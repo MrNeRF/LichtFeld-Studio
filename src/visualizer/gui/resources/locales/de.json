@@ -2027,6 +2027,9 @@
     "disabled": "Deaktiviert"
   },
   "image_preview": {
+    "source_changed": "Das Bild wurde geändert. Aktualisieren Sie es und nehmen Sie die Farbe erneut auf.",
+    "scene_changed": "Die Szene wurde geändert. Nehmen Sie die Farbe erneut auf.",
+    "color_sample_failed": "Die Farbe konnte nicht aufgenommen werden: {}",
     "help": "Hilfe",
     "refresh": "Aktualisieren",
     "apply_render_color": "Als Renderhintergrund übernehmen",

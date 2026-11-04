@@ -2027,6 +2027,9 @@
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {
+    "source_changed": "De afbeelding is gewijzigd. Vernieuw en neem de kleur opnieuw op.",
+    "scene_changed": "De scène is gewijzigd. Neem de kleur opnieuw op.",
+    "color_sample_failed": "De kleur kon niet worden opgenomen: {}",
     "help": "Help",
     "refresh": "Vernieuwen",
     "apply_render_color": "Toepassen op renderachtergrond",

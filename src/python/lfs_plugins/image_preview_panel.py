@@ -13,7 +13,7 @@ from . import rml_widgets as w
 from .types import Panel
 from .panels import panel_class
 from .preview_geometry import THUMB_ROW_DP, visible_thumbnail_range, view_to_source, source_to_view
-from .preview_metadata import PreviewMetadata
+from .preview_metadata import PreviewMetadata, SourceChangedError
 from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
@@ -1187,7 +1187,7 @@ class ImagePreviewPanel(Panel):
                 previous = tuple(settings.get("background_color"))
                 def write(value):
                     if RuntimeState.scene_generation.value != generation:
-                        raise RuntimeError("The scene changed since the color was sampled")
+                        raise RuntimeError(lf.ui.tr("image_preview.scene_changed"))
                     # Render settings are snapshots: reuse would restore unrelated old settings.
                     current = lf.get_render_settings()
                     if current is None:
@@ -1200,7 +1200,7 @@ class ImagePreviewPanel(Panel):
                 previous = tuple(params.bg_color)
                 def write(value):
                     if RuntimeState.scene_generation.value != generation:
-                        raise RuntimeError("The scene changed since the color was sampled")
+                        raise RuntimeError(lf.ui.tr("image_preview.scene_changed"))
                     current = lf.optimization_params()
                     if current is None or not current.has_params():
                         raise RuntimeError(lf.ui.tr("training_panel.parameters_unavailable"))
@@ -1277,8 +1277,10 @@ class ImagePreviewPanel(Panel):
             return
         try:
             self._sampled_color = future.result()
+        except SourceChangedError:
+            self._action_error = lf.ui.tr("image_preview.source_changed")
         except Exception as error:
-            self._action_error = str(error)
+            self._action_error = lf.ui.tr("image_preview.color_sample_failed").format(str(error))
 
     def _update_picker_cursor(self):
         """Toggle the picker-active CSS class on the image container."""

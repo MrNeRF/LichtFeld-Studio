@@ -7,6 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from _lfs_path_io import native_path
 
 
+class SourceChangedError(RuntimeError):
+    """The sampled file revision no longer matches the displayed image."""
+
+
 def _read(path, image_info, previous):
     try:
         st = os.stat(native_path(path))
@@ -25,10 +29,10 @@ def _read(path, image_info, previous):
 
 def _sample(path, expected, x, y, sampler):
     if expected and _read(path, None, None)[0] != expected:
-        raise RuntimeError("Image changed. Refresh before sampling its color.")
+        raise SourceChangedError
     color = sampler(str(path), x, y, 10)
     if expected and _read(path, None, None)[0] != expected:
-        raise RuntimeError("Image changed while sampling. Refresh and try again.")
+        raise SourceChangedError
     return tuple(color)
 
 

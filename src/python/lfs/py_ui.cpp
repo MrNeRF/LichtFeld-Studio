@@ -4850,7 +4850,7 @@ namespace lfs::python {
         m.def("preview_texture_status", [](const std::string& source) {
             lfs::python::require_ui_texture_creation_thread();
             const auto* gui = lfs::python::get_gui_manager();
-            return gui ? gui->previewTextureStatus(source) : std::string("unknown"); }, nb::arg("source"), "Get a preview URL's upload state: unknown, pending, ready or error. UI thread only.");
+            return gui ? gui->previewTextureStatus(source) : std::string("unknown"); }, nb::arg("source"), "UI thread: return unknown, pending, ready or error for a revisioned preview URL.");
 
         m.def(
             "get_image_info",
@@ -4898,7 +4898,8 @@ namespace lfs::python {
                 return nb::make_tuple(color[0], color[1], color[2]);
             },
             nb::arg("path"), nb::arg("x"), nb::arg("y"), nb::arg("radius") = 10,
-            "Sample average color around pixel (x, y) within given radius, returns (r, g, b) in 0..1");
+            "Sample source pixels as (r, g, b) in 0..1. Releases the GIL during image IO.\n"
+            "Raises on decode failure or invalid coordinates; failures do not produce a black sample.");
 
         m.def(
             "preload_image_async",

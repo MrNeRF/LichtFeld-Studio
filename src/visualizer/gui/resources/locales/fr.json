@@ -2027,6 +2027,9 @@
     "disabled": "Désactivé"
   },
   "image_preview": {
+    "source_changed": "L’image a changé. Actualisez et prélevez à nouveau la couleur.",
+    "scene_changed": "La scène a changé. Prélevez à nouveau la couleur.",
+    "color_sample_failed": "Impossible de prélever la couleur : {}",
     "help": "Aide",
     "refresh": "Actualiser",
     "apply_render_color": "Appliquer au fond du rendu",

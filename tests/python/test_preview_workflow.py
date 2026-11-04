@@ -301,6 +301,55 @@ def test_late_color_sample_does_not_follow_navigation(panel_modules):
     assert panel._dirty, "discarding a late result must re-enable the picker"
 
 
+@pytest.mark.parametrize("during_sample", [False, True])
+def test_file_replacement_rejects_a_color_sample(panel_modules, tmp_path, during_sample):
+    module, _ = panel_modules
+    path = tmp_path / "frame.png"
+    path.write_bytes(b"original")
+    stat = path.stat()
+    revision = (True, stat.st_mtime_ns, stat.st_size, stat.st_dev, stat.st_ino, stat.st_ctime_ns)
+    sampled = []
+
+    def sample(*_):
+        sampled.append(get_ident())
+        path.write_bytes(b"different image data")
+        return (0.4, 0.5, 0.6)
+
+    if not during_sample:
+        path.write_bytes(b"different image data")
+    metadata = module.PreviewMetadata()
+    try:
+        future = metadata.sample(path, revision, 0, 0, sample)
+        with pytest.raises(module.SourceChangedError):
+            future.result(timeout=5)
+        assert bool(sampled) == during_sample
+        assert all(thread != get_ident() for thread in sampled)
+    finally:
+        metadata.close()
+
+
+@pytest.mark.parametrize("source_changed", [False, True])
+def test_sampling_errors_are_translated_when_published_on_ui(panel_modules, monkeypatch, source_changed):
+    module, _ = panel_modules
+    panel = module.ImagePreviewPanel()
+    panel._image_paths = [module.Path("frame.png")]
+    future = Future()
+    future.set_exception(module.SourceChangedError() if source_changed else RuntimeError("decode failed"))
+    panel._sample_request = ("frame.png", None, future)
+    ui_thread = get_ident()
+
+    def translate(key):
+        assert get_ident() == ui_thread
+        return {"image_preview.source_changed": "Aggiorna l’immagine",
+                "image_preview.color_sample_failed": "Prelievo non riuscito: {}"}[key]
+
+    monkeypatch.setattr(module.lf.ui, "tr", translate)
+    panel._service_sample()
+    assert panel._sampled_color is None
+    assert panel._sample_request is None
+    assert panel._action_error == ("Aggiorna l’immagine" if source_changed else "Prelievo non riuscito: decode failed")
+
+
 def test_texture_completion_updates_the_available_commands(panel_modules, monkeypatch):
     module, _ = panel_modules
     panel = module.ImagePreviewPanel()

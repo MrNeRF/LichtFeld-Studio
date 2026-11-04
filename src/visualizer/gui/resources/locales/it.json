@@ -2040,6 +2040,9 @@
     "disabled": "Disabilitato"
   },
   "image_preview": {
+    "source_changed": "L’immagine è cambiata. Aggiorna e preleva di nuovo il colore.",
+    "scene_changed": "La scena è cambiata. Preleva di nuovo il colore.",
+    "color_sample_failed": "Impossibile prelevare il colore: {}",
     "help": "Aiuto",
     "refresh": "Aggiorna",
     "apply_render_color": "Applica allo sfondo rendering",
