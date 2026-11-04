@@ -35,7 +35,7 @@ def process_arguments():
 
 def numerical_runtime(wait=True):
     if not _numerical_lock.acquire(blocking=wait):
-        raise NumericalRuntimeUnavailable("The preview numerical runtime is being prepared")
+        raise NumericalRuntimeBusy("The preview numerical runtime is being prepared")
     try:
         return _load_numerical_runtime()
     finally:
@@ -43,6 +43,10 @@ def numerical_runtime(wait=True):
 
 
 class NumericalRuntimeUnavailable(RuntimeError):
+    pass
+
+
+class NumericalRuntimeBusy(NumericalRuntimeUnavailable):
     pass
 
 
@@ -205,7 +209,7 @@ class AutoStream:
             import lichtfeld as lf
             try:
                 runtime = numerical_runtime(wait=False)
-            except NumericalRuntimeUnavailable:
+            except NumericalRuntimeBusy:
                 return  # Optional capture never waits for a viewer's package setup.
             if not getattr(self, "geometry_published", False) and time.monotonic() >= getattr(self, "geometry_retry_at", 0):
                 try:

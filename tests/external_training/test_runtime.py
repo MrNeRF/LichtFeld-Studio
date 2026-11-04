@@ -357,6 +357,17 @@ class RuntimeContracts(unittest.TestCase):
         capture.assert_called_once()
         self.assertIs(capture.call_args.kwargs['runtime'], runtime)
 
+    def test_missing_numerical_runtime_remains_an_explicit_optional_preview_error(self):
+        stream = producer.AutoStream.__new__(producer.AutoStream)
+        stream.publisher = types.SimpleNamespace(update=mock.Mock(), clients=lambda: [object()])
+        stream.last_status = stream.last = 0
+        stream.interval = 0
+        with mock.patch.dict(sys.modules, lichtfeld=types.SimpleNamespace()), mock.patch.object(
+                producer, 'numerical_runtime', side_effect=producer.NumericalRuntimeUnavailable('runtime is not ready')):
+            stream.step({'iteration': 7, 'num_gaussians': 3})
+        self.assertEqual(stream.publisher.update.call_args.kwargs, {'error': 'runtime is not ready'})
+        self.assertTrue(hasattr(stream, 'retry_at'))
+
     def test_large_model_capture_uses_bounded_candidate_indices(self):
         import numpy as np
         selected = []
