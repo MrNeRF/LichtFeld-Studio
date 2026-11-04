@@ -10,14 +10,15 @@ from pathlib import Path
 
 import lichtfeld as lf
 
-from . import probe, runner
+from . import probe, runner, share
 from .pipeline import Request
 from .project_bridge import build_hooks, finalize_now
 
 _runner = runner.PipelineRunner()
 _finalizer = runner.FinalizeRunner(lambda package, on_progress, should_cancel: finalize_now(
     Path(package), on_progress=on_progress, should_cancel=should_cancel))
-TOOL_NAMES = ("video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel", "video_to_splat_finalize")
+TOOL_NAMES = ("video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel", "video_to_splat_finalize",
+              "video_to_splat_share", "video_to_splat_share_stop")
 
 
 def video_to_splat_start(source: str, project: str, mode: str = "auto", preset: str = "balanced",
@@ -52,6 +53,7 @@ def video_to_splat_status() -> dict:
     frames, registered, mode, project, work_dir, package_dir."""
     status = _runner.status()
     status.update({"finalize_" + k: v for k, v in _finalizer.status().items()})
+    status.update({"share_" + k: v for k, v in share.status().items()})
     return status
 
 
@@ -71,13 +73,36 @@ def video_to_splat_finalize(package: str = "") -> dict:
     return _finalizer.start(str(target))
 
 
+def video_to_splat_share(package: str = "", lan: bool = True) -> dict:
+    """Serve a package folder from this machine under a random link, free and without an account: the link
+    opens viewer.html, <link>files lists the downloads. Defaults to the last run's package. ``lan`` makes the
+    link reachable from other devices on the network (Windows asks once to allow it); false keeps it on this
+    machine. The server stops with the app or with video_to_splat_share_stop. Returns {sharing, url, files_url,
+    port, package, lan}."""
+    target = package or _runner.status().get("package_dir") or ""
+    if not target:
+        return {"sharing": False, "error": "No package folder: pass one or run the pipeline first."}
+    try:
+        return share.share(Path(target), lan=bool(lan))
+    except OSError as exc:
+        return {"sharing": False, "error": str(exc)}
+
+
+def video_to_splat_share_stop() -> dict:
+    """Stop serving the shared package."""
+    return share.stop()
+
+
 def register_mcp_tools() -> None:
     lf.mcp.register_tool(video_to_splat_start, "video_to_splat_start", video_to_splat_start.__doc__ or "")
     lf.mcp.register_tool(video_to_splat_status, "video_to_splat_status", video_to_splat_status.__doc__ or "")
     lf.mcp.register_tool(video_to_splat_cancel, "video_to_splat_cancel", video_to_splat_cancel.__doc__ or "")
     lf.mcp.register_tool(video_to_splat_finalize, "video_to_splat_finalize", video_to_splat_finalize.__doc__ or "")
+    lf.mcp.register_tool(video_to_splat_share, "video_to_splat_share", video_to_splat_share.__doc__ or "")
+    lf.mcp.register_tool(video_to_splat_share_stop, "video_to_splat_share_stop", video_to_splat_share_stop.__doc__ or "")
 
 
 def unregister_mcp_tools() -> None:
+    share.stop()
     for name in TOOL_NAMES:
         lf.mcp.unregister_tool(name)

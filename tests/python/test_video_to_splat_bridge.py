@@ -47,6 +47,8 @@ def lf_stub(monkeypatch, tmp_path):
         "video_to_splat.package_ready_message": "package {path} files {files} skipped {skipped}",
         "video_to_splat.package_ready_publish": "Publish to gallery",
         "video_to_splat.package_ready_show": "Show folder",
+        "video_to_splat.package_ready_share": "Share link",
+        "video_to_splat.share_message": "link {url} files {files_url}",
     }
 
     stub = ModuleType("lichtfeld")
@@ -75,6 +77,8 @@ def lf_stub(monkeypatch, tmp_path):
     stub.io = SimpleNamespace(export_html=lambda data, path, **kw: state.html_exports.append(path))
     state.messages = []
     stub.ui.message_dialog = lambda title, message, style="info", callback=None: state.messages.append((title, message, style))
+    state.clipboard = []
+    stub.ui.set_clipboard_text = lambda text: state.clipboard.append(text)
     stub.packages = SimpleNamespace(install=lambda name: state.installed.append(name) or "ok")
     stub.optimization_params = lambda: state.optimization
     stub.is_training_active = lambda: False
@@ -375,6 +379,7 @@ def test_training_end_announces_the_package(lf_stub, tmp_path, monkeypatch):
     bridge, state = lf_stub
     from lfs_plugins.video_to_splat import finalize as fin
 
+    (tmp_path / "package").mkdir()
     result = fin.FinalizeResult(package=tmp_path / "package", files={"splat.ply": {"source": "x", "bytes": 1}},
                                 skipped={"viewer.html": "nope"})
     monkeypatch.setattr(bridge, "finalize_now", lambda package, *a, **k: result)
@@ -389,8 +394,14 @@ def test_training_end_announces_the_package(lf_stub, tmp_path, monkeypatch):
     title, message, buttons, _style = state.dialogs[-1]
     assert title == "video_to_splat.package_ready_title"
     assert str(tmp_path / "package") in message and "splat.ply" in message
-    assert buttons == ["Publish to gallery", "Show folder", "common.ok"]
-    assert published == ["gallery"]  # the stub presses the first button
+    assert buttons == ["Share link", "Publish to gallery", "Show folder", "common.ok"]
+    assert published == []  # the stub presses the first button: the share link
+    assert state.clipboard and state.clipboard[-1].startswith("http://") and state.clipboard[-1].endswith("/")
+    assert state.messages[-1][0] == "video_to_splat.share_title" and "files" in state.messages[-1][1]
+    from lfs_plugins.video_to_splat import share as share_mod
+
+    assert share_mod.status()["package"] == str(tmp_path / "package")
+    share_mod.stop()
 
 
 def test_training_end_with_publish_opens_the_gallery_review_directly(lf_stub, tmp_path, monkeypatch):
@@ -414,6 +425,17 @@ def test_show_folder_button_reveals_the_package(lf_stub, tmp_path, monkeypatch):
 
     revealed = []
     bridge.lf.ui.reveal_in_file_manager = lambda path: revealed.append(path) or True
-    bridge.lf.ui.confirm_dialog = lambda title, message, buttons, callback, style="info": callback(buttons[1])
+    bridge.lf.ui.confirm_dialog = lambda title, message, buttons, callback, style="info": callback(buttons[2])
     bridge.announce_package(fin.FinalizeResult(package=tmp_path / "package"))
     assert revealed == [str(tmp_path / "package")]
+
+
+def test_publish_button_opens_the_gallery(lf_stub, tmp_path, monkeypatch):
+    bridge, state = lf_stub
+    from lfs_plugins.video_to_splat import finalize as fin
+
+    published = []
+    monkeypatch.setattr(bridge, "publish_to_gallery", lambda: published.append("gallery"))
+    bridge.lf.ui.confirm_dialog = lambda title, message, buttons, callback, style="info": callback(buttons[1])
+    bridge.announce_package(fin.FinalizeResult(package=tmp_path / "package"))
+    assert published == ["gallery"]

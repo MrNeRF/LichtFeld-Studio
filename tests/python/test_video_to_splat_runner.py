@@ -130,7 +130,7 @@ def test_mcp_tools_register_and_validate(lf_stub, tmp_path, monkeypatch):
     mcp_tools = import_module("lfs_plugins.video_to_splat.mcp_tools")
     mcp_tools.register_mcp_tools()
     assert set(state.tools) == {"video_to_splat_start", "video_to_splat_status", "video_to_splat_cancel",
-                                "video_to_splat_finalize"}
+                                "video_to_splat_finalize", "video_to_splat_share", "video_to_splat_share_stop"}
 
     run = ScriptedRun()
     monkeypatch.setattr(mcp_tools, "_runner", runner.PipelineRunner(run=run))
@@ -207,3 +207,22 @@ def test_mcp_finalize_tool_defaults_to_the_last_package(lf_stub, tmp_path, monke
     mcp_tools._finalizer.wait(5)
     assert calls == [str(tmp_path / "pkg")]
     assert "finalize_done" in mcp_tools.video_to_splat_status()
+
+
+def test_mcp_share_tools_serve_the_package(lf_stub, tmp_path, monkeypatch):
+    import urllib.request
+
+    stub, state = lf_stub
+    mcp_tools = import_module("lfs_plugins.video_to_splat.mcp_tools")
+    assert mcp_tools.video_to_splat_share()["sharing"] is False  # nothing ran yet
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "viewer.html").write_text("<html>shared</html>")
+    info = mcp_tools.video_to_splat_share(str(package), lan=False)
+    assert info["sharing"] is True and info["url"].endswith("/") and info["package"] == str(package)
+    local = "http://127.0.0.1:%d/%s/" % (info["port"], info["url"].rstrip("/").rsplit("/", 1)[1])
+    with urllib.request.urlopen(local, timeout=5) as response:
+        assert b"shared" in response.read()
+    assert mcp_tools.video_to_splat_status()["share_url"] == info["url"]
+    assert mcp_tools.video_to_splat_share_stop() == {"sharing": False}
+    assert mcp_tools.video_to_splat_status()["share_sharing"] is False

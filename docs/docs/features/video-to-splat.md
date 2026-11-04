@@ -61,8 +61,15 @@ COLMAP, creates the project and starts training.
    the mesh textured from the source frames (every triangle samples the frame that sees it best, which works
    for 360 cameras too); and `viewer.html`, the self-contained web viewer to share or embed. `package.json`
    lists what was written and why anything was skipped. A dialog announces the folder when it is ready, with
-   **Publish to gallery** and **Show folder** one click away. The MCP tool `plugin_video_to_splat_finalize`
-   writes the same package for whatever splat is in the scene, at any time.
+   **Share link**, **Publish to gallery** and **Show folder** one click away. The MCP tool
+   `plugin_video_to_splat_finalize` writes the same package for whatever splat is in the scene, at any time.
+
+   **Share link** needs no account: LichtFeld serves the package from your machine under a random link such as
+   `http://192.168.1.20:52345/k3Qw…/`. The link opens the viewer; the same link followed by `files` lists the
+   downloads. It works for anyone on your network while LichtFeld Studio runs, is copied to the clipboard, and
+   stops with `plugin_video_to_splat_share_stop` or when the app closes. Windows asks once whether to allow
+   LichtFeld Studio through the firewall; decline and the link works on this machine only. The MCP tool
+   `plugin_video_to_splat_share` does the same for any package folder (`lan=false` keeps it local).
 7. **Publish to the gallery when the package is ready** (a checkbox in the dialog, `publish_to_gallery` in
    the MCP tool) opens the gallery publish review as soon as the package exists: sign in to your gallery
    account if needed, set the title and visibility, upload, and copy the share link or open the hosted
@@ -135,6 +142,8 @@ without the dialog. Python tools appear with a `plugin_` prefix in `tools/list`,
 | `video_to_splat_status` | none | `{active, stage, fraction, message, done, error, cancelled, frames, registered, mode, project, work_dir, package_dir}` |
 | `video_to_splat_cancel` | none | `{cancelling}` |
 | `video_to_splat_finalize` | `package` (folder; defaults to the last run's) | `{started, package}`; progress and results under `finalize_*` in the status |
+| `video_to_splat_share` | `package` (folder; defaults to the last run's) | `{sharing, url, files_url, port, package}`; also under `share_*` in the status |
+| `video_to_splat_share_stop` | none | `{sharing: false}` |
 
 One run at a time; a start while another run is active is refused. Training is left running when the run
 finishes, so the usual `training_*` tools and `lichtfeld://runtime/jobs/training.main` take over from there.

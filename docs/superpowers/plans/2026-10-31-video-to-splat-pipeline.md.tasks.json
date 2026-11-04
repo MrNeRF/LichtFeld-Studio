@@ -130,7 +130,14 @@
       "status": "completed",
       "blockedBy": [18],
       "description": "**Goal:** Hosted sharing with accounts through the gallery, from the pipeline.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/project_bridge.py\", \"src/python/lfs_plugins/video_to_splat/pipeline.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_bridge.py tests/python/test_video_to_splat_pipeline.py -q\", \"acceptanceCriteria\": [\"publish review opens when asked\", \"ready dialog offers publish and show folder\"]}\n```"
+    },
+    {
+      "id": 20,
+      "subject": "Task 20: Free share link",
+      "status": "completed",
+      "blockedBy": [19],
+      "description": "**Goal:** Share the package without an account, from the user's machine.\n\n```json:metadata\n{\"files\": [\"src/python/lfs_plugins/video_to_splat/share.py\", \"src/python/lfs_plugins/video_to_splat/project_bridge.py\", \"src/python/lfs_plugins/video_to_splat/mcp_tools.py\"], \"verifyCommand\": \"python -m pytest tests/python/test_video_to_splat_share.py -q\", \"acceptanceCriteria\": [\"link opens the viewer and lists downloads\", \"token and path guards\", \"dialog button and MCP tool start and stop the share\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-11-03T23:00:00Z"
+  "lastUpdated": "2026-11-03T23:50:00Z"
 }

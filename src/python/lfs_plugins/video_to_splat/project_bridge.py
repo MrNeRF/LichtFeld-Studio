@@ -16,7 +16,7 @@ import lichtfeld as lf
 
 from ..environment import value as env_value
 from ..process_runner import run_cancellable_process
-from . import finalize, masking, toolchain
+from . import finalize, masking, share, toolchain
 from .pipeline import ExtractParams, Hooks, PipelineError
 from .toolchain import Resolved
 
@@ -289,17 +289,31 @@ def publish_to_gallery() -> None:
         lf.ui.message_dialog(tr("video_to_splat.package_ready_title"), str(exc), "error")
 
 
+def share_package(package: Path) -> dict:
+    """Serve the package from this machine under a random link (no account), copy the link, show it."""
+    info = share.share(Path(package))
+    lf.ui.set_clipboard_text(info["url"])
+    lf.ui.message_dialog(tr("video_to_splat.share_title"),
+                         tr("video_to_splat.share_message").format(url=info["url"], files_url=info["files_url"]),
+                         "info")
+    return info
+
+
 def announce_package(result: finalize.FinalizeResult, publish: bool = False) -> None:
-    """The local stand-in for 'we e-mail you when it is ready': a dialog naming the package folder, with the
-    gallery publish review one click away (or opened right away when the run asked for it)."""
+    """The local stand-in for 'we e-mail you when it is ready': a dialog naming the package folder, with a free
+    share link, the gallery publish review and the folder one click away (the gallery opens right away when
+    the run asked for it)."""
     written = ", ".join(sorted(result.files)) or "-"
     message = tr("video_to_splat.package_ready_message").format(path=str(result.package), files=written,
                                                                skipped=len(result.skipped))
+    share_label = tr("video_to_splat.package_ready_share")
     publish_label = tr("video_to_splat.package_ready_publish")
     show_label = tr("video_to_splat.package_ready_show")
 
     def on_choice(label: str) -> None:
-        if label == publish_label:
+        if label == share_label:
+            share_package(result.package)
+        elif label == publish_label:
             publish_to_gallery()
         elif label == show_label:
             lf.ui.reveal_in_file_manager(str(result.package))
@@ -309,7 +323,7 @@ def announce_package(result: finalize.FinalizeResult, publish: bool = False) -> 
             publish_to_gallery()
             return
         lf.ui.confirm_dialog(tr("video_to_splat.package_ready_title"), message,
-                             [publish_label, show_label, tr("common.ok")], on_choice)
+                             [share_label, publish_label, show_label, tr("common.ok")], on_choice)
 
     lf.ui.schedule_on_ui_thread(show)
 

@@ -2876,6 +2876,20 @@ git commit -m "Tune video-to-splat presets from a real 360 capture (N/M frames r
 
 ---
 
+### Task 20: Free share link
+
+**Goal:** Share the result without an account, as the cloud service's free tier does.
+
+**Files:** `video_to_splat/share.py` (token-guarded HTTP server for one package folder), `project_bridge.py` (Share link button, clipboard, dialog), `mcp_tools.py` (`video_to_splat_share`, `video_to_splat_share_stop`, `share_*` status), locales, `tests/python/test_video_to_splat_share.py`.
+
+**Acceptance Criteria:**
+- [x] The link opens viewer.html, `<link>files` lists the downloads, every package file downloads; other tokens and paths outside the folder answer 404.
+- [x] The ready dialog's Share link button starts the server and copies the link; the MCP tool does the same and the status reports it; stop works.
+
+**Verify:** `python -m pytest tests/python/test_video_to_splat_share.py tests/python/test_video_to_splat_bridge.py tests/python/test_video_to_splat_runner.py -q`, then fetch the link from the running app.
+
+---
+
 ## Self-review
 
 **Spec coverage.** Toolchain download with consent and hash (Task 5, 7); Linux PATH fallback (5); `lf.video` probe and extract (2, 3); COLMAP commands with EQUIRECTANGULAR/OPENCV and loop detection off (4); shared process runner (1); stage orchestration with `pipeline.json` resume and cancel (6); project creation and training start with import wait (7); New Project `video` kind, options, progress, Extract frames only, File menu entry (8); drop behaviour (9); error handling: no COLMAP (5, 7), bad input (6), weak reconstruction prompt (6, 7), cancel (1, 6), GPU contention via `is_training_active` (8), disk warning (6); tests: Python unit (1, 4, 5, 6, 7, 8), C++ probe test (2), binding runtime test (3), opt-in end-to-end (10, 11); docs (10). Not in scope per spec: `.insv`, vocab tree, CLI flag, MCP job, the three extras.
