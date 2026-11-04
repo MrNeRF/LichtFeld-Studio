@@ -2107,6 +2107,10 @@ TEST_F(PythonIOTest, HtmlExport) {
         << "Measure-tool export statement should be stripped";
     EXPECT_TRUE(content.find("export { initLabelTool };") == std::string::npos)
         << "Label-tool export statement should be stripped";
+    EXPECT_TRUE(content.find("Copyright (c) 2011-2024 PlayCanvas Ltd.") != std::string::npos)
+        << "Should carry the PlayCanvas notice of the embedded viewer";
+    EXPECT_TRUE(content.find("Copyright (c) 2016-2026 Arseny Kapoulkine") != std::string::npos)
+        << "Should carry the meshoptimizer notice of the embedded viewer";
 }
 
 TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
